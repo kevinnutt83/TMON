@@ -84,10 +84,13 @@ async def lora_comm_task():
     # Frost/Heat watch hooks (non-blocking)
     try:
         import tmon as _tmon
-        if getattr(settings, 'ENABLE_FROSTWATCH', False) and getattr(sdata, 'cur_temp_f', 0) <= getattr(settings, 'FROSTWATCH_ACTIVE_TEMP', 70):
+        curf = getattr(sdata, 'cur_temp_f', 0)
+        if getattr(settings, 'ENABLE_FROSTWATCH', False) and curf <= getattr(settings, 'FROSTWATCH_ACTIVE_TEMP', 70):
             await _tmon.frostwatchCheck()
-        if getattr(settings, 'ENABLE_HEATWATCH', False) and getattr(sdata, 'cur_temp_f', 0) >= getattr(settings, 'HEATWATCH_ACTIVE_TEMP', 90):
+        if getattr(settings, 'ENABLE_HEATWATCH', False) and curf >= getattr(settings, 'HEATWATCH_ACTIVE_TEMP', 90):
             await _tmon.heatwatchCheck()
+        # Auto-relax when temps normalize (hysteresis)
+        await _tmon.maybe_end_ops(curf)
     except Exception:
         pass
         try:

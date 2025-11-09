@@ -149,3 +149,19 @@ async def endHeatOperations():
             _recalc_interval()
         except Exception:
             pass
+
+async def maybe_end_ops(cur_temp_f):
+    """Auto-relax active modes using hysteresis thresholds."""
+    try:
+        frost_active = 'frost' in _active_modes
+        heat_active = 'heat' in _active_modes
+        fa = getattr(settings, 'FROSTWATCH_ACTIVE_TEMP', 70)
+        ha = getattr(settings, 'HEATWATCH_ACTIVE_TEMP', 90)
+        frost_clear = getattr(settings, 'FROSTWATCH_CLEAR_TEMP', fa + 3)
+        heat_clear = getattr(settings, 'HEATWATCH_CLEAR_TEMP', ha - 3)
+        if frost_active and cur_temp_f >= frost_clear:
+            await endFrostOperations()
+        if heat_active and cur_temp_f <= heat_clear:
+            await endHeatOperations()
+    except Exception:
+        pass

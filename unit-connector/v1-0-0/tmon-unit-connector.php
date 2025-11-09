@@ -63,5 +63,32 @@ add_action('rest_api_init', function() {
       return ['ok' => true];
     }
   ]);
+  // Admin URL/Key settings page
+  add_action('admin_menu', function(){
+    add_submenu_page(
+      'options-general.php',
+      'TMON Unit Connector',
+      'TMON Unit Connector',
+      'manage_options',
+      'tmon-unit-connector-settings',
+      function(){
+        if (!current_user_can('manage_options')) return;
+        if (isset($_POST['tmon_uc_save']) && check_admin_referer('tmon_uc_settings_save')) {
+          update_option('tmon_uc_admin_url', esc_url_raw($_POST['tmon_uc_admin_url'] ?? ''));
+          update_option('tmon_uc_admin_key', sanitize_text_field($_POST['tmon_uc_admin_key'] ?? ''));
+          echo '<div class="updated"><p>Settings saved.</p></div>';
+        }
+        $admin_url = esc_url(get_option('tmon_uc_admin_url',''));
+        $admin_key = esc_html(get_option('tmon_uc_admin_key',''));
+        echo '<div class="wrap"><h1>TMON Unit Connector Settings</h1><form method="post">';
+        wp_nonce_field('tmon_uc_settings_save');
+        echo '<table class="form-table"><tr><th scope="row"><label for="tmon_uc_admin_url">Admin Hub URL</label></th><td><input type="url" name="tmon_uc_admin_url" id="tmon_uc_admin_url" class="regular-text" value="'.$admin_url.'" placeholder="https://admin.example.com" /></td></tr>';
+        echo '<tr><th scope="row"><label for="tmon_uc_admin_key">Admin Shared Key</label></th><td><input type="text" name="tmon_uc_admin_key" id="tmon_uc_admin_key" class="regular-text" value="'.$admin_key.'" /></td></tr>';
+        echo '</table><p><input type="submit" name="tmon_uc_save" class="button button-primary" value="Save Changes" /></p></form>';
+        echo '<h2>Forwarding Status</h2><p>Records will forward when both URL and key are set.</p>';
+        echo '</div>';
+      }
+    );
+  });
 });
 

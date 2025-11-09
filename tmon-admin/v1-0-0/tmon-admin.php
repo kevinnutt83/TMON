@@ -36,6 +36,33 @@ add_action('rest_api_init', function() {
       return [ 'unit_id' => $unit_id, 'suspended' => $suspend ];
     }
   ]);
+  // Field data ingestion (normalized records forwarded from Unit Connector)
+  register_rest_route('tmon-admin/v1', '/field-data', [
+    'methods' => 'POST',
+    'permission_callback' => function() {
+        // Accept either admin auth (logged-in) or shared key header
+        if (current_user_can('manage_options')) return true;
+        $hdrs = function_exists('getallheaders') ? getallheaders() : [];
+        $admin_key = get_option('tmon_admin_uc_key');
+        $sent = $hdrs['X-TMON-ADMIN'] ?? ($_SERVER['HTTP_X_TMON_ADMIN'] ?? '');
+        return $admin_key && hash_equals($admin_key, (string)$sent);
+    },
+    'callback' => function($req) {
+        global $wpdb;
+        $body = $req->get_json_params();
+        if (!is_array($body)) return new WP_Error('invalid_body','Expected JSON object',['status'=>400]);
+        $table = $wpdb->prefix . 'tmon_field_data';
+        // Create table if missing (lightweight schema)
+        $wpdb->query("CREATE TABLE IF NOT EXISTS $table (id BIGINT AUTO_INCREMENT PRIMARY KEY, unit_id VARCHAR(64), created_at DATETIME DEFAULT CURRENT_TIMESTAMP, data LONGTEXT)");
+        $unit_id = sanitize_text_field($body['unit_id'] ?? '');
+        $wpdb->insert($table, [
+            'unit_id' => $unit_id,
+            'data' => wp_json_encode($body),
+        ]);
+        do_action('tmon_admin_receive_field_data', $unit_id, $body);
+        return ['stored' => true];
+    }
+  ]);
 });
 
 // Admin menu: Devices page
