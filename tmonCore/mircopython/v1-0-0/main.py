@@ -81,6 +81,15 @@ async def lora_comm_task():
         if not hasattr(sdata, 'script_runtime'):
             print(f"[DEBUG] lora_comm_task: initializing sdata.script_runtime")
             sdata.script_runtime = 0
+    # Frost/Heat watch hooks (non-blocking)
+    try:
+        import tmon as _tmon
+        if getattr(settings, 'ENABLE_FROSTWATCH', False) and getattr(sdata, 'cur_temp_f', 0) <= getattr(settings, 'FROSTWATCH_ACTIVE_TEMP', 70):
+            await _tmon.frostwatchCheck()
+        if getattr(settings, 'ENABLE_HEATWATCH', False) and getattr(sdata, 'cur_temp_f', 0) >= getattr(settings, 'HEATWATCH_ACTIVE_TEMP', 90):
+            await _tmon.heatwatchCheck()
+    except Exception:
+        pass
         try:
             print(f"[DEBUG] lora_comm_task: assigning sdata.loop_runtime")
             sdata.loop_runtime = (time.ticks_ms() - loop_start_time) // 1000

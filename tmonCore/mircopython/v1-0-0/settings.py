@@ -137,6 +137,11 @@ CRC_ON = True
 TCXO_VOLTAGE = 1.8  # Confirmed for Waveshare SX1262
 USE_LDO = True
 
+# --- LoRa network admission (simple shared secret; not cryptographic) ---
+# Remotes must present matching name/password to the base. Base will ignore packets that fail auth.
+LORA_NETWORK_NAME = "tmon"
+LORA_NETWORK_PASSWORD = "12345"
+
 
 #Frost & Heat Monitoring
 ENABLE_FROSTWATCH = False

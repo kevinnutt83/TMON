@@ -516,6 +516,9 @@ async def connectLora():
                     'bar': getattr(sdata, 'cur_bar_pres', 0),
                     'v': getattr(sdata, 'sys_voltage', 0),
                     'fm': getattr(sdata, 'free_mem', 0),
+                    # Simple network admission fields
+                    'net': getattr(settings, 'LORA_NETWORK_NAME', 'tmon'),
+                    'pw': getattr(settings, 'LORA_NETWORK_PASSWORD', '12345'),
                 }
                 data = ujson.dumps(payload).encode('utf-8')
 
@@ -677,6 +680,24 @@ async def connectLora():
                     write_lora_log("Base RX packet", 'INFO')
                     try:
                         obj = ujson.loads(msg)
+                        # Admission control: verify shared network name/password
+                        try:
+                            n_ok = (obj.get('net') == getattr(settings, 'LORA_NETWORK_NAME', 'tmon'))
+                            p_ok = (obj.get('pw') == getattr(settings, 'LORA_NETWORK_PASSWORD', '12345'))
+                        except Exception:
+                            n_ok = False; p_ok = False
+                        if not (n_ok and p_ok):
+                            # Send a minimal deny ack to avoid indefinite retries without feedback
+                            try:
+                                nack = {'ack': 'denied', 'reason': 'auth'}
+                                if lora is not None:
+                                    _, _ = lora.send(ujson.dumps(nack).encode('utf-8'))
+                            except Exception:
+                                pass
+                            # Skip further processing of this unauthorized packet
+                            msg = None  # prevent downstream handling
+                            err = -1
+                            raise Exception('LoRa packet failed admission (network auth)')
                         # Capture RSSI/SNR and last message for UI
                         try:
                             if hasattr(lora, 'getRSSI'):

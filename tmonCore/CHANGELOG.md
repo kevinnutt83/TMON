@@ -39,3 +39,10 @@ Admin Plugins:
 Known issues:
 - Lint warnings for MicroPython modules in desktop editor are expected; not applicable on-device.
 - Additional memory tuning might be needed for very large field data logs; adjust batch_size in utils.py if needed.
+
+## v2.0.11 — 2025-11-09
+
+- Firmware: Added simple LoRa network admission controls via `LORA_NETWORK_NAME` and `LORA_NETWORK_PASSWORD` in `settings.py`. Remotes include credentials; base validates and denies unauthenticated packets.
+- Firmware: Hooked frost/heat watch checks into `sample_task` using `ENABLE_FROSTWATCH` / `ENABLE_HEATWATCH` and thresholds, calling `tmon.frostwatchCheck`/`heatwatchCheck`.
+- Admin: New REST route `POST /wp-json/tmon-admin/v1/device/suspend` to toggle device suspension; mirrors status in both `tmon_devices` and `tmon_provisioned_devices`.
+- Docs: `.github/copilot-instructions.md` added; Root `README.md` expanded with architecture and workflows.

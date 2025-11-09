@@ -297,6 +297,31 @@ add_action('rest_api_init', function() {
         'permission_callback' => '__return_true',
     ]);
 
+    // Device suspend/enable toggle (admin action)
+    register_rest_route('tmon-admin/v1', '/device/suspend', [
+        'methods' => 'POST',
+        'permission_callback' => function(){ return current_user_can('manage_options'); },
+        'callback' => function($request){
+            global $wpdb;
+            $unit_id = sanitize_text_field($request->get_param('unit_id'));
+            $suspend = strtolower(sanitize_text_field($request->get_param('suspend')));
+            if (!$unit_id || !in_array($suspend, ['0','1','true','false','yes','no'], true)) {
+                return rest_ensure_response(['status'=>'error','message'=>'unit_id and suspend required']);
+            }
+            $flag = in_array($suspend, ['1','true','yes'], true) ? 1 : 0;
+            // Update devices table
+            $wpdb->update($wpdb->prefix.'tmon_devices', ['suspended'=>$flag,'last_seen'=>current_time('mysql')], ['unit_id'=>$unit_id]);
+            // Mirror provisioning status if provisioned
+            $prov_tbl = $wpdb->prefix.'tmon_provisioned_devices';
+            $exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $prov_tbl WHERE unit_id=%s", $unit_id));
+            if ($exists) {
+                $wpdb->update($prov_tbl, ['status' => $flag ? 'suspended' : 'active', 'updated_at'=>current_time('mysql')], ['unit_id'=>$unit_id]);
+            }
+            do_action('tmon_admin_notify', 'suspend', ($flag? 'Device suspended':'Device enabled').": $unit_id", ['unit_id'=>$unit_id,'suspended'=>$flag]);
+            return rest_ensure_response(['status'=>'ok','unit_id'=>$unit_id,'suspended'=>$flag]);
+        }
+    ]);
+
     // GPS override helper: admin can push GPS directly to a Unit Connector device settings
     register_rest_route('tmon-admin/v1', '/device/gps-override', [
         'methods' => 'POST',
