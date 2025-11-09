@@ -23,6 +23,12 @@ add_action('rest_api_init', function() {
     if (!$admin_url || !$admin_key || !wp_http_validate_url($admin_url)) {
       return new WP_Error('uc_not_configured','Admin URL/key not set',['status'=>500]);
     }
+    // Try transient cache first
+    $cache_key = 'tmon_uc_thresholds_cache';
+    $cached = get_transient($cache_key);
+    if (is_array($cached)) {
+      return $cached;
+    }
     $endpoint = rtrim($admin_url,'/').'/wp-json/tmon-admin/v1/settings/thresholds';
     $resp = wp_remote_get($endpoint, [
       'timeout' => 10,
@@ -37,6 +43,8 @@ add_action('rest_api_init', function() {
     if ($code !== 200 || !is_array($json)) {
       return new WP_Error('bad_admin_response','Unexpected Admin response',['status'=>502]);
     }
+    // Cache short TTL (5 minutes)
+    set_transient($cache_key, $json, 5 * MINUTE_IN_SECONDS);
     return $json;
   }
   ]);
@@ -51,56 +59,82 @@ add_action('rest_api_init', function() {
         return $expected && hash_equals($expected, (string)$sent);
     },
     'callback' => function($req) {
-      $data = $req->get_json_params();
-      if (!is_array($data)) {
-        return new WP_Error('invalid_payload','Expected JSON object',['status'=>400]);
+      $payload = $req->get_json_params();
+      if (!is_array($payload)) {
+        return new WP_Error('invalid_payload','Expected JSON object',["status"=>400]);
       }
-      // Basic normalization of remote-style payload
-      $norm = [
-        'unit_id' => $data['unit_id'] ?? '',
-        'machine_id' => $data['machine_id'] ?? ($data['mid'] ?? ''),
-        'name' => $data['name'] ?? '',
-        'timestamp' => $data['ts'] ?? ($data['timestamp'] ?? time()),
-        'temp_f' => $data['t_f'] ?? ($data['cur_temp_f'] ?? null),
-        'temp_c' => $data['t_c'] ?? ($data['cur_temp_c'] ?? null),
-        'humidity' => $data['hum'] ?? ($data['cur_humid'] ?? null),
-        'pressure' => $data['bar'] ?? ($data['cur_bar_pres'] ?? null),
-        'voltage_v' => $data['v'] ?? ($data['sys_voltage'] ?? null),
-        'free_mem' => $data['fm'] ?? ($data['free_mem'] ?? null),
-        'lora_rssi' => $data['lora_SigStr'] ?? null,
-        'wifi_rssi' => $data['wifi_rssi'] ?? null,
-        'gps_lat' => $data['gps_lat'] ?? null,
-        'gps_lng' => $data['gps_lng'] ?? null,
-        'gps_alt_m' => $data['gps_alt_m'] ?? null,
-        'gps_accuracy_m' => $data['gps_accuracy_m'] ?? null,
-        'gps_last_fix_ts' => $data['gps_last_fix_ts'] ?? null,
-      ];
 
-      // Store locally (simplified; real implementation would use custom table)
-      do_action('tmon_uc_receive_field_data', $norm);
-
-      // Optional forward to Admin hub if configured
-      $admin_url = get_option('tmon_uc_admin_url');
-      $admin_key = get_option('tmon_uc_admin_key');
-      if ($admin_url && $admin_key && wp_http_validate_url($admin_url)) {
-        $endpoint = rtrim($admin_url,'/') . '/wp-json/tmon-admin/v1/field-data';
-        $args = [
-          'timeout' => 10,
-          'headers' => [
-            'Content-Type' => 'application/json',
-            'X-TMON-ADMIN' => $admin_key,
-          ],
-          'body' => wp_json_encode($norm),
+      $process_one = function($data, $defaults = []){
+        // Basic normalization of remote-style payload
+        $norm = [
+          'unit_id' => $data['unit_id'] ?? ($defaults['unit_id'] ?? ''),
+          'machine_id' => $data['machine_id'] ?? ($data['mid'] ?? ($defaults['machine_id'] ?? '')),
+          'name' => $data['name'] ?? ($defaults['name'] ?? ''),
+          'timestamp' => $data['ts'] ?? ($data['timestamp'] ?? time()),
+          'temp_f' => $data['t_f'] ?? ($data['cur_temp_f'] ?? null),
+          'temp_c' => $data['t_c'] ?? ($data['cur_temp_c'] ?? null),
+          'humidity' => $data['hum'] ?? ($data['cur_humid'] ?? null),
+          'pressure' => $data['bar'] ?? ($data['cur_bar_pres'] ?? null),
+          'voltage_v' => $data['v'] ?? ($data['sys_voltage'] ?? null),
+          'free_mem' => $data['fm'] ?? ($data['free_mem'] ?? null),
+          'lora_rssi' => $data['lora_SigStr'] ?? null,
+          'wifi_rssi' => $data['wifi_rssi'] ?? null,
+          'gps_lat' => $data['gps_lat'] ?? null,
+          'gps_lng' => $data['gps_lng'] ?? null,
+          'gps_alt_m' => $data['gps_alt_m'] ?? null,
+          'gps_accuracy_m' => $data['gps_accuracy_m'] ?? null,
+          'gps_last_fix_ts' => $data['gps_last_fix_ts'] ?? null,
         ];
-        $resp = wp_remote_post($endpoint, $args);
-        if (is_wp_error($resp)) {
-          // Log lightweight failure; avoid noisy fatal
-          do_action('tmon_uc_forward_error', $norm['unit_id'], $resp->get_error_message());
-        } else {
-          do_action('tmon_uc_forward_success', $norm['unit_id'], wp_remote_retrieve_response_code($resp));
+        // Surface applied thresholds if present
+        $norm['frost_active_temp'] = $data['FROSTWATCH_ACTIVE_TEMP'] ?? ($data['frost_active_temp'] ?? null);
+        $norm['frost_clear_temp']  = $data['FROSTWATCH_CLEAR_TEMP'] ?? ($data['frost_clear_temp'] ?? null);
+        $norm['frost_interval_s']  = $data['FROSTWATCH_LORA_INTERVAL'] ?? ($data['frost_interval_s'] ?? null);
+        $norm['heat_active_temp']  = $data['HEATWATCH_ACTIVE_TEMP'] ?? ($data['heat_active_temp'] ?? null);
+        $norm['heat_clear_temp']   = $data['HEATWATCH_CLEAR_TEMP'] ?? ($data['heat_clear_temp'] ?? null);
+        $norm['heat_interval_s']   = $data['HEATWATCH_LORA_INTERVAL'] ?? ($data['heat_interval_s'] ?? null);
+
+        // Store locally and forward
+        do_action('tmon_uc_receive_field_data', $norm);
+
+        $admin_url = get_option('tmon_uc_admin_url');
+        $admin_key = get_option('tmon_uc_admin_key');
+        if ($admin_url && $admin_key && wp_http_validate_url($admin_url)) {
+          $endpoint = rtrim($admin_url,'/') . '/wp-json/tmon-admin/v1/field-data';
+          $args = [
+            'timeout' => 10,
+            'headers' => [
+              'Content-Type' => 'application/json',
+              'X-TMON-ADMIN' => $admin_key,
+            ],
+            'body' => wp_json_encode($norm),
+          ];
+          $resp = wp_remote_post($endpoint, $args);
+          if (is_wp_error($resp)) {
+            do_action('tmon_uc_forward_error', $norm['unit_id'], $resp->get_error_message());
+          } else {
+            do_action('tmon_uc_forward_success', $norm['unit_id'], wp_remote_retrieve_response_code($resp));
+          }
         }
+      };
+
+      // If batched payload with 'data' array, process each entry
+      if (isset($payload['data']) && is_array($payload['data'])) {
+        $defaults = [
+          'unit_id' => $payload['unit_id'] ?? '',
+          'machine_id' => $payload['machine_id'] ?? ($payload['mid'] ?? ''),
+          'name' => $payload['name'] ?? '',
+        ];
+        foreach ($payload['data'] as $entry) {
+          if (is_array($entry)) {
+            $process_one($entry, $defaults);
+          }
+        }
+        return ['ok' => true, 'count' => count($payload['data'])];
       }
-      return ['ok' => true];
+
+      // Single record path
+      $process_one($payload, []);
+      return ['ok' => true, 'count' => 1];
     }
   ]);
   // Admin URL/Key settings page
@@ -117,6 +151,8 @@ add_action('rest_api_init', function() {
           update_option('tmon_uc_admin_url', esc_url_raw($_POST['tmon_uc_admin_url'] ?? ''));
           update_option('tmon_uc_admin_key', sanitize_text_field($_POST['tmon_uc_admin_key'] ?? ''));
           update_option('tmon_uc_device_key', sanitize_text_field($_POST['tmon_uc_device_key'] ?? ''));
+          // Clear thresholds cache on settings change
+          delete_transient('tmon_uc_thresholds_cache');
           echo '<div class="updated"><p>Settings saved.</p></div>';
         }
         $admin_url = esc_url(get_option('tmon_uc_admin_url',''));

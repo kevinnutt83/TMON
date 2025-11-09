@@ -107,29 +107,48 @@ add_action('admin_menu', function() {
       global $wpdb;
       $table = $wpdb->prefix . 'tmon_field_data';
       $wpdb->query("CREATE TABLE IF NOT EXISTS $table (id BIGINT AUTO_INCREMENT PRIMARY KEY, unit_id VARCHAR(64), created_at DATETIME DEFAULT CURRENT_TIMESTAMP, data LONGTEXT)");
-      // Simplified viewer with filters + pagination
+      // Viewer with filters (unit, date range) + pagination
       $unit_filter = isset($_GET['unit_id']) ? sanitize_text_field($_GET['unit_id']) : '';
+      $start = isset($_GET['start']) ? sanitize_text_field($_GET['start']) : '';
+      $end = isset($_GET['end']) ? sanitize_text_field($_GET['end']) : '';
       $page = isset($_GET['paged']) ? max(1, intval($_GET['paged'])) : 1;
       $per_page = isset($_GET['per_page']) ? max(1, min(500, intval($_GET['per_page']))) : 100;
       $offset = ($page - 1) * $per_page;
-      if ($unit_filter !== '') {
-        $total = intval($wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $table WHERE unit_id=%s", $unit_filter)));
-        $rows = $wpdb->get_results($wpdb->prepare("SELECT * FROM $table WHERE unit_id=%s ORDER BY id DESC LIMIT %d OFFSET %d", $unit_filter, $per_page, $offset), ARRAY_A);
+
+      $conditions = [];
+      $params = [];
+      if ($unit_filter !== '') { $conditions[] = 'unit_id = %s'; $params[] = $unit_filter; }
+      if ($start !== '') { $conditions[] = 'created_at >= %s'; $params[] = $start; }
+      if ($end !== '') { $conditions[] = 'created_at <= %s'; $params[] = $end; }
+      $where = $conditions ? ('WHERE ' . implode(' AND ', $conditions)) : '';
+
+      // Count
+      if ($params) {
+        $count_sql = call_user_func_array([$wpdb,'prepare'], array_merge(["SELECT COUNT(*) FROM $table $where"], $params));
+        $total = intval($wpdb->get_var($count_sql));
       } else {
         $total = intval($wpdb->get_var("SELECT COUNT(*) FROM $table"));
-        $rows = $wpdb->get_results($wpdb->prepare("SELECT * FROM $table ORDER BY id DESC LIMIT %d OFFSET %d", $per_page, $offset), ARRAY_A);
       }
+      // Rows
+      if ($params) {
+        $select_sql = call_user_func_array([$wpdb,'prepare'], array_merge(["SELECT * FROM $table $where ORDER BY id DESC LIMIT %d OFFSET %d"], $params, [$per_page, $offset]));
+      } else {
+        $select_sql = $wpdb->prepare("SELECT * FROM $table ORDER BY id DESC LIMIT %d OFFSET %d", $per_page, $offset);
+      }
+      $rows = $wpdb->get_results($select_sql, ARRAY_A);
       $total_pages = max(1, ceil($total / $per_page));
       echo '<div class="wrap"><h1>Field Data Viewer</h1>';
       echo '<form method="get" style="margin-bottom:15px;">';
       echo '<input type="hidden" name="page" value="tmon-admin-field-data-viewer" />';
       echo '<label>Unit ID: <input type="text" name="unit_id" value="'.esc_attr($unit_filter).'" /></label> ';
+      echo '<label>Start (YYYY-MM-DD HH:MM:SS): <input type="text" name="start" placeholder="2025-01-01 00:00:00" value="'.esc_attr($start).'" /></label> ';
+      echo '<label>End (YYYY-MM-DD HH:MM:SS): <input type="text" name="end" placeholder="2025-12-31 23:59:59" value="'.esc_attr($end).'" /></label> ';
       echo '<label>Per Page: <input style="width:80px" type="number" name="per_page" value="'.esc_attr($per_page).'" /></label> ';
       echo '<input type="submit" class="button" value="Filter" />';
       echo '</form>';
       echo '<p>Total records: '.esc_html($total).' | Page '.esc_html($page).' of '.esc_html($total_pages).'</p>';
       if (!$rows) { echo '<p><em>No data found.</em></p></div>'; return; }
-      echo '<table class="widefat"><thead><tr><th>ID</th><th>Created</th><th>Unit</th><th>Temp F</th><th>Humidity</th><th>Pressure</th><th>Voltage</th><th>Origin</th></tr></thead><tbody>';
+    echo '<table class="widefat"><thead><tr><th>ID</th><th>Created</th><th>Unit</th><th>Temp F</th><th>Humidity</th><th>Pressure</th><th>Voltage</th><th>Origin</th><th>Thresholds</th></tr></thead><tbody>';
       foreach ($rows as $r) {
           $d = json_decode($r['data'], true);
           if (!is_array($d)) $d = [];
@@ -140,9 +159,20 @@ add_action('admin_menu', function() {
           $hum = isset($d['hum']) ? $d['hum'] : ($d['cur_humid'] ?? '');
           $pres = isset($d['bar']) ? $d['bar'] : ($d['cur_bar_pres'] ?? '');
           $volt = isset($d['v']) ? $d['v'] : ($d['sys_voltage'] ?? '');
+      $thr = '';
+      $fa = $d['frost_active_temp'] ?? ($d['FROSTWATCH_ACTIVE_TEMP'] ?? null);
+      $fc = $d['frost_clear_temp'] ?? ($d['FROSTWATCH_CLEAR_TEMP'] ?? null);
+      $fi = $d['frost_interval_s'] ?? ($d['FROSTWATCH_LORA_INTERVAL'] ?? null);
+      $ha = $d['heat_active_temp'] ?? ($d['HEATWATCH_ACTIVE_TEMP'] ?? null);
+      $hc = $d['heat_clear_temp'] ?? ($d['HEATWATCH_CLEAR_TEMP'] ?? null);
+      $hi = $d['heat_interval_s'] ?? ($d['HEATWATCH_LORA_INTERVAL'] ?? null);
+      if ($fa || $ha) {
+      $thr = 'F:' . esc_html((string)$fa) . '/' . esc_html((string)$fc) . ' (' . esc_html((string)$fi) . 's) ' .
+           'H:' . esc_html((string)$ha) . '/' . esc_html((string)$hc) . ' (' . esc_html((string)$hi) . 's)';
+      }
           echo '<tr>';
-          echo '<td>'.intval($r['id']).'</td><td>'.esc_html($r['created_at']).'</td><td>'.esc_html($r['unit_id']).'</td>';
-          echo '<td>'.esc_html($tf).'</td><td>'.esc_html($hum).'</td><td>'.esc_html($pres).'</td><td>'.esc_html($volt).'</td><td>'.esc_html($origin).'</td>';
+      echo '<td>'.intval($r['id']).'</td><td>'.esc_html($r['created_at']).'</td><td>'.esc_html($r['unit_id']).'</td>';
+      echo '<td>'.esc_html($tf).'</td><td>'.esc_html($hum).'</td><td>'.esc_html($pres).'</td><td>'.esc_html($volt).'</td><td>'.esc_html($origin).'</td><td>'.$thr.'</td>';
           echo '</tr>';
       }
       echo '</tbody></table>';
