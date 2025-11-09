@@ -1,2 +1,2 @@
 # TMON
-TMON is a python based envirmental monitoring program which relays data back to a wordpress website for viewing. 
+TMON is a Python-based environmental monitoring program that relays data back to a WordPress website for viewing. 
