@@ -217,6 +217,12 @@ async def first_boot_provision():
             # If remote node, disable WiFi after provisioning
             if getattr(settings, 'NODE_TYPE', 'base') == 'remote' and getattr(settings, 'WIFI_DISABLE_AFTER_PROVISION', True):
                 disable_wifi()
+            # One-shot OTA job poll to pick up any staged updates after registration
+            try:
+                from wprest import poll_ota_jobs
+                await poll_ota_jobs()
+            except Exception:
+                pass
     except Exception as e:
         await debug_print('Provisioning check-in failed: %s' % e, 'ERROR')
 
@@ -233,6 +239,15 @@ async def startup():
     if getattr(settings, 'NODE_TYPE', 'base') == 'base':
         tm.add_task(periodic_field_data_task, 'field_data', settings.FIELD_DATA_SEND_INTERVAL)
         tm.add_task(periodic_command_poll_task, 'cmd_poll', 10)
+    # OLED periodic UI refresh (page 0 by default). Keep lightweight.
+    if getattr(settings, 'ENABLE_OLED', False):
+        from oled import update_display
+        async def oled_task():
+            try:
+                await update_display(0)
+            except Exception:
+                pass
+        tm.add_task(oled_task, 'oled_ui', 5)
     await tm.run()
 
 def run_asyncio_thread():

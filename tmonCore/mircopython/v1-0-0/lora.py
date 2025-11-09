@@ -750,6 +750,21 @@ async def connectLora():
                         # Include absolute and relative schedule in ACK for robustness
                         next_in = max(1, int(candidate - now_epoch))
                         ack = {'ack': 'ok', 'next': candidate, 'next_in': next_in}
+                        # Optionally broadcast base GPS to remotes
+                        try:
+                            if getattr(settings, 'GPS_BROADCAST_TO_REMOTES', True):
+                                blat = getattr(settings, 'GPS_LAT', None)
+                                blng = getattr(settings, 'GPS_LNG', None)
+                                balt = getattr(settings, 'GPS_ALT_M', None)
+                                bacc = getattr(settings, 'GPS_ACCURACY_M', None)
+                                bts = getattr(settings, 'GPS_LAST_FIX_TS', None)
+                                if (blat is not None) and (blng is not None):
+                                    ack.update({'gps_lat': blat, 'gps_lng': blng})
+                                    if balt is not None: ack['gps_alt_m'] = balt
+                                    if bacc is not None: ack['gps_accuracy_m'] = bacc
+                                    if bts is not None: ack['gps_last_fix_ts'] = bts
+                        except Exception:
+                            pass
                         try:
                             if lora is None:
                                 raise Exception('LoRa unavailable for ACK TX')

@@ -236,6 +236,8 @@ function tmon_admin_menu() {
 
     add_submenu_page('tmon-admin', 'Provisioning', 'Provisioning', 'manage_options', 'tmon-admin-provisioning', 'tmon_admin_provisioning_page');
 
+    add_submenu_page('tmon-admin', 'Devices', 'Devices', 'manage_options', 'tmon-admin-devices', 'tmon_admin_devices_page');
+
     add_submenu_page('tmon-admin', 'Field Data Log', 'Field Data Log', 'manage_options', 'tmon-admin-field-data', 'tmon_admin_field_data_page');
         add_submenu_page('tmon-admin', 'Data History Log', 'Data History Log', 'manage_options', 'tmon-admin-data-history', 'tmon_admin_data_history_page');
     add_submenu_page('tmon-admin', 'Device Location', 'Device Location', 'manage_options', 'tmon-admin-location', 'tmon_admin_location_page');
@@ -279,6 +281,9 @@ function tmon_admin_export_page() {
 }
 function tmon_admin_ai_feedback_page() {
     require TMON_ADMIN_PATH . 'templates/ai-feedback.php';
+}
+function tmon_admin_devices_page() {
+    require TMON_ADMIN_PATH . 'admin/devices.php';
 }
 
 function tmon_admin_pairings_page(){
