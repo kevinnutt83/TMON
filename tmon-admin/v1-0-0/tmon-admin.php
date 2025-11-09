@@ -8,6 +8,35 @@ if (!defined('ABSPATH')) { exit; }
 
 // Basic REST route for device suspension (simplified)
 add_action('rest_api_init', function() {
+  // Read-only thresholds/settings endpoint for firmware sync
+  register_rest_route('tmon-admin/v1', '/settings/thresholds', [
+    'methods' => 'GET',
+    'permission_callback' => function() {
+        // Allow admin user or shared key header (same key used for UC forwarding)
+        if (current_user_can('manage_options')) return true;
+        $hdrs = function_exists('getallheaders') ? getallheaders() : [];
+        $admin_key = get_option('tmon_admin_uc_key');
+        $sent = $hdrs['X-TMON-ADMIN'] ?? ($_SERVER['HTTP_X_TMON_ADMIN'] ?? '');
+        return $admin_key && hash_equals($admin_key, (string)$sent);
+    },
+    'callback' => function($req) {
+        // Return frost/heat thresholds + intervals used by firmware
+        $resp = [
+          'frost' => [
+            'active_temp_f' => intval(get_option('tmon_frost_active_temp', 70)),
+            'clear_temp_f'  => intval(get_option('tmon_frost_clear_temp', 73)),
+            'lora_interval_s' => intval(get_option('tmon_frost_lora_interval', 60)),
+          ],
+          'heat' => [
+            'active_temp_f' => intval(get_option('tmon_heat_active_temp', 90)),
+            'clear_temp_f'  => intval(get_option('tmon_heat_clear_temp', 87)),
+            'lora_interval_s' => intval(get_option('tmon_heat_lora_interval', 120)),
+          ],
+          'version' => '1.0.0'
+        ];
+        return $resp;
+    }
+  ]);
   register_rest_route('tmon-admin/v1', '/device/suspend', [
     'methods' => 'POST',
     'permission_callback' => function() { return current_user_can('manage_options'); },
@@ -72,5 +101,63 @@ add_action('admin_menu', function() {
   });
   add_submenu_page('tmon-admin', 'Devices', 'Devices', 'manage_options', 'tmon-admin-devices', function() {
     include __DIR__ . '/admin/devices.php';
+  });
+  // Field Data Viewer submenu
+  add_submenu_page('tmon-admin', 'Field Data Viewer', 'Field Data Viewer', 'manage_options', 'tmon-admin-field-data-viewer', function(){
+      global $wpdb;
+      $table = $wpdb->prefix . 'tmon_field_data';
+      $wpdb->query("CREATE TABLE IF NOT EXISTS $table (id BIGINT AUTO_INCREMENT PRIMARY KEY, unit_id VARCHAR(64), created_at DATETIME DEFAULT CURRENT_TIMESTAMP, data LONGTEXT)");
+      // Simplified viewer with filters + pagination
+      $unit_filter = isset($_GET['unit_id']) ? sanitize_text_field($_GET['unit_id']) : '';
+      $page = isset($_GET['paged']) ? max(1, intval($_GET['paged'])) : 1;
+      $per_page = isset($_GET['per_page']) ? max(1, min(500, intval($_GET['per_page']))) : 100;
+      $offset = ($page - 1) * $per_page;
+      if ($unit_filter !== '') {
+        $total = intval($wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $table WHERE unit_id=%s", $unit_filter)));
+        $rows = $wpdb->get_results($wpdb->prepare("SELECT * FROM $table WHERE unit_id=%s ORDER BY id DESC LIMIT %d OFFSET %d", $unit_filter, $per_page, $offset), ARRAY_A);
+      } else {
+        $total = intval($wpdb->get_var("SELECT COUNT(*) FROM $table"));
+        $rows = $wpdb->get_results($wpdb->prepare("SELECT * FROM $table ORDER BY id DESC LIMIT %d OFFSET %d", $per_page, $offset), ARRAY_A);
+      }
+      $total_pages = max(1, ceil($total / $per_page));
+      echo '<div class="wrap"><h1>Field Data Viewer</h1>';
+      echo '<form method="get" style="margin-bottom:15px;">';
+      echo '<input type="hidden" name="page" value="tmon-admin-field-data-viewer" />';
+      echo '<label>Unit ID: <input type="text" name="unit_id" value="'.esc_attr($unit_filter).'" /></label> ';
+      echo '<label>Per Page: <input style="width:80px" type="number" name="per_page" value="'.esc_attr($per_page).'" /></label> ';
+      echo '<input type="submit" class="button" value="Filter" />';
+      echo '</form>';
+      echo '<p>Total records: '.esc_html($total).' | Page '.esc_html($page).' of '.esc_html($total_pages).'</p>';
+      if (!$rows) { echo '<p><em>No data found.</em></p></div>'; return; }
+      echo '<table class="widefat"><thead><tr><th>ID</th><th>Created</th><th>Unit</th><th>Temp F</th><th>Humidity</th><th>Pressure</th><th>Voltage</th><th>Origin</th></tr></thead><tbody>';
+      foreach ($rows as $r) {
+          $d = json_decode($r['data'], true);
+          if (!is_array($d)) $d = [];
+          $origin = 'unknown';
+          if (!empty($d['machine_id'])) { $origin = 'remote'; }
+          elseif (!empty($d['NODE_TYPE'])) { $origin = strtolower($d['NODE_TYPE'])==='remote' ? 'remote':'base'; }
+          $tf = isset($d['t_f']) ? $d['t_f'] : ($d['cur_temp_f'] ?? '');
+          $hum = isset($d['hum']) ? $d['hum'] : ($d['cur_humid'] ?? '');
+          $pres = isset($d['bar']) ? $d['bar'] : ($d['cur_bar_pres'] ?? '');
+          $volt = isset($d['v']) ? $d['v'] : ($d['sys_voltage'] ?? '');
+          echo '<tr>';
+          echo '<td>'.intval($r['id']).'</td><td>'.esc_html($r['created_at']).'</td><td>'.esc_html($r['unit_id']).'</td>';
+          echo '<td>'.esc_html($tf).'</td><td>'.esc_html($hum).'</td><td>'.esc_html($pres).'</td><td>'.esc_html($volt).'</td><td>'.esc_html($origin).'</td>';
+          echo '</tr>';
+      }
+      echo '</tbody></table>';
+      if ($total_pages > 1) {
+        $base_url = admin_url('admin.php?page=tmon-admin-field-data-viewer');
+        if ($unit_filter !== '') $base_url = add_query_arg('unit_id', urlencode($unit_filter), $base_url);
+        $base_url = add_query_arg('per_page', $per_page, $base_url);
+        echo '<div class="tablenav"><div class="tablenav-pages">';
+        for ($p=1; $p <= $total_pages; $p++) {
+          $link = add_query_arg('paged', $p, $base_url);
+          $class = $p === $page ? ' class="current-page"' : '';
+          echo '<a'.$class.' style="margin-right:4px" href="'.esc_url($link).'">'.intval($p).'</a>';
+        }
+        echo '</div></div>';
+      }
+      echo '</div>';
   });
 });

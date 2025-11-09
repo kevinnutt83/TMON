@@ -225,6 +225,12 @@ async def send_field_data_log():
                     try:
                         token = get_jwt_token()
                         headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json; charset=utf-8'}
+                        try:
+                            dev_key = getattr(settings, 'UC_DEVICE_POST_KEY', '')
+                            if dev_key:
+                                headers['X-TMON-DEVICE'] = dev_key
+                        except Exception:
+                            pass
                         await debug_print(f'send_field_data_log: Attempt {attempt} POST to {WORDPRESS_API_URL}/wp-json/tmon/v1/device/field-data', 'DEBUG')
                         safe_payload = _sanitize_json(payload)
                         try:

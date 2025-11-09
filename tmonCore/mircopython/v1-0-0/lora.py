@@ -46,6 +46,7 @@ from wprest import (
     send_data_to_wp,
     send_settings_to_wp,
     fetch_settings_from_wp,
+    fetch_admin_thresholds_via_uc,
     send_file_to_wp,
     request_file_from_wp,
     heartbeat_ping,
@@ -200,6 +201,11 @@ async def periodic_wp_sync():
         await register_with_wp()
         await send_settings_to_wp()
         await fetch_settings_from_wp()
+        # Also fetch Admin thresholds via UC proxy when configured
+        try:
+            await fetch_admin_thresholds_via_uc()
+        except Exception:
+            pass
         await send_data_to_wp()
         await poll_ota_jobs()
         await asyncio.sleep(300)  # Sync every 5 minutes

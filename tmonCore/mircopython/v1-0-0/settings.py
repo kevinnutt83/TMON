@@ -17,6 +17,7 @@ WORDPRESS_PASSWORD = "Pepper-1"  # Set to your WordPress password
 MACHINE_ID = None                 # Populated by firmware from chipset UID on first boot
 UNIT_PROVISIONED = False  # Set to True after initial setup is complete
 TMON_ADMIN_API_URL = "https://tmonsystems.com"  # TMON Admin Hub API for first-boot check-in (optional)
+ADMIN_SHARED_KEY = ""  # Shared key with Admin hub for thresholds/settings fetch (X-TMON-ADMIN header)
 PROVISION_CHECK_INTERVAL_S = 30   # Retry interval for hub check-in
 PROVISION_MAX_RETRIES = 60        # Max retries before longer backoff
 WIFI_ALWAYS_ON_WHEN_UNPROVISIONED = True  # keep WiFi enabled until provisioned
@@ -149,12 +150,21 @@ FROSTWATCH_ACTIVE_TEMP = 70
 FROSTWATCH_ALERT_TEMP = 42
 FROSTWATCH_ACTION_TEMP = 38
 FROSTWATCH_STANDDOWN_TEMP = 40
+# Preferred variable names used by firmware auto-relax logic
+FROSTWATCH_CLEAR_TEMP = 73  # if not configured, firmware may derive from ACTIVE_TEMP
+FROSTWATCH_LORA_INTERVAL = 60
 
 ENABLE_HEATWATCH = False
 HEATWATCH_ACTIVE_TEMP = 90
 HEATWATCH_ALERT_TEMP = 100
 HEATWATCH_ACTION_TEMP = 110
 HEATWATCH_STANDDOWN_TEMP = 105
+# Preferred variable names used by firmware auto-relax logic
+HEATWATCH_CLEAR_TEMP = 87
+HEATWATCH_LORA_INTERVAL = 120
+
+# Unit Connector device POST key (adds X-TMON-DEVICE header)
+UC_DEVICE_POST_KEY = ""
 
 # --- OTA & Command/Relay Safety ---
 OTA_ENABLED = True

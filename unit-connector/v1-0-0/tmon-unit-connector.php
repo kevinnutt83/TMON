@@ -7,9 +7,49 @@
 if (!defined('ABSPATH')) { exit; }
 
 add_action('rest_api_init', function() {
+  // Proxy: expose Admin thresholds to devices via UC (auth by device key)
+  register_rest_route('tmon/v1', '/admin/thresholds', [
+  'methods' => 'GET',
+  'permission_callback' => function(){
+    if (current_user_can('manage_options')) return true;
+    $headers = function_exists('getallheaders') ? getallheaders() : [];
+    $sent = $headers['X-TMON-DEVICE'] ?? ($_SERVER['HTTP_X_TMON_DEVICE'] ?? '');
+    $expected = get_option('tmon_uc_device_key');
+    return $expected && hash_equals($expected, (string)$sent);
+  },
+  'callback' => function($req){
+    $admin_url = get_option('tmon_uc_admin_url');
+    $admin_key = get_option('tmon_uc_admin_key');
+    if (!$admin_url || !$admin_key || !wp_http_validate_url($admin_url)) {
+      return new WP_Error('uc_not_configured','Admin URL/key not set',['status'=>500]);
+    }
+    $endpoint = rtrim($admin_url,'/').'/wp-json/tmon-admin/v1/settings/thresholds';
+    $resp = wp_remote_get($endpoint, [
+      'timeout' => 10,
+      'headers' => [ 'X-TMON-ADMIN' => $admin_key ]
+    ]);
+    if (is_wp_error($resp)) {
+      return new WP_Error('admin_fetch_failed',$resp->get_error_message(),['status'=>502]);
+    }
+    $code = wp_remote_retrieve_response_code($resp);
+    $body = wp_remote_retrieve_body($resp);
+    $json = json_decode($body, true);
+    if ($code !== 200 || !is_array($json)) {
+      return new WP_Error('bad_admin_response','Unexpected Admin response',['status'=>502]);
+    }
+    return $json;
+  }
+  ]);
   register_rest_route('tmon/v1', '/device/field-data', [
     'methods' => 'POST',
-    'permission_callback' => '__return_true', // Replace with key/header auth
+    'permission_callback' => function() {
+        // Require shared device key header unless user is admin
+        if (current_user_can('manage_options')) return true;
+        $headers = function_exists('getallheaders') ? getallheaders() : [];
+        $sent = $headers['X-TMON-DEVICE'] ?? ($_SERVER['HTTP_X_TMON_DEVICE'] ?? '');
+        $expected = get_option('tmon_uc_device_key');
+        return $expected && hash_equals($expected, (string)$sent);
+    },
     'callback' => function($req) {
       $data = $req->get_json_params();
       if (!is_array($data)) {
@@ -76,16 +116,20 @@ add_action('rest_api_init', function() {
         if (isset($_POST['tmon_uc_save']) && check_admin_referer('tmon_uc_settings_save')) {
           update_option('tmon_uc_admin_url', esc_url_raw($_POST['tmon_uc_admin_url'] ?? ''));
           update_option('tmon_uc_admin_key', sanitize_text_field($_POST['tmon_uc_admin_key'] ?? ''));
+          update_option('tmon_uc_device_key', sanitize_text_field($_POST['tmon_uc_device_key'] ?? ''));
           echo '<div class="updated"><p>Settings saved.</p></div>';
         }
         $admin_url = esc_url(get_option('tmon_uc_admin_url',''));
         $admin_key = esc_html(get_option('tmon_uc_admin_key',''));
+        $device_key = esc_html(get_option('tmon_uc_device_key',''));
         echo '<div class="wrap"><h1>TMON Unit Connector Settings</h1><form method="post">';
         wp_nonce_field('tmon_uc_settings_save');
         echo '<table class="form-table"><tr><th scope="row"><label for="tmon_uc_admin_url">Admin Hub URL</label></th><td><input type="url" name="tmon_uc_admin_url" id="tmon_uc_admin_url" class="regular-text" value="'.$admin_url.'" placeholder="https://admin.example.com" /></td></tr>';
         echo '<tr><th scope="row"><label for="tmon_uc_admin_key">Admin Shared Key</label></th><td><input type="text" name="tmon_uc_admin_key" id="tmon_uc_admin_key" class="regular-text" value="'.$admin_key.'" /></td></tr>';
+        echo '<tr><th scope="row"><label for="tmon_uc_device_key">Device POST Key (X-TMON-DEVICE)</label></th><td><input type="text" name="tmon_uc_device_key" id="tmon_uc_device_key" class="regular-text" value="'.$device_key.'" /></td></tr>';
         echo '</table><p><input type="submit" name="tmon_uc_save" class="button button-primary" value="Save Changes" /></p></form>';
         echo '<h2>Forwarding Status</h2><p>Records will forward when both URL and key are set.</p>';
+        echo '<p>Device POSTs must include header <code>X-TMON-DEVICE</code> matching the configured Device POST Key.</p>';
         echo '</div>';
       }
     );

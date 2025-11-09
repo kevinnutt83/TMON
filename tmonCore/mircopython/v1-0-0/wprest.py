@@ -179,6 +179,50 @@ async def fetch_settings_from_wp():
     except Exception as e:
         await debug_print(f'Failed to fetch settings from WP: {e}', 'ERROR')
 
+async def fetch_admin_thresholds_via_uc():
+    """Fetch frost/heat thresholds from Admin hub via Unit Connector proxy endpoint.
+    Requires UC device key set in settings.UC_DEVICE_POST_KEY and ADMIN_SHARED_KEY on UC.
+    Populates CLEAR/LORA_INTERVAL variables when present.
+    """
+    try:
+        uc_url = getattr(settings, 'WORDPRESS_API_URL', '')
+        device_key = getattr(settings, 'UC_DEVICE_POST_KEY', '')
+        if not uc_url or not device_key:
+            return
+        endpoint = uc_url.rstrip('/') + '/wp-json/tmon/v1/admin/thresholds'
+        headers = {'X-TMON-DEVICE': device_key}
+        resp = requests.get(endpoint, headers=headers, timeout=10)
+        if resp.status_code != 200:
+            await debug_print(f'Admin thresholds fetch failed: {resp.status_code}', 'WARN')
+            return
+        try:
+            payload = resp.json()
+        except Exception:
+            payload = None
+        if not isinstance(payload, dict):
+            return
+        frost = payload.get('frost', {})
+        heat = payload.get('heat', {})
+        # Map into settings if keys present
+        try:
+            if 'active_temp_f' in frost:
+                settings.FROSTWATCH_ACTIVE_TEMP = int(frost.get('active_temp_f'))
+            if 'clear_temp_f' in frost:
+                settings.FROSTWATCH_CLEAR_TEMP = int(frost.get('clear_temp_f'))
+            if 'lora_interval_s' in frost:
+                settings.FROSTWATCH_LORA_INTERVAL = int(frost.get('lora_interval_s'))
+            if 'active_temp_f' in heat:
+                settings.HEATWATCH_ACTIVE_TEMP = int(heat.get('active_temp_f'))
+            if 'clear_temp_f' in heat:
+                settings.HEATWATCH_CLEAR_TEMP = int(heat.get('clear_temp_f'))
+            if 'lora_interval_s' in heat:
+                settings.HEATWATCH_LORA_INTERVAL = int(heat.get('lora_interval_s'))
+            await debug_print('Admin thresholds applied', 'HTTP')
+        except Exception:
+            pass
+    except Exception as e:
+        await debug_print(f'Failed to fetch admin thresholds via UC: {e}', 'WARN')
+
 async def send_file_to_wp(filepath):
     if not WORDPRESS_API_URL:
         await debug_print('No WordPress API URL set', 'ERROR')
