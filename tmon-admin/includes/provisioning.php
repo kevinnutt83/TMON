@@ -586,7 +586,7 @@ EOT;
         wp_nonce_field('tmon_admin_provision');
         echo '<input type="hidden" name="action" value="update" />';
         echo '<input type="hidden" name="id" value="'.intval($r['id']).'" />';
-        // FIXED: Proper concatenation for dropdowns to avoid parse error
+        // FIX: Proper concatenation for dropdowns to avoid parse error
         echo ' Role <select name="role">'
             . '<option value="base"' . selected($r['role'], 'base', false) . '>base</option>'
             . '<option value="remote"' . selected($r['role'], 'remote', false) . '>remote</option>'
