@@ -239,98 +239,6 @@ add_action('rest_api_init', function() {
         }
     ]);
 
-    // Device first-boot check-in (WiFi): unit posts unit_id + machine_id
-    register_rest_route('tmon-admin/v1', '/device/check-in', [
-        'methods' => 'POST',
-        'callback' => function($request){
-            global $wpdb;
-            $unit_id_in = sanitize_text_field($request->get_param('unit_id'));
-            $machine_id = sanitize_text_field($request->get_param('machine_id'));
-            if (!$machine_id) return rest_ensure_response(['status'=>'error','message'=>'Missing machine_id']);
-
-            $table = $wpdb->prefix.'tmon_provisioned_devices';
-
-            // Allocate next UNIT_ID (6 digits), ensuring uniqueness
-            $alloc_unit_id = function() use ($wpdb, $table) {
-                $seq = intval(get_option('tmon_admin_next_unit_seq', 1));
-                for ($i=0; $i<1000000; $i++) {
-                    $candidate = str_pad((string)$seq, 6, '0', STR_PAD_LEFT);
-                    $exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $table WHERE unit_id=%s", $candidate));
-                    if (!$exists) { update_option('tmon_admin_next_unit_seq', ($seq>=999999?1:($seq+1))); return $candidate; }
-                    $seq = ($seq>=999999?1:($seq+1));
-                }
-                return null;
-            };
-
-            $needs_alloc = (empty($unit_id_in) || strtolower($unit_id_in) === 'none');
-            $unit_id = $needs_alloc ? $alloc_unit_id() : $unit_id_in;
-            if (!$unit_id) return rest_ensure_response(['status'=>'error','message'=>'Unable to allocate UNIT_ID']);
-
-            // Prefer existing row by machine_id; else by unit_id; else insert
-            $row_mid = $wpdb->get_row($wpdb->prepare("SELECT id FROM $table WHERE machine_id=%s", $machine_id), ARRAY_A);
-            $row_uid = $wpdb->get_row($wpdb->prepare("SELECT id FROM $table WHERE unit_id=%s", $unit_id), ARRAY_A);
-            if ($row_mid) {
-                $wpdb->update($table, ['unit_id'=>$unit_id, 'status'=>'registered', 'updated_at'=>current_time('mysql')], ['id'=>$row_mid['id']]);
-            } elseif ($row_uid) {
-                $wpdb->update($table, ['machine_id'=>$machine_id, 'status'=>'registered', 'updated_at'=>current_time('mysql')], ['id'=>$row_uid['id']]);
-            } else {
-                $wpdb->insert($table, [
-                    'unit_id'=>$unit_id,'machine_id'=>$machine_id,'status'=>'registered',
-                    'notes'=>'first-boot check-in','created_at'=>current_time('mysql'),'updated_at'=>current_time('mysql'),
-                ]);
-            }
-
-            // Mirror to devices table for visibility
-            $dtable = $wpdb->prefix.'tmon_devices';
-            $exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $dtable WHERE unit_id=%s", $unit_id));
-            if (!$exists) {
-                $wpdb->insert($dtable, ['unit_id'=>$unit_id,'unit_name'=>$unit_id,'last_seen'=>current_time('mysql'),'suspended'=>0,'settings'=>wp_json_encode([])]);
-            } else {
-                $wpdb->update($dtable, ['last_seen'=>current_time('mysql')], ['unit_id'=>$unit_id]);
-            }
-
-            do_action('tmon_admin_notify', 'provisioning', "Device checked in: $unit_id", ['unit_id'=>$unit_id,'machine_id'=>$machine_id]);
-
-            // Return assigned UNIT_ID so device can persist it; profile stub reserved for future use
-            return rest_ensure_response(['status'=>'ok','assigned_unit_id'=>$unit_id]);
-        },
-        'permission_callback' => '__return_true',
-    ]);
-
-    // GPS override helper: admin can push GPS directly to a Unit Connector device settings
-    register_rest_route('tmon-admin/v1', '/device/gps-override', [
-        'methods' => 'POST',
-        'permission_callback' => function() { return current_user_can('manage_options'); },
-        'callback' => function($request){
-            $params = $request->get_json_params();
-            $unit_id = sanitize_text_field($params['unit_id'] ?? '');
-            $site_url = esc_url_raw($params['site_url'] ?? '');
-            $lat = isset($params['gps_lat']) ? floatval($params['gps_lat']) : null;
-            $lng = isset($params['gps_lng']) ? floatval($params['gps_lng']) : null;
-            $alt = isset($params['gps_alt_m']) ? floatval($params['gps_alt_m']) : null;
-            $acc = isset($params['gps_accuracy_m']) ? floatval($params['gps_accuracy_m']) : null;
-            if (!$unit_id || !$site_url || is_null($lat) || is_null($lng)) {
-                return new WP_REST_Response(['status'=>'error','message'=>'unit_id, site_url, gps_lat, gps_lng required'], 400);
-            }
-            $settings = ['GPS_LAT'=>$lat, 'GPS_LNG'=>$lng];
-            if (!is_null($alt)) $settings['GPS_ALT_M'] = $alt;
-            if (!is_null($acc)) $settings['GPS_ACCURACY_M'] = $acc;
-            $endpoint = rtrim($site_url, '/') . '/wp-json/tmon/v1/admin/device/settings';
-            $headers = ['Content-Type'=>'application/json'];
-            $admin_key = get_option('tmon_admin_uc_key');
-            if ($admin_key) $headers['X-TMON-ADMIN'] = $admin_key;
-            $resp = wp_remote_post($endpoint, [
-                'timeout' => 20,
-                'headers' => $headers,
-                'body' => wp_json_encode(['unit_id'=>$unit_id, 'settings'=>$settings]),
-            ]);
-            if (is_wp_error($resp)) return new WP_REST_Response(['status'=>'error','message'=>$resp->get_error_message()], 500);
-            $code = wp_remote_retrieve_response_code($resp);
-            if ($code !== 200) return new WP_REST_Response(['status'=>'error','message'=>wp_remote_retrieve_body($resp)], $code);
-            return rest_ensure_response(['status'=>'ok']);
-        }
-    ]);
-
     // Read-only: list provisioned devices for Unit Connector (authenticated via hub shared key)
     register_rest_route('tmon-admin/v1', '/provisioned-devices', [
         'methods' => 'GET',
@@ -421,59 +329,64 @@ add_action('rest_api_init', function () {
 	register_rest_route('tmon-admin/v1', '/device/check-in', [
 		'methods'             => 'POST',
 		'callback'            => 'tmon_admin_handle_device_check_in',
-		'permission_callback' => '__return_true', // Consider adding HMAC/key verification later
+		'permission_callback' => '__return_true',
 	]);
 });
 
-function tmon_admin_handle_device_check_in(WP_REST_Request $request) {
-	global $wpdb;
-	$params     = $request->get_json_params();
-	$machine_id = isset($params['machine_id']) ? sanitize_text_field($params['machine_id']) : '';
+if (!function_exists('tmon_admin_handle_device_check_in')) {
+	function tmon_admin_handle_device_check_in(WP_REST_Request $request) {
+		global $wpdb;
+		$params     = $request->get_json_params();
+		$machine_id = isset($params['machine_id']) ? sanitize_text_field($params['machine_id']) : '';
 
-	if (!$machine_id) {
-		return new WP_REST_Response(['error' => 'machine_id required'], 400);
-	}
+		if (!$machine_id) {
+			return new WP_REST_Response(['error' => 'machine_id required'], 400);
+		}
 
-	$table = $wpdb->prefix . 'tmon_devices';
-	$device = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$table} WHERE machine_id = %s", $machine_id));
+		$table  = $wpdb->prefix . 'tmon_devices';
+		$device = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$table} WHERE machine_id = %s", $machine_id));
 
-	if (!$device) {
-		$unit_id = tmon_admin_generate_unique_unit_id();
-		$inserted = $wpdb->insert(
-			$table,
-			[
+		if (!$device) {
+			$unit_id  = tmon_admin_generate_unique_unit_id();
+			$inserted = $wpdb->insert(
+				$table,
+				[
+					'machine_id'  => $machine_id,
+					'unit_id'     => $unit_id,
+					'provisioned' => 0,
+					'suspended'   => 0,
+					'created_at'  => current_time('mysql'),
+					'updated_at'  => current_time('mysql'),
+					'last_seen'   => current_time('mysql'),
+				],
+				['%s', '%s', '%d', '%d', '%s', '%s', '%s']
+			);
+
+			if ($inserted === false) {
+				return new WP_REST_Response(['error' => 'db insert failed'], 500);
+			}
+
+			do_action('tmon_admin_notify', 'Device registered', ['machine_id' => $machine_id, 'unit_id' => $unit_id]);
+
+			$device = (object) [
 				'machine_id'  => $machine_id,
 				'unit_id'     => $unit_id,
 				'provisioned' => 0,
 				'suspended'   => 0,
-				'created_at'  => current_time('mysql'),
-				'updated_at'  => current_time('mysql'),
-			],
-			['%s', '%s', '%d', '%d', '%s', '%s']
-		);
-
-		if ($inserted === false) {
-			return new WP_REST_Response(['error' => 'db insert failed'], 500);
+			];
+		} else {
+			// Update last_seen on subsequent check-ins
+			$wpdb->update($table, ['last_seen' => current_time('mysql')], ['machine_id' => $machine_id]);
 		}
 
-		do_action('tmon_admin_notify', 'Device registered', ['machine_id' => $machine_id, 'unit_id' => $unit_id]);
-
-		$device = (object) [
-			'machine_id'  => $machine_id,
-			'unit_id'     => $unit_id,
-			'provisioned' => 0,
-			'suspended'   => 0,
+		$response = [
+			'unit_id'     => $device->unit_id,
+			'provisioned' => (int) $device->provisioned === 1,
+			'suspended'   => (int) $device->suspended === 1,
 		];
+
+		return new WP_REST_Response($response, 200);
 	}
-
-	$response = [
-		'unit_id'     => $device->unit_id,
-		'provisioned' => (int) $device->provisioned === 1,
-		'suspended'   => (int) $device->suspended === 1,
-		// Optionally include current config snapshot here for first boot
-	];
-
-	return new WP_REST_Response($response, 200);
 }
 
 // Ensure we don't collide with the UC plugin by using a unique handler name in this plugin.
@@ -487,7 +400,7 @@ if (!function_exists('tmon_admin_get_devices')) {
 		}
 		global $wpdb;
 		$table = $wpdb->prefix . 'tmon_devices';
-		$rows = $wpdb->get_results(
+		$rows  = $wpdb->get_results(
 			"SELECT unit_id, unit_name, company, site, zone, cluster, suspended FROM {$table}",
 			ARRAY_A
 		);

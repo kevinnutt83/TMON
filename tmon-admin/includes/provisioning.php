@@ -467,7 +467,8 @@ function tmon_admin_provisioning_page() {
     if (is_array($remote_known)) {
         foreach ($remote_known as $uid => $d) {
             if (!isset($known_units[$uid])) $known_units[$uid] = isset($d['unit_name']) ? $d['unit_name'] : $uid;
-            if (!empty($d['machine_id']) && !isset($known_machines[$d['machine_id']])) $known_machines[$d['machine_id']] = $uid;
+            if (!empty($d['machine_id']) && !isset($known_machines[$d['machine_id']]))
+                $known_machines[$d['machine_id']] = $uid;
         }
     }
     echo '<tr><th scope="row">Unit ID</th><td>';
@@ -907,3 +908,51 @@ add_action('wp_ajax_tmon_admin_known_units', function(){
         wp_send_json_success(['items' => [], 'page' => 1, 'per_page' => $per_page]);
     }
 });
+
+// Rename the schema function to avoid redeclaration conflicts with includes/db.php
+if (!function_exists('tmon_admin_install_provisioning_schema')) {
+	function tmon_admin_install_provisioning_schema() {
+		global $wpdb;
+		$charset_collate = $wpdb->get_charset_collate();
+		$table = $wpdb->prefix . 'tmon_provisioned_devices';
+		$sql = "CREATE TABLE IF NOT EXISTS $table (
+			id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+			unit_id VARCHAR(64) NOT NULL,
+			machine_id VARCHAR(64) NOT NULL,
+			role VARCHAR(32) DEFAULT 'base',
+			company_id BIGINT UNSIGNED DEFAULT NULL,
+			plan VARCHAR(64) DEFAULT 'standard',
+			status VARCHAR(32) DEFAULT 'active',
+			notes TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY unit_machine (unit_id, machine_id)
+		) $charset_collate;";
+		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+		dbDelta($sql);
+
+		// Claim requests table
+		$claim = $wpdb->prefix . 'tmon_claim_requests';
+		$sql2 = "CREATE TABLE IF NOT EXISTS $claim (
+			id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+			unit_id VARCHAR(64) NOT NULL,
+			machine_id VARCHAR(64) NOT NULL,
+			user_id BIGINT UNSIGNED NOT NULL,
+			status VARCHAR(32) DEFAULT 'pending',
+			notes TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+		) $charset_collate;";
+		dbDelta($sql2);
+	}
+
+	// Ensure it's executed after the core schema installer.
+	add_action('tmon_admin_install_schema_after', 'tmon_admin_install_provisioning_schema');
+
+	// If this file previously registered activation hook to the old name, switch it:
+	if (function_exists('register_activation_hook')) {
+		// Remove any stale reference to the old function name in this file and point to the new one.
+		// register_activation_hook(__FILE__, 'tmon_admin_install_schema');  // remove/replace this if present
+		register_activation_hook(__FILE__, 'tmon_admin_install_provisioning_schema');
+	}
+}
