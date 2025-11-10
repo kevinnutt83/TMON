@@ -8,6 +8,33 @@ if (!defined('ABSPATH')) { exit; }
 
 // Basic REST route for device suspension (simplified)
 add_action('rest_api_init', function() {
+  // Per-UC last sync map endpoint
+  register_rest_route('tmon-admin/v1', '/uc/last-syncs', [
+    'methods' => 'GET',
+    'permission_callback' => function() {
+      if (current_user_can('manage_options')) return true;
+      $hdrs = function_exists('getallheaders') ? getallheaders() : [];
+      $admin_key = get_option('tmon_admin_uc_key');
+      $sent = $hdrs['X-TMON-ADMIN'] ?? ($_SERVER['HTTP_X_TMON_ADMIN'] ?? '');
+      return $admin_key && hash_equals($admin_key, (string)$sent);
+    },
+    'callback' => function($req) {
+      $map = get_option('tmon_admin_uc_thresholds_sync_map', []);
+      if (!is_array($map)) $map = [];
+      // Convert to structured array sorted desc by ts
+      arsort($map);
+      $out = [];
+      foreach ($map as $uc_id => $ts) {
+        $out[] = [
+          'uc_id' => $uc_id,
+          'last_sync_ts' => intval($ts),
+          'last_sync_iso' => $ts ? date_i18n('Y-m-d H:i:s', intval($ts)) : null,
+          'age_human' => $ts ? human_time_diff(intval($ts)) . ' ago' : null,
+        ];
+      }
+      return [ 'uc_syncs' => $out, 'count' => count($out) ];
+    }
+  ]);
   // Read-only thresholds/settings endpoint for firmware sync
   register_rest_route('tmon-admin/v1', '/settings/thresholds', [
     'methods' => 'GET',
@@ -212,6 +239,7 @@ add_action('admin_menu', function() {
           echo '<tr><td>'.esc_html($ucid).'</td><td>'.esc_html($when).'</td><td>'.esc_html($age).'</td></tr>';
         }
         echo '</tbody></table>';
+        echo '<p><em>UC ID best practices:</em> Use a short, unique identifier per Unit Connector site (e.g., <code>uc-east-1</code>). Avoid spaces, prefer lowercase, and rotate only when migrating to a new UC instance.</p>';
       }
       echo '<form method="get" style="margin-bottom:15px;">';
       echo '<input type="hidden" name="page" value="tmon-admin-field-data-viewer" />';

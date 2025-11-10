@@ -229,6 +229,9 @@ async def send_field_data_log():
                             dev_key = getattr(settings, 'UC_DEVICE_POST_KEY', '')
                             if dev_key:
                                 headers['X-TMON-DEVICE'] = dev_key
+                            uc_id = getattr(settings, 'UC_ID', '')
+                            if uc_id:
+                                headers['X-TMON-UC'] = uc_id
                         except Exception:
                             pass
                         await debug_print(f'send_field_data_log: Attempt {attempt} POST to {WORDPRESS_API_URL}/wp-json/tmon/v1/device/field-data', 'DEBUG')
@@ -246,6 +249,14 @@ async def send_field_data_log():
                         except Exception:
                             log_snippet = '<payload>'
                         await debug_print(f'send_field_data_log: Payload: {log_snippet}', 'DEBUG')
+                        # Embed uc_id redundantly in payload if present
+                        if getattr(settings, 'UC_ID', '') and isinstance(safe_payload, dict):
+                            if 'uc_id' not in safe_payload:
+                                safe_payload['uc_id'] = getattr(settings, 'UC_ID')
+                            try:
+                                encoded = ujson.dumps(safe_payload)
+                            except Exception:
+                                pass
                         resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/field-data', headers=headers, data=encoded, timeout=10)
                         try:
                             await debug_print(f'send_field_data_log: Response status: {resp.status_code}', 'DEBUG')

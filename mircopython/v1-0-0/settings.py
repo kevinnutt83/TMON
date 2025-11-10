@@ -166,6 +166,10 @@ HEATWATCH_LORA_INTERVAL = 120
 # Unit Connector device POST key (adds X-TMON-DEVICE header)
 UC_DEVICE_POST_KEY = ""
 
+# Optional Unit Connector ID (for Admin per-UC tracking). If set, firmware will add X-TMON-UC header
+# and include 'uc_id' in posted payloads. Typically set on UC, but can be mirrored here for logs.
+UC_ID = ""
+
 # --- OTA & Command/Relay Safety ---
 OTA_ENABLED = True
 OTA_BACKUP_ENABLED = True                 # keep backup of current firmware/settings
