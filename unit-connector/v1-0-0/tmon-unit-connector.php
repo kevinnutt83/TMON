@@ -6,6 +6,39 @@
  */
 if (!defined('ABSPATH')) { exit; }
 
+// Helper: normalize a single payload for reuse and unit tests
+if (!function_exists('tmon_uc_normalize_payload')) {
+  function tmon_uc_normalize_payload($data, $defaults = []) {
+    $norm = [
+      'unit_id' => $data['unit_id'] ?? ($defaults['unit_id'] ?? ''),
+      'machine_id' => $data['machine_id'] ?? ($data['mid'] ?? ($defaults['machine_id'] ?? '')),
+      'name' => $data['name'] ?? ($defaults['name'] ?? ''),
+      'timestamp' => $data['ts'] ?? ($data['timestamp'] ?? time()),
+      'temp_f' => $data['t_f'] ?? ($data['cur_temp_f'] ?? null),
+      'temp_c' => $data['t_c'] ?? ($data['cur_temp_c'] ?? null),
+      'humidity' => $data['hum'] ?? ($data['cur_humid'] ?? null),
+      'pressure' => $data['bar'] ?? ($data['cur_bar_pres'] ?? null),
+      'voltage_v' => $data['v'] ?? ($data['sys_voltage'] ?? null),
+      'free_mem' => $data['fm'] ?? ($data['free_mem'] ?? null),
+      'lora_rssi' => $data['lora_SigStr'] ?? null,
+      'wifi_rssi' => $data['wifi_rssi'] ?? null,
+      'gps_lat' => $data['gps_lat'] ?? null,
+      'gps_lng' => $data['gps_lng'] ?? null,
+      'gps_alt_m' => $data['gps_alt_m'] ?? null,
+      'gps_accuracy_m' => $data['gps_accuracy_m'] ?? null,
+      'gps_last_fix_ts' => $data['gps_last_fix_ts'] ?? null,
+    ];
+    // Surface applied thresholds if present
+    $norm['frost_active_temp'] = $data['FROSTWATCH_ACTIVE_TEMP'] ?? ($data['frost_active_temp'] ?? null);
+    $norm['frost_clear_temp']  = $data['FROSTWATCH_CLEAR_TEMP'] ?? ($data['frost_clear_temp'] ?? null);
+    $norm['frost_interval_s']  = $data['FROSTWATCH_LORA_INTERVAL'] ?? ($data['frost_interval_s'] ?? null);
+    $norm['heat_active_temp']  = $data['HEATWATCH_ACTIVE_TEMP'] ?? ($data['heat_active_temp'] ?? null);
+    $norm['heat_clear_temp']   = $data['HEATWATCH_CLEAR_TEMP'] ?? ($data['heat_clear_temp'] ?? null);
+    $norm['heat_interval_s']   = $data['HEATWATCH_LORA_INTERVAL'] ?? ($data['heat_interval_s'] ?? null);
+    return $norm;
+  }
+}
+
 add_action('rest_api_init', function() {
   // Proxy: expose Admin thresholds to devices via UC (auth by device key)
   register_rest_route('tmon/v1', '/admin/thresholds', [
@@ -27,6 +60,7 @@ add_action('rest_api_init', function() {
     $cache_key = 'tmon_uc_thresholds_cache';
     $cached = get_transient($cache_key);
     if (is_array($cached)) {
+      // include last_sync metadata when returning cached
       return $cached;
     }
     $endpoint = rtrim($admin_url,'/').'/wp-json/tmon-admin/v1/settings/thresholds';
@@ -43,9 +77,12 @@ add_action('rest_api_init', function() {
     if ($code !== 200 || !is_array($json)) {
       return new WP_Error('bad_admin_response','Unexpected Admin response',['status'=>502]);
     }
-    // Cache short TTL (5 minutes)
-    set_transient($cache_key, $json, 5 * MINUTE_IN_SECONDS);
-    return $json;
+        // Cache short TTL (configurable, minutes)
+        $ttl_minutes = intval(get_option('tmon_uc_threshold_cache_ttl', 5));
+        $ttl_seconds = max(30, $ttl_minutes * 60);
+        $wrapped = ['payload' => $json, 'last_sync' => time()];
+        set_transient($cache_key, $wrapped, $ttl_seconds);
+        return $wrapped;
   }
   ]);
   register_rest_route('tmon/v1', '/device/field-data', [
@@ -151,6 +188,8 @@ add_action('rest_api_init', function() {
           update_option('tmon_uc_admin_url', esc_url_raw($_POST['tmon_uc_admin_url'] ?? ''));
           update_option('tmon_uc_admin_key', sanitize_text_field($_POST['tmon_uc_admin_key'] ?? ''));
           update_option('tmon_uc_device_key', sanitize_text_field($_POST['tmon_uc_device_key'] ?? ''));
+          // Cache TTL option
+          update_option('tmon_uc_threshold_cache_ttl', intval($_POST['tmon_uc_threshold_cache_ttl'] ?? 5));
           // Clear thresholds cache on settings change
           delete_transient('tmon_uc_thresholds_cache');
           echo '<div class="updated"><p>Settings saved.</p></div>';
@@ -158,10 +197,12 @@ add_action('rest_api_init', function() {
         $admin_url = esc_url(get_option('tmon_uc_admin_url',''));
         $admin_key = esc_html(get_option('tmon_uc_admin_key',''));
         $device_key = esc_html(get_option('tmon_uc_device_key',''));
+        $ttl = intval(get_option('tmon_uc_threshold_cache_ttl', 5));
         echo '<div class="wrap"><h1>TMON Unit Connector Settings</h1><form method="post">';
         wp_nonce_field('tmon_uc_settings_save');
         echo '<table class="form-table"><tr><th scope="row"><label for="tmon_uc_admin_url">Admin Hub URL</label></th><td><input type="url" name="tmon_uc_admin_url" id="tmon_uc_admin_url" class="regular-text" value="'.$admin_url.'" placeholder="https://admin.example.com" /></td></tr>';
         echo '<tr><th scope="row"><label for="tmon_uc_admin_key">Admin Shared Key</label></th><td><input type="text" name="tmon_uc_admin_key" id="tmon_uc_admin_key" class="regular-text" value="'.$admin_key.'" /></td></tr>';
+        echo '<tr><th scope="row"><label for="tmon_uc_threshold_cache_ttl">Thresholds cache TTL (minutes)</label></th><td><input type="number" min="0" name="tmon_uc_threshold_cache_ttl" id="tmon_uc_threshold_cache_ttl" class="regular-text" value="'.esc_attr($ttl).'" /></td></tr>';
         echo '<tr><th scope="row"><label for="tmon_uc_device_key">Device POST Key (X-TMON-DEVICE)</label></th><td><input type="text" name="tmon_uc_device_key" id="tmon_uc_device_key" class="regular-text" value="'.$device_key.'" /></td></tr>';
         echo '</table><p><input type="submit" name="tmon_uc_save" class="button button-primary" value="Save Changes" /></p></form>';
         echo '<h2>Forwarding Status</h2><p>Records will forward when both URL and key are set.</p>';

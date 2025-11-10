@@ -129,6 +129,33 @@ add_action('admin_menu', function() {
       } else {
         $total = intval($wpdb->get_var("SELECT COUNT(*) FROM $table"));
       }
+      // CSV export
+      if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
+        // Build rows again (we already have $rows) and output CSV
+        header('Content-Type: text/csv');
+        header('Content-Disposition: attachment; filename="tmon_field_data_export.csv"');
+        $out = fopen('php://output', 'w');
+        fputcsv($out, ['id','created_at','unit_id','temp_f','humidity','pressure','voltage','origin','thresholds']);
+        foreach ($rows as $r) {
+          $d = json_decode($r['data'], true);
+          if (!is_array($d)) $d = [];
+          $origin = 'unknown';
+          if (!empty($d['machine_id'])) { $origin = 'remote'; }
+          elseif (!empty($d['NODE_TYPE'])) { $origin = strtolower($d['NODE_TYPE'])==='remote' ? 'remote':'base'; }
+          $tf = isset($d['t_f']) ? $d['t_f'] : ($d['cur_temp_f'] ?? '');
+          $hum = isset($d['hum']) ? $d['hum'] : ($d['cur_humid'] ?? '');
+          $pres = isset($d['bar']) ? $d['bar'] : ($d['cur_bar_pres'] ?? '');
+          $volt = isset($d['v']) ? $d['v'] : ($d['sys_voltage'] ?? '');
+          $fa = $d['frost_active_temp'] ?? ($d['FROSTWATCH_ACTIVE_TEMP'] ?? '');
+          $fc = $d['frost_clear_temp'] ?? ($d['FROSTWATCH_CLEAR_TEMP'] ?? '');
+          $ha = $d['heat_active_temp'] ?? ($d['HEATWATCH_ACTIVE_TEMP'] ?? '');
+          $hc = $d['heat_clear_temp'] ?? ($d['HEATWATCH_CLEAR_TEMP'] ?? '');
+          $thr = "F:{$fa}/{$fc};H:{$ha}/{$hc}";
+          fputcsv($out, [intval($r['id']), $r['created_at'], $r['unit_id'], $tf, $hum, $pres, $volt, $origin, $thr]);
+        }
+        fclose($out);
+        exit;
+      }
       // Rows
       if ($params) {
         $select_sql = call_user_func_array([$wpdb,'prepare'], array_merge(["SELECT * FROM $table $where ORDER BY id DESC LIMIT %d OFFSET %d"], $params, [$per_page, $offset]));
