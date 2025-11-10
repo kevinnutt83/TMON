@@ -516,6 +516,9 @@ async def connectLora():
                     'bar': getattr(sdata, 'cur_bar_pres', 0),
                     'v': getattr(sdata, 'sys_voltage', 0),
                     'fm': getattr(sdata, 'free_mem', 0),
+                    # LoRa network admission (basic, to be upgraded to HMAC later)
+                    'net': getattr(settings, 'LORA_NETWORK_NAME', 'tmon'),
+                    'key': getattr(settings, 'LORA_NETWORK_PASSWORD', ''),
                 }
                 data = ujson.dumps(payload).encode('utf-8')
 
@@ -677,6 +680,25 @@ async def connectLora():
                     write_lora_log("Base RX packet", 'INFO')
                     try:
                         obj = ujson.loads(msg)
+                        # Basic network credential enforcement
+                        try:
+                            net_ok = (obj.get('net') == getattr(settings, 'LORA_NETWORK_NAME', 'tmon'))
+                            key_ok = (obj.get('key') == getattr(settings, 'LORA_NETWORK_PASSWORD', ''))
+                        except Exception:
+                            net_ok = False
+                            key_ok = False
+                        if not (net_ok and key_ok):
+                            # Optionally send an auth error ack
+                            try:
+                                nack = {'err': 'auth'}
+                                if lora is not None:
+                                    _, stn = lora.send(ujson.dumps(nack).encode('utf-8'))
+                                    write_lora_log(f"Base NACK auth (rc={stn})", 'WARN')
+                            except Exception:
+                                pass
+                            await debug_print('Base: rejected packet (LoRa network credentials mismatch)', 'WARN')
+                            led_status_flash('WARN')
+                            return True
                         # Capture RSSI/SNR and last message for UI
                         try:
                             if hasattr(lora, 'getRSSI'):
@@ -728,7 +750,7 @@ async def connectLora():
 
                         # Include absolute and relative schedule in ACK for robustness
                         next_in = max(1, int(candidate - now_epoch))
-                        ack = {'ack': 'ok', 'next': candidate, 'next_in': next_in}
+                        ack = {'ack': 'ok', 'next': candidate, 'next_in': next_in, 'net': getattr(settings, 'LORA_NETWORK_NAME', 'tmon')}
                         try:
                             if lora is None:
                                 raise Exception('LoRa unavailable for ACK TX')
