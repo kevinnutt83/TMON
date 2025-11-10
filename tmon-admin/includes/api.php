@@ -415,3 +415,94 @@ add_action('tmon_admin_receive_field_data', function($unit_id, $rec) {
 
     // TODO: tie into company/unit association tables when present
 }, 10, 2);
+
+// REST: Device check-in (first boot and recurring)
+add_action('rest_api_init', function () {
+	register_rest_route('tmon-admin/v1', '/device/check-in', [
+		'methods'             => 'POST',
+		'callback'            => 'tmon_admin_handle_device_check_in',
+		'permission_callback' => '__return_true', // Consider adding HMAC/key verification later
+	]);
+});
+
+function tmon_admin_handle_device_check_in(WP_REST_Request $request) {
+	global $wpdb;
+	$params     = $request->get_json_params();
+	$machine_id = isset($params['machine_id']) ? sanitize_text_field($params['machine_id']) : '';
+
+	if (!$machine_id) {
+		return new WP_REST_Response(['error' => 'machine_id required'], 400);
+	}
+
+	$table = $wpdb->prefix . 'tmon_devices';
+	$device = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$table} WHERE machine_id = %s", $machine_id));
+
+	if (!$device) {
+		$unit_id = tmon_admin_generate_unique_unit_id();
+		$inserted = $wpdb->insert(
+			$table,
+			[
+				'machine_id'  => $machine_id,
+				'unit_id'     => $unit_id,
+				'provisioned' => 0,
+				'suspended'   => 0,
+				'created_at'  => current_time('mysql'),
+				'updated_at'  => current_time('mysql'),
+			],
+			['%s', '%s', '%d', '%d', '%s', '%s']
+		);
+
+		if ($inserted === false) {
+			return new WP_REST_Response(['error' => 'db insert failed'], 500);
+		}
+
+		do_action('tmon_admin_notify', 'Device registered', ['machine_id' => $machine_id, 'unit_id' => $unit_id]);
+
+		$device = (object) [
+			'machine_id'  => $machine_id,
+			'unit_id'     => $unit_id,
+			'provisioned' => 0,
+			'suspended'   => 0,
+		];
+	}
+
+	$response = [
+		'unit_id'     => $device->unit_id,
+		'provisioned' => (int) $device->provisioned === 1,
+		'suspended'   => (int) $device->suspended === 1,
+		// Optionally include current config snapshot here for first boot
+	];
+
+	return new WP_REST_Response($response, 200);
+}
+
+// AJAX: Unit Connector device list; ensure columns exist and return safe JSON.
+add_action('wp_ajax_tmon_uc_get_devices', 'tmon_uc_get_devices');
+function tmon_uc_get_devices() {
+	check_ajax_referer('tmon-admin', 'nonce');
+
+	// Capability gate if this action is used in admin.
+	if (!current_user_can('manage_options')) {
+		wp_send_json_error(['message' => 'forbidden'], 403);
+	}
+
+	global $wpdb;
+	$table = $wpdb->prefix . 'tmon_devices';
+
+	// Select the columns used by UI; schema ensured by tmon_admin_install_schema
+	$rows = $wpdb->get_results(
+		"SELECT unit_id, unit_name, company, site, zone, cluster, suspended FROM {$table}",
+		ARRAY_A
+	);
+
+	if ($rows === null) {
+		wp_send_json_error(['message' => 'query failed'], 500);
+	}
+
+	wp_send_json_success($rows);
+}
+
+// Wherever you previously called notifications with one arg, update to pass context as second arg:
+function tmon_admin_example_event_logger($message, $context = []) {
+	do_action('tmon_admin_notify', $message, $context);
+}
