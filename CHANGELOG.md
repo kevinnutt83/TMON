@@ -1,0 +1,41 @@
+## v2.00j — 2025-10-18
+
+- Firmware: OLED change-detection UI with two pages; added WiFi/LoRa telemetry display.
+- Firmware: Field data uploader adds detailed response logging and backlog handling.
+- Unit Connector: Field data API now normalizes remote records (REMOTE_NODE_INFO), writes headered CSV with consistent columns, stores per-unit normalized rows, and forwards unknown devices to TMON Admin when `TMON_ADMIN_HUB_URL` is configured.
+- TMON Admin: Adds `/tmon-admin/v1/ingest-unknown` endpoint to audit and queue auto-provisioning of unassigned machine IDs.
+- Unit Connector: New admin CSV export route for normalized field data to fix prior parsing issues.
+ - Unit Connector: Device status shortcode now includes relay controls (if firmware enables relays). Supports immediate and scheduled toggles with runtime.
+ - Unit Connector: Added JSON field data listing for Admin hub (`/tmon/v1/admin/field-data`) and enhanced CSV export route with time-window and gzip.
+ - TMON Admin: Field Data page shows window filter and a mini chart reflecting REMOTE_SYNC_SCHEDULE; aggregates logs from paired Unit Connectors via `/tmon-admin/v1/field-data`.
+ - TMON Admin: Safe nonce verification to avoid "link expired" fatals across pages; improved provisioning schema migrations and error messages.
+ - Cross-site GPS overrides: Admin pushes GPS to UC via `/tmon/v1/admin/device/settings` using `X-TMON-ADMIN`.
+ - Provisioned Devices in UC falls back to hub endpoint when local table is missing.
+
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+## v.2.00i - 2025-10-17
+
+Firmware (MicroPython):
+- Base-managed LoRa sync scheduling
+  - Added nextLoraSync default (5 minutes) in settings.py
+  - Base assigns per-remote absolute next sync epochs and sends via ACK
+  - Overlap avoidance with minimal spacing window (LORA_SYNC_WINDOW)
+  - Remotes persist next absolute sync to disk and honor it for future TX windows
+  - Fallback probing on remotes before first contact
+- LoRa robustness
+  - Verifies setBlockingCallback and packet type during init
+  - Logs readable error names and device error flags on failures
+- WordPress field data delivery
+  - Batched file-to-JSON conversion and upload to reduce memory spikes on base
+  - Maintains backlog logic and rotates logs after successful delivery
+- Version bump banners to v.2.00i across key firmware files
+
+Admin Plugins:
+- No changes in this release.
+
+Known issues:
+- Lint warnings for MicroPython modules in desktop editor are expected; not applicable on-device.
+- Additional memory tuning might be needed for very large field data logs; adjust batch_size in utils.py if needed.
