@@ -1,4 +1,4 @@
-# Firmware Version: v.2.00i
+# Firmware Version: v2.00j
 
 
 
@@ -21,7 +21,7 @@ try:
 except Exception:
     requests = None
 from wifi import disable_wifi, connectToWifiNetwork, wifi_rssi_monitor
-from utils import get_machine_id
+# duplicate import removed
 
 checkLogDirectory()
 
@@ -209,9 +209,19 @@ async def first_boot_provision():
     try:
         await connectToWifiNetwork()
         mid = get_machine_id()
-        body = {'unit_id': settings.UNIT_ID, 'machine_id': mid}
+        body = {
+            'unit_id': settings.UNIT_ID,
+            'machine_id': mid,
+            'firmware_version': getattr(settings, 'FIRMWARE_VERSION', ''),
+            'node_type': getattr(settings, 'NODE_TYPE', ''),
+        }
         url = hub.rstrip('/') + '/wp-json/tmon-admin/v1/device/check-in'
-        resp = requests.post(url, json=body)
+        # Add a small timeout to avoid hanging on boot
+        try:
+            resp = requests.post(url, json=body, timeout=10)
+        except TypeError:
+            # Some urequests versions don't support timeout kwarg
+            resp = requests.post(url, json=body)
         ok = (resp is not None and getattr(resp, 'status_code', 0) == 200)
         if ok:
             # Persist flag

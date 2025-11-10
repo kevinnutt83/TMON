@@ -124,6 +124,11 @@ async def apply_staged_settings_once():
         staged = read_json(staged_path, None)
         if not isinstance(staged, dict):
             return False
+        # Load previous applied snapshot for diffing (optional)
+        prev_applied_meta = read_json(applied_path, None)
+        prev_applied = {}
+        if isinstance(prev_applied_meta, dict) and isinstance(prev_applied_meta.get('applied'), dict):
+            prev_applied = prev_applied_meta.get('applied') or {}
         applied = _filter_and_apply(staged)
         # Persist applied snapshot
         meta = {
@@ -135,13 +140,37 @@ async def apply_staged_settings_once():
             meta['ts'] = int(_t.time())
         except Exception:
             pass
+        # Compute diff summary
+        try:
+            changed_keys = []
+            added_keys = []
+            for k, v in applied.items():
+                if k not in prev_applied:
+                    added_keys.append(k)
+                elif prev_applied.get(k) != v:
+                    changed_keys.append(k)
+            ignored_keys = [k for k in (staged or {}).keys() if k not in applied]
+            meta['changed_keys'] = changed_keys
+            meta['added_keys'] = added_keys
+            meta['ignored_keys'] = ignored_keys
+        except Exception:
+            pass
         write_json(applied_path, meta)
         # Remove staged file to prevent re-apply
         try:
             os.remove(staged_path)
         except Exception:
             pass
-        await debug_print('Settings: staged settings applied', 'INFO')
+        try:
+            msg = 'Settings applied: ' \
+                  + ('added=' + ','.join(meta.get('added_keys', [])) if meta.get('added_keys') else 'added=0') \
+                  + ' | ' \
+                  + ('changed=' + ','.join(meta.get('changed_keys', [])) if meta.get('changed_keys') else 'changed=0') \
+                  + ' | ' \
+                  + ('ignored=' + ','.join(meta.get('ignored_keys', [])) if meta.get('ignored_keys') else 'ignored=0')
+        except Exception:
+            msg = 'Settings: staged settings applied'
+        await debug_print(msg, 'INFO')
         return True
     except Exception as e:
         await debug_print('Settings: apply failed: %s' % e, 'ERROR')

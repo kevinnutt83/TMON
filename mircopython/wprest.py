@@ -1,4 +1,4 @@
-# Firmware Version: 2.0.0h
+# Firmware Version: v2.00j
 # wprest.py
 # Handles all WordPress REST API communication for TMON MicroPython device
 import settings
@@ -80,6 +80,8 @@ async def register_with_wp():
         'zone': getattr(settings, 'ZONE', ''),
         'cluster': getattr(settings, 'CLUSTER', ''),
         'machine_id': get_machine_id() or '',
+        'firmware_version': getattr(settings, 'FIRMWARE_VERSION', ''),
+        'node_type': getattr(settings, 'NODE_TYPE', ''),
     }
     try:
         token = get_jwt_token()
@@ -113,6 +115,8 @@ async def send_data_to_wp():
         return
     data = {
         'unit_id': settings.UNIT_ID,
+        'firmware_version': getattr(settings, 'FIRMWARE_VERSION', ''),
+        'node_type': getattr(settings, 'NODE_TYPE', ''),
         'data': {
             'runtime': getattr(sdata, 'loop_runtime', 0),
             'script_runtime': getattr(sdata, 'script_runtime', 0),
@@ -120,6 +124,10 @@ async def send_data_to_wp():
             'temp_f': getattr(sdata, 'cur_temp_f', 0),
             'bar': getattr(sdata, 'cur_bar_pres', 0),
             'humid': getattr(sdata, 'cur_humid', 0),
+            'sys_voltage': getattr(sdata, 'sys_voltage', None),
+            'wifi_rssi': getattr(sdata, 'wifi_rssi', None),
+            'lora_rssi': getattr(sdata, 'lora_SigStr', None),
+            'free_mem': getattr(sdata, 'free_mem', None),
             # optional GPS fields
             'gps_lat': getattr(sdata, 'gps_lat', None),
             'gps_lng': getattr(sdata, 'gps_lng', None),

@@ -1,4 +1,4 @@
-# Firmware Version: v.2.00i
+# Firmware Version: v2.00j
 import ujson
 import uasyncio as asyncio
 import os
@@ -227,6 +227,15 @@ async def send_field_data_log():
                 delay = 2
                 try:
                     payload['machine_id'] = get_machine_id()
+                except Exception:
+                    pass
+                # Enrich envelope with firmware and node role for auditing/normalization
+                try:
+                    payload['firmware_version'] = getattr(settings, 'FIRMWARE_VERSION', '')
+                except Exception:
+                    pass
+                try:
+                    payload['node_type'] = getattr(settings, 'NODE_TYPE', '')
                 except Exception:
                     pass
                 delivered = False
