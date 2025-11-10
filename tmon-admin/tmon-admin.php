@@ -164,31 +164,37 @@ add_action('wp_ajax_tmon_admin_submit_ai_feedback', function() {
 
 if (!defined('ABSPATH')) exit;
 
-define('TMON_ADMIN_PATH', plugin_dir_path(__FILE__));
-define('TMON_ADMIN_URL', plugin_dir_url(__FILE__));
-
-tmon_admin_include_files();
-
-function tmon_admin_include_files() {
-    require_once TMON_ADMIN_PATH . 'includes/admin-dashboard.php';
-        require_once TMON_ADMIN_PATH . 'includes/settings.php';
-    require_once TMON_ADMIN_PATH . 'includes/api.php';
-    require_once TMON_ADMIN_PATH . 'includes/provisioning.php';
-    require_once TMON_ADMIN_PATH . 'includes/ai.php';
-    require_once TMON_ADMIN_PATH . 'includes/audit.php';
-    require_once TMON_ADMIN_PATH . 'includes/notifications.php';
-    require_once TMON_ADMIN_PATH . 'includes/ota.php';
-    require_once TMON_ADMIN_PATH . 'includes/files.php';
-    require_once TMON_ADMIN_PATH . 'includes/groups.php';
-    require_once TMON_ADMIN_PATH . 'includes/custom-code.php';
-    require_once TMON_ADMIN_PATH . 'includes/export.php';
-    require_once TMON_ADMIN_PATH . 'includes/ai-feedback.php';
-    require_once TMON_ADMIN_PATH . 'includes/dashboard-widgets.php';
-    require_once TMON_ADMIN_PATH . 'includes/field-data-api.php';
-    // Admin pages
-    require_once TMON_ADMIN_PATH . 'admin/location.php';
-    require_once TMON_ADMIN_PATH . 'admin/firmware.php';
+if (!defined('TMON_ADMIN_PATH')) {
+	define('TMON_ADMIN_PATH', plugin_dir_path(__FILE__));
 }
+if (!defined('TMON_ADMIN_URL')) {
+	define('TMON_ADMIN_URL', plugin_dir_url(__FILE__));
+}
+
+// Guard include loader to prevent accidental redeclare.
+if (!function_exists('tmon_admin_include_files')) {
+	function tmon_admin_include_files() {
+		require_once TMON_ADMIN_PATH . 'includes/admin-dashboard.php';
+		require_once TMON_ADMIN_PATH . 'includes/settings.php';
+		require_once TMON_ADMIN_PATH . 'includes/api.php';
+		require_once TMON_ADMIN_PATH . 'includes/provisioning.php';
+		require_once TMON_ADMIN_PATH . 'includes/ai.php';
+		require_once TMON_ADMIN_PATH . 'includes/audit.php';
+		require_once TMON_ADMIN_PATH . 'includes/notifications.php';
+		require_once TMON_ADMIN_PATH . 'includes/ota.php';
+		require_once TMON_ADMIN_PATH . 'includes/files.php';
+		require_once TMON_ADMIN_PATH . 'includes/groups.php';
+		require_once TMON_ADMIN_PATH . 'includes/custom-code.php';
+		require_once TMON_ADMIN_PATH . 'includes/export.php';
+		require_once TMON_ADMIN_PATH . 'includes/ai-feedback.php';
+		require_once TMON_ADMIN_PATH . 'includes/dashboard-widgets.php';
+		require_once TMON_ADMIN_PATH . 'includes/field-data-api.php';
+		// Admin pages
+		require_once TMON_ADMIN_PATH . 'admin/location.php';
+		require_once TMON_ADMIN_PATH . 'admin/firmware.php';
+	}
+}
+tmon_admin_include_files();
 
 // Helper: verify nonce safely (avoid wp_die); returns true/false and shows notice when invalid
 function tmon_admin_verify_nonce($action, $nonce_field = '_wpnonce') {

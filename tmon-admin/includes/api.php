@@ -143,7 +143,7 @@ add_action('rest_api_init', function() {
             $user_hint = sanitize_text_field($request->get_param('user_hint'));
             $site_url = esc_url_raw($request->get_param('site_url'));
             if (!$unit_id || !$machine_id) {
-                return new WP_REST_Response(['status' => 'error', 'message' => 'unit_id and machine_id required'], 400);
+                return new WP_REST_Response(['status' => 'error', 'message' => 'unit_id and machine_id required', 'request' => $request->get_params()], 400);
             }
             global $wpdb;
             $wpdb->insert($wpdb->prefix.'tmon_claim_requests', [
@@ -477,29 +477,33 @@ function tmon_admin_handle_device_check_in(WP_REST_Request $request) {
 }
 
 // AJAX: Unit Connector device list; ensure columns exist and return safe JSON.
-add_action('wp_ajax_tmon_uc_get_devices', 'tmon_uc_get_devices');
-function tmon_uc_get_devices() {
-	check_ajax_referer('tmon-admin', 'nonce');
+add_action('wp_ajax_tmon_uc_get_devices', 'tmon_admin_get_devices');
 
-	// Capability gate if this action is used in admin.
-	if (!current_user_can('manage_options')) {
-		wp_send_json_error(['message' => 'forbidden'], 403);
+if (!function_exists('tmon_admin_get_devices')) {
+	function tmon_admin_get_devices() {
+		check_ajax_referer('tmon-admin', 'nonce');
+		if (!current_user_can('manage_options')) {
+			wp_send_json_error(['message' => 'forbidden'], 403);
+		}
+		global $wpdb;
+		$table = $wpdb->prefix . 'tmon_devices';
+		$rows = $wpdb->get_results(
+			"SELECT unit_id, unit_name, company, site, zone, cluster, suspended FROM {$table}",
+			ARRAY_A
+		);
+		if ($rows === null) {
+			wp_send_json_error(['message' => 'query failed'], 500);
+		}
+		wp_send_json_success($rows);
 	}
+}
 
-	global $wpdb;
-	$table = $wpdb->prefix . 'tmon_devices';
-
-	// Select the columns used by UI; schema ensured by tmon_admin_install_schema
-	$rows = $wpdb->get_results(
-		"SELECT unit_id, unit_name, company, site, zone, cluster, suspended FROM {$table}",
-		ARRAY_A
-	);
-
-	if ($rows === null) {
-		wp_send_json_error(['message' => 'query failed'], 500);
+// Optional compatibility alias ONLY if legacy name not present (prevents fatal).
+if (!function_exists('tmon_uc_get_devices')) {
+	function tmon_uc_get_devices() {
+		// Delegate to new name (no duplication of logic).
+		tmon_admin_get_devices();
 	}
-
-	wp_send_json_success($rows);
 }
 
 // Wherever you previously called notifications with one arg, update to pass context as second arg:
