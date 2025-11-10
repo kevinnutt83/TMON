@@ -916,9 +916,6 @@ add_action('wp_ajax_tmon_admin_known_units', function(){
     $out = [];
     foreach ($items as $it) { if (!isset($dedup[$it['unit_id']])) { $dedup[$it['unit_id']] = 1; $out[] = $it; } }
     wp_send_json_success(['items' => $out, 'page' => $page, 'per_page' => $per_page]);
-} else {
-    wp_send_json_success(['items' => [], 'page' => 1, 'per_page' => $per_page]);
-}
 });
 
 // Fix for parse error: ensure all array values are quoted as strings.
