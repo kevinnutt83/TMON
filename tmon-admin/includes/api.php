@@ -389,8 +389,6 @@ if (!function_exists('tmon_admin_handle_device_check_in')) {
 	}
 }
 
-// Ensure only one device check-in route and handler definition exist; keep unique names elsewhere.
-
 // Ensure we don't collide with the UC plugin by using a unique handler name in this plugin.
 add_action('wp_ajax_tmon_uc_get_devices', 'tmon_admin_get_devices');
 

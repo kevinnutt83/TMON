@@ -617,7 +617,7 @@ EOT;
     echo ' Unit Name <input name="unit_name" type="text" class="regular-text" placeholder="Optional display name" value="'.esc_attr($cur_name).'" />';
         echo ' Company Name <input name="company_name" type="text" class="regular-text" placeholder="Acme Inc." />';
         echo ' Company ID <input name="company_id" type="number" class="small-text" value="'.intval($r['company_id']).'" />';
-        echo ' Role <select name="role"><option value="base" '.selected($r['role'],'base',false).'>base</option><option value="remote" '.selected($r['role'],'remote',false).'>remote</option></select>';
+        echo ' Role <select name="role"><option value="base" '.selected($r['role],'base',false).'>base</option><option value="remote" '.selected($r['role'],'remote',false).'>remote</option></select>';
         echo ' GPS Lat <input name="gps_lat" type="text" class="small-text" placeholder="38.8977" />';
         echo ' GPS Lng <input name="gps_lng" type="text" class="small-text" placeholder="-77.0365" />';
     echo ' UC Site URL <input name="site_url" list="tmon_paired_sites" type="url" class="regular-text" placeholder="https://uc.example.com" />';
@@ -629,7 +629,7 @@ EOT;
     wp_nonce_field('tmon_admin_provision');
     echo '<input type="hidden" name="action" value="push_role_gps_direct" />';
     echo '<input type="hidden" name="unit_id" value="'.esc_attr($r['unit_id']).'" />';
-    echo ' Role <select name="role"><option value="base" '.selected($r['role'],'base',false).'>base</option><option value="remote" '.selected($r['role'],'remote',false).'>remote</option></select>';
+    echo ' Role <select name="role"><option value="base" '.selected($r['role],'base',false).'>base</option><option value="remote" '.selected($r['role'],'remote',false).'>remote</option></select>';
     echo ' Unit Name <input name="unit_name" type="text" class="regular-text" placeholder="Optional display name" value="'.esc_attr($cur_name).'" />';
     echo ' GPS Lat <input name="gps_lat" type="text" class="small-text" placeholder="38.8977" />';
     echo ' GPS Lng <input name="gps_lng" type="text" class="small-text" placeholder="-77.0365" />';
@@ -739,7 +739,7 @@ EOT;
     $total_count = $args_count ? (int) $wpdb->get_var($wpdb->prepare($sql_count, ...$args_count)) : (int) $wpdb->get_var($sql_count);
     $total_pages = max(1, (int) ceil($total_count / $claim_pp));
 
-    // Query to get claims data
+    // Query to display claims
     $sql_claims = "SELECT * FROM {$wpdb->prefix}tmon_claim_requests";
     $where = [];
     $args = [];
@@ -909,7 +909,7 @@ add_action('wp_ajax_tmon_admin_known_units', function(){
     }
 });
 
-// Rename the schema function to avoid redeclaration conflicts with includes/db.php
+// Previously duplicated core installer name; renamed to avoid fatal.
 if (!function_exists('tmon_admin_install_provisioning_schema')) {
 	function tmon_admin_install_provisioning_schema() {
 		global $wpdb;
@@ -946,14 +946,15 @@ if (!function_exists('tmon_admin_install_provisioning_schema')) {
 		dbDelta($sql2);
 	}
 
-	// Ensure it's executed after the core schema installer.
+	// Run after core schema install.
 	add_action('tmon_admin_install_schema_after', 'tmon_admin_install_provisioning_schema');
 
-	// If this file previously had: register_activation_hook(__FILE__, 'tmon_admin_install_schema');
-	// replace it with the renamed function:
-	if (function_exists('register_activation_hook')) {
-		// Remove any stale reference to the old function name in this file and point to the new one.
-		// register_activation_hook(__FILE__, 'tmon_admin_install_schema'); // remove this if present
-		register_activation_hook(__FILE__, 'tmon_admin_install_provisioning_schema');
+	// Optional: ensure provisioning tables exist on activation (avoid duplicate core installer call).
+	if (!has_action('activate_' . plugin_basename(__FILE__))) {
+		register_activation_hook(__FILE__, function() {
+			if (function_exists('tmon_admin_install_provisioning_schema')) {
+				tmon_admin_install_provisioning_schema();
+			}
+		});
 	}
 }
