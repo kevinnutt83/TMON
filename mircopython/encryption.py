@@ -53,3 +53,22 @@ def chacha20_encrypt(key, nonce, counter, data):
 def derive_nonce(ts, ctr):
     # 12-byte nonce from timestamp (4 bytes) + counter (4 bytes) + mixed XOR chunk (4 bytes)
     return ((ts & 0xffffffff).to_bytes(4,'little') + (ctr & 0xffffffff).to_bytes(4,'little') + ((ts ^ ctr) & 0xffffffff).to_bytes(4,'little'))
+
+
+# --- Optional AEAD (scaffold) ---
+def chacha20_poly1305_encrypt(key, nonce, aad, plaintext):
+    """
+    Placeholder for AEAD encryption. For now, returns ciphertext via chacha20 stream and a dummy tag.
+    This is NOT authenticated. Intended to be replaced with proper Poly1305 tag generation.
+    """
+    ct = chacha20_encrypt(key, nonce, 1, plaintext)
+    tag = b"\x00" * 16
+    return ct, tag
+
+
+def chacha20_poly1305_decrypt(key, nonce, aad, ciphertext, tag):
+    """
+    Placeholder for AEAD decryption. Verifies nothing and returns stream-deciphered plaintext.
+    """
+    pt = chacha20_encrypt(key, nonce, 1, ciphertext)
+    return pt

@@ -42,7 +42,10 @@ function tmon_unit_connector_enqueue_assets($hook = '') {
     if (is_admin()) {
         wp_enqueue_style( 'tmon-unit-connector', TMON_UNIT_CONNECTOR_URL . 'assets/admin.css', [], TMON_UNIT_CONNECTOR_VERSION );
         wp_enqueue_script( 'tmon-unit-connector', TMON_UNIT_CONNECTOR_URL . 'assets/admin.js', ['jquery'], TMON_UNIT_CONNECTOR_VERSION, true );
-        wp_localize_script( 'tmon-unit-connector', 'tmon_uc_ajaxurl', admin_url( 'admin-ajax.php' ) );
+        // Fix improper use of wp_localize_script: third param must be array. Expose ajaxurl compatibly.
+        wp_localize_script( 'tmon-unit-connector', 'tmon_uc_ajax', array( 'ajaxurl' => admin_url( 'admin-ajax.php' ) ) );
+        // Also provide a simple global for legacy code paths if needed.
+        wp_add_inline_script( 'tmon-unit-connector', 'window.tmon_uc_ajaxurl = window.ajaxurl || (window.tmon_uc_ajax && window.tmon_uc_ajax.ajaxurl) || "";', 'before' );
         wp_enqueue_script('tmon-hierarchy-js', plugin_dir_url(__FILE__) . 'assets/tmon-hierarchy.js', array('jquery'), null, true);
         wp_enqueue_style('tmon-hierarchy-css', plugin_dir_url(__FILE__) . 'assets/tmon-hierarchy.css');
     } else {

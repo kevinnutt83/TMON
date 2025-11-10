@@ -24,6 +24,8 @@ Foundation reboot for Phase 1 (no deletions, additive only):
 - Debug module: Added `mircopython/debug.py` as a thin wrapper around existing async `utils.debug_print`, enabling category-scoped logging.
 - Main firmware: Persist MACHINE_ID on first boot; added suspension checks to skip sampling/LoRa/command polling when suspended; improved first-boot provisioning to persist UNIT_ID when provided.
 - Docs: Will update README in subsequent commits as features land in each phase.
+- Unit Connector: Fixed improper `wp_localize_script` usage (non-array param) producing WP_Scripts::localize notices; now passes array and adds inline compatibility shim.
+- Tests: Extended `tests/harness.py` with ChaCha20 encryption round-trip and nonce derivation tests.
 
 ## v.2.00i - 2025-10-17
 
