@@ -28,6 +28,13 @@ if (!function_exists('tmon_uc_normalize_payload')) {
       'gps_accuracy_m' => $data['gps_accuracy_m'] ?? null,
       'gps_last_fix_ts' => $data['gps_last_fix_ts'] ?? null,
     ];
+    // Firmware version and suspension state passthrough when present
+    if (isset($data['FIRMWARE_VERSION']) || isset($data['firmware_version'])) {
+      $norm['firmware_version'] = $data['FIRMWARE_VERSION'] ?? $data['firmware_version'];
+    }
+    if (isset($data['UNIT_SUSPENDED']) || isset($data['device_suspended'])) {
+      $norm['device_suspended'] = isset($data['UNIT_SUSPENDED']) ? (bool)$data['UNIT_SUSPENDED'] : (bool)$data['device_suspended'];
+    }
     // Surface applied thresholds if present
     $norm['frost_active_temp'] = $data['FROSTWATCH_ACTIVE_TEMP'] ?? ($data['frost_active_temp'] ?? null);
     $norm['frost_clear_temp']  = $data['FROSTWATCH_CLEAR_TEMP'] ?? ($data['frost_clear_temp'] ?? null);
@@ -143,6 +150,12 @@ add_action('rest_api_init', function() {
           'gps_accuracy_m' => $data['gps_accuracy_m'] ?? null,
           'gps_last_fix_ts' => $data['gps_last_fix_ts'] ?? null,
         ];
+        if (isset($data['FIRMWARE_VERSION']) || isset($data['firmware_version'])) {
+          $norm['firmware_version'] = $data['FIRMWARE_VERSION'] ?? $data['firmware_version'];
+        }
+        if (isset($data['UNIT_SUSPENDED']) || isset($data['device_suspended'])) {
+          $norm['device_suspended'] = isset($data['UNIT_SUSPENDED']) ? (bool)$data['UNIT_SUSPENDED'] : (bool)$data['device_suspended'];
+        }
         // Surface applied thresholds if present
         $norm['frost_active_temp'] = $data['FROSTWATCH_ACTIVE_TEMP'] ?? ($data['frost_active_temp'] ?? null);
         $norm['frost_clear_temp']  = $data['FROSTWATCH_CLEAR_TEMP'] ?? ($data['frost_clear_temp'] ?? null);
@@ -203,12 +216,37 @@ add_action('rest_api_init', function() {
             $process_one($entry, $defaults);
           }
         }
-        return ['ok' => true, 'count' => count($payload['data'])];
+        // Ask Admin for suspension state (batch uses outer unit_id)
+        $suspended = false;
+        $admin_url = get_option('tmon_uc_admin_url');
+        $admin_key = get_option('tmon_uc_admin_key');
+        if ($admin_url && $admin_key && $defaults['unit_id']) {
+          $endpoint = rtrim($admin_url,'/') . '/wp-json/tmon-admin/v1/device/state?unit_id=' . urlencode($defaults['unit_id']);
+          $resp2 = wp_remote_get($endpoint, [ 'timeout' => 8, 'headers' => [ 'X-TMON-ADMIN' => $admin_key ]]);
+          if (!is_wp_error($resp2) && wp_remote_retrieve_response_code($resp2) === 200) {
+            $st = json_decode(wp_remote_retrieve_body($resp2), true);
+            if (is_array($st) && array_key_exists('suspended', $st)) { $suspended = !empty($st['suspended']); }
+          }
+        }
+        return ['ok' => true, 'count' => count($payload['data']), 'device_suspended' => $suspended];
       }
 
       // Single record path
       $process_one($payload, []);
-      return ['ok' => true, 'count' => 1];
+      // Single record: check suspension for this unit
+      $suspended = false;
+      $admin_url = get_option('tmon_uc_admin_url');
+      $admin_key = get_option('tmon_uc_admin_key');
+      $uid = is_array($payload) ? ($payload['unit_id'] ?? '') : '';
+      if ($admin_url && $admin_key && $uid) {
+        $endpoint = rtrim($admin_url,'/') . '/wp-json/tmon-admin/v1/device/state?unit_id=' . urlencode($uid);
+        $resp2 = wp_remote_get($endpoint, [ 'timeout' => 8, 'headers' => [ 'X-TMON-ADMIN' => $admin_key ]]);
+        if (!is_wp_error($resp2) && wp_remote_retrieve_response_code($resp2) === 200) {
+          $st = json_decode(wp_remote_retrieve_body($resp2), true);
+          if (is_array($st) && array_key_exists('suspended', $st)) { $suspended = !empty($st['suspended']); }
+        }
+      }
+      return ['ok' => true, 'count' => 1, 'device_suspended' => $suspended];
     }
   ]);
   // Admin URL/Key settings page
@@ -237,6 +275,26 @@ add_action('rest_api_init', function() {
           delete_transient('tmon_uc_thresholds_cache');
           echo '<div class="updated"><p>Thresholds cache flushed.</p></div>';
         }
+        // Suspension status check
+        $susp_unit = '';
+        $susp_state = null;
+        if (isset($_POST['tmon_uc_check_suspend']) && check_admin_referer('tmon_uc_settings_suspend')) {
+          $susp_unit = sanitize_text_field($_POST['susp_unit_id'] ?? '');
+          $admin_url_chk = get_option('tmon_uc_admin_url');
+          $admin_key_chk = get_option('tmon_uc_admin_key');
+          if ($susp_unit && $admin_url_chk && $admin_key_chk) {
+            $endpoint = rtrim($admin_url_chk,'/') . '/wp-json/tmon-admin/v1/device/state?unit_id=' . urlencode($susp_unit);
+            $resp = wp_remote_get($endpoint, [ 'timeout' => 10, 'headers' => [ 'X-TMON-ADMIN' => $admin_key_chk ] ]);
+            if (!is_wp_error($resp) && wp_remote_retrieve_response_code($resp) === 200) {
+              $st = json_decode(wp_remote_retrieve_body($resp), true);
+              if (is_array($st) && array_key_exists('suspended',$st)) {
+                $susp_state = !empty($st['suspended']);
+              }
+            } else {
+              echo '<div class="notice notice-error"><p>Failed to query Admin for suspension state.</p></div>';
+            }
+          }
+        }
         $admin_url = esc_url(get_option('tmon_uc_admin_url',''));
         $admin_key = esc_html(get_option('tmon_uc_admin_key',''));
   $device_key = esc_html(get_option('tmon_uc_device_key',''));
@@ -263,6 +321,15 @@ add_action('rest_api_init', function() {
         echo '<form method="post" style="margin-top:10px;">';
         wp_nonce_field('tmon_uc_settings_flush');
         echo '<p><input type="submit" name="tmon_uc_flush_cache" class="button" value="Flush Cache Now" /></p></form>';
+        echo '<h2>Suspension Status Test</h2>';
+        echo '<form method="post" style="margin-top:10px;">';
+        wp_nonce_field('tmon_uc_settings_suspend');
+        echo '<p><label for="susp_unit_id">Unit ID</label> <input type="text" name="susp_unit_id" id="susp_unit_id" value="'.esc_attr($susp_unit).'" /> ';
+        echo '<input type="submit" name="tmon_uc_check_suspend" class="button" value="Check" /></p>';
+        if ($susp_state !== null) {
+          echo '<p>Status: '.($susp_state ? '<span style="color:#c00;font-weight:bold">Suspended</span>' : '<span style="color:#090;">Enabled</span>').'</p>';
+        }
+        echo '</form>';
         echo '<h2>Forwarding Status</h2><p>Records will forward when both URL and key are set.</p>';
         echo '<p>Device POSTs must include header <code>X-TMON-DEVICE</code> matching the configured Device POST Key.</p>';
         echo '</div>';

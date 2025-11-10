@@ -16,6 +16,21 @@ async def boot():
     await display_message(fw_msg, 2)
     print(fw_msg)
     await display_message("Booting TMON Device", 3)
+    # Load suspension state
+    try:
+        import os
+        if hasattr(settings, 'UNIT_SUSPENDED_STATE_FILE'):
+            if 'logs' not in os.listdir('/'):
+                os.mkdir('/logs')
+            try:
+                with open(settings.UNIT_SUSPENDED_STATE_FILE,'r') as f:
+                    val = f.read().strip()
+                    if val in ('1','true','True'):
+                        settings.UNIT_SUSPENDED = True
+            except Exception:
+                pass
+    except Exception:
+        pass
     # If remote node, try to load persisted next sync time
     try:
         if getattr(settings, 'NODE_TYPE', None) == 'remote':

@@ -66,6 +66,10 @@ class TaskManager:
 async def lora_comm_task():
     global sdata
     while True:
+        # Respect suspension: skip LoRa communications while suspended
+        if getattr(settings, 'UNIT_SUSPENDED', False):
+            await asyncio.sleep(1)
+            continue
         loop_start_time = time.ticks_ms()
         print(f"[DEBUG] lora_comm_task: loop start at {loop_start_time}")
         from utils import led_status_flash
@@ -138,6 +142,10 @@ import machine
 
 async def sample_task():
     loop_start_time = time.ticks_ms()
+    # Respect suspension: skip sampling while suspended
+    if getattr(settings, 'UNIT_SUSPENDED', False):
+        await asyncio.sleep(1)
+        return
     from utils import led_status_flash
     led_status_flash('INFO')  # Always flash LED for info
     await sampleEnviroment()

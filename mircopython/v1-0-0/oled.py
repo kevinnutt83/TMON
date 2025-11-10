@@ -528,7 +528,18 @@ async def update_display(page=0):
         vstr = f"{volt:.1f}V"
         oled.text(vstr, 64 - len(vstr) * 4, 0)
 
-        if page == 0:
+        suspended = False
+        try:
+            import settings as _s
+            suspended = bool(getattr(_s, 'UNIT_SUSPENDED', False))
+        except Exception:
+            suspended = False
+        if suspended:
+            # Overlay suspended banner prominently
+            oled.fill_rect(0, 16, 128, 48, 0)
+            oled.text('SUSPENDED', 8, 28)
+            oled.text('PAUSED', 24, 42)
+        elif page == 0:
             # Network bars: WiFi left, LoRa right
             wrssi = _safe_attr(_sdata, 'wifi_rssi', 0)
             lrssi = _safe_attr(_sdata, 'lora_SigStr', 0)
@@ -557,7 +568,6 @@ async def update_display(page=0):
             oled.text(f"Err {err}", 72, 50)
         oled.show()
     except Exception as _e:
-        # Best-effort; avoid raising
         try:
             print('[OLED] update_display error:', _e)
         except Exception:

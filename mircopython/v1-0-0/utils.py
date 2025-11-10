@@ -277,7 +277,7 @@ async def send_field_data_log():
                                     await debug_print(f'send_field_data_log: Response text: {safe_text[:200]}', 'DEBUG')
                                 except Exception:
                                     pass
-                            ok_resp = (resp.status_code == 200) and ((resp_json.get('status') == 'ok') or (resp_bytes == b'OK'))
+                            ok_resp = (resp.status_code == 200) and ((resp_json.get('status') == 'ok') or (resp_bytes == b'OK') or (resp_json.get('ok') is True))
                             if ok_resp:
                                 # Persist UNIT_ID mapping if provided
                                 try:
@@ -288,6 +288,22 @@ async def send_field_data_log():
                                             persist_unit_id(settings.UNIT_ID)
                                         except Exception:
                                             pass
+                                except Exception:
+                                    pass
+                                # If server indicates suspension state, adopt it
+                                try:
+                                            if isinstance(resp_json, dict) and ('device_suspended' in resp_json):
+                                                new_state = bool(resp_json.get('device_suspended'))
+                                                if new_state != getattr(settings, 'UNIT_SUSPENDED', False):
+                                                    settings.UNIT_SUSPENDED = new_state
+                                                    # Persist to state file
+                                                    try:
+                                                        path = getattr(settings, 'UNIT_SUSPENDED_STATE_FILE', '/logs/unit_suspended.state')
+                                                        checkLogDirectory()
+                                                        with open(path, 'w') as sf:
+                                                            sf.write('1' if new_state else '0')
+                                                    except Exception:
+                                                        pass
                                 except Exception:
                                     pass
                                 delivered = True
@@ -369,6 +385,10 @@ async def send_field_data_log():
 
 async def periodic_field_data_send():
     while True:
+        # Respect suspension: skip sending while suspended
+        if getattr(settings, 'UNIT_SUSPENDED', False):
+            await asyncio.sleep(max(1, int(getattr(settings, 'FIELD_DATA_SEND_INTERVAL', 30))))
+            continue
         await send_field_data_log()
         await asyncio.sleep(settings.FIELD_DATA_SEND_INTERVAL)
 # Record all sdata and settings variables to field_data.log with timestamp
@@ -422,6 +442,12 @@ def record_field_data():
     # Reduce console spam
     # if getattr(settings, 'DEBUG', False):
     #     print("[DEBUG] record_field_data: entry appended")
+    # Always include firmware version & suspension state for Admin visibility
+    try:
+        entry['firmware_version'] = getattr(settings, 'FIRMWARE_VERSION', 'v0.0.0')
+        entry['device_suspended'] = bool(getattr(settings, 'UNIT_SUSPENDED', False))
+    except Exception:
+        pass
     # Only persist on base node to avoid filling flash on remotes
     if getattr(settings, 'NODE_TYPE', 'base') != 'base':
         return

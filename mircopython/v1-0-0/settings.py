@@ -5,6 +5,10 @@ NODE_TYPE = 'base'
 #NODE_TYPE = 'remote'  # 'base' or 'remote'
 
 FIRMWARE_VERSION = "v2.00j"
+# Device suspension flag (pushed from Admin). When True, non-critical tasks pause.
+UNIT_SUSPENDED = False  # Firmware will skip sampling + LoRa TX when suspended
+# Persist suspension state across reboots
+UNIT_SUSPENDED_STATE_FILE = '/logs/unit_suspended.state'
 
  # WordPress API integration
 WORDPRESS_API_URL = ""  # Set to your WordPress site URL
