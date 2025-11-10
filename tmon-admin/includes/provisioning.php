@@ -586,13 +586,22 @@ EOT;
         wp_nonce_field('tmon_admin_provision');
         echo '<input type="hidden" name="action" value="update" />';
         echo '<input type="hidden" name="id" value="'.intval($r['id']).'" />';
+        // FIXED: Proper concatenation for dropdowns to avoid parse error
         echo ' Role <select name="role">'
             . '<option value="base"' . selected($r['role'], 'base', false) . '>base</option>'
             . '<option value="remote"' . selected($r['role'], 'remote', false) . '>remote</option>'
             . '<option value="wifi"' . selected($r['role'], 'wifi', false) . '>wifi</option>'
             . '</select>';
-        echo ' Plan <select name="plan"><option '.selected($r['plan'],'standard',false).'>standard</option><option '.selected($r['plan'],'pro',false).'>pro</option><option '.selected($r['plan'],'enterprise',false).'>enterprise</option></select>';
-        echo ' Status <select name="status"><option '.selected($r['status'],'active',false).'>active</option><option '.selected($r['status'],'suspended',false).'>suspended</option><option '.selected($r['status'],'expired',false).'>expired</option></select>';
+        echo ' Plan <select name="plan">'
+            . '<option value="standard"' . selected($r['plan'], 'standard', false) . '>standard</option>'
+            . '<option value="pro"' . selected($r['plan'], 'pro', false) . '>pro</option>'
+            . '<option value="enterprise"' . selected($r['plan'], 'enterprise', false) . '>enterprise</option>'
+            . '</select>';
+        echo ' Status <select name="status">'
+            . '<option value="active"' . selected($r['status'], 'active', false) . '>active</option>'
+            . '<option value="suspended"' . selected($r['status'], 'suspended', false) . '>suspended</option>'
+            . '<option value="expired"' . selected($r['status'], 'expired', false) . '>expired</option>'
+            . '</select>';
         echo ' Company <input name="company_id" type="number" class="small-text" value="'.intval($r['company_id']).'" />';
         echo ' Notes <input name="notes" type="text" class="regular-text" value="'.esc_attr($r['notes']).'" />';
         submit_button('Update', 'primary', '', false);
