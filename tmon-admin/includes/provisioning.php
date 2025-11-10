@@ -589,7 +589,8 @@ EOT;
         echo ' Role <select name="role">'
             . '<option value="base"' . selected($r['role'], 'base', false) . '>base</option>'
             . '<option value="remote"' . selected($r['role'], 'remote', false) . '>remote</option>'
-            . '<option value="wifi"' . selected($r['role'], 'wifi', false) . '>wifi</option></select>';
+            . '<option value="wifi"' . selected($r['role'], 'wifi', false) . '>wifi</option>'
+            . '</select>';
         echo ' Plan <select name="plan"><option '.selected($r['plan'],'standard',false).'>standard</option><option '.selected($r['plan'],'pro',false).'>pro</option><option '.selected($r['plan'],'enterprise',false).'>enterprise</option></select>';
         echo ' Status <select name="status"><option '.selected($r['status'],'active',false).'>active</option><option '.selected($r['status'],'suspended',false).'>suspended</option><option '.selected($r['status'],'expired',false).'>expired</option></select>';
         echo ' Company <input name="company_id" type="number" class="small-text" value="'.intval($r['company_id']).'" />';
