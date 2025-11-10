@@ -16,6 +16,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## v2.01.0 - 2025-11-10
+
+Foundation reboot for Phase 1 (no deletions, additive only):
+- Licensing: Added MIT LICENSE at repository root.
+- Firmware settings: Expanded `mircopython/settings.py` with provisioning flags, persistent file paths, LoRa network credentials (LORA_NETWORK_NAME/PASSWORD), device suspension flag, OTA parameters, and additional debug categories.
+- Debug module: Added `mircopython/debug.py` as a thin wrapper around existing async `utils.debug_print`, enabling category-scoped logging.
+- Main firmware: Persist MACHINE_ID on first boot; added suspension checks to skip sampling/LoRa/command polling when suspended; improved first-boot provisioning to persist UNIT_ID when provided.
+- Docs: Will update README in subsequent commits as features land in each phase.
+
 ## v.2.00i - 2025-10-17
 
 Firmware (MicroPython):

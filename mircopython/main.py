@@ -5,10 +5,11 @@
 # --- Single-threaded asyncio event loop ---
 import uasyncio as asyncio
 import settings
+from debug import info as dbg_info, warn as dbg_warn, error as dbg_error
 import sdata
 import utime as time
 from sampling import sampleEnviroment
-from utils import free_pins, checkLogDirectory, debug_print, periodic_field_data_send, load_persisted_unit_id
+from utils import free_pins, checkLogDirectory, debug_print, periodic_field_data_send, load_persisted_unit_id, persist_unit_id, get_machine_id
 from lora import connectLora, log_error, TMON_AI
 import ujson as json
 import uos as os
@@ -23,12 +24,26 @@ checkLogDirectory()
 
 script_start_time = time.ticks_ms()
 
+# Detect and persist MACHINE_ID on first boot if missing
+try:
+    if settings.MACHINE_ID is None:
+        mid = get_machine_id()
+        if mid:
+            settings.MACHINE_ID = mid
+            try:
+                with open(settings.MACHINE_ID_FILE, 'w') as f:
+                    f.write(mid)
+            except Exception:
+                pass
+except Exception:
+    pass
+
 # Load persisted UNIT_ID mapping if available
 try:
     stored_uid = load_persisted_unit_id()
     if stored_uid and str(stored_uid) != str(settings.UNIT_ID):
         settings.UNIT_ID = str(stored_uid)
-        print(f"[BOOT] Loaded persisted UNIT_ID: {settings.UNIT_ID}")
+    print(f"[BOOT] Loaded persisted UNIT_ID: {settings.UNIT_ID}")
 except Exception:
     pass
 def get_script_runtime():
@@ -67,7 +82,7 @@ async def lora_comm_task():
     global sdata
     while True:
         loop_start_time = time.ticks_ms()
-        print(f"[DEBUG] lora_comm_task: loop start at {loop_start_time}")
+    print(f"[DEBUG] lora_comm_task: loop start at {loop_start_time}")
         from utils import led_status_flash
         led_status_flash('INFO')  # Always flash LED for status, not tied to debug
         result = None
@@ -88,7 +103,12 @@ async def lora_comm_task():
             sdata.script_runtime = get_script_runtime()
             print(f"[DEBUG] lora_comm_task: sdata.loop_runtime={sdata.loop_runtime}, sdata.script_runtime={sdata.script_runtime}")
             print(f"[DEBUG] lora_comm_task: calling connectLora")
-            result = await connectLora()
+            # Respect suspension: skip active LoRa work but still loop
+            if getattr(settings, 'DEVICE_SUSPENDED', False):
+                await debug_print("Device suspended; skipping LoRa connect", "WARN")
+                result = None
+            else:
+                result = await connectLora()
             print(f"[DEBUG] lora_comm_task: connectLora result={result}")
             if result is False:
                 led_status_flash('WARN')  # Always flash LED for warning
@@ -128,7 +148,11 @@ async def sample_task():
     loop_start_time = time.ticks_ms()
     from utils import led_status_flash
     led_status_flash('INFO')  # Always flash LED for info
-    await sampleEnviroment()
+    # Skip sampling if suspended
+    if getattr(settings, 'DEVICE_SUSPENDED', False):
+        await debug_print("Device suspended; skipping sampling", "WARN")
+    else:
+        await sampleEnviroment()
     sdata.loop_runtime = (time.ticks_ms() - loop_start_time) // 1000
     sdata.script_runtime = get_script_runtime()
     sdata.free_mem = gc.mem_free()
@@ -154,7 +178,10 @@ async def periodic_field_data_task():
     while True:
         # Run send sequentially to avoid overlapping uploads (reduces memory pressure)
         try:
-            await send_field_data_log()
+            if getattr(settings, 'DEVICE_SUSPENDED', False):
+                await debug_print("Device suspended; skip field data send", "WARN")
+            else:
+                await send_field_data_log()
         except Exception as e:
             await debug_print(f"field_data_task error: {e}", "ERROR")
         await asyncio.sleep(settings.FIELD_DATA_SEND_INTERVAL)
@@ -165,7 +192,7 @@ async def periodic_command_poll_task():
     except Exception:
         poll_device_commands = None
     while True:
-        if poll_device_commands:
+        if poll_device_commands and not getattr(settings, 'DEVICE_SUSPENDED', False):
             try:
                 await poll_device_commands()
             except Exception as e:
@@ -203,6 +230,15 @@ async def first_boot_provision():
             try:
                 with open(flag, 'w') as f:
                     f.write('ok')
+            except Exception:
+                pass
+            # If UNIT_ID returned in body, persist
+            try:
+                resp_json = resp.json()
+                new_uid = resp_json.get('unit_id') if isinstance(resp_json, dict) else None
+                if new_uid and str(new_uid) != str(settings.UNIT_ID):
+                    settings.UNIT_ID = str(new_uid)
+                    persist_unit_id(settings.UNIT_ID)
             except Exception:
                 pass
             # If remote node, disable WiFi after provisioning
