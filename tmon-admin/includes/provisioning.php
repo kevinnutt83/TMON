@@ -909,6 +909,9 @@ add_action('wp_ajax_tmon_admin_known_units', function(){
     }
 });
 
+// Fix for parse error: ensure all array values are quoted as strings.
+$roles = ['base', 'remote', 'wifi'];
+
 // Previously duplicated core installer name; renamed to avoid fatal.
 if (!function_exists('tmon_admin_install_provisioning_schema')) {
 	function tmon_admin_install_provisioning_schema() {
