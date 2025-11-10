@@ -17,9 +17,9 @@ class NormalizationTest extends TestCase {
         $norm = tmon_uc_normalize_payload($input);
         $this->assertEquals(40, $norm['frost_active_temp']);
         $this->assertEquals(95, $norm['heat_active_temp']);
-        $this->assertNotEmpty($norm['thresholds_summary']);
-        $this->assertStringStartsWith('F:', $norm['thresholds_summary']);
-        $this->assertStringContainsString(';H:', $norm['thresholds_summary']);
+        $this->assertTrue(!empty($norm['thresholds_summary']));
+        $this->assertTrue(strpos($norm['thresholds_summary'], 'F:') === 0);
+        $this->assertTrue(strpos($norm['thresholds_summary'], ';H:') !== false);
     }
 
     public function test_cache_invalidation_placeholder() {

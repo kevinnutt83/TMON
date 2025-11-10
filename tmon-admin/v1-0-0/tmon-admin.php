@@ -76,7 +76,7 @@ add_action('rest_api_init', function() {
         $sent = $hdrs['X-TMON-ADMIN'] ?? ($_SERVER['HTTP_X_TMON_ADMIN'] ?? '');
         return $admin_key && hash_equals($admin_key, (string)$sent);
     },
-  'callback' => function($req) {
+    'callback' => function($req) {
         global $wpdb;
         $body = $req->get_json_params();
         if (!is_array($body)) return new WP_Error('invalid_body','Expected JSON object',['status'=>400]);
@@ -84,6 +84,14 @@ add_action('rest_api_init', function() {
         // Create table if missing (lightweight schema)
         $wpdb->query("CREATE TABLE IF NOT EXISTS $table (id BIGINT AUTO_INCREMENT PRIMARY KEY, unit_id VARCHAR(64), created_at DATETIME DEFAULT CURRENT_TIMESTAMP, data LONGTEXT)");
         $unit_id = sanitize_text_field($body['unit_id'] ?? '');
+        // Capture UC ID from header or payload for per-UC tracking
+        $hdrs = function_exists('getallheaders') ? getallheaders() : [];
+        $uc_id = isset($hdrs['X-TMON-UC']) ? $hdrs['X-TMON-UC'] : ($_SERVER['HTTP_X_TMON_UC'] ?? '');
+        if (!$uc_id) {
+          $uc_id = sanitize_text_field($body['uc_id'] ?? '');
+        } else {
+          $uc_id = sanitize_text_field($uc_id);
+        }
         $wpdb->insert($table, [
             'unit_id' => $unit_id,
             'data' => wp_json_encode($body),
@@ -93,6 +101,12 @@ add_action('rest_api_init', function() {
     $ha = $body['heat_active_temp'] ?? ($body['HEATWATCH_ACTIVE_TEMP'] ?? null);
     if ($fa !== null || $ha !== null || !empty($body['thresholds_summary'])) {
       update_option('tmon_admin_last_thresholds_sync_ts', time());
+          if ($uc_id) {
+            $map = get_option('tmon_admin_uc_thresholds_sync_map', []);
+            if (!is_array($map)) { $map = []; }
+            $map[$uc_id] = time();
+            update_option('tmon_admin_uc_thresholds_sync_map', $map);
+          }
     }
         do_action('tmon_admin_receive_field_data', $unit_id, $body);
         return ['stored' => true];
@@ -183,6 +197,21 @@ add_action('admin_menu', function() {
         echo '<p><strong>Last thresholds sync:</strong> '.esc_html(date_i18n('Y-m-d H:i:s', $last_thr_ts)).' ('.esc_html(human_time_diff($last_thr_ts)).' ago)</p>';
       } else {
         echo '<p><strong>Last thresholds sync:</strong> Never</p>';
+      }
+      // Per-UC last sync table
+      $map = get_option('tmon_admin_uc_thresholds_sync_map', []);
+      if (is_array($map) && !empty($map)) {
+        // sort by latest first
+        arsort($map);
+        echo '<h3>Per-Unit Connector Last Sync</h3>';
+        echo '<table class="widefat"><thead><tr><th>UC ID</th><th>Last Sync</th><th>Age</th></tr></thead><tbody>';
+        foreach ($map as $ucid => $ts) {
+          $ts_i = intval($ts);
+          $when = $ts_i ? date_i18n('Y-m-d H:i:s', $ts_i) : 'Never';
+          $age = $ts_i ? human_time_diff($ts_i) . ' ago' : '';
+          echo '<tr><td>'.esc_html($ucid).'</td><td>'.esc_html($when).'</td><td>'.esc_html($age).'</td></tr>';
+        }
+        echo '</tbody></table>';
       }
       echo '<form method="get" style="margin-bottom:15px;">';
       echo '<input type="hidden" name="page" value="tmon-admin-field-data-viewer" />';

@@ -168,6 +168,7 @@ add_action('rest_api_init', function() {
 
         $admin_url = get_option('tmon_uc_admin_url');
         $admin_key = get_option('tmon_uc_admin_key');
+        $uc_id = get_option('tmon_uc_id', '');
         if ($admin_url && $admin_key && wp_http_validate_url($admin_url)) {
           $endpoint = rtrim($admin_url,'/') . '/wp-json/tmon-admin/v1/field-data';
           $args = [
@@ -175,8 +176,11 @@ add_action('rest_api_init', function() {
             'headers' => [
               'Content-Type' => 'application/json',
               'X-TMON-ADMIN' => $admin_key,
+              // Identify this Unit Connector to Admin
+              'X-TMON-UC' => $uc_id ? $uc_id : 'default'
             ],
-            'body' => wp_json_encode($norm),
+            // Also embed UC id inside payload for redundancy
+            'body' => wp_json_encode($uc_id ? array_merge($norm, ['uc_id' => $uc_id]) : $norm),
           ];
           $resp = wp_remote_post($endpoint, $args);
           if (is_wp_error($resp)) {
@@ -221,6 +225,7 @@ add_action('rest_api_init', function() {
           update_option('tmon_uc_admin_url', esc_url_raw($_POST['tmon_uc_admin_url'] ?? ''));
           update_option('tmon_uc_admin_key', sanitize_text_field($_POST['tmon_uc_admin_key'] ?? ''));
           update_option('tmon_uc_device_key', sanitize_text_field($_POST['tmon_uc_device_key'] ?? ''));
+          update_option('tmon_uc_id', sanitize_text_field($_POST['tmon_uc_id'] ?? ''));
           // Cache TTL option
           update_option('tmon_uc_threshold_cache_ttl', intval($_POST['tmon_uc_threshold_cache_ttl'] ?? 5));
           // Clear thresholds cache on settings change
@@ -234,7 +239,8 @@ add_action('rest_api_init', function() {
         }
         $admin_url = esc_url(get_option('tmon_uc_admin_url',''));
         $admin_key = esc_html(get_option('tmon_uc_admin_key',''));
-        $device_key = esc_html(get_option('tmon_uc_device_key',''));
+  $device_key = esc_html(get_option('tmon_uc_device_key',''));
+  $uc_id = esc_html(get_option('tmon_uc_id',''));
         $ttl = intval(get_option('tmon_uc_threshold_cache_ttl', 5));
         $cached = get_transient('tmon_uc_thresholds_cache');
         $last_sync_ts = is_array($cached) ? ($cached['last_sync'] ?? null) : null;
@@ -246,8 +252,9 @@ add_action('rest_api_init', function() {
         }
         echo '<div class="wrap"><h1>TMON Unit Connector Settings</h1><form method="post">';
         wp_nonce_field('tmon_uc_settings_save');
-        echo '<table class="form-table"><tr><th scope="row"><label for="tmon_uc_admin_url">Admin Hub URL</label></th><td><input type="url" name="tmon_uc_admin_url" id="tmon_uc_admin_url" class="regular-text" value="'.$admin_url.'" placeholder="https://admin.example.com" /></td></tr>';
+  echo '<table class="form-table"><tr><th scope="row"><label for="tmon_uc_admin_url">Admin Hub URL</label></th><td><input type="url" name="tmon_uc_admin_url" id="tmon_uc_admin_url" class="regular-text" value="'.$admin_url.'" placeholder="https://admin.example.com" /></td></tr>';
         echo '<tr><th scope="row"><label for="tmon_uc_admin_key">Admin Shared Key</label></th><td><input type="text" name="tmon_uc_admin_key" id="tmon_uc_admin_key" class="regular-text" value="'.$admin_key.'" /></td></tr>';
+  echo '<tr><th scope="row"><label for="tmon_uc_id">Unit Connector ID</label></th><td><input type="text" name="tmon_uc_id" id="tmon_uc_id" class="regular-text" value="'.$uc_id.'" placeholder="uc-1" /><p class="description">Used to track per-UC thresholds sync in Admin.</p></td></tr>';
         echo '<tr><th scope="row"><label for="tmon_uc_threshold_cache_ttl">Thresholds cache TTL (minutes)</label></th><td><input type="number" min="0" name="tmon_uc_threshold_cache_ttl" id="tmon_uc_threshold_cache_ttl" class="regular-text" value="'.esc_attr($ttl).'" /></td></tr>';
         echo '<tr><th scope="row"><label for="tmon_uc_device_key">Device POST Key (X-TMON-DEVICE)</label></th><td><input type="text" name="tmon_uc_device_key" id="tmon_uc_device_key" class="regular-text" value="'.$device_key.'" /></td></tr>';
         echo '</table><p><input type="submit" name="tmon_uc_save" class="button button-primary" value="Save Changes" /></p></form>';
