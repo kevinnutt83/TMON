@@ -13,6 +13,7 @@ from utils import free_pins, checkLogDirectory, debug_print, periodic_field_data
 from lora import connectLora, log_error, TMON_AI
 from ota import check_for_update
 from oled import update_display
+from settings_apply import load_applied_settings_on_boot, settings_apply_loop
 import ujson as json
 import uos as os
 try:
@@ -23,6 +24,12 @@ from wifi import disable_wifi, connectToWifiNetwork, wifi_rssi_monitor
 from utils import get_machine_id
 
 checkLogDirectory()
+
+# Apply any previously applied settings snapshot on boot
+try:
+    load_applied_settings_on_boot()
+except Exception:
+    pass
 
 script_start_time = time.ticks_ms()
 
@@ -245,6 +252,12 @@ async def startup():
     try:
         import uasyncio as _a
         _a.create_task(wifi_rssi_monitor())
+    except Exception:
+        pass
+    # Staged settings apply loop
+    try:
+        import uasyncio as _a0
+        _a0.create_task(settings_apply_loop(int(getattr(settings, 'PROVISION_CHECK_INTERVAL_S', 60))))
     except Exception:
         pass
     # OLED background update with optional page rotation
