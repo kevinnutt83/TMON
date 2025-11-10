@@ -164,6 +164,10 @@ add_action('wp_ajax_tmon_admin_submit_ai_feedback', function() {
 
 if (!defined('ABSPATH')) exit;
 
+if (!defined('TMON_ADMIN_VERSION')) {
+	define('TMON_ADMIN_VERSION', '0.1.2');
+}
+
 if (!defined('TMON_ADMIN_PATH')) {
 	define('TMON_ADMIN_PATH', plugin_dir_path(__FILE__));
 }
@@ -174,13 +178,14 @@ if (!defined('TMON_ADMIN_URL')) {
 // Guard include loader to prevent accidental redeclare.
 if (!function_exists('tmon_admin_include_files')) {
 	function tmon_admin_include_files() {
+		require_once TMON_ADMIN_PATH . 'includes/db.php';
 		require_once TMON_ADMIN_PATH . 'includes/admin-dashboard.php';
 		require_once TMON_ADMIN_PATH . 'includes/settings.php';
-		require_once TMON_ADMIN_PATH . 'includes/api.php';
+		require_once TMON_ADMIN_PATH . 'includes/api.php';              // contains renamed AJAX handler
 		require_once TMON_ADMIN_PATH . 'includes/provisioning.php';
 		require_once TMON_ADMIN_PATH . 'includes/ai.php';
 		require_once TMON_ADMIN_PATH . 'includes/audit.php';
-		require_once TMON_ADMIN_PATH . 'includes/notifications.php';
+		require_once TMON_ADMIN_PATH . 'includes/notifications.php';   // fixed signature
 		require_once TMON_ADMIN_PATH . 'includes/ota.php';
 		require_once TMON_ADMIN_PATH . 'includes/files.php';
 		require_once TMON_ADMIN_PATH . 'includes/groups.php';
@@ -196,15 +201,46 @@ if (!function_exists('tmon_admin_include_files')) {
 }
 tmon_admin_include_files();
 
-// Helper: verify nonce safely (avoid wp_die); returns true/false and shows notice when invalid
-function tmon_admin_verify_nonce($action, $nonce_field = '_wpnonce') {
-    if (!isset($_POST[$nonce_field])) return false;
-    if (!wp_verify_nonce($_POST[$nonce_field], $action)) {
-        add_action('admin_notices', function(){ echo '<div class="notice notice-error"><p>Security check failed (nonce expired). Please reload the page and try again.</p></div>'; });
-        return false;
-    }
-    return true;
+// Install/upgrade schema
+if (!function_exists('tmon_admin_install_schema')) {
+	// Provided in includes/db.php; ensure it exists before hook usage.
 }
+
+// Activation installs/updates DB schema + version.
+if (!has_action('activate_' . plugin_basename(__FILE__))) {
+	register_activation_hook(__FILE__, function () {
+		if (function_exists('tmon_admin_install_schema')) {
+			tmon_admin_install_schema();
+		}
+		update_option('tmon_admin_version', TMON_ADMIN_VERSION);
+	});
+}
+
+// Upgrade path on version change.
+add_action('plugins_loaded', function () {
+	$stored = get_option('tmon_admin_version');
+	if ($stored !== TMON_ADMIN_VERSION) {
+		if (function_exists('tmon_admin_install_schema')) {
+			tmon_admin_install_schema();
+		}
+		update_option('tmon_admin_version', TMON_ADMIN_VERSION);
+	}
+});
+
+// Enqueue assets; fix localization ($l10n must be an array).
+add_action('admin_enqueue_scripts', function () {
+	wp_enqueue_style('tmon-admin', TMON_ADMIN_URL . 'assets/admin.css', [], TMON_ADMIN_VERSION);
+	wp_enqueue_script('tmon-admin', TMON_ADMIN_URL . 'assets/admin.js', ['jquery'], TMON_ADMIN_VERSION, true);
+
+	$localized = [
+		'ajaxUrl' => admin_url('admin-ajax.php'),
+		'nonce'   => wp_create_nonce('tmon-admin'),
+	];
+	wp_localize_script('tmon-admin', 'TMON_ADMIN', $localized);
+
+	// For arbitrary data, prefer inline script:
+	// wp_add_inline_script('tmon-admin', 'window.TMON_ADMIN_EXTRA = ' . wp_json_encode($extra) . ';', 'before');
+});
 
 add_action('admin_menu', 'tmon_admin_menu');
 function tmon_admin_menu() {

@@ -4,10 +4,8 @@
 function tmon_admin_install_schema() {
 	global $wpdb;
 	$charset_collate = $wpdb->get_charset_collate();
-
 	$devices = $wpdb->prefix . 'tmon_devices';
 
-	// Full schema with columns referenced by code (company, site, zone, cluster, suspended).
 	$sql = "CREATE TABLE {$devices} (
 		id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
 		machine_id VARCHAR(64) NOT NULL,
@@ -29,16 +27,21 @@ function tmon_admin_install_schema() {
 	require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 	dbDelta($sql);
 
-	// Defensive: ensure columns exist even if older installs missed dbDelta additions.
+	// Ensure columns exist on legacy installs.
 	tmon_admin_ensure_columns($devices, [
-		'unit_name' => "ALTER TABLE {$devices} ADD COLUMN unit_name VARCHAR(100) DEFAULT NULL",
-		'company'   => "ALTER TABLE {$devices} ADD COLUMN company VARCHAR(191) DEFAULT NULL",
-		'site'      => "ALTER TABLE {$devices} ADD COLUMN site VARCHAR(191) DEFAULT NULL",
-		'zone'      => "ALTER TABLE {$devices} ADD COLUMN zone VARCHAR(191) DEFAULT NULL",
-		'cluster'   => "ALTER TABLE {$devices} ADD COLUMN cluster VARCHAR(191) DEFAULT NULL",
-		'suspended' => "ALTER TABLE {$devices} ADD COLUMN suspended TINYINT(1) NOT NULL DEFAULT 0",
+		'unit_name'   => "ALTER TABLE {$devices} ADD COLUMN unit_name VARCHAR(100) DEFAULT NULL",
+		'company'     => "ALTER TABLE {$devices} ADD COLUMN company VARCHAR(191) DEFAULT NULL",
+		'site'        => "ALTER TABLE {$devices} ADD COLUMN site VARCHAR(191) DEFAULT NULL",
+		'zone'        => "ALTER TABLE {$devices} ADD COLUMN zone VARCHAR(191) DEFAULT NULL",
+		'cluster'     => "ALTER TABLE {$devices} ADD COLUMN cluster VARCHAR(191) DEFAULT NULL",
+		'suspended'   => "ALTER TABLE {$devices} ADD COLUMN suspended TINYINT(1) NOT NULL DEFAULT 0",
 		'provisioned' => "ALTER TABLE {$devices} ADD COLUMN provisioned TINYINT(1) NOT NULL DEFAULT 0",
 	]);
+
+	// Generate Hub shared key if missing.
+	if (!get_option('tmon_admin_uc_key')) {
+		update_option('tmon_admin_uc_key', wp_generate_password(32, false, false));
+	}
 }
 
 function tmon_admin_ensure_columns($table, $ddl_by_column) {

@@ -5,9 +5,7 @@ add_action('tmon_admin_notify', function ($message, $context = []) {
 	if (!is_array($context)) {
 		$context = ['context' => $context];
 	}
-	// Route to admin_notices, error_log, or custom storage as needed.
-	// Example: show a transient admin notice in the dashboard.
-	$notice = sprintf('[TMON] %s %s', (string) $message, !empty($context) ? wp_json_encode($context) : '');
+	$notice = sprintf('[TMON] %s %s', (string) $message, empty($context) ? '' : wp_json_encode($context));
 	error_log($notice); // keep lightweight and reliable
 
 	// Optionally surface in WP Admin UI:

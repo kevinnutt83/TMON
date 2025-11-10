@@ -476,7 +476,7 @@ function tmon_admin_handle_device_check_in(WP_REST_Request $request) {
 	return new WP_REST_Response($response, 200);
 }
 
-// AJAX: Unit Connector device list; ensure columns exist and return safe JSON.
+// Ensure we don't collide with the UC plugin by using a unique handler name in this plugin.
 add_action('wp_ajax_tmon_uc_get_devices', 'tmon_admin_get_devices');
 
 if (!function_exists('tmon_admin_get_devices')) {
@@ -497,6 +497,9 @@ if (!function_exists('tmon_admin_get_devices')) {
 		wp_send_json_success($rows);
 	}
 }
+
+// IMPORTANT: Remove any previous function tmon_uc_get_devices() from this file.
+// If it exists in older code, delete it rather than aliasing it to avoid redeclare with the UC plugin.
 
 // Wherever you previously called notifications with one arg, update to pass context as second arg:
 function tmon_admin_example_event_logger($message, $context = []) {
