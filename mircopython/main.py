@@ -11,13 +11,14 @@ import utime as time
 from sampling import sampleEnviroment
 from utils import free_pins, checkLogDirectory, debug_print, periodic_field_data_send, load_persisted_unit_id, persist_unit_id, get_machine_id
 from lora import connectLora, log_error, TMON_AI
+from ota import check_for_update
 import ujson as json
 import uos as os
 try:
     import urequests as requests
 except Exception:
     requests = None
-from wifi import disable_wifi, connectToWifiNetwork
+from wifi import disable_wifi, connectToWifiNetwork, wifi_rssi_monitor
 from utils import get_machine_id
 
 checkLogDirectory()
@@ -79,67 +80,46 @@ class TaskManager:
             await asyncio.sleep(sleep_time)
 
 async def lora_comm_task():
+    """Periodic LoRa communication init/retry loop."""
     global sdata
+    from utils import led_status_flash
     while True:
         loop_start_time = time.ticks_ms()
-    print(f"[DEBUG] lora_comm_task: loop start at {loop_start_time}")
-        from utils import led_status_flash
-        led_status_flash('INFO')  # Always flash LED for status, not tied to debug
+        led_status_flash('INFO')
         result = None
         error_msg = None
-        # Defensive: ensure sdata variables are always initialized
-        print(f"[DEBUG] lora_comm_task: checking sdata.loop_runtime exists: {hasattr(sdata, 'loop_runtime')}")
-        print(f"[DEBUG] lora_comm_task: checking sdata.script_runtime exists: {hasattr(sdata, 'script_runtime')}")
+        # Defensive init
         if not hasattr(sdata, 'loop_runtime'):
-            print(f"[DEBUG] lora_comm_task: initializing sdata.loop_runtime")
             sdata.loop_runtime = 0
         if not hasattr(sdata, 'script_runtime'):
-            print(f"[DEBUG] lora_comm_task: initializing sdata.script_runtime")
             sdata.script_runtime = 0
         try:
-            print(f"[DEBUG] lora_comm_task: assigning sdata.loop_runtime")
             sdata.loop_runtime = (time.ticks_ms() - loop_start_time) // 1000
-            print(f"[DEBUG] lora_comm_task: assigning sdata.script_runtime")
             sdata.script_runtime = get_script_runtime()
-            print(f"[DEBUG] lora_comm_task: sdata.loop_runtime={sdata.loop_runtime}, sdata.script_runtime={sdata.script_runtime}")
-            print(f"[DEBUG] lora_comm_task: calling connectLora")
-            # Respect suspension: skip active LoRa work but still loop
             if getattr(settings, 'DEVICE_SUSPENDED', False):
                 await debug_print("Device suspended; skipping LoRa connect", "WARN")
                 result = None
             else:
                 result = await connectLora()
-            print(f"[DEBUG] lora_comm_task: connectLora result={result}")
             if result is False:
-                led_status_flash('WARN')  # Always flash LED for warning
-                print(f"[DEBUG] lora_comm_task: connectLora returned False, retrying...")
+                led_status_flash('WARN')
                 await debug_print("LoRa init failed, retrying...", "WARN")
                 for _ in range(10):
                     await asyncio.sleep(1)
         except Exception as e:
-            led_status_flash('ERROR')  # Always flash LED for error
-            print(f"[DEBUG] lora_comm_task: exception occurred: {repr(e)}")
-            import sys
-            exc_type, exc_value, exc_traceback = sys.exc_info()
-            import traceback
-            tb_str = ''.join(traceback.format_exception(exc_type, exc_value, exc_traceback))
-            print(f"[DEBUG] lora_comm_task: full traceback:\n{tb_str}")
-            if error_msg is None:
-                error_msg = f"Unexpected error in lora_comm_task: {str(e)}"
-            else:
-                error_msg += f" | Exception: {str(e)}"
+            led_status_flash('ERROR')
+            error_msg = f"Unexpected error in lora_comm_task: {e}"
             if "blocking" in error_msg:
                 error_msg += " | .blocking attribute does not exist on SX1262."
             await debug_print(error_msg, "ERROR")
             await log_error(error_msg)
             await free_pins()
-            print(f"[DEBUG] lora_comm_task: exception caught, error_msg={error_msg}")
             for _ in range(10):
                 await asyncio.sleep(1)
         loop_runtime = (time.ticks_ms() - loop_start_time) // 1000
-        print(f"[DEBUG] lora_comm_task: loop_runtime={loop_runtime}, script_runtime={get_script_runtime()}")
-        led_status_flash('INFO')  # Always flash LED for info
+        led_status_flash('INFO')
         await debug_print(f"lora_comm_task loop runtime: {loop_runtime}s | script runtime: {get_script_runtime()}s", "TASK")
+        await asyncio.sleep(1)
 
 import gc
 import machine
@@ -260,6 +240,24 @@ async def startup():
     if getattr(settings, 'NODE_TYPE', 'base') == 'base':
         tm.add_task(periodic_field_data_task, 'field_data', settings.FIELD_DATA_SEND_INTERVAL)
         tm.add_task(periodic_command_poll_task, 'cmd_poll', 10)
+    # Background periodic tasks (standalone loops)
+    try:
+        import uasyncio as _a
+        _a.create_task(wifi_rssi_monitor())
+    except Exception:
+        pass
+    async def ota_version_task():
+        while True:
+            try:
+                await check_for_update()
+            except Exception:
+                pass
+            await asyncio.sleep(getattr(settings, 'OTA_CHECK_INTERVAL_S', 1800))
+    try:
+        import uasyncio as _a2
+        _a2.create_task(ota_version_task())
+    except Exception:
+        pass
     await tm.run()
 
 def run_asyncio_thread():

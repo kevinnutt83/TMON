@@ -3,10 +3,12 @@ import ujson
 import uasyncio as asyncio
 import os
 import settings
+from config_persist import write_text, read_text, set_flag, is_flag_set, write_json, read_json
 
 # Persistent backlog file for unsent field data
 FIELD_DATA_BACKLOG = settings.LOG_DIR + '/field_data_backlog.log'
-UNIT_ID_FILE = settings.LOG_DIR + '/unit_id.txt'
+UNIT_ID_FILE = settings.UNIT_ID_FILE if hasattr(settings, 'UNIT_ID_FILE') else (settings.LOG_DIR + '/unit_id.txt')
+SUSPENDED_FLAG = getattr(settings, 'DEVICE_SUSPENDED_FILE', settings.LOG_DIR + '/suspended.flag')
 
 def append_to_backlog(payload):
     checkLogDirectory()
@@ -44,19 +46,32 @@ def clear_backlog():
 def persist_unit_id(unit_id):
     try:
         checkLogDirectory()
-        with open(UNIT_ID_FILE, 'w') as f:
-            f.write(str(unit_id).strip())
+        write_text(UNIT_ID_FILE, str(unit_id).strip())
     except Exception as e:
         print(f"Error persisting UNIT_ID: {e}")
 
 def load_persisted_unit_id():
     try:
         checkLogDirectory()
-        with open(UNIT_ID_FILE, 'r') as f:
-            val = f.read().strip()
-            return val if val else None
+        val = read_text(UNIT_ID_FILE, None)
+        if not val:
+            return None
+        val = val.strip()
+        return val if val else None
     except Exception:
         return None
+
+def persist_suspension_state(enabled: bool):
+    try:
+        set_flag(SUSPENDED_FLAG, enabled)
+    except Exception:
+        pass
+
+def load_suspension_state():
+    try:
+        return is_flag_set(SUSPENDED_FLAG)
+    except Exception:
+        return False
 # --- Field Data Log Management ---
 
 
