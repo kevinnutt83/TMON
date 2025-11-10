@@ -443,7 +443,7 @@ function tmon_admin_provisioning_page() {
     echo '<table class="form-table">';
     // Compact search filters to help narrow large fleets
     echo '<tr><th scope="row">Filters</th><td>';
-    echo ' Role <select id="tmon_filter_role"><option value="">Any</option><option value="base">base</option><option value="remote">remote</option></select>';
+    echo ' Role <select id="tmon_filter_role"><option value="">Any</option><option value="base">base</option><option value="remote">remote</option><option value="wifi">wifi</option></select>';
     echo ' Company ID <input id="tmon_filter_company" type="number" class="small-text" placeholder="any" />';
     echo ' <span class="description">Type at least 2 characters in Unit/Machine fields to search. Results may be truncated; refine your query.</span>';
     echo '</td></tr>';
@@ -537,7 +537,7 @@ function tmon_admin_provisioning_page() {
 })();</script>
 EOT;
     // Removed inline refresh form to prevent nested forms (moved above)
-    echo '<tr><th scope="row">Role</th><td><select name="role"><option value="base">base</option><option value="remote">remote</option></select></td></tr>';
+    echo '<tr><th scope="row">Role</th><td><select name="role"><option value="base">base</option><option value="remote">remote</option><option value="wifi">wifi</option></select></td></tr>';
     echo '<tr><th scope="row">Company ID</th><td><input name="company_id" type="number" class="small-text"></td></tr>';
     echo '<tr><th scope="row">Plan</th><td><select name="plan"><option>standard</option><option>pro</option><option>enterprise</option></select></td></tr>';
     echo '<tr><th scope="row">Status</th><td><select name="status"><option>active</option><option>suspended</option><option>expired</option></select></td></tr>';
@@ -586,7 +586,7 @@ EOT;
         wp_nonce_field('tmon_admin_provision');
         echo '<input type="hidden" name="action" value="update" />';
         echo '<input type="hidden" name="id" value="'.intval($r['id']).'" />';
-        echo ' Role <select name="role"><option value="base" '.selected($r['role'],'base',false).'>base</option><option value="remote" '.selected($r['role'],'remote',false).'>remote</option></select>';
+        echo ' Role <select name="role"><option value="base" '.selected($r['role'],'base',false).'>base</option><option value="remote" '.selected($r['role'],'remote',false).'>remote</option><option value="wifi" '.selected($r['role'],'wifi',false).'>wifi</option></select>';
         echo ' Plan <select name="plan"><option '.selected($r['plan'],'standard',false).'>standard</option><option '.selected($r['plan'],'pro',false).'>pro</option><option '.selected($r['plan'],'enterprise',false).'>enterprise</option></select>';
         echo ' Status <select name="status"><option '.selected($r['status'],'active',false).'>active</option><option '.selected($r['status'],'suspended',false).'>suspended</option><option '.selected($r['status'],'expired',false).'>expired</option></select>';
         echo ' Company <input name="company_id" type="number" class="small-text" value="'.intval($r['company_id']).'" />';
