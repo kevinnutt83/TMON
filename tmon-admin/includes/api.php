@@ -498,14 +498,6 @@ if (!function_exists('tmon_admin_get_devices')) {
 	}
 }
 
-// Optional compatibility alias ONLY if legacy name not present (prevents fatal).
-if (!function_exists('tmon_uc_get_devices')) {
-	function tmon_uc_get_devices() {
-		// Delegate to new name (no duplication of logic).
-		tmon_admin_get_devices();
-	}
-}
-
 // Wherever you previously called notifications with one arg, update to pass context as second arg:
 function tmon_admin_example_event_logger($message, $context = []) {
 	do_action('tmon_admin_notify', $message, $context);
