@@ -12,6 +12,7 @@ from sampling import sampleEnviroment
 from utils import free_pins, checkLogDirectory, debug_print, periodic_field_data_send, load_persisted_unit_id, persist_unit_id, get_machine_id
 from lora import connectLora, log_error, TMON_AI
 from ota import check_for_update
+from oled import update_display
 import ujson as json
 import uos as os
 try:
@@ -244,6 +245,30 @@ async def startup():
     try:
         import uasyncio as _a
         _a.create_task(wifi_rssi_monitor())
+    except Exception:
+        pass
+    # OLED background update with optional page rotation
+    async def _oled_loop():
+        page = 0
+        try:
+            upd = int(getattr(settings, 'OLED_UPDATE_INTERVAL_S', 10))
+            rotate_s = int(getattr(settings, 'OLED_PAGE_ROTATE_INTERVAL_S', 30))
+            scroll = bool(getattr(settings, 'OLED_SCROLL_ENABLED', False))
+        except Exception:
+            upd, rotate_s, scroll = 10, 30, False
+        last_rotate = time.time()
+        while True:
+            try:
+                await update_display(page)
+            except Exception:
+                pass
+            if scroll and (time.time() - last_rotate) >= rotate_s:
+                page = 1 - page
+                last_rotate = time.time()
+            await asyncio.sleep(upd)
+    try:
+        import uasyncio as _a3
+        _a3.create_task(_oled_loop())
     except Exception:
         pass
     async def ota_version_task():

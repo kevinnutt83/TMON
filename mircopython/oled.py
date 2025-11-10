@@ -528,6 +528,25 @@ async def update_display(page=0):
         vstr = f"{volt:.1f}V"
         oled.text(vstr, 64 - len(vstr) * 4, 0)
 
+        # Secondary header line: UNIT_ID and machine id suffix
+        try:
+            import settings as _s
+            uid = getattr(_s, 'UNIT_ID', '')
+            if uid is None:
+                uid = ''
+            uid = str(uid)
+        except Exception:
+            uid = ''
+        try:
+            from utils import get_machine_id as _get_mid
+            mid = _get_mid()
+            mid_suf = mid[-4:] if mid else '----'
+        except Exception:
+            mid_suf = '----'
+        label = f"U {uid[-6:]} M {mid_suf}"
+        label = label[:20]
+        oled.text(label, 0, 8)
+
         if page == 0:
             # Network bars: WiFi left, LoRa right
             wrssi = _safe_attr(_sdata, 'wifi_rssi', 0)
