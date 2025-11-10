@@ -865,3 +865,55 @@ if (!function_exists('tmon_admin_install_provisioning_schema')) {
         });
     }
 }
+
+// Add this function to avoid fatal error if not already defined elsewhere
+if (!function_exists('tmon_admin_ensure_columns')) {
+    /**
+     * Ensure required columns exist in the tmon_provisioned_devices table.
+     * Adds missing columns if necessary.
+     */
+    function tmon_admin_ensure_columns() {
+        global $wpdb;
+        $table = $wpdb->prefix . 'tmon_provisioned_devices';
+        $required = [
+            'role' => "ALTER TABLE $table ADD COLUMN role VARCHAR(32) DEFAULT 'base'",
+            'company_id' => "ALTER TABLE $table ADD COLUMN company_id BIGINT UNSIGNED NULL",
+            'plan' => "ALTER TABLE $table ADD COLUMN plan VARCHAR(64) DEFAULT 'standard'",
+            'status' => "ALTER TABLE $table ADD COLUMN status VARCHAR(32) DEFAULT 'active'",
+            'notes' => "ALTER TABLE $table ADD COLUMN notes TEXT",
+            'created_at' => "ALTER TABLE $table ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP",
+            'updated_at' => "ALTER TABLE $table ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP",
+        ];
+        $cols = $wpdb->get_results("SHOW COLUMNS FROM $table", ARRAY_A);
+        $have = [];
+        foreach (($cols ?: []) as $c) {
+            $have[strtolower($c['Field'])] = true;
+        }
+        foreach ($required as $col => $sql) {
+            if (empty($have[$col])) {
+                $wpdb->query($sql);
+                // Special handling for updated_at ON UPDATE
+                if ($col === 'updated_at') {
+                    $wpdb->query("ALTER TABLE $table MODIFY COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
+                }
+            }
+        }
+        // Ensure unique index on (unit_id, machine_id)
+        $indexes = $wpdb->get_results("SHOW INDEX FROM $table", ARRAY_A);
+        $hasUnitMachineIdx = false;
+        foreach (($indexes ?: []) as $idx) {
+            if (isset($idx['Key_name']) && $idx['Key_name'] === 'unit_machine') {
+                $hasUnitMachineIdx = true;
+                break;
+            }
+        }
+        if (!$hasUnitMachineIdx) {
+            $colsCheck = $wpdb->get_col("SHOW COLUMNS FROM $table LIKE 'unit_id'");
+            $colsCheck2 = $wpdb->get_col("SHOW COLUMNS FROM $table LIKE 'machine_id'");
+            if (!empty($colsCheck) && !empty($colsCheck2)) {
+                $wpdb->query("ALTER TABLE $table ADD UNIQUE KEY unit_machine (unit_id, machine_id)");
+            }
+        }
+        return true;
+    }
+}
