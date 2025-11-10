@@ -11,6 +11,8 @@
 - LED mapping: distinct colors for LoRa RX/TX, sampling categories, and errors.
 - Structured logs: confirmations/errors written to `/logs/lora.log` and `/logs/lora_errors.log`.
 - Batched field-data uploads to reduce memory usage on base.
+ - OTA version check scaffold with pending flag to support future safe updates.
+ - Wi-Fi RSSI monitor and OLED pages showing UNIT_ID, machine suffix, temp in F, and bars for Wi-Fi/LoRa.
 
 ## First-boot provisioning (WiFi check-in)
 - On first boot (or until provisioned), the device enables WiFi and posts its `unit_id` and `machine_id` to the TMON Admin hub at `TMON_ADMIN_API_URL`.
@@ -31,7 +33,14 @@
 ## Logs
 - Device logs are stored in `/logs`. LoRa confirmations in `lora.log`; errors in `lora_errors.log`.
 
+## Display
+- Background OLED update runs at `OLED_UPDATE_INTERVAL_S`.
+- If `OLED_SCROLL_ENABLED=True`, pages rotate every `OLED_PAGE_ROTATE_INTERVAL_S` seconds between:
+	- Page 0: Sensors + Wi-Fi/LoRa bars, voltage, unit name, message line
+	- Page 1: Relay grid + system runtime and memory
+
 ## Troubleshooting
 - For LoRa error -1 or radio faults, the firmware re-initializes the radio and logs error flags.
 - If uploads fail due to memory, ensure batching is enabled (default in v2.00i).
 - Check power and WiFi signal; confirm server URL and credentials.
+ - On desktop, MicroPython modules (`uasyncio`, `machine`) will show lint warnings; they are valid on-device.
