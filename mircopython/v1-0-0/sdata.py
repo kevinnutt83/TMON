@@ -65,3 +65,6 @@ gps_lng = None
 gps_alt_m = None
 gps_accuracy_m = None
 gps_last_fix_ts = None
+
+# Thresholds summary (populated when record_field_data runs; placeholder for UI overlays)
+thresholds_summary = ''

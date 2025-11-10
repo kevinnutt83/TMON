@@ -388,6 +388,25 @@ def record_field_data():
     for k in dir(settings):
         if not k.startswith('__') and not callable(getattr(settings, k)):
             entry[k] = getattr(settings, k)
+    # Add compact thresholds summary (for quick visibility in Admin)
+    try:
+        fA = getattr(settings, 'FROSTWATCH_ACTIVE_TEMP', None)
+        fC = getattr(settings, 'FROSTWATCH_CLEAR_TEMP', None)
+        fI = getattr(settings, 'FROSTWATCH_LORA_INTERVAL', None)
+        hA = getattr(settings, 'HEATWATCH_ACTIVE_TEMP', None)
+        hC = getattr(settings, 'HEATWATCH_CLEAR_TEMP', None)
+        hI = getattr(settings, 'HEATWATCH_LORA_INTERVAL', None)
+        if (fA is not None) or (hA is not None):
+            entry['thresholds_summary'] = 'F:{}/{}/{};H:{}/{}/{}'.format(
+                fA if fA is not None else '-',
+                fC if fC is not None else '-',
+                fI if fI is not None else '-',
+                hA if hA is not None else '-',
+                hC if hC is not None else '-',
+                hI if hI is not None else '-'
+            )
+    except Exception:
+        pass
     # Keep console output small to reduce memory churn
     # Reduce console spam
     # if getattr(settings, 'DEBUG', False):

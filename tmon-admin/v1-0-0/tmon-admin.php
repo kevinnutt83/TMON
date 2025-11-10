@@ -76,7 +76,7 @@ add_action('rest_api_init', function() {
         $sent = $hdrs['X-TMON-ADMIN'] ?? ($_SERVER['HTTP_X_TMON_ADMIN'] ?? '');
         return $admin_key && hash_equals($admin_key, (string)$sent);
     },
-    'callback' => function($req) {
+  'callback' => function($req) {
         global $wpdb;
         $body = $req->get_json_params();
         if (!is_array($body)) return new WP_Error('invalid_body','Expected JSON object',['status'=>400]);
@@ -88,6 +88,12 @@ add_action('rest_api_init', function() {
             'unit_id' => $unit_id,
             'data' => wp_json_encode($body),
         ]);
+    // Update global last thresholds sync time if payload contains threshold markers
+    $fa = $body['frost_active_temp'] ?? ($body['FROSTWATCH_ACTIVE_TEMP'] ?? null);
+    $ha = $body['heat_active_temp'] ?? ($body['HEATWATCH_ACTIVE_TEMP'] ?? null);
+    if ($fa !== null || $ha !== null || !empty($body['thresholds_summary'])) {
+      update_option('tmon_admin_last_thresholds_sync_ts', time());
+    }
         do_action('tmon_admin_receive_field_data', $unit_id, $body);
         return ['stored' => true];
     }
@@ -131,7 +137,13 @@ add_action('admin_menu', function() {
       }
       // CSV export
       if (isset($_GET['export_csv']) && $_GET['export_csv'] == '1') {
-        // Build rows again (we already have $rows) and output CSV
+        // Build rows for export using same filters
+        if ($params) {
+          $select_sql = call_user_func_array([$wpdb,'prepare'], array_merge(["SELECT * FROM $table $where ORDER BY id DESC"], $params));
+        } else {
+          $select_sql = "SELECT * FROM $table ORDER BY id DESC";
+        }
+        $rows = $wpdb->get_results($select_sql, ARRAY_A);
         header('Content-Type: text/csv');
         header('Content-Disposition: attachment; filename="tmon_field_data_export.csv"');
         $out = fopen('php://output', 'w');
@@ -165,6 +177,13 @@ add_action('admin_menu', function() {
       $rows = $wpdb->get_results($select_sql, ARRAY_A);
       $total_pages = max(1, ceil($total / $per_page));
       echo '<div class="wrap"><h1>Field Data Viewer</h1>';
+      // Show last thresholds sync time (global)
+      $last_thr_ts = intval(get_option('tmon_admin_last_thresholds_sync_ts', 0));
+      if ($last_thr_ts > 0) {
+        echo '<p><strong>Last thresholds sync:</strong> '.esc_html(date_i18n('Y-m-d H:i:s', $last_thr_ts)).' ('.esc_html(human_time_diff($last_thr_ts)).' ago)</p>';
+      } else {
+        echo '<p><strong>Last thresholds sync:</strong> Never</p>';
+      }
       echo '<form method="get" style="margin-bottom:15px;">';
       echo '<input type="hidden" name="page" value="tmon-admin-field-data-viewer" />';
       echo '<label>Unit ID: <input type="text" name="unit_id" value="'.esc_attr($unit_filter).'" /></label> ';

@@ -35,6 +35,18 @@ if (!function_exists('tmon_uc_normalize_payload')) {
     $norm['heat_active_temp']  = $data['HEATWATCH_ACTIVE_TEMP'] ?? ($data['heat_active_temp'] ?? null);
     $norm['heat_clear_temp']   = $data['HEATWATCH_CLEAR_TEMP'] ?? ($data['heat_clear_temp'] ?? null);
     $norm['heat_interval_s']   = $data['HEATWATCH_LORA_INTERVAL'] ?? ($data['heat_interval_s'] ?? null);
+    // Compact thresholds summary
+    if ($norm['frost_active_temp'] !== null || $norm['heat_active_temp'] !== null) {
+      $fA = $norm['frost_active_temp'];
+      $fC = $norm['frost_clear_temp'];
+      $fI = $norm['frost_interval_s'];
+      $hA = $norm['heat_active_temp'];
+      $hC = $norm['heat_clear_temp'];
+      $hI = $norm['heat_interval_s'];
+      $norm['thresholds_summary'] = 'F:' . ($fA ?? '-') . '/' . ($fC ?? '-') . '/' . ($fI ?? '-') . ';H:' . ($hA ?? '-') . '/' . ($hC ?? '-') . '/' . ($hI ?? '-');
+    } else {
+      $norm['thresholds_summary'] = null;
+    }
     return $norm;
   }
 }
@@ -85,6 +97,15 @@ add_action('rest_api_init', function() {
         return $wrapped;
   }
   ]);
+  // Flush thresholds cache (admin-only)
+  register_rest_route('tmon/v1', '/admin/thresholds/flush', [
+    'methods' => 'POST',
+    'permission_callback' => function() { return current_user_can('manage_options'); },
+    'callback' => function($req) {
+      delete_transient('tmon_uc_thresholds_cache');
+      return ['flushed' => true];
+    }
+  ]);
   register_rest_route('tmon/v1', '/device/field-data', [
     'methods' => 'POST',
     'permission_callback' => function() {
@@ -129,6 +150,18 @@ add_action('rest_api_init', function() {
         $norm['heat_active_temp']  = $data['HEATWATCH_ACTIVE_TEMP'] ?? ($data['heat_active_temp'] ?? null);
         $norm['heat_clear_temp']   = $data['HEATWATCH_CLEAR_TEMP'] ?? ($data['heat_clear_temp'] ?? null);
         $norm['heat_interval_s']   = $data['HEATWATCH_LORA_INTERVAL'] ?? ($data['heat_interval_s'] ?? null);
+        // Compact thresholds summary string (for quick display/debug)
+        if ($norm['frost_active_temp'] !== null || $norm['heat_active_temp'] !== null) {
+          $fA = $norm['frost_active_temp'];
+          $fC = $norm['frost_clear_temp'];
+          $fI = $norm['frost_interval_s'];
+          $hA = $norm['heat_active_temp'];
+          $hC = $norm['heat_clear_temp'];
+          $hI = $norm['heat_interval_s'];
+          $norm['thresholds_summary'] = 'F:' . ($fA ?? '-') . '/' . ($fC ?? '-') . '/' . ($fI ?? '-') . ';H:' . ($hA ?? '-') . '/' . ($hC ?? '-') . '/' . ($hI ?? '-');
+        } else {
+          $norm['thresholds_summary'] = null;
+        }
 
         // Store locally and forward
         do_action('tmon_uc_receive_field_data', $norm);
@@ -194,10 +227,23 @@ add_action('rest_api_init', function() {
           delete_transient('tmon_uc_thresholds_cache');
           echo '<div class="updated"><p>Settings saved.</p></div>';
         }
+        // Manual flush action
+        if (isset($_POST['tmon_uc_flush_cache']) && check_admin_referer('tmon_uc_settings_flush')) {
+          delete_transient('tmon_uc_thresholds_cache');
+          echo '<div class="updated"><p>Thresholds cache flushed.</p></div>';
+        }
         $admin_url = esc_url(get_option('tmon_uc_admin_url',''));
         $admin_key = esc_html(get_option('tmon_uc_admin_key',''));
         $device_key = esc_html(get_option('tmon_uc_device_key',''));
         $ttl = intval(get_option('tmon_uc_threshold_cache_ttl', 5));
+        $cached = get_transient('tmon_uc_thresholds_cache');
+        $last_sync_ts = is_array($cached) ? ($cached['last_sync'] ?? null) : null;
+        $last_sync_human = $last_sync_ts ? date_i18n('Y-m-d H:i:s', $last_sync_ts) : 'Never';
+        $age_str = '';
+        if ($last_sync_ts) {
+          $diff = time() - $last_sync_ts;
+          $age_str = ' ('.human_time_diff($last_sync_ts).' ago)';
+        }
         echo '<div class="wrap"><h1>TMON Unit Connector Settings</h1><form method="post">';
         wp_nonce_field('tmon_uc_settings_save');
         echo '<table class="form-table"><tr><th scope="row"><label for="tmon_uc_admin_url">Admin Hub URL</label></th><td><input type="url" name="tmon_uc_admin_url" id="tmon_uc_admin_url" class="regular-text" value="'.$admin_url.'" placeholder="https://admin.example.com" /></td></tr>';
@@ -205,6 +251,11 @@ add_action('rest_api_init', function() {
         echo '<tr><th scope="row"><label for="tmon_uc_threshold_cache_ttl">Thresholds cache TTL (minutes)</label></th><td><input type="number" min="0" name="tmon_uc_threshold_cache_ttl" id="tmon_uc_threshold_cache_ttl" class="regular-text" value="'.esc_attr($ttl).'" /></td></tr>';
         echo '<tr><th scope="row"><label for="tmon_uc_device_key">Device POST Key (X-TMON-DEVICE)</label></th><td><input type="text" name="tmon_uc_device_key" id="tmon_uc_device_key" class="regular-text" value="'.$device_key.'" /></td></tr>';
         echo '</table><p><input type="submit" name="tmon_uc_save" class="button button-primary" value="Save Changes" /></p></form>';
+        echo '<h2>Thresholds Cache</h2>';
+        echo '<p>Last sync: <strong>'.$last_sync_human.'</strong>'.$age_str.'</p>';
+        echo '<form method="post" style="margin-top:10px;">';
+        wp_nonce_field('tmon_uc_settings_flush');
+        echo '<p><input type="submit" name="tmon_uc_flush_cache" class="button" value="Flush Cache Now" /></p></form>';
         echo '<h2>Forwarding Status</h2><p>Records will forward when both URL and key are set.</p>';
         echo '<p>Device POSTs must include header <code>X-TMON-DEVICE</code> matching the configured Device POST Key.</p>';
         echo '</div>';
