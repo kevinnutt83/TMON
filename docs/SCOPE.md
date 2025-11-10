@@ -43,7 +43,7 @@ Provide a resilient, modular platform for distributed environmental monitoring w
 | 1 | Foundation | Provisioning, basic sampling, field-data batching, OLED minimal UI, suspension gating. |
 | 2 | Visibility & Control | Enhanced OLED, RSSI telemetry, OTA version checks, improved error logging. |
 | 3 | Security & Settings | LoRa credentials, staged settings apply, relay safety limits. |
-| 4 | OTA & Recovery | Full firmware distribution, backup, rollback, watchdog improvements. |
+| 4 | OTA & Recovery | Full firmware distribution, backup, hash-verified apply, rollback, watchdog improvements. |
 | 5 | Advanced Sensors & GPS | Additional sensor integration and GPS override/broadcast. |
 | 6 | Command & Automation | Command queue, scheduled actions, policy evaluation. |
 

@@ -129,6 +129,15 @@ async def apply_staged_settings_once():
         prev_applied = {}
         if isinstance(prev_applied_meta, dict) and isinstance(prev_applied_meta.get('applied'), dict):
             prev_applied = prev_applied_meta.get('applied') or {}
+        # Snapshot previous settings for rollback
+        prev_snapshot = {}
+        for k in ALLOWLIST.keys():
+            if hasattr(settings, k):
+                prev_snapshot[k] = getattr(settings, k)
+        try:
+            write_json(getattr(settings,'REMOTE_SETTINGS_PREV_FILE','/logs/remote_settings.prev.json'), prev_snapshot)
+        except Exception:
+            pass
         applied = _filter_and_apply(staged)
         # Persist applied snapshot
         meta = {
@@ -173,7 +182,18 @@ async def apply_staged_settings_once():
         await debug_print(msg, 'INFO')
         return True
     except Exception as e:
-        await debug_print('Settings: apply failed: %s' % e, 'ERROR')
+        # Rollback to previous snapshot
+        try:
+            prev = read_json(getattr(settings,'REMOTE_SETTINGS_PREV_FILE','/logs/remote_settings.prev.json'), {})
+            if isinstance(prev, dict):
+                for k, v in prev.items():
+                    try:
+                        setattr(settings, k, v)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        await debug_print('Settings: apply failed, rollback executed: %s' % e, 'ERROR')
         return False
 
 async def settings_apply_loop(interval_s: int = 60):

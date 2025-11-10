@@ -30,7 +30,13 @@ This document summarizes key variables in `mircopython/settings.py` and their in
 | `nextLoraSync` | Absolute epoch for next remote sync slot. |
 | `LORA_SYNC_WINDOW` | Minimum spacing between remote sync slot boundaries. |
 | `POWER`, `SF`, `BW`, `CR` | Core LoRa radio PHY parameters (power, spread factor, bandwidth, coding rate). |
-| `LORA_NETWORK_NAME` / `LORA_NETWORK_PASSWORD` | Planned handshake credentials for secure network admission. |
+| `LORA_NETWORK_NAME` / `LORA_NETWORK_PASSWORD` | Basic handshake credentials for network admission (legacy). |
+| `LORA_HMAC_ENABLED` | Enable HMAC signing and verification for LoRa payloads. |
+| `LORA_HMAC_SECRET` | Per-device shared secret used to sign frames. |
+| `LORA_HMAC_COUNTER_FILE` | Remote counter persistence for monotonic `ctr`. |
+| `LORA_REMOTE_COUNTERS_FILE` | Base-side last seen counter table per unit. |
+| `LORA_HMAC_REJECT_UNSIGNED` | When true, drop frames missing valid signatures. |
+| `LORA_HMAC_REPLAY_PROTECT` | Enforce `ctr` strictly increasing to prevent replay. |
 | `REMOTE_CHECKIN_INTERVAL_S` | Default periodic telemetry interval for remotes to base. |
 
 ## OTA & Update
@@ -41,6 +47,13 @@ This document summarizes key variables in `mircopython/settings.py` and their in
 | `OTA_VERSION_ENDPOINT` | Remote file with latest version identifier. |
 | `OTA_PENDING_FILE` | Flag file indicating an update is pending verification/application. |
 | `OTA_CHECK_INTERVAL_S` | Interval (seconds) between OTA version checks. |
+| `OTA_FIRMWARE_BASE_URL` | Base URL for fetching updated firmware files. |
+| `OTA_MANIFEST_URL` | URL to JSON manifest mapping files to SHA-256. |
+| `OTA_FILES_ALLOWLIST` | List of files permitted to be updated via OTA. |
+| `OTA_HASH_VERIFY` | Verify download hashes against manifest. |
+| `OTA_BACKUP_ENABLED` / `OTA_BACKUP_DIR` | Backup current files before apply. |
+| `OTA_RESTORE_ON_FAIL` | Restore backups if any apply step fails. |
+| `OTA_APPLY_INTERVAL_S` | Background loop cadence to attempt apply when pending. |
 
 ## Logging & Telemetry
 | Setting | Description |
@@ -99,6 +112,7 @@ Only persist a conservative subset of settings to avoid bricking devices:
 - Select telemetry intervals: `FIELD_DATA_SEND_INTERVAL`, `OLED_UPDATE_INTERVAL_S`.
 - Wi-Fi creds ONLY after secure provisioning handshake.
 - Staged settings file is validated then merged; invalid entries discarded.
+- On error, previous snapshot (`remote_settings.prev.json`) is restored automatically.
 
 ## Applying Staged Settings (Planned)
 1. Detect `REMOTE_SETTINGS_STAGED_FILE` presence.

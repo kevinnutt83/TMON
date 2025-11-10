@@ -24,6 +24,7 @@ WIFI_DISABLE_AFTER_PROVISION = True       # Remote nodes disable WiFi after prov
 PROVISIONED_FLAG_FILE = '/logs/provisioned.flag'  # Presence indicates initial hub registration completed
 REMOTE_SETTINGS_STAGED_FILE = '/logs/remote_settings.staged.json'  # Admin or UC pushed settings awaiting apply
 REMOTE_SETTINGS_APPLIED_FILE = '/logs/remote_settings.applied.json' # Snapshot of last applied settings
+REMOTE_SETTINGS_PREV_FILE = '/logs/remote_settings.prev.json'       # Snapshot of previous settings before last apply
 UNIT_ID_FILE = '/logs/unit_id.txt'       # Persisted UNIT_ID mapping
 MACHINE_ID_FILE = '/logs/machine_id.txt' # Persisted MACHINE_ID after detection
 LAST_FIRMWARE_CHECK_FILE = '/logs/fw_last_check.txt'
@@ -58,6 +59,14 @@ LORA_HARD_REBOOT_ERR_CODES = [-2]  # error codes that trigger hard reboot (e.g.,
 LORA_ERR_PERSIST_REBOOTS = 2       # if persists this many times across reboots, stop rebooting and log
 ERROR_STATE_FILE = LOG_DIR + '/last_error.state'  # persist last error and reboot counters
 LORA_REMOTE_INFO_LOG = LOG_DIR + '/remote_info.log'  # base records remote identities here
+LORA_HMAC_ENABLED = False            # When True, firmware includes a signature with LoRa frames
+LORA_HMAC_SECRET = ''                # Per-device secret used to sign LoRa frames (provisioned)
+LORA_HMAC_COUNTER_FILE = LOG_DIR + '/lora_ctr.json'  # Persist local counter (remote)
+LORA_REMOTE_COUNTERS_FILE = LOG_DIR + '/remote_ctr.json'  # Base: last seen counters per remote
+LORA_HMAC_REJECT_UNSIGNED = True     # When enabled + HMAC active, reject frames lacking valid signature
+LORA_HMAC_REPLAY_PROTECT = True      # Enforce strictly increasing counter (ctr) to prevent replay
+LORA_ENCRYPT_ENABLED = False         # Optional payload encryption (ChaCha20 stream cipher)
+LORA_ENCRYPT_SECRET = ''             # 32-byte key (hex or text) for encryption; provision per device
 
 # --- Last error telemetry (include in sdata payloads) ---
 LAST_ERROR_CODE = 0
@@ -186,6 +195,16 @@ RELAY_SAFETY_MAX_RUNTIME_MIN = 1440       # Safety cap for relay runtime
 OTA_VERSION_ENDPOINT = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/mircopython/version.txt'
 OTA_FIRMWARE_BASE_URL = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/mircopython/'
 OTA_CHECK_INTERVAL_S = 1800               # 30 min default update check cadence
+OTA_MANIFEST_URL = OTA_FIRMWARE_BASE_URL + 'manifest.json'  # Manifest lists files + hashes
+OTA_HASH_VERIFY = True                    # Verify sha256 of downloaded files against manifest
+OTA_APPLY_INTERVAL_S = 600                # Check/apply pending update every 10 minutes
+OTA_RESTORE_ON_FAIL = True                # Restore backups if any file verification/apply fails
+OTA_MAX_FILE_BYTES = 256*1024             # Safety cap per file download size
+OTA_FILES_ALLOWLIST = [                   # Limit which files can be updated via OTA
+	'main.py','lora.py','utils.py','sampling.py','settings.py','relay.py','oled.py','ota.py','wprest.py'
+]
+OTA_MANIFEST_SIG_URL = OTA_MANIFEST_URL + '.sig'  # Optional detached HMAC signature (hex)
+OTA_MANIFEST_HMAC_SECRET = ''             # If set, verify manifest with HMAC(secret, manifest_bytes)
 
 # --- Connectivity ---
 ENABLE_WIFI = True
@@ -203,6 +222,12 @@ LORA_NETWORK_PASSWORD = '12345'           # Simple password handshake (strengthe
 REMOTE_CHECKIN_INTERVAL_S = 300           # Default remote -> base sync period
 REMOTE_CHECKIN_JITTER_S = 5               # Jitter to avoid collisions
 BASE_REMOTE_TABLE_FILE = '/logs/remotes.table.json'  # Base-maintained remote registry
+
+# --- Field Data HMAC (optional) ---
+FIELD_DATA_HMAC_ENABLED = False           # When True, sign each field-data payload
+FIELD_DATA_HMAC_SECRET = ''               # Secret for field data HMAC (provisioned)
+FIELD_DATA_HMAC_INCLUDE_KEYS = ['unit_id','firmware_version','node_type']  # Keys guaranteed present (order stable)
+FIELD_DATA_HMAC_TRUNCATE = 32             # Hex chars of hash to include as signature
 
 # NOTE:
 # - sdata.py should include LAST_ERROR_* when TELEMETRY_INCLUDE_LAST_ERROR is True.

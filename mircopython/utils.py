@@ -249,6 +249,33 @@ async def send_field_data_log():
                     try:
                         token = get_jwt_token()
                         headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json; charset=utf-8'}
+                        # Optional field data HMAC signing
+                        try:
+                            if getattr(settings, 'FIELD_DATA_HMAC_ENABLED', False):
+                                import uhashlib as _uh, ubinascii as _ub
+                                secret = getattr(settings, 'FIELD_DATA_HMAC_SECRET', '')
+                                if secret:
+                                    # Build canonical minimal string
+                                    core = []
+                                    for k in getattr(settings, 'FIELD_DATA_HMAC_INCLUDE_KEYS', ['unit_id']):
+                                        core.append(str(payload.get(k, '')))
+                                    # Also include count and first/last timestamps if present for stability
+                                    try:
+                                        arr = payload.get('data', [])
+                                        if isinstance(arr, list) and arr:
+                                            first_ts = arr[0].get('timestamp') if isinstance(arr[0], dict) else ''
+                                            last_ts = arr[-1].get('timestamp') if isinstance(arr[-1], dict) else ''
+                                        else:
+                                            first_ts = last_ts = ''
+                                    except Exception:
+                                        first_ts = last_ts = ''
+                                    canon = '|'.join(core + [str(len(payload.get('data', []) or [])), str(first_ts), str(last_ts)])
+                                    h = _uh.sha256(secret.encode() + canon.encode())
+                                    sig = _ub.hexlify(h.digest()).decode()[:int(getattr(settings,'FIELD_DATA_HMAC_TRUNCATE',32))]
+                                    payload['sig'] = sig
+                                    payload['sig_v'] = 1
+                        except Exception:
+                            pass
                         await debug_print(f'send_field_data_log: Attempt {attempt} POST to {WORDPRESS_API_URL}/wp-json/tmon/v1/device/field-data', 'DEBUG')
                         safe_payload = _sanitize_json(payload)
                         try:
@@ -391,6 +418,9 @@ def get_unix_time():
         return int(time.time())
 
 def record_field_data():
+    """Append a minimal telemetry record for the base node.
+    Prior approach dumped all settings/sdata which was too heavy for flash and bandwidth.
+    """
     import sdata, settings, ujson, os, utime as time
     entry = {'timestamp': int(get_unix_time())}
     try:
@@ -398,18 +428,47 @@ def record_field_data():
         entry['ts_iso'] = f"{ts[0]:04}-{ts[1]:02}-{ts[2]:02} {ts[3]:02}:{ts[4]:02}:{ts[5]:02}"
     except Exception:
         pass
-    # Add all sdata variables
-    for k in dir(sdata):
-        if not k.startswith('__') and not callable(getattr(sdata, k)):
-            entry[k] = getattr(sdata, k)
-    # Add all settings variables
-    for k in dir(settings):
-        if not k.startswith('__') and not callable(getattr(settings, k)):
-            entry[k] = getattr(settings, k)
-    # Keep console output small to reduce memory churn
-    # Reduce console spam
-    # if getattr(settings, 'DEBUG', False):
-    #     print("[DEBUG] record_field_data: entry appended")
+    # Curated sdata fields
+    def _copy(dst, src, key, alias=None):
+        try:
+            val = getattr(src, key)
+            dst[alias or key] = val
+        except Exception:
+            pass
+    _copy(entry, sdata, 'cur_temp_f')
+    _copy(entry, sdata, 'cur_temp_c')
+    _copy(entry, sdata, 'cur_humid')
+    _copy(entry, sdata, 'cur_bar_pres')
+    _copy(entry, sdata, 'sys_voltage')
+    _copy(entry, sdata, 'wifi_rssi')
+    _copy(entry, sdata, 'lora_SigStr')
+    _copy(entry, sdata, 'free_mem')
+    _copy(entry, sdata, 'script_runtime')
+    _copy(entry, sdata, 'loop_runtime')
+    _copy(entry, sdata, 'cpu_temp')
+    _copy(entry, sdata, 'error_count')
+    _copy(entry, sdata, 'last_error')
+    # Relay runtime counters (only include if non-zero to reduce payload size)
+    for i in range(1,9):
+        try:
+            val = getattr(sdata, f'relay{i}_runtime_s')
+            if val:
+                entry[f'relay{i}_runtime_s'] = val
+            on_state = getattr(sdata, f'relay{i}_on')
+            if on_state:
+                entry[f'relay{i}_on'] = 1
+        except Exception:
+            pass
+    # GPS mirrors if present
+    _copy(entry, sdata, 'gps_lat')
+    _copy(entry, sdata, 'gps_lng')
+    _copy(entry, sdata, 'gps_alt_m')
+    _copy(entry, sdata, 'gps_accuracy_m')
+    _copy(entry, sdata, 'gps_last_fix_ts')
+    # Minimal identity
+    entry['unit_id'] = getattr(settings, 'UNIT_ID', '')
+    entry['firmware_version'] = getattr(settings, 'FIRMWARE_VERSION', '')
+    entry['NODE_TYPE'] = getattr(settings, 'NODE_TYPE', '')
     # Only persist on base node to avoid filling flash on remotes
     if getattr(settings, 'NODE_TYPE', 'base') != 'base':
         return
@@ -417,7 +476,6 @@ def record_field_data():
     try:
         with open(settings.FIELD_DATA_LOG, 'a') as f:
             f.write(ujson.dumps(entry) + '\n')
-        print(f"[DEBUG] record_field_data: wrote entry to {settings.FIELD_DATA_LOG}")
         import gc
         gc.collect()
     except Exception as e:

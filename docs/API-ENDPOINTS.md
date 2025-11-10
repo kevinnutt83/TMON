@@ -16,7 +16,8 @@ This document enumerates REST endpoints used by firmware and WordPress plugins. 
 |--------|------|---------|------|
 | POST | `/wp-json/tmon/v1/device/field-data` | Batched field data delivery from base node | JWT Bearer (token issued by plugin) |
 | GET  | `/wp-json/tmon/v1/device/status/{unit_id}` | Device latest status snapshot | Public/secured optional |
-| POST | `/wp-json/tmon/v1/device/ack` | Acknowledge command execution | JWT Bearer |
+| POST | `/wp-json/tmon/v1/device/command-complete` | Preferred command completion endpoint | JWT Bearer |
+| POST | `/wp-json/tmon/v1/device/ack` | Legacy/simple command acknowledgment (fallback) | JWT Bearer |
 | GET  | `/wp-json/tmon/v1/device/history/{unit_id}` | Historical data query (paged) | JWT Bearer / capability |
 
 ## Common Payload Shapes
@@ -88,13 +89,25 @@ Response 200:
 
 ### Command Acknowledge (Firmware/Base → Unit Connector)
 ```
+POST /wp-json/tmon/v1/device/command-complete
+Authorization: Bearer <jwt>
+{
+  "job_id": 15,
+  "ok": true,
+  "result": "executed"
+}
+Response 200:
+{ "status": "ok" }
+```
+
+Legacy fallback:
+```
 POST /wp-json/tmon/v1/device/ack
 Authorization: Bearer <jwt>
 {
-  "unit_id": "A1B2C3",
   "command_id": 15,
-  "result": "executed",
-  "timestamp": 1731200400
+  "ok": true,
+  "result": "executed"
 }
 Response 200:
 { "status": "ok" }
@@ -113,6 +126,7 @@ Response 200:
 - JWT tokens should be short-lived; refresh flows must avoid storing secrets in firmware plaintext (future secure storage TBD).
 - Shared keys between plugins validated server-side; never transmitted by firmware after provisioning.
 - Future enhancement: signing field data payloads with HMAC using a device-specific secret issued at provisioning.
+- Current enhancement: LoRa frames optionally signed via HMAC (see `LORA_HMAC_ENABLED`).
 
 ---
 Generated November 10, 2025.

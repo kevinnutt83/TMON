@@ -34,6 +34,8 @@ See `/wp-json/tmon/v1/` for REST endpoints.
 - POST /device/ping
 - GET /device/ota-jobs/{unit_id}
 - POST /device/ota-job-complete
+- POST /device/command-complete — Preferred modern endpoint for firmware to acknowledge command execution (body: { job_id, ok, result })
+- POST /device/ack — Legacy/simple ACK (body: { command_id, ok, result }); still accepted for backward compatibility
 ### Admin/Hub endpoints (read/admin)
 - GET /admin/field-data.csv — Normalized CSV export; supports unit_id/since/until/hours/gzip; Auth via headers X-TMON-ADMIN, X-TMON-HUB, or X-TMON-READ.
 - GET /admin/field-data — JSON rows for Admin aggregation; same auth.

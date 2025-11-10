@@ -41,6 +41,16 @@ relay6_on = False
 relay7_on = False
 relay8_on = False
 
+# Relay runtime counters (seconds)
+relay1_runtime_s = 0
+relay2_runtime_s = 0
+relay3_runtime_s = 0
+relay4_runtime_s = 0
+relay5_runtime_s = 0
+relay6_runtime_s = 0
+relay7_runtime_s = 0
+relay8_runtime_s = 0
+
 # Frost and Heat Monitoring Data Variables
 frostwatch_active = False
 heatwatch_active = False

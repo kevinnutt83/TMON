@@ -11,7 +11,7 @@ import utime as time
 from sampling import sampleEnviroment
 from utils import free_pins, checkLogDirectory, debug_print, periodic_field_data_send, load_persisted_unit_id, persist_unit_id, get_machine_id
 from lora import connectLora, log_error, TMON_AI
-from ota import check_for_update
+from ota import check_for_update, apply_pending_update
 from oled import update_display
 from settings_apply import load_applied_settings_on_boot, settings_apply_loop
 import ujson as json
@@ -304,6 +304,18 @@ async def startup():
     try:
         import uasyncio as _a2
         _a2.create_task(ota_version_task())
+    except Exception:
+        pass
+    async def ota_apply_task():
+        while True:
+            try:
+                await apply_pending_update()
+            except Exception:
+                pass
+            await asyncio.sleep(getattr(settings, 'OTA_APPLY_INTERVAL_S', 600))
+    try:
+        import uasyncio as _a4
+        _a4.create_task(ota_apply_task())
     except Exception:
         pass
     await tm.run()

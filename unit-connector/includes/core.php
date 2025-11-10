@@ -363,6 +363,12 @@ add_action('rest_api_init', function() {
         'callback' => 'tmon_uc_api_device_command_complete',
         'permission_callback' => 'tmon_uc_jwt_verify',
     ]);
+    // Backward-compatible simple ACK endpoint (docs reference /device/ack)
+    register_rest_route('tmon/v1', '/device/ack', [
+        'methods' => 'POST',
+        'callback' => 'tmon_uc_api_device_command_ack',
+        'permission_callback' => 'tmon_uc_jwt_verify',
+    ]);
 });
 
 function tmon_uc_api_device_command_enqueue($request) {
@@ -426,6 +432,34 @@ function tmon_uc_api_device_command_complete($request) {
     }
     $p['__ok'] = $ok;
     if (!is_null($result)) $p['__result'] = $result;
+    $wpdb->update(
+        $wpdb->prefix . 'tmon_device_commands',
+        [
+            'params' => wp_json_encode($p),
+            'executed_at' => current_time('mysql')
+        ],
+        ['id' => $job_id]
+    );
+    return rest_ensure_response(['status' => 'ok']);
+}
+
+// Lightweight ACK: unit posts command_id and result; maps onto existing update logic
+function tmon_uc_api_device_command_ack($request) {
+    global $wpdb;
+    $params = $request->get_json_params();
+    $job_id = isset($params['command_id']) ? intval($params['command_id']) : 0;
+    $result = isset($params['result']) ? $params['result'] : null;
+    if (!$job_id) {
+        return rest_ensure_response(['status' => 'error', 'message' => 'Missing command_id']);
+    }
+    $row = $wpdb->get_row($wpdb->prepare("SELECT params FROM {$wpdb->prefix}tmon_device_commands WHERE id = %d", $job_id));
+    $p = [];
+    if ($row && !empty($row->params)) {
+        $decoded = json_decode($row->params, true);
+        if (is_array($decoded)) $p = $decoded;
+    }
+    if (!is_null($result)) $p['__result'] = $result;
+    $p['__ok'] = 1; // simple success marker
     $wpdb->update(
         $wpdb->prefix . 'tmon_device_commands',
         [

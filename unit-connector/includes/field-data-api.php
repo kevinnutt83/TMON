@@ -57,6 +57,46 @@ add_action('rest_api_init', function() {
     ]);
 });
 
+// Optional: verify HMAC signature on field-data payloads if a secret is configured
+function tmon_uc_fd_hmac_secret() {
+    $opt = get_option('tmon_uc_field_data_hmac_secret', '');
+    if (!$opt && defined('TMON_FIELD_DATA_HMAC_SECRET')) {
+        $opt = TMON_FIELD_DATA_HMAC_SECRET;
+    }
+    return (string)$opt;
+}
+
+function tmon_uc_fd_verify_sig($data) {
+    $secret = tmon_uc_fd_hmac_secret();
+    if (!$secret) return true; // not enforced if no secret configured
+    $sig = isset($data['sig']) ? (string)$data['sig'] : '';
+    $sig_v = isset($data['sig_v']) ? intval($data['sig_v']) : 0;
+    if ($sig_v !== 1 || $sig === '') return false;
+    // Canonical string: unit_id|firmware_version|node_type|count|first_ts|last_ts
+    $get = function($arr, $key) { return isset($arr[$key]) ? (string)$arr[$key] : ''; };
+    $core = [
+        $get($data, 'unit_id'),
+        $get($data, 'firmware_version'),
+        $get($data, 'node_type'),
+    ];
+    $arr = [];
+    if (isset($data['data']) && is_array($data['data'])) { $arr = $data['data']; }
+    $count = count($arr);
+    $first_ts = '';
+    $last_ts = '';
+    if ($count > 0) {
+        $first = $arr[0];
+        $last = $arr[$count-1];
+        $first_ts = isset($first['timestamp']) ? (string)$first['timestamp'] : (isset($first['time']) ? (string)$first['time'] : '');
+        $last_ts = isset($last['timestamp']) ? (string)$last['timestamp'] : (isset($last['time']) ? (string)$last['time'] : '');
+    }
+    $canon = implode('|', array_merge($core, [strval($count), $first_ts, $last_ts]));
+    $digest = hash('sha256', $secret . $canon);
+    // Accept truncated signatures (prefix match)
+    $len = min(strlen($sig), strlen($digest));
+    return hash_equals(substr($digest, 0, $len), substr($sig, 0, $len));
+}
+
 function tmon_uc_rest_list_field_data($request) {
     global $wpdb;
     $unit_id = sanitize_text_field($request->get_param('unit_id') ?? '');
@@ -192,6 +232,11 @@ function tmon_uc_rest_export_field_data($request) {
 function tmon_uc_receive_field_data($request) {
     global $wpdb;
     $data = $request->get_json_params();
+    // Enforce HMAC when configured
+    $hsec = tmon_uc_fd_hmac_secret();
+    if ($hsec && !tmon_uc_fd_verify_sig($data)) {
+        return new WP_REST_Response(['status'=>'error','message'=>'HMAC verification failed'], 401);
+    }
     $log_dir = WP_CONTENT_DIR . '/tmon-field-logs';
     if (!file_exists($log_dir)) {
         mkdir($log_dir, 0777, true);

@@ -11,8 +11,9 @@
 - LED mapping: distinct colors for LoRa RX/TX, sampling categories, and errors.
 - Structured logs: confirmations/errors written to `/logs/lora.log` and `/logs/lora_errors.log`.
 - Batched field-data uploads to reduce memory usage on base.
- - OTA version check scaffold with pending flag to support future safe updates.
- - Wi-Fi RSSI monitor and OLED pages showing UNIT_ID, machine suffix, temp in F, and bars for Wi-Fi/LoRa.
+- OTA version check scaffold with pending flag to support future safe updates.
+- Wi-Fi RSSI monitor and OLED pages showing UNIT_ID, machine suffix, temp in F, and bars for Wi-Fi/LoRa.
+- Command completion with primary /device/command-complete endpoint and automatic fallback to legacy /device/ack if the server lacks the newer route.
 
 ## First-boot provisioning (WiFi check-in)
 - On first boot (or until provisioned), the device enables WiFi and posts its `unit_id` and `machine_id` to the TMON Admin hub at `TMON_ADMIN_API_URL`.

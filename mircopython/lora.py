@@ -41,6 +41,11 @@ except ImportError:
         requests = None
 from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run, led_status_flash, write_lora_log
 from relay import toggle_relay
+try:
+    from encryption import chacha20_encrypt, derive_nonce
+except Exception:
+    chacha20_encrypt = None
+    derive_nonce = None
 from wprest import (
     register_with_wp,
     send_data_to_wp,
@@ -506,6 +511,7 @@ async def connectLora():
         if due:
             try:
                 # Build compact payload
+                # Load & increment local HMAC counter if enabled
                 payload = {
                     'unit_id': getattr(settings, 'UNIT_ID', ''),
                     'name': getattr(settings, 'UNIT_Name', ''),
@@ -516,11 +522,55 @@ async def connectLora():
                     'bar': getattr(sdata, 'cur_bar_pres', 0),
                     'v': getattr(sdata, 'sys_voltage', 0),
                     'fm': getattr(sdata, 'free_mem', 0),
-                    # LoRa network admission (basic, to be upgraded to HMAC later)
                     'net': getattr(settings, 'LORA_NETWORK_NAME', 'tmon'),
                     'key': getattr(settings, 'LORA_NETWORK_PASSWORD', ''),
                 }
-                data = ujson.dumps(payload).encode('utf-8')
+                try:
+                    if getattr(settings, 'LORA_HMAC_ENABLED', False):
+                        import uhashlib, ubinascii, ujson
+                        ctr_file = getattr(settings, 'LORA_HMAC_COUNTER_FILE', '/logs/lora_ctr.json')
+                        ctr = 0
+                        try:
+                            with open(ctr_file, 'r') as cf:
+                                ctr_obj = ujson.loads(cf.read())
+                                ctr = int(ctr_obj.get('ctr', 0))
+                        except Exception:
+                            ctr = 0
+                        ctr += 1
+                        try:
+                            with open(ctr_file, 'w') as cfw:
+                                cfw.write(ujson.dumps({'ctr': ctr}))
+                        except Exception:
+                            pass
+                        payload['ctr'] = ctr
+                        secret = getattr(settings, 'LORA_HMAC_SECRET', '')
+                        if secret:
+                            mac_src = b"|".join([
+                                secret.encode(),
+                                str(payload['unit_id']).encode(),
+                                str(payload['ts']).encode(),
+                                str(payload['ctr']).encode()
+                            ])
+                            h = uhashlib.sha256(mac_src)
+                            payload['sig'] = ubinascii.hexlify(h.digest())[:32].decode()
+                except Exception:
+                    pass
+                # Optional encryption: wrap payload into {enc, nonce, ct}
+                if getattr(settings, 'LORA_ENCRYPT_ENABLED', False) and chacha20_encrypt and derive_nonce:
+                    try:
+                        secret = getattr(settings, 'LORA_ENCRYPT_SECRET', '')
+                        key = secret.encode()
+                        if len(key) < 32:
+                            key = (key + b'\x00'*32)[:32]
+                        nonce = derive_nonce(int(time.time()), int(payload.get('ctr', 0)))
+                        pt = ujson.dumps(payload).encode('utf-8')
+                        ct = chacha20_encrypt(key, nonce, 1, pt)
+                        env = {'enc': 1, 'nonce': ''.join('{:02x}'.format(b) for b in nonce), 'ct': ''.join('{:02x}'.format(b) for b in ct), 'net': payload.get('net'), 'key': payload.get('key')}
+                        data = ujson.dumps(env).encode('utf-8')
+                    except Exception:
+                        data = ujson.dumps(payload).encode('utf-8')
+                else:
+                    data = ujson.dumps(payload).encode('utf-8')
 
                 # Transmit in non-blocking mode; poll for TX_DONE
                 # If radio was deinitialized in a prior loop, re-init
@@ -680,6 +730,19 @@ async def connectLora():
                     write_lora_log("Base RX packet", 'INFO')
                     try:
                         obj = ujson.loads(msg)
+                        # If encrypted envelope, attempt decrypt
+                        if isinstance(obj, dict) and obj.get('enc') and getattr(settings, 'LORA_ENCRYPT_ENABLED', False) and chacha20_encrypt and derive_nonce:
+                            try:
+                                secret = getattr(settings, 'LORA_ENCRYPT_SECRET', '')
+                                key = secret.encode(); key = (key + b'\x00'*32)[:32]
+                                hex_nonce = obj.get('nonce','')
+                                nonce = bytes(int(hex_nonce[i:i+2],16) for i in range(0, len(hex_nonce),2)) if hex_nonce else b'\x00'*12
+                                hex_ct = obj.get('ct','')
+                                ct = bytes(int(hex_ct[i:i+2],16) for i in range(0, len(hex_ct),2)) if hex_ct else b''
+                                pt = chacha20_encrypt(key, nonce, 1, ct)
+                                obj = ujson.loads(pt)
+                            except Exception:
+                                pass
                         # Basic network credential enforcement
                         try:
                             net_ok = (obj.get('net') == getattr(settings, 'LORA_NETWORK_NAME', 'tmon'))
@@ -687,6 +750,50 @@ async def connectLora():
                         except Exception:
                             net_ok = False
                             key_ok = False
+                        # Strict HMAC validation & replay protection
+                        if getattr(settings, 'LORA_HMAC_ENABLED', False):
+                            try:
+                                import uhashlib, ubinascii, ujson
+                                secret = getattr(settings, 'LORA_HMAC_SECRET', '')
+                                sig = obj.get('sig')
+                                ctr = obj.get('ctr')
+                                if not secret or sig is None or ctr is None:
+                                    if getattr(settings, 'LORA_HMAC_REJECT_UNSIGNED', True):
+                                        net_ok = False; key_ok = False
+                                else:
+                                    mac_src = b"|".join([
+                                        secret.encode(),
+                                        str(obj.get('unit_id','')).encode(),
+                                        str(obj.get('ts','')).encode(),
+                                        str(ctr).encode()
+                                    ])
+                                    h = uhashlib.sha256(mac_src)
+                                    expect = ubinascii.hexlify(h.digest())[:32].decode()
+                                    if expect != sig:
+                                        net_ok = False; key_ok = False
+                                        await debug_print('Base: LoRa HMAC signature mismatch', 'WARN')
+                                    elif getattr(settings, 'LORA_HMAC_REPLAY_PROTECT', True):
+                                        # Load remote counters table
+                                        rctr_file = getattr(settings, 'LORA_REMOTE_COUNTERS_FILE', '/logs/remote_ctr.json')
+                                        table = {}
+                                        try:
+                                            with open(rctr_file, 'r') as rf:
+                                                table = ujson.loads(rf.read()) or {}
+                                        except Exception:
+                                            table = {}
+                                        last_ctr = int(table.get(obj.get('unit_id',''), -1))
+                                        if int(ctr) <= last_ctr:
+                                            net_ok = False; key_ok = False
+                                            await debug_print('Base: LoRa HMAC replay detected', 'WARN')
+                                        else:
+                                            table[obj.get('unit_id','')] = int(ctr)
+                                            try:
+                                                with open(rctr_file, 'w') as rfw:
+                                                    rfw.write(ujson.dumps(table))
+                                            except Exception:
+                                                pass
+                            except Exception:
+                                pass
                         if not (net_ok and key_ok):
                             # Optionally send an auth error ack
                             try:

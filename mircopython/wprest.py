@@ -345,11 +345,25 @@ async def handle_device_command(job):
         else:
             ok = False
             result = f"unknown command: {cmd}"
-        # confirm completion
+        # confirm completion with fallback to /device/ack for older servers
         try:
             token = get_jwt_token()
             headers = {'Authorization': f'Bearer {token}'}
-            requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/command-complete', headers=headers, json={'job_id': job_id, 'ok': ok, 'result': result})
+            resp = requests.post(
+                WORDPRESS_API_URL + '/wp-json/tmon/v1/device/command-complete',
+                headers=headers,
+                json={'job_id': job_id, 'ok': ok, 'result': result}
+            )
+            # Fallback if route isn't present or returns error
+            if getattr(resp, 'status_code', 500) == 404 or getattr(resp, 'status_code', 500) >= 400:
+                try:
+                    requests.post(
+                        WORDPRESS_API_URL + '/wp-json/tmon/v1/device/ack',
+                        headers=headers,
+                        json={'command_id': job_id, 'ok': ok, 'result': result}
+                    )
+                except Exception:
+                    pass
         except Exception:
             pass
     except Exception as e:
