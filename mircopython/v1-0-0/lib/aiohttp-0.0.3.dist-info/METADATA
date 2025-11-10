@@ -1,6 +1,0 @@
-Metadata-Version: 2.1
-Name: aiohttp
-Version: 0.0.3
-Summary: HTTP client module for MicroPython asyncio module
-Author: 
-License: MIT
