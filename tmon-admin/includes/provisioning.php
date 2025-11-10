@@ -208,7 +208,7 @@ function tmon_admin_provisioning_page() {
                 $wpdb->update($table, compact('role','plan','status','company_id','notes'), ['id' => $id]);
                 echo '<div class="updated"><p>Provisioned device updated.</p></div>';
             }
-    } elseif ($action === 'push_config') {
+        } elseif ($action === 'push_config') {
             // Push configuration to a Unit Connector site as a settings_update command
             $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
             $role = sanitize_text_field($_POST['role'] ?? 'base');
@@ -238,7 +238,7 @@ function tmon_admin_provisioning_page() {
             } else {
                 echo '<div class="error"><p>Unit ID and Site URL required to push configuration.</p></div>';
             }
-    } elseif ($action === 'send_to_uc_registry') {
+        } elseif ($action === 'send_to_uc_registry') {
             // Register device in UC and set initial settings (role + optional GPS)
             $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
             $unit_name = sanitize_text_field($_POST['unit_name'] ?? '');
@@ -299,7 +299,7 @@ function tmon_admin_provisioning_page() {
             } else {
                 echo '<div class="error"><p>Unit ID and Site URL required.</p></div>';
             }
-    } elseif ($action === 'push_role_gps_direct') {
+        } elseif ($action === 'push_role_gps_direct') {
             $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
             $role = sanitize_text_field($_POST['role'] ?? 'base');
             $site_url = esc_url_raw($_POST['site_url'] ?? '');
@@ -331,7 +331,7 @@ function tmon_admin_provisioning_page() {
             } else {
                 echo '<div class="error"><p>Unit ID, Site URL, GPS Lat/Lng required.</p></div>';
             }
-    } elseif ($action === 'refresh_known_ids') {
+        } elseif ($action === 'refresh_known_ids') {
             // Pull devices from paired UC sites and cache in option
             $sites = get_option('tmon_admin_uc_sites', []);
             $agg = [];
@@ -447,7 +447,7 @@ function tmon_admin_provisioning_page() {
     echo ' Company ID <input id="tmon_filter_company" type="number" class="small-text" placeholder="any" />';
     echo ' <span class="description">Type at least 2 characters in Unit/Machine fields to search. Results may be truncated; refine your query.</span>';
     echo '</td></tr>';
-    // Build datalists from local mirrors and cached remote pull if available
+    // Build datalists from local mirror and cached remote pull if available
     $known_units = [];
     $known_machines = [];
     if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $wpdb->prefix.'tmon_devices'))) {
@@ -467,8 +467,7 @@ function tmon_admin_provisioning_page() {
     if (is_array($remote_known)) {
         foreach ($remote_known as $uid => $d) {
             if (!isset($known_units[$uid])) $known_units[$uid] = isset($d['unit_name']) ? $d['unit_name'] : $uid;
-            if (!empty($d['machine_id']) && !isset($known_machines[$d['machine_id']]))
-                $known_machines[$d['machine_id']] = $uid;
+            if (!empty($d['machine_id']) && !isset($known_machines[$d['machine_id']])) $known_machines[$d['machine_id']] = $uid;
         }
     }
     echo '<tr><th scope="row">Unit ID</th><td>';
@@ -487,12 +486,12 @@ function tmon_admin_provisioning_page() {
     }
     echo '</datalist>';
     echo '</td></tr>';
-        // Inline JS to power dynamic typeahead via admin-ajax
-        $ajax_url = admin_url('admin-ajax.php');
-        $nonce = wp_create_nonce('tmon_admin_known_units');
-        $ajax_url_js = wp_json_encode(esc_url($ajax_url));
-        $nonce_js = wp_json_encode($nonce);
-        echo <<<EOT
+    // Inline JS to power dynamic typeahead via admin-ajax
+    $ajax_url = admin_url('admin-ajax.php');
+    $nonce = wp_create_nonce('tmon_admin_known_units');
+    $ajax_url_js = wp_json_encode(esc_url($ajax_url));
+    $nonce_js = wp_json_encode($nonce);
+    echo <<<EOT
 <script>(function(){
     const unitInput = document.getElementById("tmon_unit_id");
     const unitList = document.getElementById("tmon_known_unit_ids");
@@ -536,7 +535,6 @@ function tmon_admin_provisioning_page() {
     if(filterCompany){ filterCompany.addEventListener("input", ()=> debounce(()=>{ if(unitInput && unitInput.value.length>=2) refreshUnit(); if(machInput && machInput.value.length>=2) refreshMach(); })); }
 })();</script>
 EOT;
-    // Removed inline refresh form to prevent nested forms (moved above)
     echo '<tr><th scope="row">Role</th><td><select name="role"><option value="base">base</option><option value="remote">remote</option><option value="wifi">wifi</option></select></td></tr>';
     echo '<tr><th scope="row">Company ID</th><td><input name="company_id" type="number" class="small-text"></td></tr>';
     echo '<tr><th scope="row">Plan</th><td><select name="plan"><option>standard</option><option>pro</option><option>enterprise</option></select></td></tr>';
@@ -607,18 +605,18 @@ EOT;
         submit_button('Update', 'primary', '', false);
         echo '</form>';
         // Push config to UC
-    echo '<form method="post" style="display:block;margin-top:6px;">';
+        echo '<form method="post" style="display:block;margin-top:6px;">';
         wp_nonce_field('tmon_admin_provision');
         echo '<input type="hidden" name="action" value="push_config" />';
         echo '<input type="hidden" name="unit_id" value="'.esc_attr($r['unit_id']).'" />';
         echo '<input type="hidden" name="role" value="'.esc_attr($r['role']).'" />';
-    echo ' Unit Name <input name="unit_name" type="text" class="regular-text" placeholder="Optional display name" value="'.esc_attr($cur_name).'" />';
-    // Paired UC sites datalist
-    $paired = get_option('tmon_admin_uc_sites', []);
-    echo ' UC Site URL <input name="site_url" list="tmon_paired_sites" type="url" class="regular-text" placeholder="https://uc.example.com" />';
-    echo '<datalist id="tmon_paired_sites">';
-    if (is_array($paired)) { foreach ($paired as $purl => $info) { echo '<option value="'.esc_attr($purl).'">'.esc_html($info['paired_at'] ?? '').'</option>'; } }
-    echo '</datalist>';
+        echo ' Unit Name <input name="unit_name" type="text" class="regular-text" placeholder="Optional display name" value="'.esc_attr($cur_name).'" />';
+        // Paired UC sites datalist
+        $paired = get_option('tmon_admin_uc_sites', []);
+        echo ' UC Site URL <input name="site_url" list="tmon_paired_sites" type="url" class="regular-text" placeholder="https://uc.example.com" />';
+        echo '<datalist id="tmon_paired_sites">';
+        if (is_array($paired)) { foreach ($paired as $purl => $info) { echo '<option value="'.esc_attr($purl).'">'.esc_html($info['paired_at'] ?? '').'</option>'; } }
+        echo '</datalist>';
         submit_button('Push Config to UC', 'secondary', '', false);
         echo '</form>';
 
@@ -627,30 +625,30 @@ EOT;
         wp_nonce_field('tmon_admin_provision');
         echo '<input type="hidden" name="action" value="send_to_uc_registry" />';
         echo '<input type="hidden" name="unit_id" value="'.esc_attr($r['unit_id']).'" />';
-    echo ' Unit Name <input name="unit_name" type="text" class="regular-text" placeholder="Optional display name" value="'.esc_attr($cur_name).'" />';
+        echo ' Unit Name <input name="unit_name" type="text" class="regular-text" placeholder="Optional display name" value="'.esc_attr($cur_name).'" />';
         echo ' Company Name <input name="company_name" type="text" class="regular-text" placeholder="Acme Inc." />';
         echo ' Company ID <input name="company_id" type="number" class="small-text" value="'.intval($r['company_id']).'" />';
-        echo ' Role <select name="role"><option value="base" '.selected($r['role],'base',false).'>base</option><option value="remote" '.selected($r['role],'remote',false).'>remote</option></select>';
+        echo ' Role <select name="role"><option value="base" '.selected($r['role'],'base',false).'>base</option><option value="remote" '.selected($r['role'],'remote',false).'>remote</option></select>';
         echo ' GPS Lat <input name="gps_lat" type="text" class="small-text" placeholder="38.8977" />';
         echo ' GPS Lng <input name="gps_lng" type="text" class="small-text" placeholder="-77.0365" />';
-    echo ' UC Site URL <input name="site_url" list="tmon_paired_sites" type="url" class="regular-text" placeholder="https://uc.example.com" />';
+        echo ' UC Site URL <input name="site_url" list="tmon_paired_sites" type="url" class="regular-text" placeholder="https://uc.example.com" />';
         submit_button('Send to UC registry', 'secondary', '', false);
         echo '</form>';
 
-    // Direct Role + GPS override push (no device poll required)
-    echo '<form method="post" style="display:block;margin-top:6px;">';
-    wp_nonce_field('tmon_admin_provision');
-    echo '<input type="hidden" name="action" value="push_role_gps_direct" />';
-    echo '<input type="hidden" name="unit_id" value="'.esc_attr($r['unit_id']).'" />';
-    echo ' Role <select name="role"><option value="base" '.selected($r['role],'base',false).'>base</option><option value="remote" '.selected($r['role],'remote',false).'>remote</option></select>';
-    echo ' Unit Name <input name="unit_name" type="text" class="regular-text" placeholder="Optional display name" value="'.esc_attr($cur_name).'" />';
-    echo ' GPS Lat <input name="gps_lat" type="text" class="small-text" placeholder="38.8977" />';
-    echo ' GPS Lng <input name="gps_lng" type="text" class="small-text" placeholder="-77.0365" />';
-    echo ' GPS Alt (m) <input name="gps_alt_m" type="text" class="small-text" placeholder="" />';
-    echo ' GPS Acc (m) <input name="gps_accuracy_m" type="text" class="small-text" placeholder="" />';
-    echo ' UC Site URL <input name="site_url" list="tmon_paired_sites" type="url" class="regular-text" placeholder="https://uc.example.com" />';
-    submit_button('Push Role + GPS (direct)', 'secondary', '', false);
-    echo '</form>';
+        // Direct Role + GPS override push (no device poll required)
+        echo '<form method="post" style="display:block;margin-top:6px;">';
+        wp_nonce_field('tmon_admin_provision');
+        echo '<input type="hidden" name="action" value="push_role_gps_direct" />';
+        echo '<input type="hidden" name="unit_id" value="'.esc_attr($r['unit_id']).'" />';
+        echo ' Role <select name="role"><option value="base" '.selected($r['role'],'base',false).'>base</option><option value="remote" '.selected($r['role'],'remote',false).'>remote</option></select>';
+        echo ' Unit Name <input name="unit_name" type="text" class="regular-text" placeholder="Optional display name" value="'.esc_attr($cur_name).'" />';
+        echo ' GPS Lat <input name="gps_lat" type="text" class="small-text" placeholder="38.8977" />';
+        echo ' GPS Lng <input name="gps_lng" type="text" class="small-text" placeholder="-77.0365" />';
+        echo ' GPS Alt (m) <input name="gps_alt_m" type="text" class="small-text" placeholder="" />';
+        echo ' GPS Acc (m) <input name="gps_accuracy_m" type="text" class="small-text" placeholder="" />';
+        echo ' UC Site URL <input name="site_url" list="tmon_paired_sites" type="url" class="regular-text" placeholder="https://uc.example.com" />';
+        submit_button('Push Role + GPS (direct)', 'secondary', '', false);
+        echo '</form>';
         echo '</td>';
         echo '</tr>';
     }
@@ -889,7 +887,7 @@ add_action('wp_ajax_tmon_admin_known_units', function(){
             $cache = get_option('tmon_admin_known_ids_cache', []);
             if (is_array($cache)) {
                 $count_added = 0;
-                $start = 0; $i = 0;
+                $i = 0;
                 foreach ($cache as $uid => $d) {
                     $name = isset($d['unit_name']) ? $d['unit_name'] : $uid;
                     $mid = isset($d['machine_id']) ? $d['machine_id'] : '';
@@ -912,14 +910,15 @@ add_action('wp_ajax_tmon_admin_known_units', function(){
                 }
             }
         }
-        // Deduplicate by unit_id
-        $dedup = [];
-        $out = [];
-        foreach ($items as $it) { if (!isset($dedup[$it['unit_id']])) { $dedup[$it['unit_id']] = 1; $out[] = $it; } }
-        wp_send_json_success(['items' => $out, 'page' => $page, 'per_page' => $per_page]);
-    } else {
-        wp_send_json_success(['items' => [], 'page' => 1, 'per_page' => $per_page]);
     }
+    // Deduplicate by unit_id
+    $dedup = [];
+    $out = [];
+    foreach ($items as $it) { if (!isset($dedup[$it['unit_id']])) { $dedup[$it['unit_id']] = 1; $out[] = $it; } }
+    wp_send_json_success(['items' => $out, 'page' => $page, 'per_page' => $per_page]);
+} else {
+    wp_send_json_success(['items' => [], 'page' => 1, 'per_page' => $per_page]);
+}
 });
 
 // Fix for parse error: ensure all array values are quoted as strings.
@@ -927,50 +926,50 @@ $roles = ['base', 'remote', 'wifi'];
 
 // Previously duplicated core installer name; renamed to avoid fatal.
 if (!function_exists('tmon_admin_install_provisioning_schema')) {
-	function tmon_admin_install_provisioning_schema() {
-		global $wpdb;
-		$charset_collate = $wpdb->get_charset_collate();
-		$table = $wpdb->prefix . 'tmon_provisioned_devices';
-		$sql = "CREATE TABLE IF NOT EXISTS $table (
-			id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-			unit_id VARCHAR(64) NOT NULL,
-			machine_id VARCHAR(64) NOT NULL,
-			role VARCHAR(32) DEFAULT 'base',
-			company_id BIGINT UNSIGNED DEFAULT NULL,
-			plan VARCHAR(64) DEFAULT 'standard',
-			status VARCHAR(32) DEFAULT 'active',
-			notes TEXT,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-			UNIQUE KEY unit_machine (unit_id, machine_id)
-		) $charset_collate;";
-		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
-		dbDelta($sql);
+    function tmon_admin_install_provisioning_schema() {
+        global $wpdb;
+        $charset_collate = $wpdb->get_charset_collate();
+        $table = $wpdb->prefix . 'tmon_provisioned_devices';
+        $sql = "CREATE TABLE IF NOT EXISTS $table (
+            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            unit_id VARCHAR(64) NOT NULL,
+            machine_id VARCHAR(64) NOT NULL,
+            role VARCHAR(32) DEFAULT 'base',
+            company_id BIGINT UNSIGNED DEFAULT NULL,
+            plan VARCHAR(64) DEFAULT 'standard',
+            status VARCHAR(32) DEFAULT 'active',
+            notes TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY unit_machine (unit_id, machine_id)
+        ) $charset_collate;";
+        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+        dbDelta($sql);
 
-		// Claim requests table
-		$claim = $wpdb->prefix . 'tmon_claim_requests';
-		$sql2 = "CREATE TABLE IF NOT EXISTS $claim (
-			id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-			unit_id VARCHAR(64) NOT NULL,
-			machine_id VARCHAR(64) NOT NULL,
-			user_id BIGINT UNSIGNED NOT NULL,
-			status VARCHAR(32) DEFAULT 'pending',
-			notes TEXT,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-		) $charset_collate;";
-		dbDelta($sql2);
-	}
+        // Claim requests table
+        $claim = $wpdb->prefix . 'tmon_claim_requests';
+        $sql2 = "CREATE TABLE IF NOT EXISTS $claim (
+            id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+            unit_id VARCHAR(64) NOT NULL,
+            machine_id VARCHAR(64) NOT NULL,
+            user_id BIGINT UNSIGNED NOT NULL,
+            status VARCHAR(32) DEFAULT 'pending',
+            notes TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) $charset_collate;";
+        dbDelta($sql2);
+    }
 
-	// Run after core schema install.
-	add_action('tmon_admin_install_schema_after', 'tmon_admin_install_provisioning_schema');
+    // Run after core schema install.
+    add_action('tmon_admin_install_schema_after', 'tmon_admin_install_provisioning_schema');
 
-	// Optional: ensure provisioning tables exist on activation (avoid duplicate core installer call).
-	if (!has_action('activate_' . plugin_basename(__FILE__))) {
-		register_activation_hook(__FILE__, function() {
-			if (function_exists('tmon_admin_install_provisioning_schema')) {
-				tmon_admin_install_provisioning_schema();
-			}
-		});
-	}
+    // Optional: ensure provisioning tables exist on activation (avoid duplicate core installer call).
+    if (!has_action('activate_' . plugin_basename(__FILE__))) {
+        register_activation_hook(__FILE__, function() {
+            if (function_exists('tmon_admin_install_provisioning_schema')) {
+                tmon_admin_install_provisioning_schema();
+            }
+        });
+    }
 }
