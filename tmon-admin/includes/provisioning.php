@@ -739,7 +739,7 @@ EOT;
     $total_count = $args_count ? (int) $wpdb->get_var($wpdb->prepare($sql_count, ...$args_count)) : (int) $wpdb->get_var($sql_count);
     $total_pages = max(1, (int) ceil($total_count / $claim_pp));
 
-    // Query by filter + pagination
+    // Query to get claims data
     $sql_claims = "SELECT * FROM {$wpdb->prefix}tmon_claim_requests";
     $where = [];
     $args = [];
@@ -949,10 +949,11 @@ if (!function_exists('tmon_admin_install_provisioning_schema')) {
 	// Ensure it's executed after the core schema installer.
 	add_action('tmon_admin_install_schema_after', 'tmon_admin_install_provisioning_schema');
 
-	// If this file previously registered activation hook to the old name, switch it:
+	// If this file previously had: register_activation_hook(__FILE__, 'tmon_admin_install_schema');
+	// replace it with the renamed function:
 	if (function_exists('register_activation_hook')) {
 		// Remove any stale reference to the old function name in this file and point to the new one.
-		// register_activation_hook(__FILE__, 'tmon_admin_install_schema');  // remove/replace this if present
+		// register_activation_hook(__FILE__, 'tmon_admin_install_schema'); // remove this if present
 		register_activation_hook(__FILE__, 'tmon_admin_install_provisioning_schema');
 	}
 }
