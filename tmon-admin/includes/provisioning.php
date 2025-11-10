@@ -617,7 +617,7 @@ EOT;
     echo ' Unit Name <input name="unit_name" type="text" class="regular-text" placeholder="Optional display name" value="'.esc_attr($cur_name).'" />';
         echo ' Company Name <input name="company_name" type="text" class="regular-text" placeholder="Acme Inc." />';
         echo ' Company ID <input name="company_id" type="number" class="small-text" value="'.intval($r['company_id']).'" />';
-        echo ' Role <select name="role"><option value="base" '.selected($r['role],'base',false).'>base</option><option value="remote" '.selected($r['role'],'remote',false).'>remote</option></select>';
+        echo ' Role <select name="role"><option value="base" '.selected($r['role],'base',false).'>base</option><option value="remote" '.selected($r['role],'remote',false).'>remote</option></select>';
         echo ' GPS Lat <input name="gps_lat" type="text" class="small-text" placeholder="38.8977" />';
         echo ' GPS Lng <input name="gps_lng" type="text" class="small-text" placeholder="-77.0365" />';
     echo ' UC Site URL <input name="site_url" list="tmon_paired_sites" type="url" class="regular-text" placeholder="https://uc.example.com" />';
