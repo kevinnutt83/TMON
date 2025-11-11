@@ -54,47 +54,22 @@
 - [x] Implemented secure customer Unit Connector access for admins.
 
 ### Issues to Investigate and Resolve
-- [ ] **Firmware page not displaying:**  
-  - URL: `/wp-admin/tmon-admin-firmware`  
-  - **Action:**  
-    - [ ] Ensure the page is registered in the plugin menu (check `tmon-admin.php`).
-    - [ ] Verify the template file exists and is loaded (check `templates/firmware.php` or similar).
-    - [ ] Check permissions and callback output.
-- [ ] **Device location page security error:**  
-  - URL: `/wp-admin/admin.php?page=tmon-admin-location`  
-  - **Action:**  
-    - [ ] Remove the location page from the admin menu/UI (edit menu registration in `tmon-admin.php`).
-    - [ ] Preserve location push logic in code for use via provisioning/device forms.
-    - [ ] Add a note in code to clarify logic is preserved for future use.
-- [ ] **Move purge all admin data button/function:**  
-  - **Action:**  
-    - [ ] Move purge logic/button from provisioning page to settings page (`includes/settings.php`).
-    - [ ] Use unit-connector plugin's settings page structure for consistency.
-    - [ ] Update documentation to reflect new location.
-- [ ] **Audit page enhancement:**  
-  - URL: `/wp-admin/admin.php?page=tmon-admin-audit`  
-  - **Action:**  
-    - [ ] Refactor audit logging for verbosity and robustness (expand `includes/audit.php`).
-    - [ ] Ensure logs are detailed, searchable, and filterable.
-    - [ ] Add export/download options for logs.
-- [ ] **Provisioning page form redundancy:**  
-  - **Action:**  
-    - [ ] Refactor provisioning page to use a single form for all device data manipulation (edit `includes/provisioning.php`).
-    - [ ] Remove duplicate forms, keep all core logic.
-    - [ ] Ensure UI is clean and user-friendly.
-- [ ] **Provisioned device actions:**  
-  - **Action:**  
-    - [ ] Add "View Device", "Provision", "Deactivate" (if active), and "Remove Device" buttons to device list table (edit `includes/provisioning.php`).
-    - [ ] Ensure actions trigger correct logic and update device status.
-- [ ] **Device registration not showing in list:**  
-  - **Action:**  
-    - [ ] Investigate DB queries, table joins, and UI rendering in `includes/provisioning.php`.
-    - [ ] Fix logic so registered devices appear in the provisioning list.
-    - [ ] Add debug logging for device registration flow.
-- [ ] **Location push logic:**  
-  - **Action:**  
-    - [ ] Ensure location push logic is preserved and accessible via provisioning/device forms.
-    - [ ] Document usage in code and README.
+- [x] **Firmware page not displaying:**  
+  - Fixed menu registration in `tmon-admin.php`, ensured `templates/firmware.php` exists and loads, added fallback message.
+- [x] **Device location page security error:**  
+  - Removed location page from admin menu in `tmon-admin.php`, preserved location push logic in provisioning/device forms, commented code for future reference.
+- [x] **Move purge all admin data button/function:**  
+  - Moved purge logic/button from provisioning page to settings page (`includes/settings.php`), matched UI to unit-connector plugin, added confirmation and admin notice.
+- [x] **Audit page enhancement:**  
+  - Refactored audit logging for verbosity, added timestamps, user info, search/filter UI, pagination, and export.
+- [x] **Provisioning page form redundancy:**  
+  - Refactored to a single form for device data manipulation, removed duplicate forms, ensured all device actions are present.
+- [x] **Provisioned device actions:**  
+  - Added "View Device", "Provision", "Deactivate", "Remove Device" buttons to device list table, ensured handlers and confirmations.
+- [x] **Device registration not showing in list:**  
+  - Fixed DB queries and joins in `includes/provisioning.php`, ensured new devices are displayed, added admin notice if none found.
+- [x] **Location push logic:**  
+  - Location push logic now accessible via provisioning/device forms, commented code for clarity.
 
 ## Phase 5: TMON Unit Connector Plugin
 
@@ -113,17 +88,8 @@
 - [x] Implemented connectivity monitoring and alerting for Admin/Unit Connector communication.
 
 ### Issues to Investigate and Resolve
-- [ ] **Non-functional pages:**  
-  - `/wp-admin/tmon_uc_commands`  
-  - `/wp-admin/tmon-docs`  
-  - `/wp-admin/tmon-offline`  
-  - `/wp-admin/tmon-hierarchy`  
-  - `/wp-admin/tmon_uc_location`  
-  - **Action:**  
-    - [ ] Ensure each page is registered in the plugin menu (check `tmon-unit-connector.php`).
-    - [ ] Verify template files exist and are loaded (check `templates/`).
-    - [ ] Fix routing, permissions, and callback output.
-    - [ ] Add debug logging for page load errors.
+- [x] **Non-functional pages:**  
+  - Fixed menu registration, ensured template files exist and load, added fallback messages, checked user capability.
 
 ## Phase 6: System Integration and Polish
 
@@ -143,12 +109,16 @@
 - All phases tested with simulated devices and mock endpoints.
 - Issues encountered:
   - [x] Minor UI polish improved (responsive tables, color contrast).
-  - [x] Firmware update logic now retries on network error and verifies checksum.
+  - [x] Firmware page now displays correctly.
+  - [x] Location page removed from menu, logic preserved in provisioning form.
+  - [x] Purge logic moved to settings page, confirmation added.
+  - [x] Audit logging enhanced with verbose output, search/filter, and export.
+  - [x] Provisioning page refactored to single form, device actions added.
+  - [x] Device registration now shows in provisioning list.
+  - [x] Non-functional pages in Unit Connector plugin now load with fallback or correct template.
   - [x] LoRa packet loss mitigated with exponential backoff and ACK packets.
   - [x] Device suspension tested for both admin and billing scenarios.
   - [x] Connectivity monitoring and alerting verified for UC/Admin links.
-  - [ ] Device registration not showing in provisioning list (see above).
-  - [ ] Non-functional plugin pages (see above).
 
 ---
 
@@ -175,10 +145,6 @@
 - [x] Final review and QA completed.
 - [x] Release announcement prepared.
 - [x] Monitoring for user feedback and bug reports started.
+- [x] All listed corrections and enhancements implemented.
 - [ ] Begin planning for v1.1.0 features (OTA improvements, advanced analytics, enhanced support portal, device replacement workflow).
-- [ ] Investigate and resolve all issues listed above.
-- [ ] Refactor provisioning page forms and move purge logic to settings.
-- [ ] Enhance audit logging and verbose output.
-- [ ] Remove redundant location page from UI, preserve logic.
-- [ ] Fix device registration display in provisioning list.
-- [ ] Fix non-functional pages in Unit Connector plugin.
+- [ ] Continue testing and polish based on user feedback.
