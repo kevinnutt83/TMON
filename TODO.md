@@ -53,23 +53,52 @@
 - [x] Created customer profile and location hierarchy management UI.
 - [x] Implemented secure customer Unit Connector access for admins.
 
-### Issues to Investigate and Resolve
-- [x] **Firmware page not displaying:**  
-  - Fixed menu registration in `tmon-admin.php`, ensured `templates/firmware.php` exists and loads, added fallback message.
-- [x] **Device location page security error:**  
-  - Removed location page from admin menu in `tmon-admin.php`, preserved location push logic in provisioning/device forms, commented code for future reference.
-- [x] **Move purge all admin data button/function:**  
-  - Moved purge logic/button from provisioning page to settings page (`includes/settings.php`), matched UI to unit-connector plugin, added confirmation and admin notice.
-- [x] **Audit page enhancement:**  
-  - Refactored audit logging for verbosity, added timestamps, user info, search/filter UI, pagination, and export.
-- [x] **Provisioning page form redundancy:**  
-  - Refactored to a single form for device data manipulation, removed duplicate forms, ensured all device actions are present.
-- [x] **Provisioned device actions:**  
-  - Added "View Device", "Provision", "Deactivate", "Remove Device" buttons to device list table, ensured handlers and confirmations.
-- [x] **Device registration not showing in list:**  
-  - Fixed DB queries and joins in `includes/provisioning.php`, ensured new devices are displayed, added admin notice if none found.
-- [x] **Location push logic:**  
-  - Location push logic now accessible via provisioning/device forms, commented code for clarity.
+### Issues to Resolve & Polishing Steps
+
+- [ ] **Firmware page not displaying:**  
+  - [ ] Ensure submenu is registered in `tmon-admin.php` for `/wp-admin/tmon-admin-firmware`.
+  - [ ] Create or update `templates/firmware.php` with a clear, styled UI and fallback message if no firmware info.
+  - [ ] Add permission checks and error handling for missing template.
+  - [ ] Polish UI: Add headings, icons, and responsive layout.
+
+- [ ] **Device location page security error:**  
+  - [ ] Remove location page from menu in `tmon-admin.php`.
+  - [ ] Move location push logic to provisioning/device forms.
+  - [ ] Add comments in code to clarify logic is preserved.
+  - [ ] Polish: Add location fields to provisioning form with tooltips/help text.
+
+- [ ] **Move purge all admin data button/function:**  
+  - [ ] Move purge logic/button from provisioning to settings page (`includes/settings.php`).
+  - [ ] Match UI to unit-connector plugin: use cards, icons, and confirmation modal.
+  - [ ] Add admin notice on success/failure.
+
+- [ ] **Audit page enhancement:**  
+  - [ ] Refactor audit logging for verbosity (add timestamps, user info, action type).
+  - [ ] Add search/filter UI (date, user, action).
+  - [ ] Paginate logs, add export to CSV/JSON.
+  - [ ] Polish: Use table with sticky headers, color-coded log levels, and responsive design.
+
+- [ ] **Provisioning page form redundancy:**  
+  - [ ] Refactor to a single form for device data manipulation.
+  - [ ] Remove duplicate forms, keep all logic.
+  - [ ] Add tabs or accordions for device actions (view, provision, deactivate, remove).
+  - [ ] Polish: Add icons, tooltips, and responsive layout.
+
+- [ ] **Provisioned device actions:**  
+  - [ ] Add "View Device", "Provision", "Deactivate", "Remove Device" buttons to device list table.
+  - [ ] Ensure correct action handlers and confirmation dialogs.
+  - [ ] Polish: Use button groups, color coding, and modal dialogs for confirmation.
+
+- [ ] **Device registration not showing in list:**  
+  - [ ] Debug DB queries and joins in `includes/provisioning.php`.
+  - [ ] Ensure new devices are inserted and queried for display.
+  - [ ] Add admin notice if no devices found.
+  - [ ] Polish: Add loading spinner, empty state message, and refresh button.
+
+- [ ] **Location push logic:**  
+  - [ ] Ensure location push logic is accessible via provisioning/device forms.
+  - [ ] Add comment in code to clarify logic is preserved.
+  - [ ] Polish: Add location autocomplete and validation.
 
 ## Phase 5: TMON Unit Connector Plugin
 
@@ -87,64 +116,51 @@
 - [x] Built robust data export and device info interface.
 - [x] Implemented connectivity monitoring and alerting for Admin/Unit Connector communication.
 
-### Issues to Investigate and Resolve
-- [x] **Non-functional pages:**  
-  - Fixed menu registration, ensured template files exist and load, added fallback messages, checked user capability.
+### Issues to Resolve & Polishing Steps
+
+- [ ] **Non-functional pages:**  
+  - [ ] Ensure menu registration for all pages.
+  - [ ] Create/update template files with fallback messages and styled UI.
+  - [ ] Add permission checks and error handling.
+  - [ ] Polish: Add icons, headings, and responsive layout to all pages.
 
 ## Phase 6: System Integration and Polish
 
-- [x] Integrated full data flow: device boot → check-in → provision → sample → relay → UC receive/forward → Admin aggregate.
-- [x] Added flexible device suspension logic for billing and admin control.
-- [x] Implemented global monitoring and alerting for device and UC connectivity.
-- [x] Optimized codebase for modular debug, common commands, and efficient structure.
-- [x] Finalized UI/UX for uniform, sleek navigation across plugins.
-- [x] Updated documentation in `README.md`, `CHANGELOG.md`, and wiki.
-- [x] Prepared for deployment (zip plugins, tag repo).
-- [x] Performed full end-to-end testing.
+- [ ] Polish all UI/UX for uniform look:  
+  - [ ] Use consistent color scheme, button styles, and table layouts.
+  - [ ] Add tooltips, help text, and icons where appropriate.
+  - [ ] Ensure all forms are responsive and accessible.
+  - [ ] Add loading spinners and empty state messages.
+  - [ ] Test all flows end-to-end and update documentation/screenshots.
 
 ---
 
 ## Testing Log
 
-- All phases tested with simulated devices and mock endpoints.
-- Issues encountered:
-  - [x] Minor UI polish improved (responsive tables, color contrast).
-  - [x] Firmware page now displays correctly.
-  - [x] Location page removed from menu, logic preserved in provisioning form.
-  - [x] Purge logic moved to settings page, confirmation added.
-  - [x] Audit logging enhanced with verbose output, search/filter, and export.
-  - [x] Provisioning page refactored to single form, device actions added.
-  - [x] Device registration now shows in provisioning list.
-  - [x] Non-functional pages in Unit Connector plugin now load with fallback or correct template.
-  - [x] LoRa packet loss mitigated with exponential backoff and ACK packets.
-  - [x] Device suspension tested for both admin and billing scenarios.
-  - [x] Connectivity monitoring and alerting verified for UC/Admin links.
+- [ ] Retest all plugin pages for display, logic, and UI/UX.
+- [ ] Retest device registration and provisioning flow.
+- [ ] Retest audit logging, purge, and location logic.
+- [ ] Retest unit connector plugin pages and data flows.
 
 ---
 
 ## Documentation
 
-- Updated `README.md` with architecture, setup, and usage.
-- `CHANGELOG.md` reflects all major features and fixes.
-- Wiki pages drafted for support, provisioning, and troubleshooting.
-- Added API reference and firmware configuration guide.
-- Documented protected settings.py variables and remote management logic.
+- [ ] Update README.md with screenshots of polished UI.
+- [ ] Update CHANGELOG.md with all fixes and enhancements.
+- [ ] Document new UI/UX features and logic changes.
 
 ---
 
 ## Commit Log
 
-- Commits made per sub-step, tagged `v1.0.0`.
-- All code and documentation changes pushed to main branch.
-- Release candidate branch created for final QA.
+- [ ] Commit all code and UI/UX changes per feature.
+- [ ] Tag release after QA.
 
 ---
 
 ## Next Actions
 
-- [x] Final review and QA completed.
-- [x] Release announcement prepared.
-- [x] Monitoring for user feedback and bug reports started.
-- [x] All listed corrections and enhancements implemented.
-- [ ] Begin planning for v1.1.0 features (OTA improvements, advanced analytics, enhanced support portal, device replacement workflow).
+- [ ] Implement and polish all listed corrections and enhancements.
 - [ ] Continue testing and polish based on user feedback.
+- [ ] Begin planning for v1.1.0 features (OTA improvements, advanced analytics, enhanced support portal, device replacement workflow).
