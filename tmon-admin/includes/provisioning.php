@@ -80,6 +80,9 @@ function tmon_admin_provisioning_page() {
     if (!current_user_can('manage_options')) wp_die('Forbidden');
     global $wpdb;
 
+    // Define $table at the start so it's available for all queries
+    $table = $wpdb->prefix . 'tmon_provisioned_devices';
+
     // Handle actions
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && function_exists('tmon_admin_verify_nonce') && tmon_admin_verify_nonce('tmon_admin_provision')) {
         $action = sanitize_text_field($_POST['action'] ?? '');
@@ -465,6 +468,7 @@ EOT;
             }
         }
     }
+    // $table is now always defined before this query
     $rows = $wpdb->get_results("SELECT * FROM $table ORDER BY created_at DESC", ARRAY_A);
     echo '<table class="wp-list-table widefat"><thead><tr><th>ID</th><th>Unit ID</th><th>Name</th><th>Machine ID</th><th>Role</th><th>Company ID</th><th>Plan</th><th>Status</th><th>Notes</th><th>Created</th><th>Updated</th><th>Actions</th></tr></thead><tbody>';
     foreach ($rows as $r) {
