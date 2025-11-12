@@ -164,3 +164,63 @@
 - [ ] Implement and polish all listed corrections and enhancements.
 - [ ] Continue testing and polish based on user feedback.
 - [ ] Begin planning for v1.1.0 features (OTA improvements, advanced analytics, enhanced support portal, device replacement workflow).
+
+---
+
+## Updated Next Actions
+
+- [ ] Debug and fix device listing on TMON Admin provisioning page.
+- [ ] Refactor and verify purge data functions clear all device records.
+- [ ] Update Unit Connector plugin to only show provisioned devices.
+- [ ] Clarify and enforce provisioning flow between Admin and Unit Connector.
+- [ ] Polish UI/UX for all device management pages.
+- [ ] Update documentation to reflect new logic and flows.
+- [ ] Continue testing and QA.
+
+---
+
+## Implementation Steps
+
+1. **Provisioning Page Device Listing**
+   - Review DB schema and queries in `includes/provisioning.php`.
+   - Ensure device registration inserts into correct tables.
+   - Update device list query to show all registered devices (provisioned and unprovisioned).
+   - Add admin notice and refresh button.
+
+2. **Purge Data Function**
+   - Refactor purge logic to clear all device-related tables.
+   - Add confirmation modal and admin notices.
+   - Test with multiple device records.
+
+3. **Unit Connector Device Filtering**
+   - Update device list logic to exclude devices without a valid `WORDPRESS_API_URL`.
+   - Only show devices that have been provisioned and assigned to the current UC site.
+
+4. **Provisioning Flow Enforcement**
+   - Ensure devices only register with TMON Admin until provisioned.
+   - After provisioning, device downloads and applies site URL, then checks in with UC.
+   - Update UI and documentation for clarity.
+
+5. **UI/UX Polish**
+   - Add tooltips, icons, help text, and responsive layouts.
+   - Ensure all actions are clear and accessible.
+
+6. **Documentation**
+   - Update README.md and CHANGELOG.md.
+   - Add screenshots and flow diagrams.
+
+---
+
+## Testing Log
+
+- [ ] Retest device registration and provisioning flow.
+- [ ] Retest purge functions.
+- [ ] Retest UC device filtering.
+- [ ] Retest UI/UX improvements.
+
+---
+
+## Commit Log
+
+- [ ] Commit all code and UI/UX changes per feature.
+- [ ] Tag release after QA.

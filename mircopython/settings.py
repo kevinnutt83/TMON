@@ -6,12 +6,12 @@ NODE_TYPE = 'base'             # 'base' or 'remote'; base can host LoRa network 
 
 FIRMWARE_VERSION = "v2.00j"    # Bumped automatically by OTA; compared during update check
 
- # WordPress API integration
-WORDPRESS_API_URL = "https://movealong.us"   # Customer Unit Connector site for provisioned devices
+ # WordPress Unit Connector API integration
+WORDPRESS_API_URL = ""   # Customer Unit Connector site for provisioned devices
 WORDPRESS_USERNAME = "agadmin"              # (Optional) Basic auth / future removal for token-based access
 WORDPRESS_PASSWORD = "Pepper-1"             # (Optional) Replace with secure secret storage in production
 
-
+ # WordPress TMON Admin API integration
 # --- Provisioning & Identity ---
 # MACHINE_ID is detected from chipset on first boot (populated by firmware); persisted to disk and echoed here
 MACHINE_ID = None                       # Chipset UID hex string

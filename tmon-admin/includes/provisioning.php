@@ -62,10 +62,23 @@ add_action('admin_init', function() {
     tmon_admin_maybe_migrate_provisioned_devices();
 });
 
+// Helper: Get all devices, provisioned and unprovisioned
+function tmon_admin_get_all_devices() {
+    global $wpdb;
+    $prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+    $dev_table = $wpdb->prefix . 'tmon_devices';
+    // Get all registered devices, join with provisioned info if exists
+    $sql = "SELECT d.unit_id, d.machine_id, d.unit_name, p.id as provision_id, p.role, p.company_id, p.plan, p.status, p.notes, p.created_at, p.updated_at, d.wordpress_api_url
+            FROM $dev_table d
+            LEFT JOIN $prov_table p ON d.unit_id = p.unit_id
+            ORDER BY d.unit_id ASC";
+    return $wpdb->get_results($sql, ARRAY_A);
+}
+
+// Provisioning page UI
 function tmon_admin_provisioning_page() {
     if (!current_user_can('manage_options')) wp_die('Forbidden');
     global $wpdb;
-    $table = $wpdb->prefix . 'tmon_provisioned_devices';
 
     // Handle actions
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && function_exists('tmon_admin_verify_nonce') && tmon_admin_verify_nonce('tmon_admin_provision')) {
