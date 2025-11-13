@@ -468,8 +468,71 @@ EOT;
             }
         }
     }
+
+    // Load provisioned and unprovisioned devices and merge for display
+    $prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+    $dev_table  = $wpdb->prefix . 'tmon_devices';
+    $rows = [];
+
+    // 1) Provisioned devices (joined with tmon_devices for friendly name / site URL)
+    if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $prov_table))) {
+        // Use LEFT JOIN so we still show provisioned entries even if tmon_devices row missing
+        $prov_sql = "SELECT p.*, d.unit_name AS unit_name, d.wordpress_api_url AS wordpress_api_url
+                     FROM {$prov_table} p
+                     LEFT JOIN {$dev_table} d ON p.unit_id = d.unit_id
+                     ORDER BY p.created_at DESC";
+        $prov_rows = $wpdb->get_results($prov_sql, ARRAY_A);
+        if (is_array($prov_rows)) {
+            foreach ($prov_rows as $pr) {
+                // Ensure fields exist for downstream rendering
+                $pr['unit_name'] = $pr['unit_name'] ?? ($names_map[$pr['unit_id']] ?? '');
+                $pr['wordpress_api_url'] = $pr['wordpress_api_url'] ?? '';
+            }
+            $rows = array_merge($rows, $prov_rows);
+        }
+    }
+
+    // 2) Unprovisioned devices (present in tmon_devices but not in tmon_provisioned_devices)
+    if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+        // Build list of provisioned unit_ids to exclude
+        $prov_ids = [];
+        if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $prov_table))) {
+            $prov_ids = $wpdb->get_col("SELECT unit_id FROM {$prov_table}");
+        }
+        // Prepare WHERE clause: exclude provisioned unit_ids if any
+        if (!empty($prov_ids)) {
+            // Sanitize each value for SQL IN clause
+            $placeholders = implode(',', array_fill(0, count($prov_ids), '%s'));
+            $sql = $wpdb->prepare("SELECT unit_id, machine_id, unit_name, last_seen, wordpress_api_url FROM {$dev_table} WHERE unit_id NOT IN ($placeholders) ORDER BY unit_id ASC", ...$prov_ids);
+        } else {
+            $sql = "SELECT unit_id, machine_id, unit_name, last_seen, wordpress_api_url FROM {$dev_table} ORDER BY unit_id ASC";
+        }
+        $dev_rows = $wpdb->get_results($sql, ARRAY_A);
+        if (is_array($dev_rows)) {
+            foreach ($dev_rows as $dr) {
+                // Normalize to same shape as provisioned rows for rendering
+                $rows[] = [
+                    'id' => 0,
+                    'unit_id' => $dr['unit_id'],
+                    'machine_id' => $dr['machine_id'] ?? '',
+                    'role' => '', // role not set until provisioned
+                    'company_id' => '',
+                    'plan' => '',
+                    'status' => 'unprovisioned',
+                    'notes' => '',
+                    'created_at' => $dr['last_seen'] ?? '',
+                    'updated_at' => $dr['last_seen'] ?? '',
+                    'unit_name' => $dr['unit_name'] ?? ($names_map[$dr['unit_id']] ?? ''),
+                    'wordpress_api_url' => $dr['wordpress_api_url'] ?? '',
+                ];
+            }
+        }
+    }
+
+    // If still empty, show helpful admin notice (rendered later with table empty state)
+    // $rows now contains both provisioned and unprovisioned devices for display
+
     // $table is now always defined before this query
-    $rows = $wpdb->get_results("SELECT * FROM $table ORDER BY created_at DESC", ARRAY_A);
     echo '<table class="wp-list-table widefat"><thead><tr><th>ID</th><th>Unit ID</th><th>Name</th><th>Machine ID</th><th>Role</th><th>Company ID</th><th>Plan</th><th>Status</th><th>Notes</th><th>Created</th><th>Updated</th><th>Actions</th></tr></thead><tbody>';
     foreach ($rows as $r) {
         echo '<tr>';
