@@ -86,7 +86,6 @@ function tmon_admin_provisioning_page() {
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && function_exists('tmon_admin_verify_nonce') && tmon_admin_verify_nonce('tmon_admin_provision')) {
         $action = sanitize_text_field($_POST['action'] ?? '');
 
-        // Ensure correct table and key usage for updates and inserts
         if ($action === 'create') {
             $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
             $machine_id = sanitize_text_field($_POST['machine_id'] ?? '');
@@ -96,17 +95,18 @@ function tmon_admin_provisioning_page() {
             $status = sanitize_text_field($_POST['status'] ?? 'active');
             $notes = sanitize_textarea_field($_POST['notes'] ?? '');
             if ($unit_id && $machine_id) {
-                // Prevent duplicate insert for same unit_id/machine_id
-                $exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $table WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id));
-                if (!$exists) {
+                // Always upsert: if exists, update; else, insert
+                $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM $table WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id));
+                if ($exists) {
+                    $wpdb->update($table, compact('role','company_id','plan','status','notes'), ['id' => $exists]);
+                    echo '<div class="updated"><p>Provisioned device updated.</p></div>';
+                } else {
                     $wpdb->insert($table, compact('unit_id','machine_id','role','company_id','plan','status','notes'));
                     if (!empty($wpdb->last_error)) {
                         echo '<div class="notice notice-error"><p>Database error: '.esc_html($wpdb->last_error).'</p></div>';
                     } else {
                         echo '<div class="updated"><p>Provisioned device created.</p></div>';
                     }
-                } else {
-                    echo '<div class="notice notice-warning"><p>Device already provisioned.</p></div>';
                 }
             }
         } elseif ($action === 'update') {
@@ -118,7 +118,7 @@ function tmon_admin_provisioning_page() {
                 $company_id = intval($_POST['company_id'] ?? 0);
                 $notes = sanitize_textarea_field($_POST['notes'] ?? '');
                 $result = $wpdb->update($table, compact('role','plan','status','company_id','notes'), ['id' => $id]);
-                if ($result !== false) {
+                if ($result !== false && $result > 0) {
                     echo '<div class="updated"><p>Provisioned device updated.</p></div>';
                 } else {
                     echo '<div class="notice notice-error"><p>Failed to update device or no changes made.</p></div>';
