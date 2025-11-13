@@ -85,7 +85,6 @@ function tmon_admin_provisioning_page() {
     // Handle actions
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && function_exists('tmon_admin_verify_nonce') && tmon_admin_verify_nonce('tmon_admin_provision')) {
         $action = sanitize_text_field($_POST['action'] ?? '');
-
         if ($action === 'update') {
             $id = intval($_POST['id'] ?? 0);
             if ($id) {
@@ -94,7 +93,7 @@ function tmon_admin_provisioning_page() {
                 $status = sanitize_text_field($_POST['status'] ?? 'active');
                 $company_id = intval($_POST['company_id'] ?? 0);
                 $notes = sanitize_textarea_field($_POST['notes'] ?? '');
-                // Ensure the update is performed on the correct table and with correct columns
+                // Ensure all fields are set for update
                 $result = $wpdb->update(
                     $table,
                     [
@@ -114,7 +113,6 @@ function tmon_admin_provisioning_page() {
                 }
             }
         }
-
         if ($action === 'create') {
             $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
             $machine_id = sanitize_text_field($_POST['machine_id'] ?? '');
