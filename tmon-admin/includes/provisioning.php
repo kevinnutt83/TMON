@@ -93,19 +93,8 @@ function tmon_admin_provisioning_page() {
                 $status = sanitize_text_field($_POST['status'] ?? 'active');
                 $company_id = intval($_POST['company_id'] ?? 0);
                 $notes = sanitize_textarea_field($_POST['notes'] ?? '');
-                // Ensure all fields are set for update
-                $result = $wpdb->update(
-                    $table,
-                    [
-                        'role' => $role,
-                        'plan' => $plan,
-                        'status' => $status,
-                        'company_id' => $company_id,
-                        'notes' => $notes,
-                        'updated_at' => current_time('mysql', 1)
-                    ],
-                    ['id' => $id]
-                );
+                // Ensure $table is correct and update returns a result
+                $result = $wpdb->update($table, compact('role','plan','status','company_id','notes'), ['id' => $id]);
                 if ($result === false) {
                     echo '<div class="notice notice-error"><p>Database error: '.esc_html($wpdb->last_error).'</p></div>';
                 } else {
@@ -121,26 +110,17 @@ function tmon_admin_provisioning_page() {
             $plan = sanitize_text_field($_POST['plan'] ?? 'standard');
             $status = sanitize_text_field($_POST['status'] ?? 'active');
             $notes = sanitize_textarea_field($_POST['notes'] ?? '');
-            if ($unit_id && $machine_id) {
-                $result = $wpdb->insert(
-                    $table,
-                    [
-                        'unit_id' => $unit_id,
-                        'machine_id' => $machine_id,
-                        'role' => $role,
-                        'company_id' => $company_id,
-                        'plan' => $plan,
-                        'status' => $status,
-                        'notes' => $notes,
-                        'created_at' => current_time('mysql', 1),
-                        'updated_at' => current_time('mysql', 1)
-                    ]
-                );
+            // Prevent duplicate unit_id/machine_id
+            $exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $table WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id));
+            if ($unit_id && $machine_id && !$exists) {
+                $result = $wpdb->insert($table, compact('unit_id','machine_id','role','company_id','plan','status','notes'));
                 if ($result === false) {
                     echo '<div class="notice notice-error"><p>Database error: '.esc_html($wpdb->last_error).'</p></div>';
                 } else {
                     echo '<div class="updated"><p>Provisioned device created.</p></div>';
                 }
+            } elseif ($exists) {
+                echo '<div class="notice notice-warning"><p>This device is already provisioned.</p></div>';
             }
         } elseif ($action === 'delete') {
             $id = intval($_POST['id'] ?? 0);
