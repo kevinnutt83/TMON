@@ -80,12 +80,41 @@ function tmon_admin_provisioning_page() {
     if (!current_user_can('manage_options')) wp_die('Forbidden');
     global $wpdb;
 
-    // Define $table at the start so it's available for all queries
     $table = $wpdb->prefix . 'tmon_provisioned_devices';
 
     // Handle actions
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && function_exists('tmon_admin_verify_nonce') && tmon_admin_verify_nonce('tmon_admin_provision')) {
         $action = sanitize_text_field($_POST['action'] ?? '');
+
+        if ($action === 'update') {
+            $id = intval($_POST['id'] ?? 0);
+            if ($id) {
+                $role = sanitize_text_field($_POST['role'] ?? 'base');
+                $plan = sanitize_text_field($_POST['plan'] ?? 'standard');
+                $status = sanitize_text_field($_POST['status'] ?? 'active');
+                $company_id = intval($_POST['company_id'] ?? 0);
+                $notes = sanitize_textarea_field($_POST['notes'] ?? '');
+                // Ensure the update is performed on the correct table and with correct columns
+                $result = $wpdb->update(
+                    $table,
+                    [
+                        'role' => $role,
+                        'plan' => $plan,
+                        'status' => $status,
+                        'company_id' => $company_id,
+                        'notes' => $notes,
+                        'updated_at' => current_time('mysql', 1)
+                    ],
+                    ['id' => $id]
+                );
+                if ($result === false) {
+                    echo '<div class="notice notice-error"><p>Database error: '.esc_html($wpdb->last_error).'</p></div>';
+                } else {
+                    echo '<div class="updated"><p>Provisioned device updated.</p></div>';
+                }
+            }
+        }
+
         if ($action === 'create') {
             $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
             $machine_id = sanitize_text_field($_POST['machine_id'] ?? '');
@@ -95,8 +124,21 @@ function tmon_admin_provisioning_page() {
             $status = sanitize_text_field($_POST['status'] ?? 'active');
             $notes = sanitize_textarea_field($_POST['notes'] ?? '');
             if ($unit_id && $machine_id) {
-                $wpdb->insert($table, compact('unit_id','machine_id','role','company_id','plan','status','notes'));
-                if (!empty($wpdb->last_error)) {
+                $result = $wpdb->insert(
+                    $table,
+                    [
+                        'unit_id' => $unit_id,
+                        'machine_id' => $machine_id,
+                        'role' => $role,
+                        'company_id' => $company_id,
+                        'plan' => $plan,
+                        'status' => $status,
+                        'notes' => $notes,
+                        'created_at' => current_time('mysql', 1),
+                        'updated_at' => current_time('mysql', 1)
+                    ]
+                );
+                if ($result === false) {
                     echo '<div class="notice notice-error"><p>Database error: '.esc_html($wpdb->last_error).'</p></div>';
                 } else {
                     echo '<div class="updated"><p>Provisioned device created.</p></div>';
@@ -107,17 +149,6 @@ function tmon_admin_provisioning_page() {
             if ($id) {
                 $wpdb->delete($table, ['id' => $id]);
                 echo '<div class="updated"><p>Provisioned device deleted.</p></div>';
-            }
-        } elseif ($action === 'update') {
-            $id = intval($_POST['id'] ?? 0);
-            if ($id) {
-                $role = sanitize_text_field($_POST['role'] ?? 'base');
-                $plan = sanitize_text_field($_POST['plan'] ?? 'standard');
-                $status = sanitize_text_field($_POST['status'] ?? 'active');
-                $company_id = intval($_POST['company_id'] ?? 0);
-                $notes = sanitize_textarea_field($_POST['notes'] ?? '');
-                $wpdb->update($table, compact('role','plan','status','company_id','notes'), ['id' => $id]);
-                echo '<div class="updated"><p>Provisioned device updated.</p></div>';
             }
         } elseif ($action === 'push_config') {
             // Push configuration to a Unit Connector site as a settings_update command
