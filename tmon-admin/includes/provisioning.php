@@ -634,7 +634,7 @@ EOT;
         echo ' Unit Name <input name="unit_name" type="text" class="regular-text" placeholder="Optional display name" value="'.esc_attr($cur_name).'" />';
         echo ' Company Name <input name="company_name" type="text" class="regular-text" placeholder="Acme Inc." />';
         echo ' Company ID <input name="company_id" type="number" class="small-text" value="'.intval($r['company_id']).'" />';
-        echo ' Role <select name="role"><option value="base" '.selected($r['role'],'base',false).'>base</option><option value="remote" '.selected($r['role'],'remote',false).'>remote</option></select>';
+        echo ' Role <select name="role"><option value="base" '.selected($r['role],'base',false).'>base</option><option value="remote" '.selected($r['role],'remote',false).'>remote</option></select>';
         echo ' GPS Lat <input name="gps_lat" type="text" class="small-text" placeholder="38.8977" />';
         echo ' GPS Lng <input name="gps_lng" type="text" class="small-text" placeholder="-77.0365" />';
         echo ' UC Site URL <input name="site_url" list="tmon_paired_sites" type="url" class="regular-text" placeholder="https://uc.example.com" />';
@@ -646,7 +646,7 @@ EOT;
         wp_nonce_field('tmon_admin_provision');
         echo '<input type="hidden" name="action" value="push_role_gps_direct" />';
         echo '<input type="hidden" name="unit_id" value="'.esc_attr($r['unit_id']).'" />';
-        echo ' Role <select name="role"><option value="base" '.selected($r['role'],'base',false).'>base</option><option value="remote" '.selected($r['role'],'remote',false).'>remote</option></select>';
+        echo ' Role <select name="role"><option value="base" '.selected($r['role],'base',false).'>base</option><option value="remote" '.selected($r['role],'remote',false).'>remote</option></select>';
         echo ' Unit Name <input name="unit_name" type="text" class="regular-text" placeholder="Optional display name" value="'.esc_attr($cur_name).'" />';
         echo ' GPS Lat <input name="gps_lat" type="text" class="small-text" placeholder="38.8977" />';
         echo ' GPS Lng <input name="gps_lng" type="text" class="small-text" placeholder="-77.0365" />';
@@ -1028,3 +1028,18 @@ if (!function_exists('tmon_admin_ensure_columns')) {
         return true;
     }
 }
+
+// Add fallback for missing admin.css and admin.js to avoid 404 errors in browser console
+add_action('admin_enqueue_scripts', function() {
+    $plugin_url = plugin_dir_url(__FILE__);
+    // Check if CSS exists before enqueue
+    $css_path = dirname(__FILE__) . '/../assets/admin.css';
+    if (file_exists($css_path)) {
+        wp_enqueue_style('tmon-admin-css', $plugin_url . '../assets/admin.css', [], '0.1.2');
+    }
+    // Check if JS exists before enqueue
+    $js_path = dirname(__FILE__) . '/../assets/admin.js';
+    if (file_exists($js_path)) {
+        wp_enqueue_script('tmon-admin-js', $plugin_url . '../assets/admin.js', [], '0.1.2', true);
+    }
+});
