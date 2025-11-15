@@ -591,21 +591,21 @@ EOT;
         echo '<input type="hidden" name="action" value="update" />';
         echo '<input type="hidden" name="id" value="'.intval($r['id']).'" />';
         // FIX: Proper concatenation for dropdowns to avoid parse error
-        echo ' Role <select name="role">'
-            . '<option value="base"' . selected($r['role'], 'base', false) . '>base</option>'
-            . '<option value="remote"' . selected($r['role'], 'remote', false) . '>remote</option>'
-            . '<option value="wifi"' . selected($r['role'], 'wifi', false) . '>wifi</option>'
-            . '</select>';
-        echo ' Plan <select name="plan">'
-            . '<option value="standard"' . selected($r['plan'], 'standard', false) . '>standard</option>'
-            . '<option value="pro"' . selected($r['plan'], 'pro', false) . '>pro</option>'
-            . '<option value="enterprise"' . selected($r['plan'], 'enterprise', false) . '>enterprise</option>'
-            . '</select>';
-        echo ' Status <select name="status">'
-            . '<option value="active"' . selected($r['status'], 'active', false) . '>active</option>'
-            . '<option value="suspended"' . selected($r['status'], 'suspended', false) . '>suspended</option>'
-            . '<option value="expired"' . selected($r['status'], 'expired', false) . '>expired</option>'
-            . '</select>';
+        echo ' Role <select name="role">';
+        echo '<option value="base"' . selected($r['role'], 'base', false) . '>base</option>';
+        echo '<option value="remote"' . selected($r['role'], 'remote', false) . '>remote</option>';
+        echo '<option value="wifi"' . selected($r['role'], 'wifi', false) . '>wifi</option>';
+        echo '</select>';
+        echo ' Plan <select name="plan">';
+        echo '<option value="standard"' . selected($r['plan'], 'standard', false) . '>standard</option>';
+        echo '<option value="pro"' . selected($r['plan'], 'pro', false) . '>pro</option>';
+        echo '<option value="enterprise"' . selected($r['plan'], 'enterprise', false) . '>enterprise</option>';
+        echo '</select>';
+        echo ' Status <select name="status">';
+        echo '<option value="active"' . selected($r['status'], 'active', false) . '>active</option>';
+        echo '<option value="suspended"' . selected($r['status'], 'suspended', false) . '>suspended</option>';
+        echo '<option value="expired"' . selected($r['status'], 'expired', false) . '>expired</option>';
+        echo '</select>';
         echo ' Company <input name="company_id" type="number" class="small-text" value="'.intval($r['company_id']).'" />';
         echo ' Notes <input name="notes" type="text" class="regular-text" value="'.esc_attr($r['notes']).'" />';
         submit_button('Update', 'primary', '', false);
