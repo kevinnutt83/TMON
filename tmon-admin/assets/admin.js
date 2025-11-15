@@ -14,7 +14,7 @@
 		if (!(window.tmon_admin && tmon_admin.dismiss_nonce)) return;
 		try {
 			const body = new URLSearchParams();
-			body.set('security', tmon_admin.dismiss_nonce); // matches check_ajax_referer
+			body.set('security', tmon_admin.dismiss_nonce); // check_ajax_referer uses 'security'
 			fetch(ajaxurl + '?action=tmon_admin_dismiss_notice', {
 				method:'POST', credentials:'same-origin',
 				headers:{ 'Content-Type':'application/x-www-form-urlencoded' },
@@ -80,7 +80,7 @@
 			}
 		});
 
-		// Prevent double submits briefly
+		// Prevent double submit for a few seconds
 		document.querySelectorAll('.wrap form').forEach(form => form.addEventListener('submit', function(){
 			const btn = form.querySelector('input[type="submit"], button[type="submit"], .button-primary');
 			if (btn) { btn.disabled=true; setTimeout(()=>{btn.disabled=false},4000); }
