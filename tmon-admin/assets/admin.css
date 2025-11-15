@@ -1,60 +1,36 @@
-/* Lightweight, focused styles for TMON admin pages. Scoped to .tmon-admin wrapper. */
-
-:root {
-  --tmon-primary: #0073aa;
-  --tmon-accent: #00a0d2;
-  --tmon-muted: #6b7280;
-  --tmon-border: #e5e7eb;
-}
+/* Minimal TMON admin UI stylesheet */
 
 .tmon-admin, .wrap.tmon-admin {
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  color: #111827;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  color: #111;
 }
 
-/* Page header */
-.tmon-admin h1 { color: var(--tmon-primary); margin: 0 0 0.4rem; font-weight: 700; }
-/* Section header */
-.tmon-admin h2 { margin: 1rem 0 0.5rem; color: #111; }
+.tmon-admin h1 {
+  color: #0073aa;
+  margin-bottom: .4rem;
+}
 
-/* Make the form-table compact and consistent */
-.tmon-admin .form-table th { width: 18%; vertical-align: top; padding-top: .6rem; color: var(--tmon-muted); }
-.tmon-admin .form-table td input.regular-text,
-.tmon-admin .form-table td select,
-.tmon-admin .form-table td textarea {
+.form-table th {
+  width: 18%;
+  vertical-align: top;
+  color: #6b7280;
+}
+
+input.regular-text, select, textarea {
   width: 70%;
-  max-width: 780px;
   padding: .45rem .6rem;
-  border: 1px solid var(--tmon-border);
+  border: 1px solid #e5e7eb;
   border-radius: 6px;
-  background: #fff;
-  box-sizing: border-box;
 }
 
-.tmon-admin input.small-text { width: 9rem; }
-
-/* Datalist inputs and tooltips */
-.tmon-admin input[list] { background: #fff; }
-
-/* Table styling and action buttons */
-.wp-list-table .widefat th, .wp-list-table .widefat td {
-  padding: .6rem; border-bottom: 1px solid var(--tmon-border);
+input.small-text {
+  width: 9rem;
 }
-.wp-list-table .widefat tbody tr:hover { background: #f8fafc; }
 
-/* Buttons: slightly stronger primary */
-.tmon-admin .button-primary { background: linear-gradient(#0086c9,#006491); border-color: #006491; color: #fff; }
-.tmon-admin .button.delete { background: linear-gradient(#ef4444,#c92d2d); color:#fff; border-color:#c92d2d; }
+.wp-list-table td .button {
+  margin-right: 6px;
+}
 
-/* Info banner */
-.tmon-admin .tmon-admin-banner { padding: 10px; border-left: 4px solid var(--tmon-accent); background: #fff; margin: .7rem 0; color: var(--tmon-muted); }
-
-/* Dismissable notice style (WordPress uses .notice .notice-warning) */
-.tmon-admin .tmon-admin-notice { margin-bottom: 16px; }
-
-/* Responsive */
-@media (max-width: 782px) {
-  .tmon-admin .form-table th, .tmon-admin .form-table td { display: block; width: 100%; }
-  .tmon-admin .form-table td input, .tmon-admin .form-table td select { width: 100%; }
-  .wp-list-table td .button { display:block; width:100%; margin-bottom:6px; }
+.tmon-admin .tmon-admin-notice {
+  margin-bottom: 12px;
 }

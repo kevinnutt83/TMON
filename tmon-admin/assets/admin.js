@@ -22,7 +22,7 @@
 		// use admin-ajax.php global "ajaxurl"
 		try {
 			const body = new URLSearchParams();
-			body.set('nonce', tmon_admin.dismiss_nonce);
+			body.set('security', tmon_admin.dismiss_nonce); // correct arg for check_ajax_referer
 			fetch(ajaxurl + '?action=tmon_admin_dismiss_notice', {
 				method: 'POST',
 				credentials: 'same-origin',
