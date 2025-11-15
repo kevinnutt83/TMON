@@ -1048,5 +1048,24 @@ add_action('admin_enqueue_scripts', function() {
 	$js_path = dirname(__FILE__) . '/../assets/admin.js';
 	if (file_exists($js_path)) {
 		wp_enqueue_script('tmon-admin-js', $assets_url . '/admin.js', ['jquery'], '0.1.2', true);
+		// Pass dismiss flag and nonce to the script to avoid multiple notices
+		$leaflet_dismissed = false;
+		if (is_user_logged_in()) {
+			$leaflet_dismissed = get_user_meta(get_current_user_id(), 'tmon_leaflet_notice_dismissed', true) ? true : false;
+		}
+		wp_localize_script('tmon-admin-js', 'tmon_admin', [
+			'dismiss_nonce' => wp_create_nonce('tmon_admin_dismiss_notice'),
+			'leaflet_dismissed' => $leaflet_dismissed,
+		]);
 	}
+});
+
+// AJAX: persist admin dismissal of Leaflet missing notice
+add_action('wp_ajax_tmon_admin_dismiss_notice', function() {
+	if (!current_user_can('manage_options')) wp_send_json_error(['message'=>'forbidden'], 403);
+	check_ajax_referer('tmon_admin_dismiss_notice');
+	$uid = get_current_user_id();
+	if (!$uid) wp_send_json_error(['message'=>'no_user'], 403);
+	update_user_meta($uid, 'tmon_leaflet_notice_dismissed', '1');
+	wp_send_json_success([]);
 });
