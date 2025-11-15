@@ -1,21 +1,34 @@
 (function () {
 	'use strict';
 
+	const NOTICE_KEY = 'tmon_leaflet_notice_dismissed';
+
 	function log(msg) { if (window.console && console.log) console.log('tmon-admin: ' + msg); }
 	function warn(msg) { if (window.console && console.warn) console.warn('tmon-admin: ' + msg); }
 
-	// Show a temporary admin notice on the page
-	function showAdminNotice(message, type = 'updated') {
+	function showAdminNotice(message) {
+		// do not show if dismissed
+		if (window.localStorage && window.localStorage.getItem(NOTICE_KEY) === '1') return;
+
 		const wrap = document.querySelector('.wrap.tmon-admin') || document.querySelector('.wrap');
 		if (!wrap) return;
+
 		const notice = document.createElement('div');
-		notice.className = type + ' notice is-dismissible';
+		notice.className = 'notice notice-warning is-dismissible tmon-admin-notice';
 		notice.innerHTML = '<p>' + message + '</p>';
+		// Add a dismiss button that sets localStorage
+		const dismiss = document.createElement('button');
+		dismiss.type = 'button';
+		dismiss.className = 'notice-dismiss';
+		dismiss.innerHTML = '<span class="screen-reader-text">Dismiss this notice.</span>';
+		notice.appendChild(dismiss);
+
 		wrap.insertBefore(notice, wrap.firstChild);
-		// auto-dismiss
-		setTimeout(() => {
+
+		dismiss.addEventListener('click', function () {
+			try { window.localStorage.setItem(NOTICE_KEY, '1'); } catch (e) {}
 			if (notice && notice.parentNode) notice.parentNode.removeChild(notice);
-		}, 7000);
+		});
 	}
 
 	// Helper to dynamically load script or stylesheet
@@ -30,7 +43,7 @@
 		});
 	}
 	function loadStyle(url) {
-		return new Promise((resolve) => {
+		return new Promise(function (resolve) {
 			const l = document.createElement('link');
 			l.rel = 'stylesheet';
 			l.href = url;
@@ -67,36 +80,20 @@
 	document.addEventListener('DOMContentLoaded', function () {
 		log('admin.js loaded');
 
-		// If hierarchy script added a hook (e.g., tmon_hierarchy_init), try to call it after Leaflet available.
-		if (typeof window.tmon_hierarchy_init === 'function') {
-			if (typeof window.L === 'undefined') {
-				ensureLeaflet().then((ok) => {
-					try {
-						window.tmon_hierarchy_init();
-					} catch (e) { warn('tmon_hierarchy_init failed: ' + e.message); }
-				});
-			} else {
-				try { window.tmon_hierarchy_init(); } catch (e) { warn('tmon_hierarchy_init failed: ' + e.message); }
+		// Try to ensure Leaflet; only show a notice when it fails and it's not dismissed.
+		ensureLeaflet().then((ok) => {
+			if (!ok) {
+				showAdminNotice('Leaflet library not found — device map may be disabled. Click "Refresh from paired UC sites" to attempt to fetch known IDs.');
 			}
-		}
+		});
 
-		// Show a small hint to admins when the page lacks Leaflet
-		if (typeof window.L === 'undefined') {
-			// only show for admin users in provisioning (best-effort)
-			if (document.querySelector('.wrap.tmon-admin') || document.querySelector('.wrap')) {
-				showAdminNotice('Leaflet library not found — device map may be disabled. Click "Refresh from paired UC sites" to attempt to fetch known IDs.', 'notice');
-			}
-		}
-
-		// Disable duplicate submits for inline update forms (improve UX)
+		// Minor UX: disable double-submit on forms quickly.
 		document.querySelectorAll('.wrap form').forEach((form) => {
 			form.addEventListener('submit', function (e) {
 				const btn = form.querySelector('input[type="submit"], button[type="submit"], .button-primary');
-				if (btn) {
+				if (btn && !btn.disabled) {
 					btn.disabled = true;
-					btn.classList.add('disabled');
-					// Re-enable in case of error after a short timeout
-					setTimeout(() => { btn.disabled = false; btn.classList.remove('disabled'); }, 5000);
+					setTimeout(() => { btn.disabled = false; }, 4000);
 				}
 			}, { passive: true });
 		});

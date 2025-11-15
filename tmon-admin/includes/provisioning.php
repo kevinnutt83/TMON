@@ -1034,15 +1034,19 @@ if (!function_exists('tmon_admin_ensure_columns')) {
 
 // Add fallback for missing admin.css and admin.js to avoid 404 errors in browser console
 add_action('admin_enqueue_scripts', function() {
-    $plugin_url = plugin_dir_url(__FILE__);
-    // Check if CSS exists before enqueue
-    $css_path = dirname(__FILE__) . '/../assets/admin.css';
-    if (file_exists($css_path)) {
-        wp_enqueue_style('tmon-admin-css', $plugin_url . '../assets/admin.css', [], '0.1.2');
-    }
-    // Check if JS exists before enqueue
-    $js_path = dirname(__FILE__) . '/../assets/admin.js';
-    if (file_exists($js_path)) {
-        wp_enqueue_script('tmon-admin-js', $plugin_url . '../assets/admin.js', [], '0.1.2', true);
-    }
+	// plugin_dir_url(__FILE__) returns the includes/ URL; move up to plugin root then assets
+	$includes_url = plugin_dir_url(__FILE__); // .../tmon-admin/includes/
+	$plugin_root_url = rtrim( dirname( dirname( $includes_url ) ), '/' ) . '/'; // .../tmon-admin/
+	$assets_url = $plugin_root_url . 'assets';
+
+	// Check if CSS exists before enqueue
+	$css_path = dirname(__FILE__) . '/../assets/admin.css';
+	if (file_exists($css_path)) {
+		wp_enqueue_style('tmon-admin-css', $assets_url . '/admin.css', [], '0.1.2');
+	}
+	// Check if JS exists before enqueue
+	$js_path = dirname(__FILE__) . '/../assets/admin.js';
+	if (file_exists($js_path)) {
+		wp_enqueue_script('tmon-admin-js', $assets_url . '/admin.js', ['jquery'], '0.1.2', true);
+	}
 });
