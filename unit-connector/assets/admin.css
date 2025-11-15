@@ -1,2 +1,71 @@
 /* Admin CSS for TMON plugin */
 #tmon-device-list, #tmon-device-status { margin: 1em 0; }
+
+:root {
+    --tmon-primary: #0073aa;
+    --tmon-accent: #00a0d2;
+    --tmon-bg: #fcfdff;
+    --tmon-muted: #6b7280;
+    --tmon-border: #e5e7eb;
+}
+
+/* Use a distinct wrapper class for Unit Connector pages */
+.tmon-uc, .wrap {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    color: #111827;
+}
+
+/* Headline style */
+.tmon-uc h1, .wrap h1 {
+    color: var(--tmon-accent);
+    margin-bottom: .6rem;
+}
+
+/* Panels */
+.tmon-uc .panel {
+    background: #fff;
+    border: 1px solid var(--tmon-border);
+    padding: .75rem 1rem;
+    border-radius: 8px;
+    margin-bottom: 12px;
+}
+
+/* Make controls consistent */
+.tmon-uc input[type="text"], .tmon-uc select, .tmon-uc textarea {
+    border: 1px solid var(--tmon-border);
+    border-radius: 6px;
+    padding: .5rem;
+    width: 70%;
+    box-sizing: border-box;
+}
+
+/* Secondary buttons for UC actions */
+.tmon-uc .button-secondary {
+    background: #f3f4f6;
+    border: 1px solid var(--tmon-border);
+    color: #111827;
+}
+
+/* Tidy lists and small descriptions */
+.tmon-uc .description {
+    color: var(--tmon-muted);
+    font-size: 13px;
+}
+
+/* Make the map/hierarchy area stand out */
+.tmon-uc .tmon-map-placeholder {
+    height: 320px;
+    background: linear-gradient(180deg,#f8fafc,#eef2ff);
+    border-radius: 6px;
+    border: 1px dashed var(--tmon-border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--tmon-muted);
+    font-size: 14px;
+}
+
+/* Responsive */
+@media (max-width: 782px) {
+    .tmon-uc input[type="text"], .tmon-uc select, .tmon-uc textarea { width: 100%; }
+}

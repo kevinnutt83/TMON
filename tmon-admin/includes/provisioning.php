@@ -363,7 +363,7 @@ function tmon_admin_provisioning_page() {
     }
 
     // Render UI
-    echo '<div class="wrap"><h1>Provisioning</h1>';
+    echo '<div class="wrap tmon-admin"><h1>Provisioning</h1>';
     // Standalone refresh known IDs form (outside of create form to avoid nested forms)
     echo '<h2>Known IDs</h2>';
     echo '<form method="post" style="margin-bottom:12px">';
