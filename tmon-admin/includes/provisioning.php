@@ -86,6 +86,7 @@ function tmon_admin_provisioning_page() {
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && function_exists('tmon_admin_verify_nonce') && tmon_admin_verify_nonce('tmon_admin_provision')) {
         $action = sanitize_text_field($_POST['action'] ?? '');
 
+        // --- PROVISION DEVICE FORM (top of page) ---
         if ($action === 'create') {
             $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
             $machine_id = sanitize_text_field($_POST['machine_id'] ?? '');
@@ -95,29 +96,45 @@ function tmon_admin_provisioning_page() {
             $status = sanitize_text_field($_POST['status'] ?? 'active');
             $notes = sanitize_textarea_field($_POST['notes'] ?? '');
             if ($unit_id && $machine_id) {
-                // Always upsert: if exists, update; else, insert
+                // Insert new provisioned device (do not upsert, only insert if not exists)
                 $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM $table WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id));
-                if ($exists) {
-                    $wpdb->update($table, compact('role','company_id','plan','status','notes'), ['id' => $exists]);
-                    echo '<div class="updated"><p>Provisioned device updated.</p></div>';
-                } else {
-                    $wpdb->insert($table, compact('unit_id','machine_id','role','company_id','plan','status','notes'));
+                if (!$exists) {
+                    $wpdb->insert($table, [
+                        'unit_id' => $unit_id,
+                        'machine_id' => $machine_id,
+                        'role' => $role,
+                        'company_id' => $company_id,
+                        'plan' => $plan,
+                        'status' => $status,
+                        'notes' => $notes
+                    ]);
                     if (!empty($wpdb->last_error)) {
                         echo '<div class="notice notice-error"><p>Database error: '.esc_html($wpdb->last_error).'</p></div>';
                     } else {
                         echo '<div class="updated"><p>Provisioned device created.</p></div>';
                     }
+                } else {
+                    echo '<div class="notice notice-warning"><p>Device already provisioned. Use the update form below to change settings.</p></div>';
                 }
             }
-        } elseif ($action === 'update') {
+        }
+
+        // --- UPDATE DEVICE ROW (table row form) ---
+        elseif ($action === 'update') {
             $id = intval($_POST['id'] ?? 0);
+            $role = sanitize_text_field($_POST['role'] ?? 'base');
+            $plan = sanitize_text_field($_POST['plan'] ?? 'standard');
+            $status = sanitize_text_field($_POST['status'] ?? 'active');
+            $company_id = intval($_POST['company_id'] ?? 0);
+            $notes = sanitize_textarea_field($_POST['notes'] ?? '');
             if ($id) {
-                $role = sanitize_text_field($_POST['role'] ?? 'base');
-                $plan = sanitize_text_field($_POST['plan'] ?? 'standard');
-                $status = sanitize_text_field($_POST['status'] ?? 'active');
-                $company_id = intval($_POST['company_id'] ?? 0);
-                $notes = sanitize_textarea_field($_POST['notes'] ?? '');
-                $result = $wpdb->update($table, compact('role','plan','status','company_id','notes'), ['id' => $id]);
+                $result = $wpdb->update($table, [
+                    'role' => $role,
+                    'plan' => $plan,
+                    'status' => $status,
+                    'company_id' => $company_id,
+                    'notes' => $notes
+                ], ['id' => $id]);
                 if ($result !== false && $result > 0) {
                     echo '<div class="updated"><p>Provisioned device updated.</p></div>';
                 } else {
