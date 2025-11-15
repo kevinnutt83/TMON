@@ -1,94 +1,60 @@
+/* Lightweight, focused styles for TMON admin pages. Scoped to .tmon-admin wrapper. */
+
 :root {
-    --tmon-primary: #0073aa;
-    --tmon-accent: #00a0d2;
-    --tmon-bg: #f7fafc;
-    --tmon-muted: #6b7280;
-    --tmon-border: #e5e7eb;
-    --tmon-success: #22c55e;
-    --tmon-danger: #ef4444;
+  --tmon-primary: #0073aa;
+  --tmon-accent: #00a0d2;
+  --tmon-muted: #6b7280;
+  --tmon-border: #e5e7eb;
 }
 
-/* Scope to plugin UI (fallback to .wrap to avoid missing classes) */
-.tmon-admin, .wrap.tmon-admin, .wrap {
-    font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif;
-    color: #111827;
+.tmon-admin, .wrap.tmon-admin {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  color: #111827;
 }
 
-/* Headings */
-.tmon-admin h1, .wrap h1 {
-    margin: 0 0 .5rem;
-    font-weight: 700;
-    color: var(--tmon-primary);
-}
+/* Page header */
+.tmon-admin h1 { color: var(--tmon-primary); margin: 0 0 0.4rem; font-weight: 700; }
+/* Section header */
+.tmon-admin h2 { margin: 1rem 0 0.5rem; color: #111; }
 
-/* Forms & Filters */
-.tmon-admin .form-table th {
-    width: 18%;
-    padding-top: .6rem;
-    vertical-align: top;
-    color: var(--tmon-muted);
-}
-
+/* Make the form-table compact and consistent */
+.tmon-admin .form-table th { width: 18%; vertical-align: top; padding-top: .6rem; color: var(--tmon-muted); }
 .tmon-admin .form-table td input.regular-text,
 .tmon-admin .form-table td select,
 .tmon-admin .form-table td textarea {
-    width: 72%;
-    max-width: 900px;
-    padding: .45rem .6rem;
-    border: 1px solid var(--tmon-border);
-    border-radius: 6px;
-    background: #fff;
-    box-sizing: border-box;
+  width: 70%;
+  max-width: 780px;
+  padding: .45rem .6rem;
+  border: 1px solid var(--tmon-border);
+  border-radius: 6px;
+  background: #fff;
+  box-sizing: border-box;
 }
 
 .tmon-admin input.small-text { width: 9rem; }
 
-/* Buttons — make Primary slightly more prominent */
-.tmon-admin .button-primary {
-    background: linear-gradient(180deg, var(--tmon-primary), #006491);
-    border-color: #005a8c;
-    color: #fff;
-    box-shadow: none;
-    text-shadow: none;
+/* Datalist inputs and tooltips */
+.tmon-admin input[list] { background: #fff; }
+
+/* Table styling and action buttons */
+.wp-list-table .widefat th, .wp-list-table .widefat td {
+  padding: .6rem; border-bottom: 1px solid var(--tmon-border);
 }
+.wp-list-table .widefat tbody tr:hover { background: #f8fafc; }
 
-/* Danger (purge) */
-.tmon-admin .button.delete {
-    background: linear-gradient(180deg, var(--tmon-danger), #cc2e2e);
-    color: #fff;
-    border-color: #cc2e2e;
-}
+/* Buttons: slightly stronger primary */
+.tmon-admin .button-primary { background: linear-gradient(#0086c9,#006491); border-color: #006491; color: #fff; }
+.tmon-admin .button.delete { background: linear-gradient(#ef4444,#c92d2d); color:#fff; border-color:#c92d2d; }
 
-/* Datatables: gentle row hover and spacing */
-.wp-list-table .widefat th,
-.wp-list-table .widefat td {
-    padding: .6rem;
-    border-bottom: 1px solid var(--tmon-border);
-}
+/* Info banner */
+.tmon-admin .tmon-admin-banner { padding: 10px; border-left: 4px solid var(--tmon-accent); background: #fff; margin: .7rem 0; color: var(--tmon-muted); }
 
-.wp-list-table .widefat tbody tr:hover {
-    background: #f1f5f9;
-}
+/* Dismissable notice style (WordPress uses .notice .notice-warning) */
+.tmon-admin .tmon-admin-notice { margin-bottom: 16px; }
 
-/* Action forms inline spacing */
-.tmon-admin form[method="post"] { margin: 0; }
-.tmon-admin .tmon-inline { display:inline-block; margin-right: 8px; vertical-align: middle }
-
-/* Banner and hints */
-.tmon-admin .tmon-admin-banner {
-    display: block;
-    margin: .5rem 0 1rem;
-    padding: .75rem 1rem;
-    border-left: 4px solid var(--tmon-accent);
-    background: #ffffff;
-    color: var(--tmon-muted);
-    border-radius: 4px;
-}
-
-/* Responsive tweaks */
+/* Responsive */
 @media (max-width: 782px) {
-    .tmon-admin .form-table th,
-    .tmon-admin .form-table td { display:block; width:100%; }
-    .tmon-admin .form-table td input, .tmon-admin .form-table td select { width: 100%; }
-    .wp-list-table td .button { display:block; width:100%; margin-bottom:6px; }
+  .tmon-admin .form-table th, .tmon-admin .form-table td { display: block; width: 100%; }
+  .tmon-admin .form-table td input, .tmon-admin .form-table td select { width: 100%; }
+  .wp-list-table td .button { display:block; width:100%; margin-bottom:6px; }
 }

@@ -6,12 +6,34 @@
 	function log(msg) { if (window.console && console.log) console.log('tmon-admin: ' + msg); }
 	function warn(msg) { if (window.console && console.warn) console.warn('tmon-admin: ' + msg); }
 
-	function showAdminNotice(message) {
-		// Do not show if already dismissed locally or server says it's dismissed
-		if (window.localStorage && window.localStorage.getItem(NOTICE_KEY) === '1') return;
-		if (window.tmon_admin && window.tmon_admin.leaflet_dismissed) return;
+	function isNoticeDismissedServer() {
+		return (window.tmon_admin && window.tmon_admin.leaflet_dismissed) ? true : false;
+	}
 
-		// Avoid duplicates
+	function setNoticeDismissedLocal() {
+		try { window.localStorage.setItem(NOTICE_KEY, '1'); } catch (e) { }
+	}
+	function isNoticeDismissedLocal() {
+		try { return window.localStorage && window.localStorage.getItem(NOTICE_KEY) === '1'; } catch (e) { return false; }
+	}
+
+	function ajaxDismissServer() {
+		if (!(window.tmon_admin && tmon_admin.dismiss_nonce)) return;
+		// use admin-ajax.php global "ajaxurl"
+		try {
+			const body = new URLSearchParams();
+			body.set('nonce', tmon_admin.dismiss_nonce);
+			fetch(ajaxurl + '?action=tmon_admin_dismiss_notice', {
+				method: 'POST',
+				credentials: 'same-origin',
+				headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+				body: body.toString(),
+			}).catch(() => { });
+		} catch (e) { }
+	}
+
+	function showAdminNotice(message) {
+		if (isNoticeDismissedLocal() || isNoticeDismissedServer()) return;
 		if (document.querySelector('.tmon-admin-notice')) return;
 
 		const wrap = document.querySelector('.wrap.tmon-admin') || document.querySelector('.wrap');
@@ -31,16 +53,8 @@
 
 		// Wire dismissal: local + server
 		dismiss.addEventListener('click', function () {
-			try { window.localStorage.setItem(NOTICE_KEY, '1'); } catch (e) { /* ignore */ }
-			// async call to persist per-user preference
-			if (window.tmon_admin && tmon_admin.dismiss_nonce) {
-				fetch(ajaxurl + '?action=tmon_admin_dismiss_notice', {
-					method: 'POST',
-					credentials: 'same-origin',
-					headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
-					body: 'nonce=' + encodeURIComponent(tmon_admin.dismiss_nonce)
-				}).catch(()=>{});
-			}
+			setNoticeDismissedLocal();
+			ajaxDismissServer();
 			if (notice && notice.parentNode) notice.parentNode.removeChild(notice);
 		});
 	}
@@ -82,33 +96,45 @@
 		}).catch(() => false);
 	}
 
+	// Only show the Leaflet notice if a TMON hierarchy map exists or if the hierarchy init is present
+	function pageHasMap() {
+		if (document.querySelector('#tmon-hierarchy-map')) return true;
+		if (document.querySelector('.tmon-hierarchy')) return true;
+		if (typeof window.tmon_hierarchy_init === 'function') return true;
+		return false;
+	}
+
 	// When DOM ready: wire small behaviors
 	document.addEventListener('DOMContentLoaded', function () {
 		log('admin.js loaded');
 
-		// Only show the Leaflet notice if a hierarchy map placeholder exists
-		const mapSelectors = ['#tmon-hierarchy-map', '.tmon-hierarchy', '.tmon-map'];
-		let hasMap = mapSelectors.some(sel => !!document.querySelector(sel));
-		// Some pages may add maps dynamically; also consider existence of tmon_hierarchy_init function
-		if (!hasMap && typeof window.tmon_hierarchy_init === 'function') hasMap = true;
-
-		if (!hasMap) {
-			// Nothing map-related on this page; don't show notices or try to load Leaflet.
+		// Skip if no map on page
+		if (!pageHasMap()) {
 			log('No TMON hierarchy map placeholder found; skipping Leaflet checks.');
 			return;
 		}
 
-		// If Leaflet missing, try to load it; only show notice if unable to load.
+		// Try to load Leaflet if missing. Show dismissable notice on failure.
 		ensureLeaflet().then(ok => {
 			if (!ok) {
 				showAdminNotice('Leaflet library not found — device map may be disabled. Click "Refresh from paired UC sites" to attempt to fetch known IDs.');
-			} else {
-				log('Leaflet available.');
-				// initialize hierarchy if available
-				if (typeof window.tmon_hierarchy_init === 'function') {
-					try { window.tmon_hierarchy_init(); } catch(e) { warn('tmon_hierarchy_init failed: ' + e.message); }
-				}
+				return;
 			}
+			log('Leaflet ready');
+			if (typeof window.tmon_hierarchy_init === 'function') {
+				try { window.tmon_hierarchy_init(); } catch (e) { warn('tmon_hierarchy_init failed: ' + e.message); }
+			}
+		});
+
+		// small UX: prevent duplicate submits
+		document.querySelectorAll('.wrap form').forEach(form => {
+			form.addEventListener('submit', function () {
+				const btn = form.querySelector('input[type="submit"], button[type="submit"], .button-primary');
+				if (btn) {
+					btn.disabled = true;
+					setTimeout(() => { btn.disabled = false; }, 4000);
+				}
+			}, { passive: true });
 		});
 	});
 })();
