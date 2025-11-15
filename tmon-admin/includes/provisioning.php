@@ -1098,7 +1098,8 @@ if (!function_exists('tmon_admin_ensure_columns')) {
         foreach (($cols ?: []) as $c) {
             $have[strtolower($c['Field'])] = true;
         }
-        foreach $required as $col => $sql) {
+        // Previously broken: foreach $required as $col => $sql) {
+        foreach ($required as $col => $sql) {
             if (empty($have[$col])) {
                 $wpdb->query($sql);
                 // Special handling for updated_at ON UPDATE
