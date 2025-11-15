@@ -1067,17 +1067,16 @@ if (!function_exists('tmon_admin_ensure_columns')) {
 
 // Add fallback for missing admin.css and admin.js to avoid 404 errors in browser console
 add_action('admin_enqueue_scripts', function() {
-	// Build assets base URL using plugin directory name (avoids includes/ in URL)
-	$plugin_slug = basename(dirname(__DIR__)); // 'tmon-admin'
-	$assets_url = plugins_url($plugin_slug . '/assets');
+	// Compute plugin assets URL reliably from plugin root
+	$assets_url = rtrim( plugin_dir_url( dirname(__FILE__) ), '/' ) . '/assets';
 
-	// Check if CSS exists before enqueue
+	// Check if CSS exists before enqueueing
 	$css_path = dirname(__FILE__) . '/../assets/admin.css';
 	if (file_exists($css_path)) {
 		wp_enqueue_style('tmon-admin-css', $assets_url . '/admin.css', [], '0.1.2');
 	}
 
-	// Check if JS exists before enqueue
+	// Check if JS exists before enqueueing
 	$js_path = dirname(__FILE__) . '/../assets/admin.js';
 	if (file_exists($js_path)) {
 		wp_enqueue_script('tmon-admin-js', $assets_url . '/admin.js', ['jquery'], '0.1.2', true);
@@ -1085,106 +1084,9 @@ add_action('admin_enqueue_scripts', function() {
 		// Pass dismiss flag and nonce to the script to avoid multiple notices (server-side persisted)
 		$leaflet_dismissed = false;
 		if (is_user_logged_in()) {
-			$leaflet_dismissed = get_user_meta(get_current_user_id(), 'tmon_leaflet_notice_dismissed', true) ? true : false;
+			$leaflet_dismissed = (bool) get_user_meta(get_current_user_id(), 'tmon_leaflet_notice_dismissed', true);
 		}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-});    }        wp_send_json_error(['message' => 'Invalid action.'], 400);    } else {        }            wp_send_json_error(['message' => 'Invalid request.'], 400);        } else {            }                wp_send_json_success(['message' => 'Claim request submitted.']);                ]);                    'status' => 'pending',                    'user_id' => $user_id,                    'machine_id' => $machine_id,                    'unit_id' => $unit_id,                $wpdb->insert($claims_table, [                // Create new claim request            } else {                wp_send_json_error(['message' => 'Device already claimed by you.'], 400);            if ($existing_claim) {            $existing_claim = $wpdb->get_var($wpdb->prepare("SELECT id FROM $claims_table WHERE unit_id=%s AND machine_id=%s AND user_id=%d", $unit_id, $machine_id, $user_id));            // Check if already claimed by this user        if ($user_id && $unit_id && $machine_id) {        $user_id = get_current_user_id();        $machine_id = sanitize_text_field($_POST['machine_id'] ?? '');        $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');        // --- CLAIM DEVICE ---    } elseif ($action === 'claim') {        }            wp_send_json_error(['message' => 'Invalid device ID.'], 400);        } else {            wp_send_json_success(['message' => 'Provisioned device deleted.']);            $wpdb->delete($table, ['id' => $id]);        if ($id) {        $id = intval($_POST['id'] ?? 0);        // --- DELETE DEVICE ---    } elseif ($action === 'delete') {        }            }                wp_send_json_success(['message' => 'Provisioned device created.']);            } else {                wp_send_json_error(['message' => 'Database error: '.esc_html($wpdb->last_error)], 500);            if (!empty($wpdb->last_error)) {            $wpdb->insert($table, $fields);        } else {            wp_send_json_success(['message' => 'Provisioned device updated.']);            $wpdb->update($table, $fields, ['id' => $exists]);        if ($exists) {        ];            'notes' => $notes            'status' => $status,            'plan' => $plan,            'company_id' => $company_id,            'role' => $role,            'machine_id' => $machine_id,            'unit_id' => $unit_id,        $fields = [        $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM $table WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id));        // Upsert: update if exists, else insert        }            return;            wp_send_json_error(['message' => 'Unit ID and Machine ID are required.'], 400);        if (empty($unit_id) || empty($machine_id)) {        // Validate required fields        $machine_id = sanitize_text_field($_POST['machine_id'] ?? '');        $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');        $notes = sanitize_textarea_field($_POST['notes'] ?? '');        $company_id = intval($_POST['company_id'] ?? 0);        $status = sanitize_text_field($_POST['status'] ?? 'active');        $plan = sanitize_text_field($_POST['plan'] ?? 'standard');        $role = sanitize_text_field($_POST['role'] ?? 'base');        $id = intval($_POST['id'] ?? 0);    if ($action === 'create' || $action === 'update') {    // --- DEVICE PROVISIONING ACTIONS ---    $claims_table = $wpdb->prefix . 'tmon_claim_requests';    $table = $wpdb->prefix . 'tmon_provisioned_devices';    $action = isset($_POST['action']) ? sanitize_text_field(wp_unslash($_POST['action'])) : '';    global $wpdb;    if (!wp_verify_nonce($nonce, 'tmon_admin_provision')) wp_send_json_error(['message' => 'bad_nonce'], 403);    $nonce = isset($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : '';	if (!current_user_can('manage_options')) wp_send_json_error(['message' => 'forbidden'], 403);add_action('wp_ajax_tmon_admin_provision', function() {// Core AJAX handler: Admin-side device commands (provisioning, claims, etc.)});	add_menu_page('Device Provisioning', 'Device Provisioning', 'manage_options', 'tmon-admin-provisioning', 'tmon_admin_provisioning_page', 'dashicons-networking', 55);add_action('admin_menu', function() {// Admin page: Device Provisioning});	}		]);			'leafletNonce' => wp_create_nonce('tmon_admin_leaflet_dismiss'),			'leafletDismissed' => $leaflet_dismissed,		wp_localize_script('tmon-admin-js', 'tmonAdmin', [		wp_localize_script('tmon-admin-js', 'tmon_admin', [
+		wp_localize_script('tmon-admin-js', 'tmon_admin', [
 			'dismiss_nonce' => wp_create_nonce('tmon_admin_dismiss_notice'),
 			'leaflet_dismissed' => $leaflet_dismissed,
 		]);
