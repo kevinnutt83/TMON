@@ -36,6 +36,9 @@ function tmon_admin_maybe_migrate_provisioned_devices() {
         $wpdb->query("ALTER TABLE $table ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP");
         $wpdb->query("ALTER TABLE $table MODIFY COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
     }
+    if (empty($have['site_url'])) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN site_url VARCHAR(255) DEFAULT ''");
+    }
 
     // Ensure unique index on (unit_id, machine_id)
     $indexes = $wpdb->get_results("SHOW INDEX FROM $table", ARRAY_A);
@@ -67,8 +70,9 @@ function tmon_admin_get_all_devices() {
     global $wpdb;
     $dev_table = $wpdb->prefix . 'tmon_devices';
     $prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
-    // Correct SQL: select from tmon_devices, left join provisioned_devices
-    $sql = "SELECT d.unit_id, d.machine_id, d.unit_name, p.id as provision_id, p.role, p.company_id, p.plan, p.status, p.notes, p.created_at, p.updated_at, d.wordpress_api_url
+    // Include provisioned site_url (fallback to d.wordpress_api_url when missing)
+    $sql = "SELECT d.unit_id, d.machine_id, d.unit_name, p.id as provision_id, p.role, p.company_id, p.plan, p.status, p.notes, p.created_at, p.updated_at, 
+            COALESCE(NULLIF(p.site_url,''), d.wordpress_api_url) AS site_url, d.wordpress_api_url AS original_api_url
             FROM $dev_table d
             LEFT JOIN $prov_table p ON d.unit_id = p.unit_id
             ORDER BY d.unit_id ASC";
@@ -85,6 +89,7 @@ function tmon_admin_provisioning_page() {
     // Handle actions
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && function_exists('tmon_admin_verify_nonce') && tmon_admin_verify_nonce('tmon_admin_provision')) {
         $action = sanitize_text_field($_POST['action'] ?? '');
+        $do_provision = isset($_POST['save_provision']); // set when the "Save & Provision" button is pressed
 
         // --- PROVISION DEVICE FORM (top of page) ---
         if ($action === 'create') {
@@ -95,6 +100,7 @@ function tmon_admin_provisioning_page() {
             $plan = sanitize_text_field($_POST['plan'] ?? 'standard');
             $status = sanitize_text_field($_POST['status'] ?? 'active');
             $notes = sanitize_textarea_field($_POST['notes'] ?? '');
+            $site_url = esc_url_raw($_POST['site_url'] ?? '');
             if ($unit_id && $machine_id) {
                 // Upsert: update if exists, else insert
                 $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM $table WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id));
@@ -105,18 +111,28 @@ function tmon_admin_provisioning_page() {
                     'company_id' => $company_id,
                     'plan' => $plan,
                     'status' => $status,
-                    'notes' => $notes
+                    'notes' => $notes,
+                    'site_url' => $site_url
                 ];
                 if ($exists) {
                     $wpdb->update($table, $fields, ['id' => $exists]);
                     echo '<div class="updated"><p>Provisioned device updated.</p></div>';
+                    $prov_id = $exists;
                 } else {
                     $wpdb->insert($table, $fields);
+                    $prov_id = $wpdb->insert_id;
                     if (!empty($wpdb->last_error)) {
                         echo '<div class="notice notice-error"><p>Database error: '.esc_html($wpdb->last_error).'</p></div>';
                     } else {
                         echo '<div class="updated"><p>Provisioned device created.</p></div>';
                     }
+                }
+                // Provision after save if requested
+                if ($do_provision && $prov_id) {
+                    $unit               = $unit_id;
+                    $site_for_provision = $site_url ?: ($_POST['site_url'] ?? '');
+                    $ok = tmon_admin_push_to_uc_site($unit, $site_for_provision, $role, $maybe_name ?? '', $company_id, null, null);
+                    if ($ok) echo '<div class="updated"><p>Saved and provisioned to UC.</p></div>'; else echo '<div class="error"><p>Saved, but provisioning failed. Check UC pairing and logs.</p></div>';
                 }
             }
         }
@@ -134,6 +150,7 @@ function tmon_admin_provisioning_page() {
             if ($id === 0) {
                 $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
                 $machine_id = sanitize_text_field($_POST['machine_id'] ?? '');
+                $site_url = esc_url_raw($_POST['site_url'] ?? '');
                 if ($unit_id && $machine_id) {
                     // Avoid duplicates: update if already exists for (unit_id, machine_id)
                     $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM $table WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id));
@@ -142,7 +159,8 @@ function tmon_admin_provisioning_page() {
                         'plan' => $plan,
                         'status' => $status,
                         'company_id' => $company_id,
-                        'notes' => $notes
+                        'notes' => $notes,
+                        'site_url' => $site_url
                     ];
                     if ($exists) {
                         $wpdb->update($table, $fields, ['id' => intval($exists)]);
@@ -162,12 +180,14 @@ function tmon_admin_provisioning_page() {
                 }
             } else {
                 if ($id) {
+                    $site_url = esc_url_raw($_POST['site_url'] ?? '');
                     $fields = [
                         'role' => $role,
                         'plan' => $plan,
                         'status' => $status,
                         'company_id' => $company_id,
-                        'notes' => $notes
+                        'notes' => $notes,
+                        'site_url' => $site_url
                     ];
                     $result = $wpdb->update($table, $fields, ['id' => $id]);
                     if ($result !== false && $result > 0) {
@@ -509,8 +529,10 @@ EOT;
     echo '<tr><th scope="row">Plan</th><td><select name="plan"><option>standard</option><option>pro</option><option>enterprise</option></select></td></tr>';
     echo '<tr><th scope="row">Status</th><td><select name="status"><option>active</option><option>suspended</option><option>expired</option></select></td></tr>';
     echo '<tr><th scope="row">Notes</th><td><textarea name="notes" class="large-text"></textarea></td></tr>';
+    echo '<tr><th scope="row">Site URL</th><td><input name="site_url" type="url" class="regular-text" placeholder="https://example.com" /></td></tr>';
     echo '</table>';
     submit_button('Provision Device');
+    submit_button('Save & Provision', 'primary', 'save_provision', false);
     echo '</form>';
 
     echo '<h2>Provisioned Devices</h2>';
@@ -597,14 +619,17 @@ EOT;
     // $rows now contains both provisioned and unprovisioned devices for display
 
     // $table is now always defined before this query
-    echo '<table class="wp-list-table widefat"><thead><tr><th>ID</th><th>Unit ID</th><th>Name</th><th>Machine ID</th><th>Role</th><th>Company ID</th><th>Plan</th><th>Status</th><th>Notes</th><th>Created</th><th>Updated</th><th>Actions</th></tr></thead><tbody>';
+    echo '<table class="wp-list-table widefat"><thead><tr><th>ID</th><th>Unit ID</th><th>Name</th><th>Machine ID</th><th>Site URL</th><th>Role</th><th>Company ID</th><th>Plan</th><th>Status</th><th>Notes</th><th>Created</th><th>Updated</th><th>Actions</th></tr></thead><tbody>';
     foreach ($rows as $r) {
         echo '<tr>';
         echo '<td>'.intval($r['id']).'</td>';
         echo '<td>'.esc_html($r['unit_id']).'</td>';
         $cur_name = isset($names_map[$r['unit_id']]) ? $names_map[$r['unit_id']] : '';
         echo '<td>'.esc_html($cur_name).'</td>';
+        // echo Machine ID cell already exists
         echo '<td>'.esc_html($r['machine_id']).'</td>';
+        // New Site URL cell (use coalesced value)
+        echo '<td>' . esc_url($r['site_url'] ?? ($r['wordpress_api_url'] ?? '')) . '</td>';
         echo '<td>'.esc_html($r['role']).'</td>';
         echo '<td>'.esc_html($r['company_id']).'</td>';
         echo '<td>'.esc_html($r['plan']).'</td>';
@@ -641,7 +666,9 @@ EOT;
         echo '</select>';
         echo ' Company <input name="company_id" type="number" class="small-text" value="'.intval($r['company_id']).'" />';
         echo ' Notes <input name="notes" type="text" class="regular-text" value="'.esc_attr($r['notes']).'" />';
+        echo ' Site URL <input name="site_url" type="url" class="regular-text" value="'.esc_attr($r['site_url'] ?? ($r['wordpress_api_url'] ?? '')).'"/>';
         submit_button('Update', 'primary', '', false);
+        submit_button('Save & Provision', 'secondary', 'save_provision', false); // new
         echo '</form>';
         // Push config to UC
         echo '<form method="post" style="display:block;margin-top:6px;">';
@@ -865,6 +892,39 @@ EOT;
     echo '</div>';
 }
 
+/**
+ * Push device registration + settings to a Unit Connector site.
+ * Returns true on success.
+ */
+function tmon_admin_push_to_uc_site($unit_id, $site_url, $role = 'base', $maybe_name = '', $company_id = 0, $gps_lat = null, $gps_lng = null) {
+	global $wpdb;
+	if (empty($unit_id) || empty($site_url)) return false;
+	$headers = ['Content-Type'=>'application/json'];
+	$pairings = get_option('tmon_admin_uc_sites', []);
+	$uc_key = is_array($pairings) && isset($pairings[$site_url]['uc_key']) ? $pairings[$site_url]['uc_key'] : '';
+	if ($uc_key) $headers['X-TMON-ADMIN'] = $uc_key;
+
+	// Register device
+	$reg_endpoint = rtrim($site_url, '/') . '/wp-json/tmon/v1/admin/device/register';
+	$reg_body = ['unit_id' => $unit_id];
+	if (!empty($maybe_name)) $reg_body['unit_name'] = $maybe_name;
+	if ($company_id) $reg_body['company_id'] = $company_id;
+	$reg_resp = wp_remote_post($reg_endpoint, ['timeout'=>20,'headers'=>$headers,'body'=>wp_json_encode($reg_body)]);
+	$reg_ok = !is_wp_error($reg_resp) && wp_remote_retrieve_response_code($reg_resp) == 200;
+
+	// Push settings (NODE_TYPE and optional GPS + company)
+	$settings = ['NODE_TYPE'=>$role, 'WIFI_DISABLE_AFTER_PROVISION'=>($role === 'remote')];
+	if (!empty($maybe_name)) { $settings['UNIT_Name'] = $maybe_name; }
+	if ($company_id) { $settings['COMPANY_ID'] = $company_id; }
+	if (!is_null($gps_lat) && !is_null($gps_lng)) { $settings['GPS_LAT']=$gps_lat; $settings['GPS_LNG']=$gps_lng; }
+	$set_endpoint = rtrim($site_url, '/') . '/wp-json/tmon/v1/admin/device/settings';
+	$set_resp = wp_remote_post($set_endpoint, ['timeout'=>20,'headers'=>$headers,'body'=>wp_json_encode(['unit_id'=>$unit_id,'settings'=>$settings])]);
+	$set_ok = !is_wp_error($set_resp) && wp_remote_retrieve_response_code($set_resp) == 200;
+
+	do_action('tmon_admin_audit', 'send_to_uc_registry', sprintf('unit_id=%s name=%s role=%s site=%s', $unit_id, $maybe_name, $role, $site_url));
+	return ($reg_ok && $set_ok);
+}
+
 // Handle Admin purge actions from UI
 add_action('admin_init', function(){
     if (!current_user_can('manage_options')) return;
@@ -980,6 +1040,7 @@ if (!function_exists('tmon_admin_install_provisioning_schema')) {
             notes TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            site_url VARCHAR(255) DEFAULT '',
             UNIQUE KEY unit_machine (unit_id, machine_id)
         ) $charset_collate;";
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
@@ -1030,6 +1091,7 @@ if (!function_exists('tmon_admin_ensure_columns')) {
             'notes' => "ALTER TABLE $table ADD COLUMN notes TEXT",
             'created_at' => "ALTER TABLE $table ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP",
             'updated_at' => "ALTER TABLE $table ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP",
+            'site_url' => "ALTER TABLE $table ADD COLUMN site_url VARCHAR(255) DEFAULT ''",
         ];
         $cols = $wpdb->get_results("SHOW COLUMNS FROM $table", ARRAY_A);
         $have = [];
@@ -1078,6 +1140,7 @@ add_action('admin_enqueue_scripts', function() {
 
 	// Check if JS exists before enqueue
 	$js_path = dirname(__FILE__) . '/../assets/admin.js';
+
 	if (file_exists($js_path)) {
 		wp_enqueue_script('tmon-admin-js', $assets_url . 'admin.js', ['jquery'], '0.1.2', true);
 
@@ -1102,5 +1165,3 @@ add_action('wp_ajax_tmon_admin_dismiss_notice', function() {
 	update_user_meta($uid, 'tmon_leaflet_notice_dismissed', '1');
 	wp_send_json_success([]);
 });
-
-// ...existing code...
