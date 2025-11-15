@@ -1034,9 +1034,8 @@ if (!function_exists('tmon_admin_ensure_columns')) {
 
 // Add fallback for missing admin.css and admin.js to avoid 404 errors in browser console
 add_action('admin_enqueue_scripts', function() {
-	// Compute plugin base URL (move out of includes/ directory)
-	$plugin_root_url = plugin_dir_url( dirname(__FILE__) ); // /wp-content/plugins/tmon-admin/
-	$assets_url = rtrim($plugin_root_url, '/') . '/assets';
+	// use plugins_url() to compute plugin assets URL (avoids "includes" segment)
+	$assets_url = plugins_url( 'assets', __FILE__ ); // resolves to .../wp-content/plugins/tmon-admin/assets
 
 	// Check if CSS exists before enqueue
 	$css_path = dirname(__FILE__) . '/../assets/admin.css';
@@ -1048,8 +1047,7 @@ add_action('admin_enqueue_scripts', function() {
 	$js_path = dirname(__FILE__) . '/../assets/admin.js';
 	if (file_exists($js_path)) {
 		wp_enqueue_script('tmon-admin-js', $assets_url . '/admin.js', ['jquery'], '0.1.2', true);
-
-		// Pass dismiss flag and nonce to the script to avoid multiple notices (server-side persisted)
+		// Pass dismiss flag and nonce to the script to avoid multiple notices
 		$leaflet_dismissed = false;
 		if (is_user_logged_in()) {
 			$leaflet_dismissed = get_user_meta(get_current_user_id(), 'tmon_leaflet_notice_dismissed', true) ? true : false;
