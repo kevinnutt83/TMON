@@ -1034,8 +1034,8 @@ if (!function_exists('tmon_admin_ensure_columns')) {
 
 // Add fallback for missing admin.css and admin.js to avoid 404 errors in browser console
 add_action('admin_enqueue_scripts', function() {
-	// Use plugins_url('', __FILE__) to compute plugin base URL rather than retrieving /plugins/ parent
-	$plugin_root_url = plugins_url('', __FILE__); // yields .../wp-content/plugins/tmon-admin
+	// Compute plugin base URL (move out of includes/ directory)
+	$plugin_root_url = plugin_dir_url( dirname(__FILE__) ); // /wp-content/plugins/tmon-admin/
 	$assets_url = rtrim($plugin_root_url, '/') . '/assets';
 
 	// Check if CSS exists before enqueue
