@@ -96,25 +96,27 @@ function tmon_admin_provisioning_page() {
             $status = sanitize_text_field($_POST['status'] ?? 'active');
             $notes = sanitize_textarea_field($_POST['notes'] ?? '');
             if ($unit_id && $machine_id) {
-                // Insert new provisioned device (do not upsert, only insert if not exists)
+                // Upsert: update if exists, else insert
                 $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM $table WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id));
-                if (!$exists) {
-                    $wpdb->insert($table, [
-                        'unit_id' => $unit_id,
-                        'machine_id' => $machine_id,
-                        'role' => $role,
-                        'company_id' => $company_id,
-                        'plan' => $plan,
-                        'status' => $status,
-                        'notes' => $notes
-                    ]);
+                $fields = [
+                    'unit_id' => $unit_id,
+                    'machine_id' => $machine_id,
+                    'role' => $role,
+                    'company_id' => $company_id,
+                    'plan' => $plan,
+                    'status' => $status,
+                    'notes' => $notes
+                ];
+                if ($exists) {
+                    $wpdb->update($table, $fields, ['id' => $exists]);
+                    echo '<div class="updated"><p>Provisioned device updated.</p></div>';
+                } else {
+                    $wpdb->insert($table, $fields);
                     if (!empty($wpdb->last_error)) {
                         echo '<div class="notice notice-error"><p>Database error: '.esc_html($wpdb->last_error).'</p></div>';
                     } else {
                         echo '<div class="updated"><p>Provisioned device created.</p></div>';
                     }
-                } else {
-                    echo '<div class="notice notice-warning"><p>Device already provisioned. Use the update form below to change settings.</p></div>';
                 }
             }
         }
@@ -128,13 +130,14 @@ function tmon_admin_provisioning_page() {
             $company_id = intval($_POST['company_id'] ?? 0);
             $notes = sanitize_textarea_field($_POST['notes'] ?? '');
             if ($id) {
-                $result = $wpdb->update($table, [
+                $fields = [
                     'role' => $role,
                     'plan' => $plan,
                     'status' => $status,
                     'company_id' => $company_id,
                     'notes' => $notes
-                ], ['id' => $id]);
+                ];
+                $result = $wpdb->update($table, $fields, ['id' => $id]);
                 if ($result !== false && $result > 0) {
                     echo '<div class="updated"><p>Provisioned device updated.</p></div>';
                 } else {
