@@ -590,22 +590,21 @@ EOT;
         wp_nonce_field('tmon_admin_provision');
         echo '<input type="hidden" name="action" value="update" />';
         echo '<input type="hidden" name="id" value="'.intval($r['id']).'" />';
-        // FIX: Avoid parse error by not using array syntax with selected()
-        // Use plain PHP ternary for selected attribute
+        // FIX: Ensure proper syntax for the "selected" attribute in dropdowns
         echo ' Role <select name="role">';
-        echo '<option value="base"' . (($r['role'] == 'base') ? ' selected' : '') . '>base</option>';
-        echo '<option value="remote"' . (($r['role'] == 'remote') ? ' selected' : '') . '>remote</option>';
-        echo '<option value="wifi"' . (($r['role'] == 'wifi') ? ' selected' : '') . '>wifi</option>';
+        echo '<option value="base"' . ($r['role'] === "base" ? ' selected="selected"' : '') . '>base</option>';
+        echo '<option value="remote"' . ($r['role'] === "remote" ? ' selected="selected"' : '') . '>remote</option>';
+        echo '<option value="wifi"' . ($r['role'] === "wifi" ? ' selected="selected"' : '') . '>wifi</option>';
         echo '</select>';
         echo ' Plan <select name="plan">';
-        echo '<option value="standard"' . (($r['plan'] == 'standard') ? ' selected' : '') . '>standard</option>';
-        echo '<option value="pro"' . (($r['plan'] == 'pro') ? ' selected' : '') . '>pro</option>';
-        echo '<option value="enterprise"' . (($r['plan'] == 'enterprise') ? ' selected' : '') . '>enterprise</option>';
+        echo '<option value="standard"' . ($r['plan'] === "standard" ? ' selected="selected"' : '') . '>standard</option>';
+        echo '<option value="pro"' . ($r['plan'] === "pro" ? ' selected="selected"' : '') . '>pro</option>';
+        echo '<option value="enterprise"' . ($r['plan'] === "enterprise" ? ' selected="selected"' : '') . '>enterprise</option>';
         echo '</select>';
         echo ' Status <select name="status">';
-        echo '<option value="active"' . (($r['status'] == 'active') ? ' selected' : '') . '>active</option>';
-        echo '<option value="suspended"' . (($r['status'] == 'suspended') ? ' selected' : '') . '>suspended</option>';
-        echo '<option value="expired"' . (($r['status'] == 'expired') ? ' selected' : '') . '>expired</option>';
+        echo '<option value="active"' . ($r['status'] === "active" ? ' selected="selected"' : '') . '>active</option>';
+        echo '<option value="suspended"' . ($r['status'] === "suspended" ? ' selected="selected"' : '') . '>suspended</option>';
+        echo '<option value="expired"' . ($r['status'] === "expired" ? ' selected="selected"' : '') . '>expired</option>';
         echo '</select>';
         echo ' Company <input name="company_id" type="number" class="small-text" value="'.intval($r['company_id']).'" />';
         echo ' Notes <input name="notes" type="text" class="regular-text" value="'.esc_attr($r['notes']).'" />';
