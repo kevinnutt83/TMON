@@ -590,7 +590,7 @@ EOT;
         wp_nonce_field('tmon_admin_provision');
         echo '<input type="hidden" name="action" value="update" />';
         echo '<input type="hidden" name="id" value="'.intval($r['id']).'" />';
-        // FIX: Ensure proper syntax for the "selected" attribute in dropdowns
+        // FIX: Wrap "base", "remote", and "wifi" in quotes to avoid syntax errors
         echo ' Role <select name="role">';
         echo '<option value="base"' . ($r['role'] === "base" ? ' selected="selected"' : '') . '>base</option>';
         echo '<option value="remote"' . ($r['role'] === "remote" ? ' selected="selected"' : '') . '>remote</option>';
