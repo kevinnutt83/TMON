@@ -80,7 +80,7 @@ function tmon_admin_get_all_devices() {
     $sql = "SELECT d.unit_id, d.machine_id, d.unit_name, p.id as provision_id, p.role, p.company_id, p.plan, p.status, p.notes, p.created_at, p.updated_at, 
             COALESCE(NULLIF(p.site_url,''), d.wordpress_api_url) AS site_url, d.wordpress_api_url AS original_api_url
             FROM $dev_table d
-            LEFT JOIN $prov_table p ON d.unit_id = p.unit_id
+            LEFT JOIN $prov_table p ON d.unit_id = p.unit_id AND d.machine_id = p.machine_id
             ORDER BY d.unit_id ASC";
     return $wpdb->get_results($sql, ARRAY_A);
 }
@@ -90,6 +90,7 @@ function tmon_admin_provisioning_page() {
     if (!current_user_can('manage_options')) wp_die('Forbidden');
     global $wpdb;
 
+    $prov_table = $wpdb->prefix . 'tmon_provisioned_devices'; // PATCH: ensure $prov_table is available to all branches below
     // --- PATCH: Handle POST with redirect-after-POST pattern ---
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && function_exists('tmon_admin_verify_nonce') && tmon_admin_verify_nonce('tmon_admin_provision')) {
         $action = sanitize_text_field($_POST['action'] ?? '');
@@ -106,12 +107,12 @@ function tmon_admin_provisioning_page() {
             $notes = sanitize_textarea_field($_POST['notes'] ?? '');
             $site_url = esc_url_raw($_POST['site_url'] ?? '');
             $maybe_name = '';
-            // PATCH: For update, ensure unit_id and machine_id are present for id==0
+            // PATCH: For update, ensure unit_id and machine_id are present for id==0 and use $prov_table
             if ($id === 0) {
                 $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
                 $machine_id = sanitize_text_field($_POST['machine_id'] ?? '');
                 if ($unit_id && $machine_id) {
-                    $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM $table WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id));
+                    $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM $prov_table WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id));
                     $fields = [
                         'unit_id' => $unit_id,
                         'machine_id' => $machine_id,
@@ -123,9 +124,9 @@ function tmon_admin_provisioning_page() {
                         'site_url' => $site_url
                     ];
                     if ($exists) {
-                        $wpdb->update($table, $fields, ['id' => intval($exists)]);
+                        $wpdb->update($prov_table, $fields, ['id' => intval($exists)]);
                     } else {
-                        $wpdb->insert($table, $fields);
+                        $wpdb->insert($prov_table, $fields);
                     }
                     $redirect_url = add_query_arg('provision', 'success', $redirect_url);
                     wp_redirect($redirect_url);
@@ -145,12 +146,48 @@ function tmon_admin_provisioning_page() {
                         'notes' => $notes,
                         'site_url' => $site_url
                     ];
-                    $wpdb->update($table, $fields, ['id' => $id]);
+                    // Use $prov_table here (was $table unintentionally)
+                    $wpdb->update($prov_table, $fields, ['id' => $id]);
                     $redirect_url = add_query_arg('provision', 'success', $redirect_url);
                     wp_redirect($redirect_url);
                     exit;
                 }
             }
+        } elseif ($action === 'delete') {
+            // --- NEW: Delete per-row handler (supports provisioned entries by id or unit/machine combo) ---
+            $id = intval($_POST['id'] ?? 0);
+            if ($id > 0) {
+                // Delete provisioned row by id
+                $wpdb->delete($prov_table, ['id' => $id]);
+                $redirect_url = add_query_arg('provision', 'success', $redirect_url);
+                wp_redirect($redirect_url);
+                exit;
+            }
+            // fallback: accept unit_id+machine_id to delete unprovisioned local mirror row or provisioned row if present
+            $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
+            $machine_id = sanitize_text_field($_POST['machine_id'] ?? '');
+            if ($unit_id && $machine_id) {
+                // prefer to delete from provisioned table if entry exists
+                $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM $prov_table WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id));
+                if ($exists) {
+                    $wpdb->delete($prov_table, ['id' => intval($exists)]);
+                    $redirect_url = add_query_arg('provision', 'success', $redirect_url);
+                    wp_redirect($redirect_url);
+                    exit;
+                }
+                // else delete from local devices mirror if present
+                $dev_table = $wpdb->prefix . 'tmon_devices';
+                if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+                    $deleted = $wpdb->delete($dev_table, ['unit_id' => $unit_id, 'machine_id' => $machine_id]);
+                    $redirect_url = add_query_arg('provision', $deleted ? 'success' : 'fail', $redirect_url);
+                    wp_redirect($redirect_url);
+                    exit;
+                }
+            }
+            // If no valid deletion criteria, mark fail
+            $redirect_url = add_query_arg('provision', 'fail', $redirect_url);
+            wp_redirect($redirect_url);
+            exit;
         } elseif ($action === 'push_config') {
             // Push configuration to a Unit Connector site as a settings_update command
             $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
@@ -175,7 +212,8 @@ function tmon_admin_provisioning_page() {
                     'headers' => ['Content-Type'=>'application/json'],
                     'body' => wp_json_encode($payload),
                 ]);
-                $ok = !is_wp_error($resp) && wp_remote_retrieve_response_code($resp) == 200;
+                $resp_code = !is_wp_error($resp) ? wp_remote_retrieve_response_code($resp) : 0;
+                $ok = !is_wp_error($resp) && in_array($resp_code, [200, 201], true);
                 do_action('tmon_admin_audit', 'push_config', sprintf('unit_id=%s role=%s name=%s site=%s', $unit_id, $role, $maybe_name, $site_url));
                 echo $ok ? '<div class="updated"><p>Configuration pushed to Unit Connector.</p></div>' : '<div class="error"><p>Push failed: '.esc_html(is_wp_error($resp)?$resp->get_error_message():wp_remote_retrieve_body($resp)).'</p></div>';
             } else {
@@ -204,7 +242,6 @@ function tmon_admin_provisioning_page() {
                         'headers'=>$headers,
                         'body'=>wp_json_encode(['company_id'=>$company_id,'name'=>$company_name])
                     ]);
-                    // ignore non-200 but log for admin notice
                 }
                 // 2) Register in UC registry
                 $reg_endpoint = rtrim($site_url, '/') . '/wp-json/tmon/v1/admin/device/register';
@@ -217,7 +254,8 @@ function tmon_admin_provisioning_page() {
                     'headers'=>$headers,
                     'body'=>wp_json_encode($reg_body)
                 ]);
-                $reg_ok = !is_wp_error($reg_resp) && wp_remote_retrieve_response_code($reg_resp) == 200;
+                $reg_code = !is_wp_error($reg_resp) ? wp_remote_retrieve_response_code($reg_resp) : 0;
+                $reg_ok = !is_wp_error($reg_resp) && in_array($reg_code, [200, 201], true);
                 // 3) Push settings (role + GPS)
                 $settings = ['NODE_TYPE'=>$role, 'WIFI_DISABLE_AFTER_PROVISION'=>($role==='remote')];
                 if (!empty($unit_name)) { $settings['UNIT_Name'] = $unit_name; }
@@ -229,7 +267,8 @@ function tmon_admin_provisioning_page() {
                     'headers'=>$headers,
                     'body'=>wp_json_encode(['unit_id'=>$unit_id,'settings'=>$settings])
                 ]);
-                $set_ok = !is_wp_error($set_resp) && wp_remote_retrieve_response_code($set_resp) == 200;
+                $set_code = !is_wp_error($set_resp) ? wp_remote_retrieve_response_code($set_resp) : 0;
+                $set_ok = !is_wp_error($set_resp) && in_array($set_code, [200, 201], true);
                 do_action('tmon_admin_audit', 'send_to_uc_registry', sprintf('unit_id=%s name=%s role=%s site=%s gps=(%s,%s)', $unit_id, $unit_name, $role, $site_url, (string)$gps_lat, (string)$gps_lng));
                 if ($reg_ok && $set_ok) {
                     echo '<div class="updated"><p>Sent to UC registry and settings applied.</p></div>';
@@ -268,7 +307,8 @@ function tmon_admin_provisioning_page() {
                     'headers'=>$headers,
                     'body'=>wp_json_encode(['unit_id'=>$unit_id,'settings'=>$settings])
                 ]);
-                $ok = !is_wp_error($set_resp) && wp_remote_retrieve_response_code($set_resp) == 200;
+                $set_code = !is_wp_error($set_resp) ? wp_remote_retrieve_response_code($set_resp) : 0;
+                $ok = !is_wp_error($set_resp) && in_array($set_code, [200, 201], true);
                 do_action('tmon_admin_audit', 'push_role_gps_direct', sprintf('unit_id=%s name=%s role=%s site=%s gps=(%s,%s)', $unit_id, $maybe_name, $role, $site_url, (string)$gps_lat, (string)$gps_lng));
                 echo $ok ? '<div class="updated"><p>Role + GPS pushed directly.</p></div>' : '<div class="error"><p>Push failed: '.esc_html(is_wp_error($set_resp)?$set_resp->get_error_message():wp_remote_retrieve_body($set_resp)).'</p></div>';
             } else {
@@ -292,7 +332,8 @@ function tmon_admin_provisioning_page() {
                     // Last fallback: UC site key if available (X-TMON-ADMIN)
                     if (!empty($info['uc_key']) && empty($headers['X-TMON-ADMIN']) && empty($headers['X-TMON-READ'])) { $headers['X-TMON-ADMIN'] = $info['uc_key']; }
                     $resp = wp_remote_get($endpoint, ['timeout' => 15, 'headers' => $headers]);
-                    if (!is_wp_error($resp) && wp_remote_retrieve_response_code($resp) === 200) {
+                    $resp_code = !is_wp_error($resp) ? wp_remote_retrieve_response_code($resp) : 0;
+                    if (!is_wp_error($resp) && in_array($resp_code, [200, 201], true)) {
                         $body = json_decode(wp_remote_retrieve_body($resp), true);
                         if (is_array($body) && !empty($body['devices']) && is_array($body['devices'])) {
                             foreach ($body['devices'] as $d) {
@@ -328,7 +369,8 @@ function tmon_admin_provisioning_page() {
                 } else {
                     $ep = rtrim($site_url, '/') . $map[$entity]['path'];
                     $resp = wp_remote_post($ep, ['timeout'=>20,'headers'=>$headers,'body'=>wp_json_encode($map[$entity]['payload'])]);
-                    $ok = !is_wp_error($resp) && wp_remote_retrieve_response_code($resp) == 200;
+                    $ep_code = !is_wp_error($resp) ? wp_remote_retrieve_response_code($resp) : 0;
+                    $ok = !is_wp_error($resp) && in_array($ep_code, [200, 201], true);
                     echo $ok ? '<div class="updated"><p>Hierarchy pushed.</p></div>' : '<div class="error"><p>Push failed: '.esc_html(is_wp_error($resp)?$resp->get_error_message():wp_remote_retrieve_body($resp)).'</p></div>';
                 }
             } else {
@@ -548,17 +590,15 @@ EOT;
         $has_unit_name = in_array('unit_name', $dev_cols);
         $has_last_seen = in_array('last_seen', $dev_cols);
         // Only select columns that exist
-        $select_cols = "unit_id, machine_id";
-        if ($has_unit_name) $select_cols .= ", unit_name";
-        if ($has_last_seen) $select_cols .= ", last_seen";
-        // Build list of provisioned unit_ids to exclude
-        $prov_ids = [];
+        $select_cols = "d.unit_id, d.machine_id";
+        if ($has_unit_name) $select_cols .= ", d.unit_name";
+        if ($has_last_seen) $select_cols .= ", d.last_seen";
+        // Use LEFT JOIN to exclude rows that are provisioned by both unit_id + machine_id
         if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $prov_table))) {
-            $prov_ids = $wpdb->get_col("SELECT unit_id FROM {$prov_table}");
-        }
-        if (!empty($prov_ids)) {
-            $placeholders = implode(',', array_fill(0, count($prov_ids), '%s'));
-            $sql = $wpdb->prepare("SELECT $select_cols FROM {$dev_table} WHERE unit_id NOT IN ($placeholders) ORDER BY unit_id ASC", ...$prov_ids);
+            $sql = "SELECT $select_cols FROM {$dev_table} d
+                    LEFT JOIN {$prov_table} p ON d.unit_id = p.unit_id AND d.machine_id = p.machine_id
+                    WHERE p.id IS NULL
+                    ORDER BY d.unit_id ASC";
         } else {
             $sql = "SELECT $select_cols FROM {$dev_table} ORDER BY unit_id ASC";
         }
@@ -834,7 +874,8 @@ function tmon_admin_push_to_uc_site($unit_id, $site_url, $role = 'base', $maybe_
 	if (!empty($maybe_name)) $reg_body['unit_name'] = $maybe_name;
 	if ($company_id) $reg_body['company_id'] = $company_id;
 	$reg_resp = wp_remote_post($reg_endpoint, ['timeout'=>20,'headers'=>$headers,'body'=>wp_json_encode($reg_body)]);
-	$reg_ok = !is_wp_error($reg_resp) && wp_remote_retrieve_response_code($reg_resp) == 200;
+	$reg_code = !is_wp_error($reg_resp) ? wp_remote_retrieve_response_code($reg_resp) : 0;
+	$reg_ok = !is_wp_error($reg_resp) && in_array($reg_code, [200, 201], true);
 
 	// Push settings (NODE_TYPE and optional GPS + company)
 	$settings = ['NODE_TYPE'=>$role, 'WIFI_DISABLE_AFTER_PROVISION'=>($role === 'remote')];
@@ -843,7 +884,8 @@ function tmon_admin_push_to_uc_site($unit_id, $site_url, $role = 'base', $maybe_
 	if (!is_null($gps_lat) && !is_null($gps_lng)) { $settings['GPS_LAT']=$gps_lat; $settings['GPS_LNG']=$gps_lng; }
 	$set_endpoint = rtrim($site_url, '/') . '/wp-json/tmon/v1/admin/device/settings';
 	$set_resp = wp_remote_post($set_endpoint, ['timeout'=>20,'headers'=>$headers,'body'=>wp_json_encode(['unit_id'=>$unit_id,'settings'=>$settings])]);
-	$set_ok = !is_wp_error($set_resp) && wp_remote_retrieve_response_code($set_resp) == 200;
+	$set_code = !is_wp_error($set_resp) ? wp_remote_retrieve_response_code($set_resp) : 0;
+	$set_ok = !is_wp_error($set_resp) && in_array($set_code, [200, 201], true);
 
 	do_action('tmon_admin_audit', 'send_to_uc_registry', sprintf('unit_id=%s name=%s role=%s site=%s', $unit_id, $maybe_name, $role, $site_url));
 	return ($reg_ok && $set_ok);
@@ -1105,7 +1147,8 @@ add_action('admin_post_tmon_admin_provision_device', function() {
     $machine_id = sanitize_text_field($_POST['machine_id'] ?? '');
     $company_id = intval($_POST['company_id'] ?? 0);
     $plan       = sanitize_text_field($_POST['plan'] ?? '');
-    $status     = sanitize_text_field($_POST['status'] ?? 'provisioned');
+    // normalize status default to match schema and UI
+    $status     = sanitize_text_field($_POST['status'] ?? 'active');
     $notes      = sanitize_textarea_field($_POST['notes'] ?? '');
     $role       = sanitize_text_field($_POST['role'] ?? 'base');
     $site_url   = esc_url_raw($_POST['site_url'] ?? '');
