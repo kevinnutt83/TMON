@@ -86,75 +86,31 @@ function tmon_admin_provisioning_page() {
 
     $table = $wpdb->prefix . 'tmon_provisioned_devices';
 
-    // Handle actions
+    // --- PATCH: Handle POST with redirect-after-POST pattern ---
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && function_exists('tmon_admin_verify_nonce') && tmon_admin_verify_nonce('tmon_admin_provision')) {
         $action = sanitize_text_field($_POST['action'] ?? '');
-        $do_provision = isset($_POST['save_provision']); // set when the "Save & Provision" button is pressed
-
-        // --- PROVISION DEVICE FORM (top of page) ---
-        if ($action === 'create') {
-            $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
-            $machine_id = sanitize_text_field($_POST['machine_id'] ?? '');
-            $role = sanitize_text_field($_POST['role'] ?? 'base');
-            $company_id = intval($_POST['company_id'] ?? 0);
-            $plan = sanitize_text_field($_POST['plan'] ?? 'standard');
-            $status = sanitize_text_field($_POST['status'] ?? 'active');
-            $notes = sanitize_textarea_field($_POST['notes'] ?? '');
-            $site_url = esc_url_raw($_POST['site_url'] ?? '');
-            if ($unit_id && $machine_id) {
-                // Upsert: update if exists, else insert
-                $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM $table WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id));
-                $fields = [
-                    'unit_id' => $unit_id,
-                    'machine_id' => $machine_id,
-                    'role' => $role,
-                    'company_id' => $company_id,
-                    'plan' => $plan,
-                    'status' => $status,
-                    'notes' => $notes,
-                    'site_url' => $site_url
-                ];
-                if ($exists) {
-                    $wpdb->update($table, $fields, ['id' => $exists]);
-                    echo '<div class="updated"><p>Provisioned device updated.</p></div>';
-                    $prov_id = $exists;
-                } else {
-                    $wpdb->insert($table, $fields);
-                    $prov_id = $wpdb->insert_id;
-                    if (!empty($wpdb->last_error)) {
-                        echo '<div class="notice notice-error"><p>Database error: '.esc_html($wpdb->last_error).'</p></div>';
-                    } else {
-                        echo '<div class="updated"><p>Provisioned device created.</p></div>';
-                    }
-                }
-                // Provision after save if requested
-                if ($do_provision && $prov_id) {
-                    $unit               = $unit_id;
-                    $site_for_provision = $site_url ?: ($_POST['site_url'] ?? '');
-                    $ok = tmon_admin_push_to_uc_site($unit, $site_for_provision, $role, $maybe_name ?? '', $company_id, null, null);
-                    if ($ok) echo '<div class="updated"><p>Saved and provisioned to UC.</p></div>'; else echo '<div class="error"><p>Saved, but provisioning failed. Check UC pairing and logs.</p></div>';
-                }
-            }
-        }
+        $do_provision = isset($_POST['save_provision']);
+        $redirect_url = remove_query_arg(['provision'], wp_get_referer() ?: admin_url('admin.php?page=tmon-admin-provisioning'));
 
         // --- UPDATE DEVICE ROW (table row form) ---
-        elseif ($action === 'update') {
+        if ($action === 'update') {
             $id = intval($_POST['id'] ?? 0);
             $role = sanitize_text_field($_POST['role'] ?? 'base');
             $plan = sanitize_text_field($_POST['plan'] ?? 'standard');
             $status = sanitize_text_field($_POST['status'] ?? 'active');
             $company_id = intval($_POST['company_id'] ?? 0);
             $notes = sanitize_textarea_field($_POST['notes'] ?? '');
-
-            // --- NEW: allow row-level insert on id==0 for unprovisioned devices ---
+            $site_url = esc_url_raw($_POST['site_url'] ?? '');
+            $maybe_name = '';
+            // PATCH: For update, ensure unit_id and machine_id are present for id==0
             if ($id === 0) {
                 $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
                 $machine_id = sanitize_text_field($_POST['machine_id'] ?? '');
-                $site_url = esc_url_raw($_POST['site_url'] ?? '');
                 if ($unit_id && $machine_id) {
-                    // Avoid duplicates: update if already exists for (unit_id, machine_id)
                     $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM $table WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id));
                     $fields = [
+                        'unit_id' => $unit_id,
+                        'machine_id' => $machine_id,
                         'role' => $role,
                         'plan' => $plan,
                         'status' => $status,
@@ -164,23 +120,19 @@ function tmon_admin_provisioning_page() {
                     ];
                     if ($exists) {
                         $wpdb->update($table, $fields, ['id' => intval($exists)]);
-                        echo '<div class="updated"><p>Provisioned device updated.</p></div>';
                     } else {
-                        $fields['unit_id'] = $unit_id;
-                        $fields['machine_id'] = $machine_id;
                         $wpdb->insert($table, $fields);
-                        if (!empty($wpdb->last_error)) {
-                            echo '<div class="notice notice-error"><p>Database error: '.esc_html($wpdb->last_error).'</p></div>';
-                        } else {
-                            echo '<div class="updated"><p>Provisioned device created.</p></div>';
-                        }
                     }
+                    $redirect_url = add_query_arg('provision', 'success', $redirect_url);
+                    wp_redirect($redirect_url);
+                    exit;
                 } else {
-                    echo '<div class="notice notice-error"><p>Unit ID and Machine ID required for creating a provisioned entry.</p></div>';
+                    $redirect_url = add_query_arg('provision', 'fail', $redirect_url);
+                    wp_redirect($redirect_url);
+                    exit;
                 }
             } else {
                 if ($id) {
-                    $site_url = esc_url_raw($_POST['site_url'] ?? '');
                     $fields = [
                         'role' => $role,
                         'plan' => $plan,
@@ -189,12 +141,10 @@ function tmon_admin_provisioning_page() {
                         'notes' => $notes,
                         'site_url' => $site_url
                     ];
-                    $result = $wpdb->update($table, $fields, ['id' => $id]);
-                    if ($result !== false && $result > 0) {
-                        echo '<div class="updated"><p>Provisioned device updated.</p></div>';
-                    } else {
-                        echo '<div class="notice notice-error"><p>Failed to update device or no changes made.</p></div>';
-                    }
+                    $wpdb->update($table, $fields, ['id' => $id]);
+                    $redirect_url = add_query_arg('provision', 'success', $redirect_url);
+                    wp_redirect($redirect_url);
+                    exit;
                 }
             }
         } elseif ($action === 'push_config') {
@@ -415,6 +365,15 @@ function tmon_admin_provisioning_page() {
         }
     }
 
+    // PATCH: Show admin notices after redirect
+    if (isset($_GET['provision'])) {
+        if ($_GET['provision'] === 'success') {
+            echo '<div class="updated"><p>Device provisioned or updated successfully.</p></div>';
+        } elseif ($_GET['provision'] === 'fail') {
+            echo '<div class="error"><p>Failed to provision or update device. Please check required fields.</p></div>';
+        }
+    }
+
     // Render UI
     echo '<div class="wrap tmon-admin"><h1>Provisioning</h1>';
     // Standalone refresh known IDs form (outside of create form to avoid nested forms)
@@ -426,9 +385,9 @@ function tmon_admin_provisioning_page() {
     echo '</form>';
 
     echo '<h2>Add Provisioned Device</h2>';
-    echo '<form method="post">';
-    wp_nonce_field('tmon_admin_provision');
-    echo '<input type="hidden" name="action" value="create" />';
+    echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '">'; // <-- FIXED
+    wp_nonce_field('tmon_admin_provision_device'); // <-- FIXED
+    echo '<input type="hidden" name="action" value="tmon_admin_provision_device" />'; // <-- FIXED
     echo '<table class="form-table">';
     // Compact search filters to help narrow large fleets
     echo '<tr><th scope="row">Filters</th><td>';
@@ -1165,4 +1124,58 @@ add_action('wp_ajax_tmon_admin_dismiss_notice', function() {
 	if (!$uid) wp_send_json_error(['message'=>'no_user'], 403);
 	update_user_meta($uid, 'tmon_leaflet_notice_dismissed', '1');
 	wp_send_json_success([]);
+});
+
+// Handle provisioning form submission
+add_action('admin_post_tmon_admin_provision_device', function() {
+    if (!current_user_can('manage_options')) wp_die('Forbidden');
+    check_admin_referer('tmon_admin_provision_device');
+    global $wpdb;
+
+    $unit_id    = sanitize_text_field($_POST['unit_id'] ?? '');
+    $machine_id = sanitize_text_field($_POST['machine_id'] ?? '');
+    $company_id = intval($_POST['company_id'] ?? 0);
+    $plan       = sanitize_text_field($_POST['plan'] ?? '');
+    $status     = sanitize_text_field($_POST['status'] ?? 'provisioned');
+    $notes      = sanitize_textarea_field($_POST['notes'] ?? '');
+    $role       = sanitize_text_field($_POST['role'] ?? 'base');
+    $site_url   = esc_url_raw($_POST['site_url'] ?? '');
+    $save_provision = isset($_POST['save_provision']);
+
+    if (!$unit_id || !$machine_id) {
+        wp_redirect(add_query_arg('provision', 'fail', wp_get_referer()));
+        exit;
+    }
+
+    $table = $wpdb->prefix . 'tmon_provisioned_devices';
+    $exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $table WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id));
+
+    $data = [
+        'unit_id'    => $unit_id,
+        'machine_id' => $machine_id,
+        'company_id' => $company_id,
+        'plan'       => $plan,
+        'status'     => $status,
+        'notes'      => $notes,
+        'role'       => $role,
+        'site_url'   => $site_url,
+    ];
+
+    if ($exists) {
+        $wpdb->update($table, $data, ['unit_id' => $unit_id, 'machine_id' => $machine_id]);
+    } else {
+        $wpdb->insert($table, $data);
+    }
+
+    // Optionally, push provisioned status to the device or trigger a hook here
+    if ($save_provision && $site_url) {
+        $maybe_name = '';
+        $dev_table = $wpdb->prefix . 'tmon_devices';
+        if ($unit_id && $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+            $maybe_name = $wpdb->get_var($wpdb->prepare("SELECT unit_name FROM $dev_table WHERE unit_id=%s", $unit_id));
+        }
+        tmon_admin_push_to_uc_site($unit_id, $site_url, $role, $maybe_name, $company_id, null, null);
+    }
+    wp_redirect(add_query_arg('provision', 'success', admin_url('admin.php?page=tmon-admin-provisioning')));
+    exit;
 });
