@@ -1109,7 +1109,7 @@ add_action('admin_post_tmon_admin_provision_device', function() {
     $notes      = sanitize_textarea_field($_POST['notes'] ?? '');
     $role       = sanitize_text_field($_POST['role'] ?? 'base');
     $site_url   = esc_url_raw($_POST['site_url'] ?? '');
-    $unit_name  = sanitize_text_field($_POST['unit_name'] ?? '');
+    $unit_name  = isset($_POST['unit_name']) ? sanitize_text_field($_POST['unit_name']) : '';
     $save_provision = isset($_POST['save_provision']);
 
     if (!$unit_id || !$machine_id) {
@@ -1118,7 +1118,7 @@ add_action('admin_post_tmon_admin_provision_device', function() {
     }
 
     $table = $wpdb->prefix . 'tmon_provisioned_devices';
-    $exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM $table WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id));
+    $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM $table WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id));
 
     $data = [
         'unit_id'    => $unit_id,
@@ -1134,16 +1134,24 @@ add_action('admin_post_tmon_admin_provision_device', function() {
     ];
 
     if ($exists) {
-        $wpdb->update($table, $data, ['unit_id' => $unit_id, 'machine_id' => $machine_id]);
+        $wpdb->update($table, $data, ['id' => $exists]);
     } else {
         $wpdb->insert($table, $data);
+    }
+
+    // PATCH: Also update tmon_devices.unit_name if present and changed
+    $dev_table = $wpdb->prefix . 'tmon_devices';
+    if ($unit_name && $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+        $dev_exists = $wpdb->get_var($wpdb->prepare("SELECT unit_id FROM $dev_table WHERE unit_id=%s", $unit_id));
+        if ($dev_exists) {
+            $wpdb->update($dev_table, ['unit_name' => $unit_name], ['unit_id' => $unit_id]);
+        }
     }
 
     // Optionally, push provisioned status to the device or trigger a hook here
     if ($save_provision && $site_url) {
         $maybe_name = $unit_name;
         if (!$maybe_name) {
-            $dev_table = $wpdb->prefix . 'tmon_devices';
             if ($unit_id && $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
                 $maybe_name = $wpdb->get_var($wpdb->prepare("SELECT unit_name FROM $dev_table WHERE unit_id=%s", $unit_id));
             }
@@ -1154,7 +1162,7 @@ add_action('admin_post_tmon_admin_provision_device', function() {
     exit;
 });
 
-// --- REST endpoint for device check-in to fetch staged settings ---
+// PATCH: REST endpoint always returns settings if settings_staged=1 OR if ?force=1 is sent (for device debug)
 add_action('rest_api_init', function() {
     register_rest_route('tmon/v1', '/device/provision', [
         'methods' => 'POST',
@@ -1163,6 +1171,7 @@ add_action('rest_api_init', function() {
             global $wpdb;
             $unit_id = sanitize_text_field($request->get_param('unit_id'));
             $machine_id = sanitize_text_field($request->get_param('machine_id'));
+            $force = $request->get_param('force');
             if (!$unit_id || !$machine_id) {
                 return new WP_REST_Response(['error' => 'unit_id and machine_id required'], 400);
             }
@@ -1171,8 +1180,8 @@ add_action('rest_api_init', function() {
             if (!$row) {
                 return new WP_REST_Response(['provisioned' => false], 200);
             }
-            if (!empty($row['settings_staged'])) {
-                // Build settings payload
+            $should_send = !empty($row['settings_staged']) || $force;
+            if ($should_send) {
                 $settings = [
                     'unit_id' => $row['unit_id'],
                     'machine_id' => $row['machine_id'],
@@ -1184,8 +1193,10 @@ add_action('rest_api_init', function() {
                     'site_url' => $row['site_url'],
                     'unit_name' => $row['unit_name'],
                 ];
-                // Clear the staged flag after sending
-                $wpdb->update($table, ['settings_staged' => 0], ['unit_id' => $unit_id, 'machine_id' => $machine_id]);
+                // Only clear staged flag if not forced
+                if (empty($force)) {
+                    $wpdb->update($table, ['settings_staged' => 0], ['unit_id' => $unit_id, 'machine_id' => $machine_id]);
+                }
                 return new WP_REST_Response(['provisioned' => true, 'settings' => $settings], 200);
             }
             return new WP_REST_Response(['provisioned' => true, 'settings' => null], 200);
