@@ -42,6 +42,13 @@ function tmon_admin_maybe_migrate_provisioned_devices() {
     if (empty($have['unit_name'])) {
         $wpdb->query("ALTER TABLE $table ADD COLUMN unit_name VARCHAR(128) DEFAULT ''");
     }
+    // NEW: firmware metadata
+    if (empty($have['firmware'])) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN firmware VARCHAR(128) DEFAULT ''");
+    }
+    if (empty($have['firmware_url'])) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN firmware_url VARCHAR(255) DEFAULT ''");
+    }
     if (empty($have['settings_staged'])) {
         $wpdb->query("ALTER TABLE $table ADD COLUMN settings_staged TINYINT(1) DEFAULT 0");
     }
@@ -537,6 +544,9 @@ EOT;
     echo '<tr><th scope="row">Notes</th><td><textarea name="notes" class="large-text"></textarea></td></tr>';
     echo '<tr><th scope="row">Site URL</th><td><input name="site_url" type="url" class="regular-text" placeholder="https://example.com" /></td></tr>';
     echo '<tr><th scope="row">Unit Name</th><td><input name="unit_name" type="text" class="regular-text" placeholder="Optional display name"></td></tr>';
+    // NEW: Firmware fields for create/update form
+    echo '<tr><th scope="row">Firmware Version</th><td><input name="firmware" type="text" class="regular-text" placeholder="e.g., 1.2.3" /></td></tr>';
+    echo '<tr><th scope="row">Firmware URL</th><td><input name="firmware_url" type="url" class="regular-text" placeholder="https://example.com/firmware.bin" /></td></tr>';
     echo '</table>';
     echo '<div class="tmon-form-actions">';
     submit_button('Save', 'secondary', 'submit', false);
@@ -676,6 +686,9 @@ EOT;
         echo ' Notes <input name="notes" type="text" class="regular-text" value="'.esc_attr($r['notes']).'" />';
         echo ' Site URL <input name="site_url" type="url" class="regular-text" value="'.esc_attr($r['site_url'] ?? ($r['wordpress_api_url'] ?? '')).'"/>';
         echo ' Unit Name <input name="unit_name" type="text" class="regular-text" value="'.esc_attr($r['unit_name'] ?? '').'" />';
+        // NEW: per-row firmware fields
+        echo ' Firmware <input name="firmware" type="text" class="regular-text" value="'.esc_attr($r['firmware'] ?? '').'" placeholder="1.2.3" />';
+        echo ' Firmware URL <input name="firmware_url" type="url" class="regular-text" value="'.esc_attr($r['firmware_url'] ?? '').'" placeholder="https://..." />';
         echo '<div class="tmon-form-actions">';
         submit_button('Save', 'secondary', 'submit', false);
         submit_button('Save & Provision to UC', 'primary', 'save_provision', false);
@@ -860,7 +873,7 @@ EOT;
  * Push device registration + settings to a Unit Connector site.
  * Returns true on success.
  */
-function tmon_admin_push_to_uc_site($unit_id, $site_url, $role = 'base', $maybe_name = '', $company_id = 0, $gps_lat = null, $gps_lng = null) {
+function tmon_admin_push_to_uc_site($unit_id, $site_url, $role = 'base', $maybe_name = '', $company_id = 0, $gps_lat = null, $gps_lng = null, $firmware = '', $firmware_url = '') {
 	global $wpdb;
 	if (empty($unit_id) || empty($site_url)) return false;
 	$headers = ['Content-Type'=>'application/json'];
@@ -877,17 +890,19 @@ function tmon_admin_push_to_uc_site($unit_id, $site_url, $role = 'base', $maybe_
 	$reg_code = !is_wp_error($reg_resp) ? wp_remote_retrieve_response_code($reg_resp) : 0;
 	$reg_ok = !is_wp_error($reg_resp) && in_array($reg_code, [200, 201], true);
 
-	// Push settings (NODE_TYPE and optional GPS + company)
+	// Push settings (NODE_TYPE and optional GPS + company + firmware)
 	$settings = ['NODE_TYPE'=>$role, 'WIFI_DISABLE_AFTER_PROVISION'=>($role === 'remote')];
 	if (!empty($maybe_name)) { $settings['UNIT_Name'] = $maybe_name; }
 	if ($company_id) { $settings['COMPANY_ID'] = $company_id; }
 	if (!is_null($gps_lat) && !is_null($gps_lng)) { $settings['GPS_LAT']=$gps_lat; $settings['GPS_LNG']=$gps_lng; }
+	if (!empty($firmware)) { $settings['FIRMWARE'] = $firmware; }
+	if (!empty($firmware_url)) { $settings['FIRMWARE_URL'] = $firmware_url; }
 	$set_endpoint = rtrim($site_url, '/') . '/wp-json/tmon/v1/admin/device/settings';
 	$set_resp = wp_remote_post($set_endpoint, ['timeout'=>20,'headers'=>$headers,'body'=>wp_json_encode(['unit_id'=>$unit_id,'settings'=>$settings])]);
 	$set_code = !is_wp_error($set_resp) ? wp_remote_retrieve_response_code($set_resp) : 0;
 	$set_ok = !is_wp_error($set_resp) && in_array($set_code, [200, 201], true);
 
-	do_action('tmon_admin_audit', 'send_to_uc_registry', sprintf('unit_id=%s name=%s role=%s site=%s', $unit_id, $maybe_name, $role, $site_url));
+	do_action('tmon_admin_audit', 'send_to_uc_registry', sprintf('unit_id=%s name=%s role=%s site=%s firmware=%s firmware_url=%s', $unit_id, $maybe_name, $role, $site_url, $firmware, $firmware_url));
 	return ($reg_ok && $set_ok);
 }
 
@@ -1004,6 +1019,8 @@ if (!function_exists('tmon_admin_install_provisioning_schema')) {
             plan VARCHAR(64) DEFAULT 'standard',
             status VARCHAR(32) DEFAULT 'active',
             notes TEXT,
+            firmware VARCHAR(128) DEFAULT '',
+            firmware_url VARCHAR(255) DEFAULT '',
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             site_url VARCHAR(255) DEFAULT '',
@@ -1061,6 +1078,8 @@ if (!function_exists('tmon_admin_ensure_columns')) {
             'updated_at' => "ALTER TABLE $table ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP",
             'site_url' => "ALTER TABLE $table ADD COLUMN site_url VARCHAR(255) DEFAULT ''",
             'unit_name' => "ALTER TABLE $table ADD COLUMN unit_name VARCHAR(128) DEFAULT ''",
+            'firmware' => "ALTER TABLE $table ADD COLUMN firmware VARCHAR(128) DEFAULT ''",
+            'firmware_url' => "ALTER TABLE $table ADD COLUMN firmware_url VARCHAR(255) DEFAULT ''",
             'settings_staged' => "ALTER TABLE $table ADD COLUMN settings_staged TINYINT(1) DEFAULT 0",
         ];
         $cols = $wpdb->get_results("SHOW COLUMNS FROM $table", ARRAY_A);
@@ -1153,6 +1172,9 @@ add_action('admin_post_tmon_admin_provision_device', function() {
     $role       = sanitize_text_field($_POST['role'] ?? 'base');
     $site_url   = esc_url_raw($_POST['site_url'] ?? '');
     $unit_name  = isset($_POST['unit_name']) ? sanitize_text_field($_POST['unit_name']) : '';
+    // NEW: firmware fields
+    $firmware   = sanitize_text_field($_POST['firmware'] ?? '');
+    $firmware_url = esc_url_raw($_POST['firmware_url'] ?? '');
     $save_provision = isset($_POST['save_provision']);
 
     if (!$unit_id || !$machine_id) {
@@ -1173,6 +1195,8 @@ add_action('admin_post_tmon_admin_provision_device', function() {
         'role'       => $role,
         'site_url'   => $site_url,
         'unit_name'  => $unit_name,
+        'firmware'   => $firmware,
+        'firmware_url' => $firmware_url,
         'settings_staged' => 1, // Mark settings as staged for device to fetch
     ];
 
@@ -1199,50 +1223,114 @@ add_action('admin_post_tmon_admin_provision_device', function() {
                 $maybe_name = $wpdb->get_var($wpdb->prepare("SELECT unit_name FROM $dev_table WHERE unit_id=%s", $unit_id));
             }
         }
-        tmon_admin_push_to_uc_site($unit_id, $site_url, $role, $maybe_name, $company_id, null, null);
+        tmon_admin_push_to_uc_site($unit_id, $site_url, $role, $maybe_name, $company_id, null, null, $firmware, $firmware_url);
     }
     wp_redirect(add_query_arg('provision', 'success', admin_url('admin.php?page=tmon-admin-provisioning')));
     exit;
 });
 
-// PATCH: REST endpoint always returns settings if settings_staged=1 OR if ?force=1 is sent (for device debug)
+// PATCH: REST endpoint - accept GET/POST, allow unit_id or machine_id/mac, return device-friendly settings
 add_action('rest_api_init', function() {
-    register_rest_route('tmon/v1', '/device/provision', [
-        'methods' => 'POST',
-        'permission_callback' => '__return_true',
-        'callback' => function($request) {
-            global $wpdb;
-            $unit_id = sanitize_text_field($request->get_param('unit_id'));
-            $machine_id = sanitize_text_field($request->get_param('machine_id'));
-            $force = $request->get_param('force');
-            if (!$unit_id || !$machine_id) {
-                return new WP_REST_Response(['error' => 'unit_id and machine_id required'], 400);
-            }
-            $table = $wpdb->prefix . 'tmon_provisioned_devices';
+    $handler = function($request) {
+        global $wpdb;
+
+        // Accept either unit_id or machine_id (or mac)
+        $unit_id = sanitize_text_field((string)$request->get_param('unit_id'));
+        $machine_id = sanitize_text_field((string)$request->get_param('machine_id') ?: (string)$request->get_param('mac'));
+
+        // Accept ?force=1 for debugging (do not clear staged flag)
+        $force = $request->get_param('force');
+        $force_flag = !empty($force) && $force !== '0' && $force !== false;
+
+        if (!$unit_id && !$machine_id) {
+            return new WP_REST_Response(['error' => 'unit_id or machine_id required'], 400);
+        }
+
+        $table = $wpdb->prefix . 'tmon_provisioned_devices';
+
+        // Prefer strict match (unit+machine). Fallback to match by machine_id or unit_id.
+        if ($unit_id && $machine_id) {
             $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id), ARRAY_A);
-            if (!$row) {
-                return new WP_REST_Response(['provisioned' => false], 200);
-            }
-            $should_send = !empty($row['settings_staged']) || $force;
-            if ($should_send) {
-                $settings = [
-                    'unit_id' => $row['unit_id'],
-                    'machine_id' => $row['machine_id'],
-                    'role' => $row['role'],
-                    'company_id' => $row['company_id'],
-                    'plan' => $row['plan'],
-                    'status' => $row['status'],
-                    'notes' => $row['notes'],
-                    'site_url' => $row['site_url'],
-                    'unit_name' => $row['unit_name'],
-                ];
-                // Only clear staged flag if not forced
-                if (empty($force)) {
-                    $wpdb->update($table, ['settings_staged' => 0], ['unit_id' => $unit_id, 'machine_id' => $machine_id]);
-                }
-                return new WP_REST_Response(['provisioned' => true, 'settings' => $settings], 200);
-            }
+        } elseif ($machine_id) {
+            $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE machine_id=%s ORDER BY created_at DESC LIMIT 1", $machine_id), ARRAY_A);
+        } else {
+            $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE unit_id=%s ORDER BY created_at DESC LIMIT 1", $unit_id), ARRAY_A);
+        }
+
+        if (!$row) {
+            return new WP_REST_Response(['provisioned' => false], 200);
+        }
+
+        // Send settings if staged OR forced
+        $should_send = (!empty($row['settings_staged']) && intval($row['settings_staged']) === 1) || $force_flag;
+        if (!$should_send) {
             return new WP_REST_Response(['provisioned' => true, 'settings' => null], 200);
         }
+
+        // Parse JSON fields that may be stored as strings
+        $db_settings = [];
+        if (!empty($row['settings'])) {
+            $decoded = json_decode($row['settings'], true);
+            if (is_array($decoded)) { $db_settings = $decoded; }
+        }
+
+        $prev_settings = [];
+        if (!empty($row['prev_settings'])) {
+            $decoded_prev = json_decode($row['prev_settings'], true);
+            if (is_array($decoded_prev)) { $prev_settings = $decoded_prev; }
+        }
+
+        // Build computed defaults for device consumption, then allow DB settings to override
+        $role = $row['role'] ?? '';
+        $device_defaults = [
+            'NODE_TYPE' => $role,
+            'UNIT_Name' => $row['unit_name'] ?? '',
+            'COMPANY_ID' => (!empty($row['company_id']) ? intval($row['company_id']) : null),
+            'PLAN' => $row['plan'] ?? '',
+            'PROVISION_STATUS' => $row['status'] ?? '',
+            'NOTES' => $row['notes'] ?? '',
+            'WIFI_DISABLE_AFTER_PROVISION' => ($role === 'remote'),
+            'SITE_URL' => $row['site_url'] ?? '',
+            'CHECKIN_TIME' => $row['checkin_time'] ?? '',
+            'FIRMWARE' => $row['firmware'] ?? '',
+            'FIRMWARE_URL' => $row['firmware_url'] ?? '',
+            'unit_id' => $row['unit_id'] ?? '',
+            'machine_id' => $row['machine_id'] ?? '',
+        };
+
+        // DB settings override defaults (explicit settings column should control values)
+        $device_settings = array_merge($device_defaults, $db_settings);
+
+        // Clear staged flag if not forced
+        if (!$force_flag) {
+            $wpdb->update(
+                $table,
+                ['settings_staged' => 0],
+                ['unit_id' => $row['unit_id'], 'machine_id' => $row['machine_id']]
+            );
+        }
+
+        // Audit/log the provision sent
+        do_action('tmon_admin_audit', 'device_provision_sent', sprintf('unit_id=%s machine_id=%s site=%s', $row['unit_id'], $row['machine_id'], $row['site_url'] ?? ''));
+
+        return new WP_REST_Response([
+            'provisioned' => true,
+            'settings' => $device_settings,
+            'meta' => ['prev_settings' => $prev_settings],
+        ], 200);
+    };
+
+    // New route: accept GET and POST
+    register_rest_route('tmon/v1', '/device/provision', [
+        'methods' => ['GET', 'POST'],
+        'permission_callback' => '__return_true',
+        'callback' => $handler,
+    ]);
+
+    // Backwards-compatible alias for older devices
+    register_rest_route('tmon/v1', '/provision', [
+        'methods' => ['GET', 'POST'],
+        'permission_callback' => '__return_true',
+        'callback' => $handler,
     ]);
 });
