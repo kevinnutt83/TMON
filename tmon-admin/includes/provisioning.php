@@ -39,6 +39,9 @@ function tmon_admin_maybe_migrate_provisioned_devices() {
     if (empty($have['site_url'])) {
         $wpdb->query("ALTER TABLE $table ADD COLUMN site_url VARCHAR(255) DEFAULT ''");
     }
+    if (empty($have['settings_staged'])) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN settings_staged TINYINT(1) DEFAULT 0");
+    }
 
     // Ensure unique index on (unit_id, machine_id)
     $indexes = $wpdb->get_results("SHOW INDEX FROM $table", ARRAY_A);
@@ -84,14 +87,13 @@ function tmon_admin_provisioning_page() {
     if (!current_user_can('manage_options')) wp_die('Forbidden');
     global $wpdb;
 
-    $table = $wpdb->prefix . 'tmon_provisioned_devices';
-
-    // Only handle table row update, push_config, send_to_uc_registry, push_role_gps_direct, refresh_known_ids, hier_sync here.
+    // --- PATCH: Handle POST with redirect-after-POST pattern ---
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && function_exists('tmon_admin_verify_nonce') && tmon_admin_verify_nonce('tmon_admin_provision')) {
         $action = sanitize_text_field($_POST['action'] ?? '');
+        $do_provision = isset($_POST['save_provision']);
         $redirect_url = remove_query_arg(['provision'], wp_get_referer() ?: admin_url('admin.php?page=tmon-admin-provisioning'));
 
-        // Only keep row update and push actions here
+        // --- UPDATE DEVICE ROW (table row form) ---
         if ($action === 'update') {
             $id = intval($_POST['id'] ?? 0);
             $role = sanitize_text_field($_POST['role'] ?? 'base');
@@ -364,7 +366,7 @@ function tmon_admin_provisioning_page() {
         }
     }
 
-    // Admin notices
+    // PATCH: Show admin notices after redirect
     if (isset($_GET['provision'])) {
         if ($_GET['provision'] === 'success') {
             echo '<div class="updated"><p>Device provisioned or updated successfully.</p></div>';
@@ -373,11 +375,9 @@ function tmon_admin_provisioning_page() {
         }
     }
 
-    // --- UI POLISH: Section headings and CSS class for main form ---
-    echo '<div class="wrap tmon-admin">';
-    echo '<h1>Provisioning</h1>';
-
-    // Standalone refresh known IDs form
+    // Render UI
+    echo '<div class="wrap tmon-admin"><h1>Provisioning</h1>';
+    // Standalone refresh known IDs form (outside of create form to avoid nested forms)
     echo '<h2>Known IDs</h2>';
     echo '<form method="post" style="margin-bottom:12px">';
     wp_nonce_field('tmon_admin_provision');
@@ -385,7 +385,7 @@ function tmon_admin_provisioning_page() {
     submit_button('Refresh from paired UC sites', 'secondary', '', false);
     echo '</form>';
 
-    // --- MAIN PROVISIONING FORM (add/update) ---
+    // --- Unified Provisioning Form ---
     echo '<h2>Add or Update Provisioned Device</h2>';
     echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" class="tmon-provision-form">';
     wp_nonce_field('tmon_admin_provision_device');
@@ -492,11 +492,13 @@ EOT;
     echo '<tr><th scope="row">Notes</th><td><textarea name="notes" class="large-text"></textarea></td></tr>';
     echo '<tr><th scope="row">Site URL</th><td><input name="site_url" type="url" class="regular-text" placeholder="https://example.com" /></td></tr>';
     echo '</table>';
-    submit_button('Save Device');
+    echo '<div class="tmon-form-actions">';
+    submit_button('Save', 'secondary', 'submit', false);
     submit_button('Save & Provision to UC', 'primary', 'save_provision', false);
+    echo '</div>';
     echo '</form>';
 
-    // --- DEVICE TABLE ---
+    // --- Provisioned Devices Table ---
     echo '<h2>Provisioned Devices</h2>';
     // Build a map of current known names from Admin's device registry (if present)
     $names_map = [];
@@ -581,7 +583,7 @@ EOT;
     // $rows now contains both provisioned and unprovisioned devices for display
 
     // $table is now always defined before this query
-    echo '<table class="wp-list-table widefat tmon-provisioned-table"><thead><tr><th>ID</th><th>Unit ID</th><th>Name</th><th>Machine ID</th><th>Site URL</th><th>Role</th><th>Company ID</th><th>Plan</th><th>Status</th><th>Notes</th><th>Created</th><th>Updated</th><th>Actions</th></tr></thead><tbody>';
+    echo '<table class="wp-list-table widefat"><thead><tr><th>ID</th><th>Unit ID</th><th>Name</th><th>Machine ID</th><th>Site URL</th><th>Role</th><th>Company ID</th><th>Plan</th><th>Status</th><th>Notes</th><th>Created</th><th>Updated</th><th>Actions</th></tr></thead><tbody>';
     foreach ($rows as $r) {
         echo '<tr>';
         echo '<td>'.intval($r['id']).'</td>';
@@ -600,11 +602,17 @@ EOT;
         echo '<td>'.esc_html($r['created_at']).'</td>';
         echo '<td>'.esc_html($r['updated_at']).'</td>';
         echo '<td>';
-        // Only one row update form
+        echo '<form method="post" style="display:inline-block;margin-right:6px;">';
+        wp_nonce_field('tmon_admin_provision');
+        echo '<input type="hidden" name="action" value="delete" />';
+        echo '<input type="hidden" name="id" value="'.intval($r['id']).'" />';
+        submit_button('Delete', 'delete', '', false);
+        echo '</form>';
         echo '<form method="post" style="display:inline-block;">';
         wp_nonce_field('tmon_admin_provision');
         echo '<input type="hidden" name="action" value="update" />';
         echo '<input type="hidden" name="id" value="'.intval($r['id']).'" />';
+        // FIX: Wrap "base", "remote", and "wifi" in quotes to avoid syntax errors
         echo ' Role <select name="role">';
         echo '<option value="base"' . (($r['role'] === 'base') ? ' selected' : '') . '>base</option>';
         echo '<option value="remote"' . (($r['role'] === 'remote') ? ' selected' : '') . '>remote</option>';
@@ -622,31 +630,13 @@ EOT;
         echo '</select>';
         echo ' Company <input name="company_id" type="number" class="small-text" value="'.intval($r['company_id']).'" />';
         echo ' Notes <input name="notes" type="text" class="regular-text" value="'.esc_attr($r['notes']).'" />';
-        echo ' Site URL <input name="site_url" type="url" class="regular-text" value="'.esc_attr($r['site_url'] ?? ($r['wordpress_api_url'] ?? '')).'" />';
-        submit_button('Update', 'primary', '', false);
+        echo ' Site URL <input name="site_url" type="url" class="regular-text" value="'.esc_attr($r['site_url'] ?? ($r['wordpress_api_url'] ?? '')).'"/>';
+        echo '<div class="tmon-form-actions">';
+        submit_button('Save', 'secondary', 'submit', false);
+        submit_button('Save & Provision to UC', 'primary', 'save_provision', false);
+        echo '</div>';
         echo '</form>';
-        // Only two push actions
-        echo '<form method="post" style="display:block;margin-top:6px;">';
-        wp_nonce_field('tmon_admin_provision');
-        echo '<input type="hidden" name="action" value="push_config" />';
-        echo '<input type="hidden" name="unit_id" value="'.esc_attr($r['unit_id']).'" />';
-        echo '<input type="hidden" name="role" value="'.esc_attr($r['role']).'" />';
-        echo ' UC Site URL <input name="site_url" list="tmon_paired_sites" type="url" class="regular-text" placeholder="https://uc.example.com" />';
-        submit_button('Push Config to UC', 'secondary', '', false);
-        echo '</form>';
-        echo '<form method="post" style="display:block;margin-top:6px;">';
-        wp_nonce_field('tmon_admin_provision');
-        echo '<input type="hidden" name="action" value="push_role_gps_direct" />';
-        echo '<input type="hidden" name="unit_id" value="'.esc_attr($r['unit_id']).'" />';
-        echo ' Role <select name="role">';
-        echo '<option value="base"' . (($r['role'] === 'base') ? ' selected' : '') . '>base</option>';
-        echo '<option value="remote"' . (($r['role'] === 'remote') ? ' selected' : '') . '>remote</option>';
-        echo '</select>';
-        echo ' GPS Lat <input name="gps_lat" type="text" class="small-text" placeholder="38.8977" />';
-        echo ' GPS Lng <input name="gps_lng" type="text" class="small-text" placeholder="-77.0365" />';
-        echo ' UC Site URL <input name="site_url" list="tmon_paired_sites" type="url" class="regular-text" placeholder="https://uc.example.com" />';
-        submit_button('Push Role + GPS', 'secondary', '', false);
-        echo '</form>';
+        // Remove other per-row forms (push config, send registry, push role+gps) for clarity
         echo '</td>';
         echo '</tr>';
     }
@@ -1129,6 +1119,7 @@ add_action('admin_post_tmon_admin_provision_device', function() {
         'notes'      => $notes,
         'role'       => $role,
         'site_url'   => $site_url,
+        'settings_staged' => 1, // Mark settings as staged for device to fetch
     ];
 
     if ($exists) {
@@ -1148,18 +1139,4 @@ add_action('admin_post_tmon_admin_provision_device', function() {
     }
     wp_redirect(add_query_arg('provision', 'success', admin_url('admin.php?page=tmon-admin-provisioning')));
     exit;
-});
-
-// CSS polish: ensure CSS is loaded only once and add some basic polish for .tmon-provision-form and .tmon-provisioned-table
-add_action('admin_head', function() {
-    ?>
-    <style>
-    .tmon-provision-form { background: #f9f9f9; padding: 18px 24px 12px 24px; border-radius: 6px; margin-bottom: 24px; }
-    .tmon-provision-form .form-table th { width: 160px; }
-    .tmon-provisioned-table th, .tmon-provisioned-table td { padding: 6px 8px; }
-    .tmon-provisioned-table tr:nth-child(even) { background: #f6f8fa; }
-    .tmon-provisioned-table tr:hover { background: #eaf6ff; }
-    .tmon-provisioned-table td form { margin-bottom: 2px; }
-    </style>
-    <?php
 });
