@@ -39,6 +39,9 @@ function tmon_admin_maybe_migrate_provisioned_devices() {
     if (empty($have['site_url'])) {
         $wpdb->query("ALTER TABLE $table ADD COLUMN site_url VARCHAR(255) DEFAULT ''");
     }
+    if (empty($have['unit_name'])) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN unit_name VARCHAR(128) DEFAULT ''");
+    }
     if (empty($have['settings_staged'])) {
         $wpdb->query("ALTER TABLE $table ADD COLUMN settings_staged TINYINT(1) DEFAULT 0");
     }
@@ -491,6 +494,7 @@ EOT;
     echo '<tr><th scope="row">Status</th><td><select name="status"><option>active</option><option>suspended</option><option>expired</option></select></td></tr>';
     echo '<tr><th scope="row">Notes</th><td><textarea name="notes" class="large-text"></textarea></td></tr>';
     echo '<tr><th scope="row">Site URL</th><td><input name="site_url" type="url" class="regular-text" placeholder="https://example.com" /></td></tr>';
+    echo '<tr><th scope="row">Unit Name</th><td><input name="unit_name" type="text" class="regular-text" placeholder="Optional display name"></td></tr>';
     echo '</table>';
     echo '<div class="tmon-form-actions">';
     submit_button('Save', 'secondary', 'submit', false);
@@ -631,6 +635,7 @@ EOT;
         echo ' Company <input name="company_id" type="number" class="small-text" value="'.intval($r['company_id']).'" />';
         echo ' Notes <input name="notes" type="text" class="regular-text" value="'.esc_attr($r['notes']).'" />';
         echo ' Site URL <input name="site_url" type="url" class="regular-text" value="'.esc_attr($r['site_url'] ?? ($r['wordpress_api_url'] ?? '')).'"/>';
+        echo ' Unit Name <input name="unit_name" type="text" class="regular-text" value="'.esc_attr($r['unit_name'] ?? '').'" />';
         echo '<div class="tmon-form-actions">';
         submit_button('Save', 'secondary', 'submit', false);
         submit_button('Save & Provision to UC', 'primary', 'save_provision', false);
@@ -960,6 +965,8 @@ if (!function_exists('tmon_admin_install_provisioning_schema')) {
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             site_url VARCHAR(255) DEFAULT '',
+            unit_name VARCHAR(128) DEFAULT '',
+            settings_staged TINYINT(1) DEFAULT 0,
             UNIQUE KEY unit_machine (unit_id, machine_id)
         ) $charset_collate;";
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
@@ -1011,6 +1018,8 @@ if (!function_exists('tmon_admin_ensure_columns')) {
             'created_at' => "ALTER TABLE $table ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP",
             'updated_at' => "ALTER TABLE $table ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP",
             'site_url' => "ALTER TABLE $table ADD COLUMN site_url VARCHAR(255) DEFAULT ''",
+            'unit_name' => "ALTER TABLE $table ADD COLUMN unit_name VARCHAR(128) DEFAULT ''",
+            'settings_staged' => "ALTER TABLE $table ADD COLUMN settings_staged TINYINT(1) DEFAULT 0",
         ];
         $cols = $wpdb->get_results("SHOW COLUMNS FROM $table", ARRAY_A);
         $have = [];
@@ -1100,6 +1109,7 @@ add_action('admin_post_tmon_admin_provision_device', function() {
     $notes      = sanitize_textarea_field($_POST['notes'] ?? '');
     $role       = sanitize_text_field($_POST['role'] ?? 'base');
     $site_url   = esc_url_raw($_POST['site_url'] ?? '');
+    $unit_name  = sanitize_text_field($_POST['unit_name'] ?? '');
     $save_provision = isset($_POST['save_provision']);
 
     if (!$unit_id || !$machine_id) {
@@ -1119,6 +1129,7 @@ add_action('admin_post_tmon_admin_provision_device', function() {
         'notes'      => $notes,
         'role'       => $role,
         'site_url'   => $site_url,
+        'unit_name'  => $unit_name,
         'settings_staged' => 1, // Mark settings as staged for device to fetch
     ];
 
@@ -1130,13 +1141,54 @@ add_action('admin_post_tmon_admin_provision_device', function() {
 
     // Optionally, push provisioned status to the device or trigger a hook here
     if ($save_provision && $site_url) {
-        $maybe_name = '';
-        $dev_table = $wpdb->prefix . 'tmon_devices';
-        if ($unit_id && $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
-            $maybe_name = $wpdb->get_var($wpdb->prepare("SELECT unit_name FROM $dev_table WHERE unit_id=%s", $unit_id));
+        $maybe_name = $unit_name;
+        if (!$maybe_name) {
+            $dev_table = $wpdb->prefix . 'tmon_devices';
+            if ($unit_id && $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+                $maybe_name = $wpdb->get_var($wpdb->prepare("SELECT unit_name FROM $dev_table WHERE unit_id=%s", $unit_id));
+            }
         }
         tmon_admin_push_to_uc_site($unit_id, $site_url, $role, $maybe_name, $company_id, null, null);
     }
     wp_redirect(add_query_arg('provision', 'success', admin_url('admin.php?page=tmon-admin-provisioning')));
     exit;
+});
+
+// --- REST endpoint for device check-in to fetch staged settings ---
+add_action('rest_api_init', function() {
+    register_rest_route('tmon/v1', '/device/provision', [
+        'methods' => 'POST',
+        'permission_callback' => '__return_true',
+        'callback' => function($request) {
+            global $wpdb;
+            $unit_id = sanitize_text_field($request->get_param('unit_id'));
+            $machine_id = sanitize_text_field($request->get_param('machine_id'));
+            if (!$unit_id || !$machine_id) {
+                return new WP_REST_Response(['error' => 'unit_id and machine_id required'], 400);
+            }
+            $table = $wpdb->prefix . 'tmon_provisioned_devices';
+            $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id), ARRAY_A);
+            if (!$row) {
+                return new WP_REST_Response(['provisioned' => false], 200);
+            }
+            if (!empty($row['settings_staged'])) {
+                // Build settings payload
+                $settings = [
+                    'unit_id' => $row['unit_id'],
+                    'machine_id' => $row['machine_id'],
+                    'role' => $row['role'],
+                    'company_id' => $row['company_id'],
+                    'plan' => $row['plan'],
+                    'status' => $row['status'],
+                    'notes' => $row['notes'],
+                    'site_url' => $row['site_url'],
+                    'unit_name' => $row['unit_name'],
+                ];
+                // Clear the staged flag after sending
+                $wpdb->update($table, ['settings_staged' => 0], ['unit_id' => $unit_id, 'machine_id' => $machine_id]);
+                return new WP_REST_Response(['provisioned' => true, 'settings' => $settings], 200);
+            }
+            return new WP_REST_Response(['provisioned' => true, 'settings' => null], 200);
+        }
+    ]);
 });
