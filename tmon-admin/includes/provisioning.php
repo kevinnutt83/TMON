@@ -893,36 +893,87 @@ EOT;
     const ajaxUrl = {$admin_ajax_url};
     const fetchNonce = {$fetch_nonce_js};
 
-    function fetchGithubAndFill(row=null) {
+    async function fetchGithubAndFill(row=null) {
         const params = new URLSearchParams();
         params.set('action','tmon_admin_fetch_github_manifest');
         params.set('nonce', fetchNonce);
-        fetch(ajaxUrl + '?' + params.toString(), { credentials: 'same-origin' })
-            .then(r => r.json())
-            .then(j => {
-                if (!j || !j.success) {
-                    alert('Failed to fetch firmware metadata from GitHub.');
-                    return;
-                }
-                const ver = j.data.version || '';
-                const url = j.data.firmware_url || '';
-                if (row) {
-                    const verEl = row.querySelector('.tmon_row_firmware');
-                    const urlEl = row.querySelector('.tmon_row_firmware_url');
-                    if (verEl) verEl.value = ver;
-                    if (urlEl) urlEl.value = url;
-                } else {
-                    const verEl = document.querySelector('#tmon_firmware');
-                    const urlEl = document.querySelector('#tmon_firmware_url');
-                    if (verEl) verEl.value = ver;
-                    if (urlEl) urlEl.value = url;
-                }
-            }).catch(()=>{ alert('Error contacting server.'); });
+
+        // Try POST first (more robust)
+        try {
+            const resp = await fetch(ajaxUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+                body: params.toString(),
+                credentials: 'same-origin'
+            });
+            if (!resp.ok) {
+                // Try to read text body to show diagnostic info
+                const text = await resp.text().catch(()=>'(no body)');
+                console.error('GitHub manifest fetch failed (POST):', resp.status, text);
+                // fallback to GET attempt
+                return fallbackGet(row, params);
+            }
+            const json = await resp.json().catch(()=>null);
+            if (!json || !json.success) {
+                console.warn('GitHub manifest returned no data or not success:', json);
+                alert('Failed to fetch firmware metadata from GitHub.');
+                return;
+            }
+            fillInputs(json, row);
+        } catch (err) {
+            console.error('GitHub manifest fetch error (POST):', err);
+            // fallback to GET attempt
+            return fallbackGet(row, params);
+        }
+    }
+
+    async function fallbackGet(row, params) {
+        // Try GET as a fallback, to show whether server accepts GET
+        try {
+            const resp = await fetch(ajaxUrl + '?' + params.toString(), {
+                method: 'GET',
+                credentials: 'same-origin'
+            });
+            if (!resp.ok) {
+                const text = await resp.text().catch(()=>'(no body)');
+                console.error('GitHub manifest fetch failed (GET):', resp.status, text);
+                alert('Failed to fetch firmware metadata from GitHub (server returned ' + resp.status + ')');
+                return;
+            }
+            const json = await resp.json().catch(()=>null);
+            if (!json || !json.success) {
+                console.warn('GitHub manifest returned no data or not success:', json);
+                alert('Failed to fetch firmware metadata from GitHub.');
+                return;
+            }
+            fillInputs(json, row);
+        } catch (err) {
+            console.error('GitHub manifest fetch error (GET):', err);
+            alert('Error contacting server for GitHub manifest.');
+            return;
+        }
+    }
+
+    function fillInputs(json, row=null) {
+        const ver = json.data.version || '';
+        const url = json.data.firmware_url || '';
+        if (row) {
+            const verEl = row.querySelector('.tmon_row_firmware');
+            const urlEl = row.querySelector('.tmon_row_firmware_url');
+            if (verEl) verEl.value = ver;
+            if (urlEl) urlEl.value = url;
+        } else {
+            const verEl = document.querySelector('#tmon_firmware');
+            const urlEl = document.querySelector('#tmon_firmware_url');
+            if (verEl) verEl.value = ver;
+            if (urlEl) urlEl.value = url;
+        }
     }
 
     // Top form fetch button(s)
     document.querySelectorAll('.tmon_fetch_github_btn').forEach(function(btn){
         btn.addEventListener('click', function(e){
+            e.preventDefault();
             fetchGithubAndFill(null);
         });
     });
@@ -930,6 +981,7 @@ EOT;
     // Per-row fetch buttons
     document.querySelectorAll('.tmon_fetch_github_btn_row').forEach(function(btn){
         btn.addEventListener('click', function(e){
+            e.preventDefault();
             const row = btn.closest('tr');
             if (!row) return;
             fetchGithubAndFill(row);
