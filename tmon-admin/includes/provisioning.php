@@ -114,6 +114,10 @@ function tmon_admin_provisioning_page() {
             $notes = sanitize_textarea_field($_POST['notes'] ?? '');
             $site_url = esc_url_raw($_POST['site_url'] ?? '');
             $maybe_name = '';
+            // NEW: firmware values from per-row or top form
+            $firmware = sanitize_text_field($_POST['firmware'] ?? '');
+            $firmware_url = esc_url_raw($_POST['firmware_url'] ?? '');
+
             // PATCH: For update, ensure unit_id and machine_id are present for id==0 and use $prov_table
             if ($id === 0) {
                 $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
@@ -128,7 +132,10 @@ function tmon_admin_provisioning_page() {
                         'status' => $status,
                         'company_id' => $company_id,
                         'notes' => $notes,
-                        'site_url' => $site_url
+                        'site_url' => $site_url,
+                        // NEW
+                        'firmware' => $firmware,
+                        'firmware_url' => $firmware_url,
                     ];
                     if ($exists) {
                         $wpdb->update($prov_table, $fields, ['id' => intval($exists)]);
@@ -151,7 +158,10 @@ function tmon_admin_provisioning_page() {
                         'status' => $status,
                         'company_id' => $company_id,
                         'notes' => $notes,
-                        'site_url' => $site_url
+                        'site_url' => $site_url,
+                        // NEW
+                        'firmware' => $firmware,
+                        'firmware_url' => $firmware_url,
                     ];
                     // Use $prov_table here (was $table unintentionally)
                     $wpdb->update($prov_table, $fields, ['id' => $id]);
@@ -545,8 +555,14 @@ EOT;
     echo '<tr><th scope="row">Site URL</th><td><input name="site_url" type="url" class="regular-text" placeholder="https://example.com" /></td></tr>';
     echo '<tr><th scope="row">Unit Name</th><td><input name="unit_name" type="text" class="regular-text" placeholder="Optional display name"></td></tr>';
     // NEW: Firmware fields for create/update form
-    echo '<tr><th scope="row">Firmware Version</th><td><input name="firmware" type="text" class="regular-text" placeholder="e.g., 1.2.3" /></td></tr>';
-    echo '<tr><th scope="row">Firmware URL</th><td><input name="firmware_url" type="url" class="regular-text" placeholder="https://example.com/firmware.bin" /></td></tr>';
+    echo '<tr><th scope="row">Firmware Version</th><td>';
+    echo '<input name="firmware" id="tmon_firmware" type="text" class="regular-text" placeholder="e.g., 1.2.3" />';
+    echo ' <button type="button" class="button tmon_fetch_github_btn" data-target="#tmon_firmware">Fetch from GitHub</button>';
+    echo '</td></tr>';
+    echo '<tr><th scope="row">Firmware URL</th><td>';
+    echo '<input name="firmware_url" id="tmon_firmware_url" type="url" class="regular-text" placeholder="https://example.com/firmware.bin" />';
+    echo ' <button type="button" class="button tmon_fetch_github_btn" data-target="#tmon_firmware_url">Fetch from GitHub</button>';
+    echo '</td></tr>';
     echo '</table>';
     echo '<div class="tmon-form-actions">';
     submit_button('Save', 'secondary', 'submit', false);
@@ -687,8 +703,9 @@ EOT;
         echo ' Site URL <input name="site_url" type="url" class="regular-text" value="'.esc_attr($r['site_url'] ?? ($r['wordpress_api_url'] ?? '')).'"/>';
         echo ' Unit Name <input name="unit_name" type="text" class="regular-text" value="'.esc_attr($r['unit_name'] ?? '').'" />';
         // NEW: per-row firmware fields
-        echo ' Firmware <input name="firmware" type="text" class="regular-text" value="'.esc_attr($r['firmware'] ?? '').'" placeholder="1.2.3" />';
-        echo ' Firmware URL <input name="firmware_url" type="url" class="regular-text" value="'.esc_attr($r['firmware_url'] ?? '').'" placeholder="https://..." />';
+        echo ' Firmware <input name="firmware" type="text" class="regular-text tmon_row_firmware" value="'.esc_attr($r['firmware'] ?? '').'" placeholder="1.2.3" /> ';
+        echo ' Firmware URL <input name="firmware_url" type="url" class="regular-text tmon_row_firmware_url" value="'.esc_attr($r['firmware_url'] ?? '').'" placeholder="https://..." /> ';
+        echo ' <button type="button" class="button tmon_fetch_github_btn_row" data-row="'.intval($r['id']).'">Fetch from GitHub</button>';
         echo '<div class="tmon-form-actions">';
         submit_button('Save', 'secondary', 'submit', false);
         submit_button('Save & Provision to UC', 'primary', 'save_provision', false);
@@ -999,6 +1016,68 @@ add_action('wp_ajax_tmon_admin_known_units', function(){
     $out = [];
     foreach ($items as $it) { if (!isset($dedup[$it['unit_id']])) { $dedup[$it['unit_id']] = 1; $out[] = $it; } }
     wp_send_json_success(['items' => $out, 'page' => $page, 'per_page' => $per_page]);
+});
+
+// --- PATCH: Add AJAX endpoint to fetch firmware information from GitHub ---
+add_action('wp_ajax_tmon_admin_fetch_github_manifest', function() {
+    if (!current_user_can('manage_options')) wp_send_json_error(['message' => 'forbidden'], 403);
+    check_ajax_referer('tmon_admin_fetch_github', 'nonce');
+
+    // Preferred: manifest JSON in micropython repo; fallback to version.txt
+    $base_raw = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/';
+    $manifest_url = $base_raw . 'manifest.json';
+    $ver_url = $base_raw . 'version.txt';
+    $firmware_url = '';
+    $version = '';
+
+    // Try manifest.json first
+    $resp = wp_remote_get($manifest_url, ['timeout' => 10]);
+    if (!is_wp_error($resp) && wp_remote_retrieve_response_code($resp) == 200) {
+        $body = wp_remote_retrieve_body($resp);
+        $m = json_decode($body, true);
+        if (is_array($m)) {
+            // common manifest shapes: {'version': '...', 'files': [{'path':'firmware.bin'}]} or {'firmware':'firmware.bin', 'version':'...'}
+            if (!empty($m['version'])) { $version = sanitize_text_field($m['version']); }
+            if (!empty($m['firmware'])) {
+                $firmware_url = $base_raw . ltrim($m['firmware'], '/');
+            } elseif (!empty($m['files']) && is_array($m['files'])) {
+                // attempt to find the first file that looks like a firmware binary
+                foreach ($m['files'] as $f) {
+                    if (is_array($f) && !empty($f['path'])) {
+                        $p = $f['path'];
+                    } elseif (is_string($f)) {
+                        $p = $f;
+                    } else { $p = ''; }
+                    if ($p && preg_match('/firmware|.bin|.hex|.img/i', $p)) {
+                        $firmware_url = $base_raw . ltrim($p, '/');
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // fallback to version.txt to get just the version
+    if (empty($version) || empty($firmware_url)) {
+        $resp2 = wp_remote_get($ver_url, ['timeout' => 10]);
+        if (!is_wp_error($resp2) && wp_remote_retrieve_response_code($resp2) == 200) {
+            $body2 = trim(wp_remote_retrieve_body($resp2));
+            if ($body2) {
+                if (empty($version)) $version = sanitize_text_field($body2);
+                // Construct a default firmware filename if manifest not present
+                if (empty($firmware_url)) {
+                    // Assume commonly named firmware binary in repo root
+                    $firmware_url = $base_raw . 'firmware.bin';
+                }
+            }
+        }
+    }
+
+    if (empty($version) && empty($firmware_url)) {
+        wp_send_json_error(['message' => 'manifest or version file not found'], 404);
+    }
+
+    wp_send_json_success(['version' => $version, 'firmware_url' => esc_url_raw($firmware_url)]);
 });
 
 // Fix for parse error: ensure all array values are quoted as strings.
