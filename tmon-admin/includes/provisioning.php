@@ -1413,3 +1413,61 @@ add_action('rest_api_init', function() {
         'callback' => $handler,
     ]);
 });
+
+// After we render the UI, expose admin-ajax URL and a server nonce for our fetch action
+$fetch_nonce = wp_create_nonce('tmon_admin_fetch_github');
+$admin_ajax_url = wp_json_encode(esc_url(admin_url('admin-ajax.php')));
+$fetch_nonce_js = wp_json_encode($fetch_nonce);
+
+// Append JS that attaches click handlers to "Fetch from GitHub" buttons
+echo <<<EOT
+<script>
+(function(){
+    const ajaxUrl = {$admin_ajax_url};
+    const fetchNonce = {$fetch_nonce_js};
+
+    function fetchGithubAndFill(row=null) {
+        const params = new URLSearchParams();
+        params.set('action','tmon_admin_fetch_github_manifest');
+        params.set('nonce', fetchNonce);
+        fetch(ajaxUrl + '?' + params.toString(), { credentials: 'same-origin' })
+            .then(r => r.json())
+            .then(j => {
+                if (!j || !j.success) {
+                    alert('Failed to fetch firmware metadata from GitHub.');
+                    return;
+                }
+                const ver = j.data.version || '';
+                const url = j.data.firmware_url || '';
+                if (row) {
+                    const verEl = row.querySelector('.tmon_row_firmware');
+                    const urlEl = row.querySelector('.tmon_row_firmware_url');
+                    if (verEl) verEl.value = ver;
+                    if (urlEl) urlEl.value = url;
+                } else {
+                    const verEl = document.querySelector('#tmon_firmware');
+                    const urlEl = document.querySelector('#tmon_firmware_url');
+                    if (verEl) verEl.value = ver;
+                    if (urlEl) urlEl.value = url;
+                }
+            }).catch(()=>{ alert('Error contacting server.'); });
+    }
+
+    // Top form fetch button(s)
+    document.querySelectorAll('.tmon_fetch_github_btn').forEach(function(btn){
+        btn.addEventListener('click', function(e){
+            fetchGithubAndFill(null);
+        });
+    });
+
+    // Per-row fetch buttons
+    document.querySelectorAll('.tmon_fetch_github_btn_row').forEach(function(btn){
+        btn.addEventListener('click', function(e){
+            const row = btn.closest('tr');
+            if (!row) return;
+            fetchGithubAndFill(row);
+        });
+    });
+})();
+</script>
+EOT;
