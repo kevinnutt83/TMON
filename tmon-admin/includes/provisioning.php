@@ -1282,7 +1282,7 @@ add_action('rest_api_init', function() {
 
         // Build computed defaults for device consumption, then allow DB settings to override
         $role = $row['role'] ?? '';
-        $device_defaults = [
+        $device_defaults = array(
             'NODE_TYPE' => $role,
             'UNIT_Name' => $row['unit_name'] ?? '',
             'COMPANY_ID' => (!empty($row['company_id']) ? intval($row['company_id']) : null),
@@ -1296,7 +1296,7 @@ add_action('rest_api_init', function() {
             'FIRMWARE_URL' => $row['firmware_url'] ?? '',
             'unit_id' => $row['unit_id'] ?? '',
             'machine_id' => $row['machine_id'] ?? '',
-        };
+        );
 
         // DB settings override defaults (explicit settings column should control values)
         $device_settings = array_merge($device_defaults, $db_settings);
