@@ -235,6 +235,9 @@ add_action('admin_enqueue_scripts', function () {
 	$localized = [
 		'ajaxUrl' => admin_url('admin-ajax.php'),
 		'nonce'   => wp_create_nonce('tmon-admin'),
+		// Add REST root and a manifest fetch nonce for admin.js to call the REST endpoint directly
+		'restRoot' => esc_url_raw( rest_url() ),
+		'manifestNonce' => wp_create_nonce('tmon_admin_manifest'),
 	];
 	wp_localize_script('tmon-admin', 'TMON_ADMIN', $localized);
 
@@ -400,4 +403,133 @@ add_action('admin_init', function(){
             }
         }
     }
+});
+
+// Proxy fetch of GitHub manifest/version files — REST & admin-ajax compatibility
+add_action('rest_api_init', function() {
+	register_rest_route('tmon-admin/v1', '/github/manifest', [
+		'methods' => WP_REST_Server::READABLE, // allow GET
+		'permission_callback' => function() {
+			return current_user_can('manage_options');
+		},
+		'callback' => function( WP_REST_Request $request ) {
+			// Accept either manifest_url OR repo (owner/name) +/- branch param
+			$manifest_url = $request->get_param('manifest_url');
+			$repo = $request->get_param('repo');
+			$branch = $request->get_param('branch') ?: 'main';
+			$try_urls = [];
+
+			if ($manifest_url) {
+				$try_urls[] = esc_url_raw($manifest_url);
+			} elseif ($repo) {
+				// Trim/normalize repo param and try raw GitHub manifest locations
+				$repo = trim($repo, " \t\n\r/"); // owner/repo or owner/repo/path
+				// If path included, try it directly; else try root manifest.json
+				if (strpos($repo, '/') !== false && strpos($repo, '/') !== strrpos($repo, '/')) {
+					// owner/repo/path -> preserve as provided
+					$try_urls[] = "https://raw.githubusercontent.com/{$repo}";
+				} else {
+					// owner/repo -> try root manifest.json & version.txt
+					$try_urls[] = "https://raw.githubusercontent.com/{$repo}/{$branch}/manifest.json";
+					$try_urls[] = "https://raw.githubusercontent.com/{$repo}/{$branch}/version.txt";
+					// also try master fallback
+					if ($branch !== 'master') {
+						$try_urls[] = "https://raw.githubusercontent.com/{$repo}/master/manifest.json";
+						$try_urls[] = "https://raw.githubusercontent.com/{$repo}/master/version.txt";
+					}
+				}
+			} else {
+				return new WP_Error('missing_params', 'manifest_url or repo parameter required', ['status'=>400]);
+			}
+
+			// Attempt to fetch candidate URLs
+			$errors = [];
+			foreach ($try_urls as $u) {
+				$u = esc_url_raw($u);
+				$res = wp_remote_get($u, ['timeout' => 10, 'headers' => ['Accept' => 'application/json']]);
+				if (is_wp_error($res)) {
+					$errors[] = sprintf('Request to %s failed: %s', $u, $res->get_error_message());
+					continue;
+				}
+				$code = wp_remote_retrieve_response_code($res);
+				$body = wp_remote_retrieve_body($res);
+				if ($code !== 200 || !$body) {
+					$errors[] = sprintf('%s returned %d', $u, $code);
+					continue;
+				}
+				// Try to decode JSON; if not JSON, accept text version file
+				$decoded = json_decode($body, true);
+				if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+					return rest_ensure_response(['success' => true, 'source' => $u, 'data' => $decoded]);
+				}
+				// If non-JSON, return as version text if it looks like a version file
+				$trim = trim($body);
+				if (preg_match('/^v?\d+\.\d+/', $trim) || strlen($trim) < 128) {
+					return rest_ensure_response(['success' => true, 'source' => $u, 'version_text' => $trim]);
+				}
+				$errors[] = sprintf('%s returned invalid content length %d', $u, strlen($body));
+			}
+			// No candidate succeeded; return helpful message
+			return new WP_Error('not_found', 'manifest or version file not found', ['status'=>404, 'errors' => $errors]);
+		}
+	]);
+});
+
+// Backwards compatible admin-ajax endpoint (POST/GET)
+add_action('wp_ajax_tmon_admin_fetch_github_manifest', function() {
+	if (!current_user_can('manage_options')) {
+		wp_send_json_error(['message' => 'forbidden'], 403);
+	}
+	// Allow both GET and POST usage per existing UI behavior
+	$manifest_url = isset($_REQUEST['manifest_url']) ? sanitize_text_field(wp_unslash($_REQUEST['manifest_url'])) : '';
+	$repo = isset($_REQUEST['repo']) ? sanitize_text_field(wp_unslash($_REQUEST['repo'])) : '';
+	$branch = isset($_REQUEST['branch']) ? sanitize_text_field(wp_unslash($_REQUEST['branch'])) : 'main';
+
+	if (!$manifest_url && !$repo) {
+		wp_send_json_error(['message' => 'manifest_url or repo parameter required'], 400);
+	}
+
+	// Build the same candidate list as the REST handler
+	$try_urls = [];
+	if ($manifest_url) {
+		$try_urls[] = esc_url_raw($manifest_url);
+	} else {
+		$repo = trim($repo, " \t\n\r/");
+		if (strpos($repo, '/') !== false && strpos($repo, '/') !== strrpos($repo, '/')) {
+			$try_urls[] = "https://raw.githubusercontent.com/{$repo}";
+		} else {
+			$try_urls[] = "https://raw.githubusercontent.com/{$repo}/{$branch}/manifest.json";
+			$try_urls[] = "https://raw.githubusercontent.com/{$repo}/{$branch}/version.txt";
+			if ($branch !== 'master') {
+				$try_urls[] = "https://raw.githubusercontent.com/{$repo}/master/manifest.json";
+				$try_urls[] = "https://raw.githubusercontent.com/{$repo}/master/version.txt";
+			}
+		}
+	}
+
+	$errors = [];
+	foreach ($try_urls as $u) {
+		$u = esc_url_raw($u);
+		$res = wp_remote_get($u, ['timeout' => 10, 'headers' => ['Accept' => 'application/json']]);
+		if (is_wp_error($res)) {
+			$errors[] = sprintf('Request to %s failed: %s', $u, $res->get_error_message());
+			continue;
+		}
+		$code = wp_remote_retrieve_response_code($res);
+		$body = wp_remote_retrieve_body($res);
+		if ($code !== 200 || !$body) {
+			$errors[] = sprintf('%s returned %d', $u, $code);
+			continue;
+		}
+		$decoded = json_decode($body, true);
+		if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+			wp_send_json_success(['source' => $u, 'data' => $decoded]);
+		}
+		$trim = trim($body);
+		if (preg_match('/^v?\d+\.\d+/', $trim) || strlen($trim) < 128) {
+			wp_send_json_success(['source' => $u, 'version_text' => $trim]);
+		}
+		$errors[] = sprintf('%s returned invalid content length %d', $u, strlen($body));
+	}
+	wp_send_json_error(['message' => 'manifest or version file not found', 'errors' => $errors], 404);
 });
