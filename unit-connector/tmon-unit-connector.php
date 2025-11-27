@@ -250,3 +250,38 @@ if (is_wp_error($response)) {
 add_action('tmon_unit_connector_device_checkin', function($unit_id, $machine_id, $payload) {
 	error_log('unit-connector: device checkin hook fired for unit=' . $unit_id . ' machine=' . $machine_id . ' payload=' . wp_json_encode($payload));
 });
+
+// Example region where we push a new read token to a paired UC
+// Build endpoint safely, add logging, only attempt POST if endpoint looks valid
+$endpoint = ''; $headers = []; $token = '';
+$uc_key = $map[$site_url]['uc_key'] ?? '';
+$token = $map[$site_url]['read_token'] ?? '';
+
+if (!empty($site_url)) {
+    $endpoint = untrailingslashit($site_url) . '/wp-json/tmon/v1/admin/read-token/set';
+    $headers = ['Content-Type' => 'application/json'];
+    if (!empty($uc_key)) {
+        $headers['X-TMON-ADMIN'] = $uc_key;
+    }
+}
+
+if (empty($endpoint)) {
+    error_log('unit-connector: No endpoint to push read token for site ' . $site_url);
+} elseif (empty($token)) {
+    error_log('unit-connector: No read token set for site ' . $site_url . '; skipping push.');
+} else {
+    // Safe parse check to prevent parse_url() warnings
+    $parsed = @parse_url($endpoint);
+    if ($parsed === false || empty($parsed['host'])) {
+        error_log('unit-connector: invalid endpoint for UC push: ' . $endpoint);
+    } else {
+        $body = wp_json_encode(['read_token' => $token]);
+        $resp = wp_remote_post($endpoint, ['timeout' => 15, 'headers' => $headers, 'body' => $body]);
+        if (is_wp_error($resp)) {
+            error_log('unit-connector: Failed to push read token to UC ' . $site_url . ' error=' . $resp->get_error_message());
+        } else {
+            $status = wp_remote_retrieve_response_code($resp);
+            error_log('unit-connector: Pushed read token to UC ' . $site_url . ' response_code=' . intval($status));
+        }
+    }
+}

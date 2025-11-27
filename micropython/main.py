@@ -9,7 +9,7 @@ from debug import info as dbg_info, warn as dbg_warn, error as dbg_error
 import sdata
 import utime as time
 from sampling import sampleEnviroment
-from utils import free_pins, checkLogDirectory, debug_print, periodic_field_data_send, load_persisted_unit_id, persist_unit_id, get_machine_id
+from utils import free_pins, checkLogDirectory, debug_print, periodic_field_data_send, load_persisted_unit_id, persist_unit_id, get_machine_id, periodic_provision_check
 from lora import connectLora, log_error, TMON_AI
 from ota import check_for_update, apply_pending_update
 from oled import update_display
@@ -253,17 +253,28 @@ async def startup():
         await first_boot_provision()
     except Exception as e:
         await debug_print('first_boot_provision error: %s' % e, 'ERROR')
+
     tm.add_task(lora_comm_task, 'lora', 1)
     tm.add_task(sample_task, 'sample', 60)
     if getattr(settings, 'NODE_TYPE', 'base') == 'base':
         tm.add_task(periodic_field_data_task, 'field_data', settings.FIELD_DATA_SEND_INTERVAL)
         tm.add_task(periodic_command_poll_task, 'cmd_poll', 10)
+
     # Background periodic tasks (standalone loops)
     try:
         import uasyncio as _a
         _a.create_task(wifi_rssi_monitor())
     except Exception:
         pass
+
+    # Start provisioning check loop explicitly here (so it runs as a background task)
+    try:
+        import uasyncio as _a5
+        _a5.create_task(periodic_provision_check())
+        await debug_print('startup: scheduled periodic_provision_check', 'INFO')
+    except Exception as e:
+        await debug_print('startup: failed to schedule periodic_provision_check: %s' % e, 'ERROR')
+
     # Staged settings apply loop
     try:
         import uasyncio as _a0
@@ -334,8 +345,9 @@ import uasyncio as asyncio
 from utils import start_background_tasks, display_message, update_sys_voltage
 
 async def main():
-	# Start background tasks (provisioning, field-data uploader, etc.)
-	start_background_tasks()
+	# Start the startup manager as a background task so main can keep running
+	import uasyncio as _a
+	_a.create_task(startup())
 
 	# Optional: present a short startup message on OLED
 	try:
