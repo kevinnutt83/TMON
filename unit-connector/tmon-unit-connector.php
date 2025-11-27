@@ -238,22 +238,21 @@ add_action('admin_post_tmon_export_field_data_csv', function() {
     exit;
 });
 
-// Helper: safe wrapper for wp_remote_post to avoid warnings when endpoint is invalid.
+// Safe remote POST helper to avoid warnings on invalid endpoints
 if (!function_exists('tmon_uc_safe_remote_post')) {
 	function tmon_uc_safe_remote_post($endpoint, $args = [], $context_label = '') {
 		if (empty($endpoint) || !is_string($endpoint)) {
 			error_log("unit-connector: tmon_uc_safe_remote_post called with empty endpoint (context={$context_label}). Aborting.");
 			return new WP_Error('invalid_endpoint', 'Endpoint not provided');
 		}
-		// Basic validation to avoid parse_url(null) deprecation warnings
 		$parsed = @parse_url($endpoint);
 		if ($parsed === false || empty($parsed['host'])) {
 			error_log("unit-connector: tmon_uc_safe_remote_post invalid endpoint: {$endpoint} (context={$context_label})");
 			return new WP_Error('invalid_endpoint', 'Endpoint invalid');
 		}
-		// Normalize args
 		if (!isset($args['headers'])) $args['headers'] = [];
 		if (!isset($args['body'])) $args['body'] = '';
+
 		$res = @wp_remote_post($endpoint, $args);
 		if (is_wp_error($res)) {
 			error_log("unit-connector: tmon_uc_safe_remote_post failed for {$endpoint} (context={$context_label}): " . $res->get_error_message());
