@@ -439,9 +439,10 @@ if (!function_exists('tmon_admin_build_manifest_try_urls')) {
 			return $try_urls;
 		}
 
-		// Fallback default repo for firmware if nothing provided
+		// Fallback default repo for firmware (explicit GitHub 'tree' URL).
+		// This was requested: https://github.com/kevinnutt83/TMON/tree/main/micropython
 		if (empty($repo)) {
-			$repo = 'kevinnutt83/TMON/micropython';
+			$repo = 'https://github.com/kevinnutt83/TMON/tree/main/micropython';
 		}
 
 		$repo = trim($repo, " \t\n\r/");
