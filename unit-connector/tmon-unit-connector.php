@@ -251,41 +251,6 @@ add_action('tmon_unit_connector_device_checkin', function($unit_id, $machine_id,
 	error_log('unit-connector: device checkin hook fired for unit=' . $unit_id . ' machine=' . $machine_id . ' payload=' . wp_json_encode($payload));
 });
 
-// Example region where we push a new read token to a paired UC
-// Build endpoint safely, add logging, only attempt POST if endpoint looks valid
-$endpoint = ''; $headers = []; $token = '';
-$uc_key = $map[$site_url]['uc_key'] ?? '';
-$token = $map[$site_url]['read_token'] ?? '';
-
-if (!empty($site_url)) {
-    $endpoint = untrailingslashit($site_url) . '/wp-json/tmon/v1/admin/read-token/set';
-    $headers = ['Content-Type' => 'application/json'];
-    if (!empty($uc_key)) {
-        $headers['X-TMON-ADMIN'] = $uc_key;
-    }
-}
-
-if (empty($endpoint)) {
-    error_log('unit-connector: No endpoint to push read token for site ' . $site_url);
-} elseif (empty($token)) {
-    error_log('unit-connector: No read token set for site ' . $site_url . '; skipping push.');
-} else {
-    // Safe parse check to prevent parse_url() warnings
-    $parsed = @parse_url($endpoint);
-    if ($parsed === false || empty($parsed['host'])) {
-        error_log('unit-connector: invalid endpoint for UC push: ' . $endpoint);
-    } else {
-        $body = wp_json_encode(['read_token' => $token]);
-        $resp = wp_remote_post($endpoint, ['timeout' => 15, 'headers' => $headers, 'body' => $body]);
-        if (is_wp_error($resp)) {
-            error_log('unit-connector: Failed to push read token to UC ' . $site_url . ' error=' . $resp->get_error_message());
-        } else {
-            $status = wp_remote_retrieve_response_code($resp);
-            error_log('unit-connector: Pushed read token to UC ' . $site_url . ' response_code=' . intval($status));
-        }
-    }
-}
-
 // Safe remote POST helper to avoid PHP warnings/errors on empty/invalid values.
 if (!function_exists('tmon_uc_safe_remote_post')) {
 	function tmon_uc_safe_remote_post($endpoint, $args = [], $context_label = '') {
@@ -300,6 +265,9 @@ if (!function_exists('tmon_uc_safe_remote_post')) {
 			error_log("unit-connector: tmon_uc_safe_remote_post invalid endpoint: {$endpoint} (context={$context_label})");
 			return new WP_Error('invalid_endpoint', 'Endpoint invalid');
 		}
+		// Ensure headers and body keys exist
+		if (!isset($args['headers'])) $args['headers'] = [];
+		if (!isset($args['body'])) $args['body'] = '';
 		$res = @wp_remote_post($endpoint, $args);
 		if (is_wp_error($res)) {
 			error_log("unit-connector: tmon_uc_safe_remote_post failed for {$endpoint} (context={$context_label}): " . $res->get_error_message());
@@ -332,25 +300,56 @@ if (!function_exists('tmon_unit_connector_deactivate')) {
 }
 register_deactivation_hook(__FILE__, 'tmon_unit_connector_deactivate');
 
-// Replace direct wp_remote_post() usage for pushing read token with the safe helper.
-// Example: (originally in some rotate/revoke function)
-if (!empty($site_url)) {
-	$endpoint = rtrim($site_url, '/') . '/wp-json/tmon/v1/admin/read-token/set';
-	$headers = ['Content-Type' => 'application/json'];
-	if (!empty($uc_key)) $headers['X-TMON-ADMIN'] = $uc_key;
-	$body = wp_json_encode(['read_token' => $token]);
+// Replace the inline read-token pushes in rotate/revoke handlers with the safe helper:
+add_action('admin_init', function(){
+    if (!current_user_can('manage_options')) return;
 
-	$res = tmon_uc_safe_remote_post($endpoint, [
-		'headers' => $headers,
-		'body' => $body,
-		'timeout' => 15,
-	], 'push_read_token');
+    if (isset($_POST['tmon_action']) && $_POST['tmon_action'] === 'rotate_token' && check_admin_referer('tmon_admin_rotate_token')) {
+        $site_url = esc_url_raw($_POST['site_url'] ?? '');
+        if ($site_url) {
+            $map = get_option('tmon_admin_uc_sites', []);
+            if (isset($map[$site_url])) {
+                try { $token = bin2hex(random_bytes(24)); } catch (Exception $e) { $token = wp_generate_password(48, false, false); }
+                $map[$site_url]['read_token'] = $token;
+                update_option('tmon_admin_uc_sites', $map);
+                // Push to UC using safe helper
+                $endpoint = rtrim($site_url, '/') . '/wp-json/tmon/v1/admin/read-token/set';
+                $headers = ['Content-Type'=>'application/json'];
+                $uc_key = $map[$site_url]['uc_key'] ?? '';
+                if ($uc_key) $headers['X-TMON-ADMIN'] = $uc_key;
+                $body = wp_json_encode(['read_token'=>$token]);
+                $res = tmon_uc_safe_remote_post($endpoint, ['timeout'=>15,'headers'=>$headers,'body'=>$body], 'rotate_token');
+                if (is_wp_error($res)) {
+                    error_log('unit-connector: Push read token failed for ' . $site_url . ' error=' . $res->get_error_message());
+                } else {
+                    error_log('unit-connector: Pushed read token to ' . $site_url . ' status=' . intval(wp_remote_retrieve_response_code($res)));
+                }
+                add_action('admin_notices', function(){ echo '<div class="updated"><p>Read token regenerated and pushed to UC.</p></div>'; });
+            }
+        }
+    }
 
-	if (is_wp_error($res)) {
-		// handled inside safe_post; add any additional actions here if required
-	} else {
-		error_log('unit-connector: pushed read token to ' . $site_url . ' status=' . intval(wp_remote_retrieve_response_code($res)));
-	}
-} else {
-	error_log('unit-connector: no site_url supplied for read token push (skipping).');
-}
+    if (isset($_POST['tmon_action']) && $_POST['tmon_action'] === 'revoke_token' && check_admin_referer('tmon_admin_revoke_token')) {
+        $site_url = esc_url_raw($_POST['site_url'] ?? '');
+        if ($site_url) {
+            $map = get_option('tmon_admin_uc_sites', []);
+            if (isset($map[$site_url])) {
+                $map[$site_url]['read_token'] = '';
+                update_option('tmon_admin_uc_sites', $map);
+                // Push revoke to UC using safe helper
+                $endpoint = rtrim($site_url, '/') . '/wp-json/tmon/v1/admin/read-token/set';
+                $headers = ['Content-Type'=>'application/json'];
+                $uc_key = $map[$site_url]['uc_key'] ?? '';
+                if ($uc_key) $headers['X-TMON-ADMIN'] = $uc_key;
+                $body = wp_json_encode(['read_token'=>'']);
+                $res = tmon_uc_safe_remote_post($endpoint, ['timeout'=>15,'headers'=>$headers,'body'=>$body], 'revoke_token');
+                if (is_wp_error($res)) {
+                    error_log('unit-connector: Push revoke read token failed for ' . $site_url . ' error=' . $res->get_error_message());
+                } else {
+                    error_log('unit-connector: Pushed revoke read token to ' . $site_url . ' status=' . intval(wp_remote_retrieve_response_code($res)));
+                }
+                add_action('admin_notices', function(){ echo '<div class="updated"><p>Read token revoked and cleared on UC.</p></div>'; });
+            }
+        }
+    }
+});
