@@ -411,10 +411,21 @@ if (!function_exists('tmon_admin_build_manifest_try_urls')) {
 	function tmon_admin_build_manifest_try_urls($manifest_url = '', $repo = '', $branch = 'main') {
 		$try_urls = [];
 
-		// If explicit manifest URL provided, prefer that (convert GitHub blob to raw)
+		// If explicit manifest URL provided, prefer that
 		if (!empty($manifest_url)) {
 			$manifest_url = trim($manifest_url);
-			if (preg_match('#^https?://github\.com/([^/]+/[^/]+)/(?:blob/[^/]+/)?(.+)$#', $manifest_url, $m)) {
+			// Convert GitHub 'blob' and 'tree' URL forms to raw.githubusercontent equivalents
+			if (preg_match('#^https?://github\.com/([^/]+/[^/]+)/(?:blob|tree)/([^/]+)/(.*)$#', $manifest_url, $m)) {
+				$ownerrepo = $m[1];      // owner/repo
+				$url_branch = $m[2];     // branch (may be 'main' etc.)
+				$path = $m[3];           // path inside repo
+				$try_urls[] = "https://raw.githubusercontent.com/{$ownerrepo}/{$url_branch}/{$path}";
+				// Also try the 'master' branch fallback if different
+				if ($url_branch !== 'master') {
+					$try_urls[] = "https://raw.githubusercontent.com/{$ownerrepo}/master/{$path}";
+				}
+			} elseif (preg_match('#^https?://github\.com/([^/]+/[^/]+)/(.*)$#', $manifest_url, $m)) {
+				// Generic GitHub URL (owner/repo/<something>), try store path as-is using default branch.
 				$ownerrepo = $m[1];
 				$path = $m[2];
 				$try_urls[] = "https://raw.githubusercontent.com/{$ownerrepo}/{$branch}/{$path}";
@@ -422,6 +433,7 @@ if (!function_exists('tmon_admin_build_manifest_try_urls')) {
 					$try_urls[] = "https://raw.githubusercontent.com/{$ownerrepo}/master/{$path}";
 				}
 			} else {
+				// Non-GitHub URL or raw already: use provided URL
 				$try_urls[] = esc_url_raw($manifest_url);
 			}
 			return $try_urls;
@@ -434,9 +446,21 @@ if (!function_exists('tmon_admin_build_manifest_try_urls')) {
 
 		$repo = trim($repo, " \t\n\r/");
 
-		// If raw.githubusercontent URL passed directly
+		// If raw.githubusercontent URL passed directly, use it
 		if (preg_match('#^https?://raw\.githubusercontent\.com/#', $repo)) {
 			$try_urls[] = $repo;
+			return $try_urls;
+		}
+
+		// If repo looks like a GitHub full URL with /tree or /blob, extract owner/repo/branch/path
+		if (preg_match('#^https?://github\.com/([^/]+/[^/]+)/(?:blob|tree)/([^/]+)/(.*)$#', $repo, $m)) {
+			$ownerrepo = $m[1];
+			$url_branch = $m[2];
+			$path = $m[3];
+			$try_urls[] = "https://raw.githubusercontent.com/{$ownerrepo}/{$url_branch}/{$path}";
+			if ($url_branch !== 'master') {
+				$try_urls[] = "https://raw.githubusercontent.com/{$ownerrepo}/master/{$path}";
+			}
 			return $try_urls;
 		}
 
@@ -451,7 +475,7 @@ if (!function_exists('tmon_admin_build_manifest_try_urls')) {
 				$try_urls[] = "https://raw.githubusercontent.com/{$owner}/{$r}/master/{$path}";
 			}
 		} else {
-			// owner/repo -> try manifest.json and version.txt
+			// owner/repo -> try root manifest.json and version.txt
 			$try_urls[] = "https://raw.githubusercontent.com/{$repo}/{$branch}/manifest.json";
 			$try_urls[] = "https://raw.githubusercontent.com/{$repo}/{$branch}/version.txt";
 			if ($branch !== 'master') {
