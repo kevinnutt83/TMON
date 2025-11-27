@@ -331,13 +331,16 @@ async def startup():
         pass
     await tm.run()
 
-# Only schedule background tasks once in main() — do not call asyncio.run(startup()) twice
-async def main():
-    # Start the startup manager as a background task so main can keep running
-    import uasyncio as _a
-    _a.create_task(startup())
+# If blocking tasks are added later, start them in a separate thread here
+import uasyncio as asyncio
+from utils import start_background_tasks, display_message, update_sys_voltage
 
-    await debug_print('main: created startup task', 'INFO')
+async def main():
+    # Start background tasks (provisioning, field-data uploader, etc.)
+    start_background_tasks()
+
+    # Start the startup manager as a background task so main can keep running
+    asyncio.create_task(startup())
 
     # Optional: present a short startup message on OLED
     try:
@@ -350,4 +353,17 @@ async def main():
         try:
             try:
                 update_sys_voltage()
-           
+            except Exception:
+                pass
+            await asyncio.sleep(10)
+        except Exception:
+            await asyncio.sleep(5)
+
+if __name__ == '__main__':
+    try:
+        asyncio.run(main())
+    except Exception:
+        # Older uasyncio compatibility
+        loop = asyncio.get_event_loop()
+        loop.create_task(main())
+        loop.run_forever()
