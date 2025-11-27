@@ -436,6 +436,7 @@ add_action('admin_enqueue_scripts', function () {
 		'restRoot' => esc_url_raw( rest_url() ),
 		'restNonce' => wp_create_nonce('wp_rest'),
 		'manifestNonce' => wp_create_nonce('tmon_admin_manifest'),
+		'provisionNonce' => wp_create_nonce('tmon_admin_provision_ajax'), // <--- new
 	];
 	wp_localize_script('tmon-admin', 'TMON_ADMIN', $localized);
 
