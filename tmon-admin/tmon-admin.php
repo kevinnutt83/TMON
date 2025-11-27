@@ -255,6 +255,7 @@ add_action('admin_post_tmon_admin_save_provision', function() {
         ];
         $where = [ 'id' => intval($row->id) ];
         $updated = $wpdb->update($table, $update, $where, ['%s','%s','%d'], ['%d']);
+        error_log('tmon-admin: Updated provisioning row ID=' . intval($row->id) . ' by user=' . get_current_user()->user_login . ' meta=' . wp_json_encode($meta));
     } else {
         // Insert new provisioned row
         $insert = [
@@ -268,6 +269,8 @@ add_action('admin_post_tmon_admin_save_provision', function() {
             'created_at' => current_time('mysql'),
         ];
         $wpdb->insert($table, $insert, ['%s','%s','%s','%s','%s','%d','%s']);
+        $insert_id = $wpdb->insert_id;
+        error_log('tmon-admin: Inserted provisioning row ID=' . intval($insert_id) . ' by user=' . get_current_user()->user_login . ' meta=' . wp_json_encode($meta));
     }
 
     // Enqueue provisioning payload for the device (use machine_id if present else unit_id)
@@ -276,6 +279,7 @@ add_action('admin_post_tmon_admin_save_provision', function() {
         $payload = $meta;
         $payload['requested_by_user'] = wp_get_current_user()->user_login;
         tmon_admin_enqueue_provision($key, $payload);
+        error_log('tmon-admin: Enqueued provisioning for key=' . $key . ' payload=' . wp_json_encode($payload));
     }
 
     // Add admin notice for save success
@@ -336,7 +340,7 @@ add_action('wp_ajax_tmon_admin_update_device_repo', function() {
         $payload = $meta;
         $payload['requested_by_user'] = wp_get_current_user()->user_login;
         tmon_admin_enqueue_provision($key, $payload);
-
+        error_log('tmon-admin: Ajax updated provisioning for key=' . $key . ' user=' . wp_get_current_user()->user_login . ' payload=' . wp_json_encode($payload));
         wp_send_json_success(['message' => 'updated', 'notes' => $new_notes]);
     } else {
         $insert = [
@@ -349,14 +353,7 @@ add_action('wp_ajax_tmon_admin_update_device_repo', function() {
             'created_at' => current_time('mysql'),
         ];
         $ok = $wpdb->insert($table, $insert, ['%s','%s','%s','%s','%s','%s']);
-        if (!$ok) {
-            wp_send_json_error(['message' => 'insert failed']);
-        }
-        $key = $machine_id ?: $unit_id;
-        $payload = $meta;
-        $payload['requested_by_user'] = wp_get_current_user()->user_login;
-        tmon_admin_enqueue_provision($key, $payload);
-
+        error_log('tmon-admin: Ajax inserted provisioning row for key=' . $key . ' user=' . wp_get_current_user()->user_login . ' payload=' . wp_json_encode($payload));
         wp_send_json_success(['message' => 'inserted', 'notes' => $meta]);
     }
 });

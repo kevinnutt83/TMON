@@ -1533,20 +1533,24 @@ add_action('rest_api_init', function() {
 			$machine_id = isset($params['machine_id']) ? sanitize_text_field($params['machine_id']) : '';
 			$key = $machine_id ?: $unit_id;
 
-			// If a pending provision exists, deliver and clear settings_staged
+			error_log('tmon-admin: device check-in received for key=' . $key);
+
+			// Deliver pending provisioning if present
 			if ($key && function_exists('tmon_admin_get_pending_provision') && function_exists('tmon_admin_dequeue_provision')) {
 				$pending = tmon_admin_get_pending_provision($key);
 				if ($pending) {
-					// Dequeue pending provision
+					error_log('tmon-admin: provisioning payload found for key=' . $key . ' payload=' . wp_json_encode($pending));
+					// Dequeue and clear staged flag
 					tmon_admin_dequeue_provision($key);
-					// Clear settings_staged flag on DB row (optional: by unit_id or machine_id)
 					$table = $wpdb->prefix . 'tmon_provisioned_devices';
 					$where_field = $machine_id ? 'machine_id' : 'unit_id';
-					$wpdb->update($table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], [$where_field => $key], ['%d', '%s'], ['%s']);
-					return rest_ensure_response(['status' => 'ok', 'provision' => $pending]);
+					$wpdb->update($table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], [$where_field => $key], ['%d','%s'], ['%s']);
+					error_log('tmon-admin: cleared settings_staged for key=' . $key);
+					return rest_ensure_response(['status'=>'ok','provision' => $pending]);
 				}
 			}
-			return rest_ensure_response(['status' => 'ok', 'provision' => null]);
+			error_log('tmon-admin: device check-in: no pending provision for key=' . $key);
+			return rest_ensure_response(['status'=>'ok','provision' => null]);
 		}
 	]);
 });

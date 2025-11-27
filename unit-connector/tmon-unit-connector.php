@@ -84,7 +84,12 @@ function tmon_unit_connector_activate() {
 function tmon_unit_connector_deactivate() {
     $remove_data = get_option('tmon_uc_remove_data_on_deactivate', false);
     if ( $remove_data ) {
-        tmon_uc_remove_all_data();
+        if (function_exists('tmon_uc_remove_all_data')) {
+			error_log('unit-connector: invoking tmon_uc_remove_all_data() during deactivate.');
+			tmon_uc_remove_all_data();
+		} else {
+			error_log('unit-connector: tmon_uc_remove_all_data() missing - skipping purge on deactivate.');
+		}
     }
     // Remove custom roles and capabilities for TMON
     remove_role('tmon_manager');
@@ -231,4 +236,17 @@ add_action('admin_post_tmon_export_field_data_csv', function() {
     }
     fclose($out);
     exit;
+});
+
+// Wherever read token is pushed to UC (existing in tmon-admin earlier), log responses - example:
+$response = wp_remote_post($endpoint, ['timeout'=>15,'headers'=>$headers,'body'=>wp_json_encode(['read_token'=>$token])]);
+if (is_wp_error($response)) {
+	error_log('unit-connector: failed to push read token to UC endpoint ' . $endpoint . ' err=' . $response->get_error_message());
+} else {
+	error_log('unit-connector: pushed read token to UC endpoint ' . $endpoint . ' response=' . wp_remote_retrieve_response_code($response));
+}
+
+// Add additional log wrap points near UC check-ins if known in this plugin; add a generic hook if possible:
+add_action('tmon_unit_connector_device_checkin', function($unit_id, $machine_id, $payload) {
+	error_log('unit-connector: device checkin hook fired for unit=' . $unit_id . ' machine=' . $machine_id . ' payload=' . wp_json_encode($payload));
 });

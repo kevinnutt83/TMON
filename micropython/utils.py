@@ -783,15 +783,37 @@ def get_machine_id():
     except Exception:
         return ''
 
+# Provisioning log file
+PROVISION_LOG_FILE = getattr(settings, 'LOG_DIR', '/logs') + '/provisioning.log'
+
+def provisioning_log(msg):
+    """Append provisioning-specific debug to the provisioning log + console."""
+    try:
+        ts = time.localtime()
+        timestamp = f"{ts[0]:04}-{ts[1]:02}-{ts[2]:02} {ts[3]:02}:{ts[4]:02}:{ts[5]:02}"
+        entry = f"[{timestamp}] {msg}"
+        print("[PROVISION] " + entry)
+        try:
+            checkLogDirectory()
+            with open(PROVISION_LOG_FILE, 'a') as f:
+                f.write(entry + '\n')
+        except Exception:
+            pass
+    except Exception:
+        pass
+
 # New: provisioning check + apply
 async def fetch_admin_provisioning(machine_id=None, unit_id=None):
     """Fetch pending provisioning from TMON Admin REST check-in endpoint."""
+    provisioning_log(f"fetch_admin_provisioning: start (machine_id={machine_id}, unit_id={unit_id})")
     try:
         import urequests as requests, ujson
     except Exception:
+        provisioning_log("fetch_admin_provisioning: urequests not available")
         return None
     from settings import TMON_ADMIN_API_URL, UNIT_ID as LOCAL_UID
     if not TMON_ADMIN_API_URL:
+        provisioning_log("fetch_admin_provisioning: TMON_ADMIN_API_URL not set, abort")
         return None
     key_payload = {}
     if machine_id:
@@ -804,10 +826,11 @@ async def fetch_admin_provisioning(machine_id=None, unit_id=None):
         key_payload['unit_id'] = getattr(settings, 'UNIT_ID', '')
     try:
         url = TMON_ADMIN_API_URL.rstrip('/') + '/wp-json/tmon-admin/v1/device/check-in'
-        # Format JSON data
         body = ujson.dumps(key_payload)
+        provisioning_log(f"fetch_admin_provisioning: POST {url} payload={key_payload}")
         resp = requests.post(url, headers={'Content-Type': 'application/json'}, data=body, timeout=10)
         status = getattr(resp, 'status_code', getattr(resp, 'status', None))
+        provisioning_log(f"fetch_admin_provisioning: response status {status}")
         if status and int(status) == 200:
             try:
                 data = ujson.loads(resp.content if hasattr(resp, 'content') else resp.text)
@@ -816,14 +839,18 @@ async def fetch_admin_provisioning(machine_id=None, unit_id=None):
                     data = ujson.loads(resp.text)
                 except Exception:
                     data = None
+            provisioning_log(f"fetch_admin_provisioning: response JSON: {data}")
             if isinstance(data, dict) and data.get('provision'):
+                provisioning_log("fetch_admin_provisioning: found provision payload")
                 return data.get('provision')
     except Exception as e:
         await debug_print(f'fetch_admin_provisioning: exception {e}', 'ERROR')
+        provisioning_log(f"fetch_admin_provisioning: exception {e}")
     return None
 
 def apply_staged_settings_and_reboot(staged):
     """Apply staged settings by persisting to REMOTE_SETTINGS_APPLIED_FILE and reseting device."""
+    provisioning_log(f"apply_staged_settings: Begin apply staged settings: {staged}")
     try:
         from config_persist import write_json, set_flag, write_text
         import settings as _settings
@@ -875,9 +902,11 @@ def apply_staged_settings_and_reboot(staged):
         try:
             import machine
             machine.soft_reset()
-        except Exception:
+        except Exception as e:
+            provisioning_log(f"apply_staged_settings: soft_reset failed with {e}")
             pass
     except Exception as e:
+        provisioning_log(f"apply_staged_settings: exception {e}")
         # best effort logging
         try:
             import uasyncio
@@ -892,31 +921,31 @@ async def periodic_provision_check():
     import os
     while True:
         try:
-            # Skip check if device is provisioned and nothing staged
             staged_exists = False
             try:
                 os.stat(REMOTE_SETTINGS_STAGED_FILE)
                 staged_exists = True
             except Exception:
                 staged_exists = False
+            provisioning_log(f"periodic_provision_check: check (staged_exists={staged_exists}, provisioned={getattr(settings,'UNIT_PROVISIONED', False)})")
             if not getattr(settings, 'UNIT_PROVISIONED', False) or staged_exists:
                 try:
                     payload = await fetch_admin_provisioning(get_machine_id(), getattr(settings, 'UNIT_ID', ''))
                     if payload:
-                        # persist staged file and apply
+                        provisioning_log(f"periodic_provision_check: received payload => {payload}")
                         try:
                             from config_persist import write_json
                             write_json(REMOTE_SETTINGS_STAGED_FILE, payload)
+                            provisioning_log("periodic_provision_check: wrote REMOTE_SETTINGS_STAGED_FILE")
                         except Exception:
-                            pass
-                        # Apply immediately and reboot
+                            provisioning_log("periodic_provision_check: failed to write REMOTE_SETTINGS_STAGED_FILE")
                         apply_staged_settings_and_reboot(payload)
-                        # Wait a while so device reboots; don't loop further
                         await asyncio.sleep(PROVISION_CHECK_INTERVAL_S)
                 except Exception as e:
                     await debug_print(f'periodic_provision_check: {e}', 'ERROR')
-        except Exception:
-            pass
+                    provisioning_log(f"periodic_provision_check: exception {e}")
+        except Exception as e:
+            provisioning_log(f"periodic_provision_check: outer exception {e}")
         await asyncio.sleep(PROVISION_CHECK_INTERVAL_S or 30)
 
 # New: provisioning & field-data start/registration helpers
