@@ -285,3 +285,72 @@ if (empty($endpoint)) {
         }
     }
 }
+
+// Safe remote POST helper to avoid PHP warnings/errors on empty/invalid values.
+if (!function_exists('tmon_uc_safe_remote_post')) {
+	function tmon_uc_safe_remote_post($endpoint, $args = [], $context_label = '') {
+		// Protect against null/empty endpoint and invalid URLs
+		if (empty($endpoint) || !is_string($endpoint)) {
+			error_log("unit-connector: tmon_uc_safe_remote_post called with empty endpoint (context={$context_label}). Aborting.");
+			return new WP_Error('invalid_endpoint', 'Endpoint not provided');
+		}
+		// Protect parse_url deprecation on null - only call parse_url with a string
+		$parsed = @parse_url($endpoint);
+		if ($parsed === false || empty($parsed['host'])) {
+			error_log("unit-connector: tmon_uc_safe_remote_post invalid endpoint: {$endpoint} (context={$context_label})");
+			return new WP_Error('invalid_endpoint', 'Endpoint invalid');
+		}
+		$res = @wp_remote_post($endpoint, $args);
+		if (is_wp_error($res)) {
+			error_log("unit-connector: tmon_uc_safe_remote_post failed for {$endpoint} (context={$context_label}): " . $res->get_error_message());
+			return $res;
+		}
+		$code = intval(wp_remote_retrieve_response_code($res));
+		if ($code < 200 || $code >= 300) {
+			error_log("unit-connector: tmon_uc_safe_remote_post non-2xx response for {$endpoint} (context={$context_label}): HTTP {$code}");
+		}
+		return $res;
+	}
+}
+
+// Guard deactivation/uninstall code to only call cleanup function if it exists.
+if (!function_exists('tmon_unit_connector_deactivate')) {
+	function tmon_unit_connector_deactivate() {
+		$remove_data = get_option('tmon_uc_remove_data_on_deactivate', false);
+		if ( $remove_data ) {
+			if (function_exists('tmon_uc_remove_all_data')) {
+				error_log('unit-connector: running tmon_uc_remove_all_data() on deactivation');
+				tmon_uc_remove_all_data();
+			} else {
+				error_log('unit-connector: tmon_uc_remove_all_data() not present; skip purge on deactivate');
+			}
+		}
+		// Remove custom roles and capabilities for TMON
+		remove_role('tmon_manager');
+		remove_role('tmon_operator');
+	}
+}
+register_deactivation_hook(__FILE__, 'tmon_unit_connector_deactivate');
+
+// Replace direct wp_remote_post() usage for pushing read token with the safe helper.
+// Example: (originally in some rotate/revoke function)
+if (!empty($site_url)) {
+	$endpoint = rtrim($site_url, '/') . '/wp-json/tmon/v1/admin/read-token/set';
+	$headers = ['Content-Type' => 'application/json'];
+	if (!empty($uc_key)) $headers['X-TMON-ADMIN'] = $uc_key;
+	$body = wp_json_encode(['read_token' => $token]);
+
+	$res = tmon_uc_safe_remote_post($endpoint, [
+		'headers' => $headers,
+		'body' => $body,
+		'timeout' => 15,
+	], 'push_read_token');
+
+	if (is_wp_error($res)) {
+		// handled inside safe_post; add any additional actions here if required
+	} else {
+		error_log('unit-connector: pushed read token to ' . $site_url . ' status=' . intval(wp_remote_retrieve_response_code($res)));
+	}
+} else {
+	error_log('unit-connector: no site_url supplied for read token push (skipping).');
+}

@@ -267,11 +267,11 @@ async def startup():
     except Exception:
         pass
 
-    # Start provisioning check loop explicitly here (so it runs as a background task)
+    # Start provisioning loop
     try:
         import uasyncio as _a5
+        await debug_print('startup: scheduling periodic_provision_check', 'INFO')
         _a5.create_task(periodic_provision_check())
-        await debug_print('startup: scheduled periodic_provision_check', 'INFO')
     except Exception as e:
         await debug_print('startup: failed to schedule periodic_provision_check: %s' % e, 'ERROR')
 
@@ -331,46 +331,23 @@ async def startup():
         pass
     await tm.run()
 
-def run_asyncio_thread():
-    import uasyncio as asyncio
-    asyncio.run(startup())
-
-
-# Run the asyncio event loop in the main thread
-import uasyncio as asyncio
-asyncio.run(startup())
-
-# If blocking tasks are added later, start them in a separate thread here
-import uasyncio as asyncio
-from utils import start_background_tasks, display_message, update_sys_voltage
-
+# Only schedule background tasks once in main() — do not call asyncio.run(startup()) twice
 async def main():
-	# Start the startup manager as a background task so main can keep running
-	import uasyncio as _a
-	_a.create_task(startup())
+    # Start the startup manager as a background task so main can keep running
+    import uasyncio as _a
+    _a.create_task(startup())
 
-	# Optional: present a short startup message on OLED
-	try:
-		await display_message("TMON Starting", 1.2)
-	except Exception:
-		pass
+    await debug_print('main: created startup task', 'INFO')
 
-	# Idle loop to update system metrics and keep loop alive
-	while True:
-		try:
-			try:
-				update_sys_voltage()
-			except Exception:
-				pass
-			await asyncio.sleep(10)
-		except Exception:
-			await asyncio.sleep(5)
+    # Optional: present a short startup message on OLED
+    try:
+        await display_message("TMON Starting", 1.2)
+    except Exception:
+        pass
 
-if __name__ == '__main__':
-	try:
-		asyncio.run(main())
-	except Exception:
-		# Older uasyncio compatibility
-		loop = asyncio.get_event_loop()
-		loop.create_task(main())
-		loop.run_forever()
+    # Idle loop to update system metrics and keep loop alive
+    while True:
+        try:
+            try:
+                update_sys_voltage()
+           
