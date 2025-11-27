@@ -919,15 +919,47 @@ async def periodic_provision_check():
             pass
         await asyncio.sleep(PROVISION_CHECK_INTERVAL_S or 30)
 
-# Launch provisioning check loop (best-effort)
-try:
-    import uasyncio as asyncio
-    try:
-        # Don't create multiple tasks
-        if not 'tmon_admin_provision_task_created' in globals():
-            asyncio.create_task(periodic_provision_check())
-            globals()['tmon_admin_provision_task_created'] = True
-    except Exception:
-        pass
-except Exception:
-    pass
+# New: provisioning & field-data start/registration helpers
+_provision_task_handle = None
+_field_data_task_handle = None
+
+def start_provisioning_check(loop=None):
+	"""Create provisioning check task if not already started."""
+	global _provision_task_handle
+	try:
+		import uasyncio as _asyncio
+		if _provision_task_handle:
+			return _provision_task_handle
+		try:
+			_provision_task_handle = _asyncio.create_task(periodic_provision_check())
+		except Exception:
+			# older uasyncio variants may need a loop object
+			if loop is None:
+				loop = _asyncio.get_event_loop()
+			_provision_task_handle = loop.create_task(periodic_provision_check())
+		return _provision_task_handle
+	except Exception:
+		return None
+
+def start_field_data_send(loop=None):
+	"""Create background field-data sender task if not already started."""
+	global _field_data_task_handle
+	try:
+		import uasyncio as _asyncio
+		if _field_data_task_handle:
+			return _field_data_task_handle
+		try:
+			_field_data_task_handle = _asyncio.create_task(periodic_field_data_send())
+		except Exception:
+			if loop is None:
+				loop = _asyncio.get_event_loop()
+			_field_data_task_handle = loop.create_task(periodic_field_data_send())
+		return _field_data_task_handle
+	except Exception:
+		return None
+
+def start_background_tasks(loop=None):
+	"""Convenience wrapper to start useful background tasks at device boot."""
+	start_provisioning_check(loop=loop)
+	start_field_data_send(loop=loop)
+	return True

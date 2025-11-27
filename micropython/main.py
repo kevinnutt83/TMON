@@ -330,3 +330,35 @@ import uasyncio as asyncio
 asyncio.run(startup())
 
 # If blocking tasks are added later, start them in a separate thread here
+import uasyncio as asyncio
+from utils import start_background_tasks, display_message, update_sys_voltage
+
+async def main():
+	# Start background tasks (provisioning, field-data uploader, etc.)
+	start_background_tasks()
+
+	# Optional: present a short startup message on OLED
+	try:
+		await display_message("TMON Starting", 1.2)
+	except Exception:
+		pass
+
+	# Idle loop to update system metrics and keep loop alive
+	while True:
+		try:
+			try:
+				update_sys_voltage()
+			except Exception:
+				pass
+			await asyncio.sleep(10)
+		except Exception:
+			await asyncio.sleep(5)
+
+if __name__ == '__main__':
+	try:
+		asyncio.run(main())
+	except Exception:
+		# Older uasyncio compatibility
+		loop = asyncio.get_event_loop()
+		loop.create_task(main())
+		loop.run_forever()
