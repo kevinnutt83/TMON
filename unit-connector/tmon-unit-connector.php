@@ -241,15 +241,20 @@ add_action('admin_post_tmon_export_field_data_csv', function() {
 // Safe remote POST helper to avoid warnings on invalid endpoints
 if (!function_exists('tmon_uc_safe_remote_post')) {
 	function tmon_uc_safe_remote_post($endpoint, $args = [], $context_label = '') {
-		if (empty($endpoint) || !is_string($endpoint)) {
-			error_log("unit-connector: tmon_uc_safe_remote_post called with empty endpoint (context={$context_label}). Aborting.");
-			return new WP_Error('invalid_endpoint', 'Endpoint not provided');
+		// Normalize -- ensure string; Quick guard avoids parse_url(null) calls.
+		if (!is_string($endpoint) || trim($endpoint) === '') {
+			error_log("unit-connector: tmon_uc_safe_remote_post called with empty or invalid endpoint (context={$context_label}). Aborting.");
+			return new WP_Error('invalid_endpoint', 'Endpoint not provided or invalid');
 		}
+
+		// Check URL validity
 		$parsed = @parse_url($endpoint);
 		if ($parsed === false || empty($parsed['host'])) {
 			error_log("unit-connector: tmon_uc_safe_remote_post invalid endpoint: {$endpoint} (context={$context_label})");
 			return new WP_Error('invalid_endpoint', 'Endpoint invalid');
 		}
+
+		// Normalize args
 		if (!isset($args['headers'])) $args['headers'] = [];
 		if (!isset($args['body'])) $args['body'] = '';
 
@@ -265,6 +270,12 @@ if (!function_exists('tmon_uc_safe_remote_post')) {
 		return $res;
 	}
 }
+
+// Ensure default variables exist so stray references do not emit PHP notices.
+// These are harmless defaults and avoid "Undefined variable" warnings if a stray reference occurs
+$endpoint = '';
+$headers = [];
+$token = '';
 
 // Guard deactivation/uninstall code to only call cleanup function if it exists.
 if (!function_exists('tmon_unit_connector_deactivate')) {
