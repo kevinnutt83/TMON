@@ -162,148 +162,201 @@ add_action('wp_ajax_tmon_admin_submit_ai_feedback', function() {
     wp_send_json_success();
 });
 
+// --- Provisioning queue helpers ---
+// Persist queued provisioning actions keyed by unit_id or machine_id.
+function tmon_admin_enqueue_provision($key, $payload) {
+    if (!$key || !is_string($key)) return false;
+    $queue = get_option('tmon_admin_pending_provision', []);
+    if (!is_array($queue)) $queue = [];
+    $payload['requested_at'] = current_time('mysql');
+    $payload['status'] = 'pending';
+    $queue[$key] = $payload;
+    update_option('tmon_admin_pending_provision', $queue);
+    return true;
+}
+
+function tmon_admin_get_pending_provision($key) {
+    if (!$key || !is_string($key)) return null;
+    $queue = get_option('tmon_admin_pending_provision', []);
+    if (!is_array($queue)) return null;
+    return $queue[$key] ?? null;
+}
+
+function tmon_admin_dequeue_provision($key) {
+    if (!$key || !is_string($key)) return null;
+    $queue = get_option('tmon_admin_pending_provision', []);
+    if (!is_array($queue) || !isset($queue[$key])) return null;
+    $entry = $queue[$key];
+    unset($queue[$key]);
+    update_option('tmon_admin_pending_provision', $queue);
+    return $entry;
+}
+
 // Admin-post: Save provisioning settings (persist repo/branch/manifest info for a unit)
 add_action('admin_post_tmon_admin_save_provision', function() {
-	if (!current_user_can('manage_options')) wp_die('Forbidden');
-	check_admin_referer('tmon_admin_provision');
+    if (!current_user_can('manage_options')) wp_die('Forbidden');
+    check_admin_referer('tmon_admin_provision');
 
-	global $wpdb;
-	$table = $wpdb->prefix . 'tmon_provisioned_devices';
+    global $wpdb;
+    $table = $wpdb->prefix . 'tmon_provisioned_devices';
 
-	$unit_id = isset($_POST['unit_id']) ? sanitize_text_field($_POST['unit_id']) : '';
-	$machine_id = isset($_POST['machine_id']) ? sanitize_text_field($_POST['machine_id']) : '';
-	$repo = isset($_POST['repo']) ? sanitize_text_field($_POST['repo']) : '';
-	$branch = isset($_POST['branch']) ? sanitize_text_field($_POST['branch']) : 'main';
-	$manifest_url = isset($_POST['manifest_url']) ? esc_url_raw($_POST['manifest_url']) : '';
-	$version = isset($_POST['version']) ? sanitize_text_field($_POST['version']) : '';
-	$notes = isset($_POST['notes']) ? sanitize_textarea_field($_POST['notes']) : '';
+    $unit_id = isset($_POST['unit_id']) ? sanitize_text_field($_POST['unit_id']) : '';
+    $machine_id = isset($_POST['machine_id']) ? sanitize_text_field($_POST['machine_id']) : '';
+    $repo = isset($_POST['repo']) ? sanitize_text_field($_POST['repo']) : '';
+    $branch = isset($_POST['branch']) ? sanitize_text_field($_POST['branch']) : 'main';
+    $manifest_url = isset($_POST['manifest_url']) ? esc_url_raw($_POST['manifest_url']) : '';
+    $version = isset($_POST['version']) ? sanitize_text_field($_POST['version']) : '';
+    $notes = isset($_POST['notes']) ? sanitize_textarea_field($_POST['notes']) : '';
 
-	if (!$unit_id && !$machine_id) {
-		wp_safe_redirect(add_query_arg('saved', '0', wp_get_referer() ?: admin_url('admin.php?page=tmon-admin-provisioning')));
-		exit;
-	}
+    if (!$unit_id && !$machine_id) {
+        wp_safe_redirect(add_query_arg('saved', '0', wp_get_referer() ?: admin_url('admin.php?page=tmon-admin-provisioning')));
+        exit;
+    }
 
-	// Build metadata for notes (preserve existing notes if JSON stored)
-	$meta = [
-		'repo' => $repo,
-		'branch' => $branch,
-		'manifest_url' => $manifest_url,
-		'firmware_version' => $version,
-	];
-	if ($notes !== '') {
-		$meta['notes_text'] = $notes;
-	}
+    // Build metadata for notes (preserve existing notes if JSON stored)
+    $meta = [
+        'repo' => $repo,
+        'branch' => $branch,
+        'manifest_url' => $manifest_url,
+        'firmware_version' => $version,
+    ];
+    if ($notes !== '') {
+        $meta['notes_text'] = $notes;
+    }
 
-	// Find existing row by unit_id or machine_id
-	$where_sql = '';
-	$params = [];
-	if ($unit_id) {
-		$where_sql = "unit_id = %s";
-		$params[] = $unit_id;
-	} elseif ($machine_id) {
-		$where_sql = "machine_id = %s";
-		$params[] = $machine_id;
-	}
+    // Find existing row by unit_id or machine_id
+    $where_sql = '';
+    $params = [];
+    if ($unit_id) {
+        $where_sql = "unit_id = %s";
+        $params[] = $unit_id;
+    } elseif ($machine_id) {
+        $where_sql = "machine_id = %s";
+        $params[] = $machine_id;
+    }
 
-	$row = null;
-	if ($where_sql) {
-		$row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$table} WHERE {$where_sql} LIMIT 1", $params));
-	}
+    $row = null;
+    if ($where_sql) {
+        $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$table} WHERE {$where_sql} LIMIT 1", $params));
+    }
 
-	if ($row) {
-		// Merge incoming metadata into existing notes JSON (if present)
-		$old_notes = [];
-		if (!empty($row->notes)) {
-			$old = json_decode($row->notes, true);
-			if (is_array($old)) { $old_notes = $old; }
-		}
-		$new_notes = array_merge($old_notes, $meta);
-		$update = [
-			'notes' => wp_json_encode($new_notes),
-			'status' => 'provisioned',
-		];
-		$where = [ 'id' => intval($row->id) ];
-		$updated = $wpdb->update($table, $update, $where, ['%s','%s'], ['%d']);
-	} else {
-		// Insert new provisioned row
-		$insert = [
-			'unit_id' => $unit_id,
-			'machine_id' => $machine_id,
-			'company_id' => '',
-			'plan' => 'default',
-			'status' => 'provisioned',
-			'notes' => wp_json_encode($meta),
-			'created_at' => current_time('mysql'),
-		];
-		$wpdb->insert($table, $insert, ['%s','%s','%s','%s','%s','%s']);
-	}
+    if ($row) {
+        // Merge incoming metadata into existing notes JSON (if present)
+        $old_notes = [];
+        if (!empty($row->notes)) {
+            $old = json_decode($row->notes, true);
+            if (is_array($old)) { $old_notes = $old; }
+        }
+        $new_notes = array_merge($old_notes, $meta);
+        $update = [
+            'notes' => wp_json_encode($new_notes),
+            'status' => 'provisioned',
+        ];
+        $where = [ 'id' => intval($row->id) ];
+        $updated = $wpdb->update($table, $update, $where, ['%s','%s'], ['%d']);
+    } else {
+        // Insert new provisioned row
+        $insert = [
+            'unit_id' => $unit_id,
+            'machine_id' => $machine_id,
+            'company_id' => '',
+            'plan' => 'default',
+            'status' => 'provisioned',
+            'notes' => wp_json_encode($meta),
+            'created_at' => current_time('mysql'),
+        ];
+        $wpdb->insert($table, $insert, ['%s','%s','%s','%s','%s','%s']);
+    }
 
-	// Redirect back with status
-	wp_safe_redirect(add_query_arg('saved', '1', wp_get_referer() ?: admin_url('admin.php?page=tmon-admin-provisioning')));
-	exit;
+    // Enqueue provisioning payload for the device (use machine_id if present else unit_id)
+    $key = $machine_id ?: $unit_id;
+    if ($key) {
+        $payload = $meta;
+        $payload['requested_by_user'] = wp_get_current_user()->user_login;
+        tmon_admin_enqueue_provision($key, $payload);
+    }
+
+    // Add admin notice for save success
+    add_action('admin_notices', function() {
+        echo '<div class="updated"><p>Provisioning saved and queued for next device check-in.</p></div>';
+    });
+
+    // Redirect back with status
+    wp_safe_redirect(add_query_arg('saved', '1', wp_get_referer() ?: admin_url('admin.php?page=tmon-admin-provisioning')));
+    exit;
 });
 
 // AJAX: Update device repo metadata inline (returns JSON)
 add_action('wp_ajax_tmon_admin_update_device_repo', function() {
-	if (!current_user_can('manage_options')) {
-		wp_send_json_error(['message' => 'forbidden']);
-	}
-	check_ajax_referer('tmon_admin_provision_ajax');
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(['message' => 'forbidden']);
+    }
+    check_ajax_referer('tmon_admin_provision_ajax');
 
-	$unit_id = isset($_POST['unit_id']) ? sanitize_text_field($_POST['unit_id']) : '';
-	$machine_id = isset($_POST['machine_id']) ? sanitize_text_field($_POST['machine_id']) : '';
-	$repo = isset($_POST['repo']) ? sanitize_text_field($_POST['repo']) : '';
-	$branch = isset($_POST['branch']) ? sanitize_text_field($_POST['branch']) : 'main';
-	$manifest_url = isset($_POST['manifest_url']) ? esc_url_raw($_POST['manifest_url']) : '';
-	$version = isset($_POST['version']) ? sanitize_text_field($_POST['version']) : '';
+    $unit_id = isset($_POST['unit_id']) ? sanitize_text_field($_POST['unit_id']) : '';
+    $machine_id = isset($_POST['machine_id']) ? sanitize_text_field($_POST['machine_id']) : '';
+    $repo = isset($_POST['repo']) ? sanitize_text_field($_POST['repo']) : '';
+    $branch = isset($_POST['branch']) ? sanitize_text_field($_POST['branch']) : 'main';
+    $manifest_url = isset($_POST['manifest_url']) ? esc_url_raw($_POST['manifest_url']) : '';
+    $version = isset($_POST['version']) ? sanitize_text_field($_POST['version']) : '';
 
-	if (!$unit_id && !$machine_id) {
-		wp_send_json_error(['message' => 'unit_id or machine_id is required'], 400);
-	}
+    if (!$unit_id && !$machine_id) {
+        wp_send_json_error(['message' => 'unit_id or machine_id is required'], 400);
+    }
 
-	global $wpdb;
-	$table = $wpdb->prefix . 'tmon_provisioned_devices';
-	$where_sql = '';
-	$params = [];
-	if ($unit_id) { $where_sql = "unit_id = %s"; $params[] = $unit_id; }
-	else { $where_sql = "machine_id = %s"; $params[] = $machine_id; }
+    global $wpdb;
+    $table = $wpdb->prefix . 'tmon_provisioned_devices';
+    $where_sql = '';
+    $params = [];
+    if ($unit_id) { $where_sql = "unit_id = %s"; $params[] = $unit_id; }
+    else { $where_sql = "machine_id = %s"; $params[] = $machine_id; }
 
-	$row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$table} WHERE {$where_sql} LIMIT 1", $params));
-	$meta = [
-		'repo' => $repo,
-		'branch' => $branch,
-		'manifest_url' => $manifest_url,
-		'firmware_version' => $version,
-	];
+    $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$table} WHERE {$where_sql} LIMIT 1", $params));
+    $meta = [
+        'repo' => $repo,
+        'branch' => $branch,
+        'manifest_url' => $manifest_url,
+        'firmware_version' => $version,
+    ];
 
-	if ($row) {
-		$old_notes = [];
-		if (!empty($row->notes)) {
-			$old = json_decode($row->notes, true);
-			if (is_array($old)) { $old_notes = $old; }
-		}
-		$new_notes = array_merge($old_notes, $meta);
-		$updated = $wpdb->update($table, [ 'notes' => wp_json_encode($new_notes) ], [ 'id' => intval($row->id) ], ['%s'], ['%d']);
-		if (false === $updated) {
-			wp_send_json_error(['message' => 'DB update failed']);
-		}
-		wp_send_json_success(['message' => 'updated', 'notes' => $new_notes]);
-	} else {
-		$insert = [
-			'unit_id' => $unit_id,
-			'machine_id' => $machine_id,
-			'company_id' => '',
-			'plan' => 'default',
-			'status' => 'provisioned',
-			'notes' => wp_json_encode($meta),
-			'created_at' => current_time('mysql'),
-		];
-		$ok = $wpdb->insert($table, $insert, ['%s','%s','%s','%s','%s','%s']);
-		if (!$ok) {
-			wp_send_json_error(['message' => 'insert failed']);
-		}
-		wp_send_json_success(['message' => 'inserted', 'notes' => $meta]);
-	}
+    if ($row) {
+        $old_notes = [];
+        if (!empty($row->notes)) {
+            $old = json_decode($row->notes, true);
+            if (is_array($old)) { $old_notes = $old; }
+        }
+        $new_notes = array_merge($old_notes, $meta);
+        $updated = $wpdb->update($table, [ 'notes' => wp_json_encode($new_notes) ], [ 'id' => intval($row->id) ], ['%s'], ['%d']);
+        if (false === $updated) {
+            wp_send_json_error(['message' => 'DB update failed']);
+        }
+        $key = $machine_id ?: $unit_id;
+        $payload = $meta;
+        $payload['requested_by_user'] = wp_get_current_user()->user_login;
+        tmon_admin_enqueue_provision($key, $payload);
+
+        wp_send_json_success(['message' => 'updated', 'notes' => $new_notes]);
+    } else {
+        $insert = [
+            'unit_id' => $unit_id,
+            'machine_id' => $machine_id,
+            'company_id' => '',
+            'plan' => 'default',
+            'status' => 'provisioned',
+            'notes' => wp_json_encode($meta),
+            'created_at' => current_time('mysql'),
+        ];
+        $ok = $wpdb->insert($table, $insert, ['%s','%s','%s','%s','%s','%s']);
+        if (!$ok) {
+            wp_send_json_error(['message' => 'insert failed']);
+        }
+        $key = $machine_id ?: $unit_id;
+        $payload = $meta;
+        $payload['requested_by_user'] = wp_get_current_user()->user_login;
+        tmon_admin_enqueue_provision($key, $payload);
+
+        wp_send_json_success(['message' => 'inserted', 'notes' => $meta]);
+    }
 });
 
 if (!defined('ABSPATH')) exit;
