@@ -86,4 +86,92 @@
 			if (btn) { btn.disabled=true; setTimeout(()=>{btn.disabled=false},4000); }
 		}, {passive:true}));
 	});
+
+	(function(){
+		if (typeof window.TMON_ADMIN === 'undefined') {
+			console.warn('TMON_ADMIN localization not present; aborting admin.js manifest fetch.');
+			return;
+		}
+		const restRoot = (TMON_ADMIN.restRoot || '').replace(/\/$/, '');
+		const restNonce = TMON_ADMIN.restNonce;
+		const ajaxUrl = TMON_ADMIN.ajaxUrl || window.ajaxurl || '/wp-admin/admin-ajax.php';
+		const ajaxNonce = TMON_ADMIN.nonce || '';
+
+		async function fetchManifest(repoParam) {
+			// Try REST endpoint first
+			try {
+				const restUrl = `${restRoot}/tmon-admin/v1/github/manifest?repo=${encodeURIComponent(repoParam)}`;
+				const res = await fetch(restUrl, {
+					method: 'GET',
+					headers: { 'X-WP-Nonce': restNonce, 'Accept': 'application/json' },
+					credentials: 'same-origin'
+				});
+				if (res.ok) {
+					const json = await res.json();
+					if (json && json.success) {
+						console.log('Manifest (REST) success:', json);
+						displayManifest(json);
+						return json;
+					}
+					// REST returned structured failure -> fall through to fallback
+					console.log('Manifest (REST) returned no success:', json);
+				} else {
+					console.warn('Manifest (REST) fetch failed with HTTP', res.status);
+				}
+			} catch (e) {
+				console.warn('Manifest (REST) fetch failed:', e);
+			}
+
+			// Fallback to admin-ajax (legacy)
+			try {
+				const adminUrl = `${ajaxUrl}?action=tmon_admin_fetch_github_manifest&repo=${encodeURIComponent(repoParam)}&nonce=${encodeURIComponent(ajaxNonce)}`;
+				const res2 = await fetch(adminUrl, { method: 'GET', credentials: 'same-origin' });
+				if (res2.ok) {
+					const json2 = await res2.json();
+					// WordPress admin-ajax uses wp_send_json_success/wp_send_json_error
+					if (json2 && json2.success) {
+						console.log('Manifest (admin-ajax) success:', json2.data);
+						displayManifest(json2.data || json2);
+						return json2.data || json2;
+					} else {
+						console.warn('Manifest (admin-ajax) returned no success:', json2);
+						displayManifest(json2);
+					}
+				} else {
+					console.warn('Manifest (admin-ajax) fetch failed with HTTP', res2.status);
+				}
+			} catch (e) {
+				console.warn('Manifest (admin-ajax) fetch failed:', e);
+			}
+			return null;
+		}
+
+		function displayManifest(obj) {
+			let container = document.getElementById('tmon-manifest-output');
+			if (!container) {
+				container = document.createElement('pre');
+				container.id = 'tmon-manifest-output';
+				container.style.maxWidth = '720px';
+				container.style.overflowX = 'auto';
+				container.style.padding = '8px';
+				container.style.border = '1px solid #ddd';
+				container.style.background = '#fff';
+				// Insert near provisioning controls if present, else append to body
+				const provNode = document.querySelector('#tmon-admin-provisioning') || document.querySelector('#tmon-admin-provisioning-wrap') || document.body;
+				provNode.appendChild(container);
+			}
+			try {
+				container.textContent = JSON.stringify(obj, null, 2);
+			} catch(e) {
+				container.textContent = String(obj);
+			}
+		}
+
+		// Auto-run in admin pages where provisioning UI exists
+		document.addEventListener('DOMContentLoaded', function() {
+			const repo = 'https://github.com/kevinnutt83/TMON/tree/main/micropython';
+			fetchManifest(repo);
+		});
+
+	})();
 })();
