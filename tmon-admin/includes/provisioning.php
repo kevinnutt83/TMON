@@ -1521,3 +1521,32 @@ add_action('rest_api_init', function() {
         'callback' => $handler,
     ]);
 });
+
+add_action('rest_api_init', function() {
+	register_rest_route('tmon-admin/v1', '/device/check-in', [
+		'methods' => WP_REST_Server::CREATABLE,
+		'permission_callback' => '__return_true',
+		'callback' => function( WP_REST_Request $request ) {
+			global $wpdb;
+			$params = $request->get_json_params() ?: $request->get_params();
+			$unit_id = isset($params['unit_id']) ? sanitize_text_field($params['unit_id']) : '';
+			$machine_id = isset($params['machine_id']) ? sanitize_text_field($params['machine_id']) : '';
+			$key = $machine_id ?: $unit_id;
+
+			// If a pending provision exists, deliver and clear settings_staged
+			if ($key && function_exists('tmon_admin_get_pending_provision') && function_exists('tmon_admin_dequeue_provision')) {
+				$pending = tmon_admin_get_pending_provision($key);
+				if ($pending) {
+					// Dequeue pending provision
+					tmon_admin_dequeue_provision($key);
+					// Clear settings_staged flag on DB row (optional: by unit_id or machine_id)
+					$table = $wpdb->prefix . 'tmon_provisioned_devices';
+					$where_field = $machine_id ? 'machine_id' : 'unit_id';
+					$wpdb->update($table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], [$where_field => $key], ['%d', '%s'], ['%s']);
+					return rest_ensure_response(['status' => 'ok', 'provision' => $pending]);
+				}
+			}
+			return rest_ensure_response(['status' => 'ok', 'provision' => null]);
+		}
+	]);
+});

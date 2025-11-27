@@ -782,3 +782,152 @@ def get_machine_id():
         return _ub.hexlify(uid).decode('utf-8')
     except Exception:
         return ''
+
+# New: provisioning check + apply
+async def fetch_admin_provisioning(machine_id=None, unit_id=None):
+    """Fetch pending provisioning from TMON Admin REST check-in endpoint."""
+    try:
+        import urequests as requests, ujson
+    except Exception:
+        return None
+    from settings import TMON_ADMIN_API_URL, UNIT_ID as LOCAL_UID
+    if not TMON_ADMIN_API_URL:
+        return None
+    key_payload = {}
+    if machine_id:
+        key_payload['machine_id'] = machine_id
+    elif unit_id:
+        key_payload['unit_id'] = unit_id
+    else:
+        # Try to use persisted unit/machine id
+        key_payload['machine_id'] = get_machine_id()
+        key_payload['unit_id'] = getattr(settings, 'UNIT_ID', '')
+    try:
+        url = TMON_ADMIN_API_URL.rstrip('/') + '/wp-json/tmon-admin/v1/device/check-in'
+        # Format JSON data
+        body = ujson.dumps(key_payload)
+        resp = requests.post(url, headers={'Content-Type': 'application/json'}, data=body, timeout=10)
+        status = getattr(resp, 'status_code', getattr(resp, 'status', None))
+        if status and int(status) == 200:
+            try:
+                data = ujson.loads(resp.content if hasattr(resp, 'content') else resp.text)
+            except Exception:
+                try:
+                    data = ujson.loads(resp.text)
+                except Exception:
+                    data = None
+            if isinstance(data, dict) and data.get('provision'):
+                return data.get('provision')
+    except Exception as e:
+        await debug_print(f'fetch_admin_provisioning: exception {e}', 'ERROR')
+    return None
+
+def apply_staged_settings_and_reboot(staged):
+    """Apply staged settings by persisting to REMOTE_SETTINGS_APPLIED_FILE and reseting device."""
+    try:
+        from config_persist import write_json, set_flag, write_text
+        import settings as _settings
+        # Write the staged JSON to REMOTE_SETTINGS_APPLIED_FILE for record
+        try:
+            write_json(_settings.REMOTE_SETTINGS_APPLIED_FILE, staged)
+        except Exception:
+            pass
+        # Update runtime settings selectively (best-effort)
+        try:
+            if 'unit_id' in staged and staged['unit_id']:
+                _settings.UNIT_ID = str(staged['unit_id'])
+                try:
+                    write_text(_settings.UNIT_ID_FILE, str(_settings.UNIT_ID))
+                except Exception:
+                    pass
+            if 'site_url' in staged and staged['site_url']:
+                _settings.WORDPRESS_API_URL = staged['site_url']
+            if 'wifi_ssid' in staged:
+                _settings.WIFI_SSID = staged['wifi_ssid']
+            if 'wifi_pass' in staged:
+                _settings.WIFI_PASS = staged['wifi_pass']
+            if 'firmware_version' in staged:
+                _settings.FIRMWARE_VERSION = staged['firmware_version']
+        except Exception:
+            pass
+        # Clear staged flag file if used
+        try:
+            import os
+            staged_file = _settings.REMOTE_SETTINGS_STAGED_FILE
+            if os.stat(staged_file):
+                try:
+                    # write empty file or delete
+                    os.remove(staged_file)
+                except Exception:
+                    try:
+                        write_text(staged_file, '')
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        # persist applied file etc.
+        try:
+            # Mark 'settings applied' flag
+            set_flag(_settings.REMOTE_SETTINGS_APPLIED_FILE, True)
+        except Exception:
+            pass
+        # Soft-reset to apply new settings
+        try:
+            import machine
+            machine.soft_reset()
+        except Exception:
+            pass
+    except Exception as e:
+        # best effort logging
+        try:
+            import uasyncio
+            uasyncio.create_task(debug_print(f'apply_staged_settings: failed {e}', 'ERROR'))
+        except Exception:
+            pass
+
+async def periodic_provision_check():
+    """Periodically check TMON Admin endpoint for provisioning updates when not provisioned or a staged flag is set."""
+    from settings import PROVISION_CHECK_INTERVAL_S, UNIT_PROVISIONED, REMOTE_SETTINGS_STAGED_FILE, UNIT_ID
+    import ujson
+    import os
+    while True:
+        try:
+            # Skip check if device is provisioned and nothing staged
+            staged_exists = False
+            try:
+                os.stat(REMOTE_SETTINGS_STAGED_FILE)
+                staged_exists = True
+            except Exception:
+                staged_exists = False
+            if not getattr(settings, 'UNIT_PROVISIONED', False) or staged_exists:
+                try:
+                    payload = await fetch_admin_provisioning(get_machine_id(), getattr(settings, 'UNIT_ID', ''))
+                    if payload:
+                        # persist staged file and apply
+                        try:
+                            from config_persist import write_json
+                            write_json(REMOTE_SETTINGS_STAGED_FILE, payload)
+                        except Exception:
+                            pass
+                        # Apply immediately and reboot
+                        apply_staged_settings_and_reboot(payload)
+                        # Wait a while so device reboots; don't loop further
+                        await asyncio.sleep(PROVISION_CHECK_INTERVAL_S)
+                except Exception as e:
+                    await debug_print(f'periodic_provision_check: {e}', 'ERROR')
+        except Exception:
+            pass
+        await asyncio.sleep(PROVISION_CHECK_INTERVAL_S or 30)
+
+# Launch provisioning check loop (best-effort)
+try:
+    import uasyncio as asyncio
+    try:
+        # Don't create multiple tasks
+        if not 'tmon_admin_provision_task_created' in globals():
+            asyncio.create_task(periodic_provision_check())
+            globals()['tmon_admin_provision_task_created'] = True
+    except Exception:
+        pass
+except Exception:
+    pass

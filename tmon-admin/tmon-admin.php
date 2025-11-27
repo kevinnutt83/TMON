@@ -251,9 +251,10 @@ add_action('admin_post_tmon_admin_save_provision', function() {
         $update = [
             'notes' => wp_json_encode($new_notes),
             'status' => 'provisioned',
+            'settings_staged' => 1, // mark staged
         ];
         $where = [ 'id' => intval($row->id) ];
-        $updated = $wpdb->update($table, $update, $where, ['%s','%s'], ['%d']);
+        $updated = $wpdb->update($table, $update, $where, ['%s','%s','%d'], ['%d']);
     } else {
         // Insert new provisioned row
         $insert = [
@@ -263,9 +264,10 @@ add_action('admin_post_tmon_admin_save_provision', function() {
             'plan' => 'default',
             'status' => 'provisioned',
             'notes' => wp_json_encode($meta),
+            'settings_staged' => 1, // mark staged
             'created_at' => current_time('mysql'),
         ];
-        $wpdb->insert($table, $insert, ['%s','%s','%s','%s','%s','%s']);
+        $wpdb->insert($table, $insert, ['%s','%s','%s','%s','%s','%d','%s']);
     }
 
     // Enqueue provisioning payload for the device (use machine_id if present else unit_id)
