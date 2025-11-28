@@ -884,69 +884,74 @@ async def fetch_admin_provisioning(machine_id=None, unit_id=None):
     return None
 
 def apply_staged_settings_and_reboot(staged):
-    """Apply staged settings by persisting to REMOTE_SETTINGS_APPLIED_FILE and reseting device."""
     provisioning_log(f"apply_staged_settings: Begin apply staged settings: {staged}")
     try:
-        from config_persist import write_json, set_flag, write_text
+        from config_persist import write_json, write_text, set_flag
         import settings as _settings
-        # Persist applied snapshot
+        # Persist applied
         try:
             write_json(_settings.REMOTE_SETTINGS_APPLIED_FILE, staged)
         except Exception:
             pass
-
-        # Map site/unit into runtime and persist them
+        # Persist UNIT_ID & WORDPRESS_API_URL & UNIT_Name
         try:
-            if staged.get('unit_id'):
+            if 'unit_id' in staged:
                 _settings.UNIT_ID = str(staged['unit_id'])
-                try:
-                    write_text(_settings.UNIT_ID_FILE, _settings.UNIT_ID)
-                except Exception:
-                    pass
-            site_val = staged.get('site_url') or staged.get('wordpress_api_url') or staged.get('site')
+                write_text(_settings.UNIT_ID_FILE, _settings.UNIT_ID)
+            site_val = staged.get('site_url') or staged.get('wordpress_api_url') or staged.get('site') or ''
             if site_val:
-                _settings.WORDPRESS_API_URL = str(site_val)
-                try:
-                    write_text(_settings.WORDPRESS_API_URL_FILE, _settings.WORDPRESS_API_URL)
-                except Exception:
-                    pass
-            if staged.get('unit_name'):
-                _settings.UNIT_Name = str(staged.get('unit_name'))
-            # apply other allowed settings accordingly...
+                _settings.WORDPRESS_API_URL = site_val
+                write_text(getattr(_settings, 'WORDPRESS_API_URL_FILE', _settings.LOG_DIR + '/wordpress_api_url.txt'), site_val)
+            if 'unit_name' in staged:
+                _settings.UNIT_Name = str(staged['unit_name'])
             _settings.UNIT_PROVISIONED = True
-            try:
-                write_text(_settings.PROVISIONED_FLAG_FILE, 'ok')
-            except Exception:
-                pass
-            provisioning_log('apply_staged_settings: updated UNIT_ID/WORDPRESS_API_URL/UNIT_Name in settings and persisted')
-        except Exception as e:
-            provisioning_log(f'apply_staged_settings: setting update error: {e}')
+            write_text(getattr(_settings, 'PROVISIONED_FLAG_FILE', _settings.LOG_DIR + '/provisioned.flag'), 'ok')
+        except Exception:
+            pass
 
-        # Confirm applied POST back to Admin (requires confirm token option)
+        # Confirm-applied POST with token
         try:
             import urequests, ujson
-            admin_url = getattr(settings, 'TMON_ADMIN_API_URL', '').rstrip('/')
-            confirm_token = getattr(settings, 'TMON_ADMIN_CONFIRM_TOKEN', '') or ''
+            admin_url = getattr(_settings, 'TMON_ADMIN_API_URL', '').rstrip('/')
+            confirm_token = getattr(_settings, 'TMON_ADMIN_CONFIRM_TOKEN', '')
             if admin_url and confirm_token:
                 headers = {'Content-Type':'application/json', 'X-TMON-CONFIRM': confirm_token}
-                body = ujson.dumps({'unit_id': settings.UNIT_ID, 'machine_id': get_machine_id()})
-                # attempt with retry
-                for i in range(3):
+                body = ujson.dumps({'unit_id': _settings.UNIT_ID, 'machine_id': get_machine_id()})
+                for attempt in range(3):
                     try:
                         resp = urequests.post(admin_url + '/wp-json/tmon-admin/v1/device/confirm-applied', headers=headers, data=body, timeout=10)
                         if getattr(resp, 'status_code', 0) == 200:
-                            provisioning_log("apply_staged_settings: confirm-applied success")
+                            provisioning_log('Confirmation sent successfully')
                             try: resp.close()
                             except Exception: pass
                             break
                     except Exception as e:
-                        provisioning_log(f"apply_staged_settings: confirm attempt {i} failed: {e}")
-                        time.sleep(2)
+                        provisioning_log(f'Confirm post attempt {attempt} failed: {e}')
+                    time.sleep(2)
         except Exception as e:
-            provisioning_log(f"apply_staged_settings: confirm post exception: {e}")
+            provisioning_log(f'apply_staged_settings: confirm-applied post error: {e}')
 
+        # clear staged file
+        try:
+            import os
+            if os.path.exists(_settings.REMOTE_SETTINGS_STAGED_FILE):
+                os.remove(_settings.REMOTE_SETTINGS_STAGED_FILE)
+        except Exception:
+            pass
+        # Mark applied flag
+        try:
+            set_flag(_settings.REMOTE_SETTINGS_APPLIED_FILE, True)
+        except Exception:
+            pass
+        # Soft reset
+        try:
+            import machine
+            provisioning_log('apply_staged_settings: soft reset')
+            machine.soft_reset()
+        except Exception:
+            pass
     except Exception as e:
-        provisioning_log(f"apply_staged_settings: exception {e}")
+        provisioning_log(f'apply_staged_settings: exception {e}')
         try:
             import uasyncio
             uasyncio.create_task(debug_print(f'apply_staged_settings: failed {e}', 'ERROR'))

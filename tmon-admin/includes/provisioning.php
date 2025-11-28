@@ -1589,7 +1589,7 @@ add_action('rest_api_init', function() {
 				// Mirror provision flag into tmon_devices
 				$dev_table = $wpdb->prefix . 'tmon_devices';
 				if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
-					$dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
+					$dev_cols = $wpdb->get_col("SHOW COLUMNS FROM $dev_table");
 					$data = ['last_seen' => current_time('mysql')];
 					if (in_array('provisioned', $dev_cols)) { $data['provisioned'] = 1; }
 					else if (in_array('status', $dev_cols)) { $data['status'] = 'provisioned'; }
@@ -1625,80 +1625,77 @@ add_action('rest_api_init', function() {
 
                 $dev_table = $wpdb->prefix . 'tmon_devices';
                 if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
-                    $dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
+                    $dev_cols = $wpdb->get_col("SHOW COLUMNS FROM $dev_table");
                     $mirror = ['last_seen' => current_time('mysql')];
-                    if (in_array('provisioned', $dev_cols)) { $mirror['provisioned'] = 1; } elseif (in_array('status', $dev_cols)) { $mirror['status'] = 'provisioned'; }
-                    if (!empty($payload['site_url']) && in_array('wordpress_api_url', $dev_cols)) { $mirror['wordpress_api_url'] = $payload['site_url']; }
-                    if (!empty($payload['unit_name']) && in_array('unit_name', $dev_cols)) { $mirror['unit_name'] = $payload['unit_name']; }
-                    if ($unit_id) { $wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]); } else { $wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]); }
+                    if (in_array('provisioned', $dev_cols)) $mirror['provisioned'] = 1; else $mirror['status'] = 'provisioned';
+                    if (!empty($payload['site_url']) && in_array('wordpress_api_url', $dev_cols)) $mirror['wordpress_api_url'] = $payload['site_url'];
+                    if (!empty($payload['unit_name']) && in_array('unit_name', $dev_cols)) $mirror['unit_name'] = $payload['unit_name'];
+                    if (in_array('provisioned_at', $dev_cols)) $mirror['provisioned_at'] = current_time('mysql');
+                    if ($unit_id) $wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]);
+                    elseif ($machine_id) $wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]);
                 }
-
-                error_log('tmon-admin: delivering staged DB payload for key=' . $key . ' payload=' . wp_json_encode($payload));
-                return rest_ensure_response(['status'=>'ok','provision'=>$payload]);
+                error_log('tmon-admin: delivering staged DB profile for key=' . $key . ' payload=' . json_encode($payload));
+                return rest_ensure_response(['status' => 'ok', 'provision' => $payload]);
             }
 
-            // Otherwise return state only
-            $status = ['status'=>'ok','provision'=>null,'provisioned' => false];
-            if ($row) {
-                $status['provisioned'] = (!empty($row['settings_staged']) && intval($row['settings_staged']) === 0) ? true : false;
-                $status['unit_id']=$row['unit_id'] ?? '';
-                $status['suspended']=($row['status'] ?? '') === 'suspended';
-            }
-            return rest_ensure_response($status);
+            // 3) nothing to send
+            $resp = ['status' => 'ok', 'provision' => null, 'provisioned' => false];
+            if ($row && intval($row['settings_staged'] ?? 0) === 0) $resp['provisioned'] = true;
+            return rest_ensure_response($resp);
 		}
 	]);
 });
 
-// Simple admin AJAX to fetch queue (also used by UI)
-add_action('wp_ajax_tmon_admin_get_pending_provisions', function() {
-    if (!current_user_can('manage_options')) wp_send_json_error(['message'=>'forbidden'], 403);
-    $queue = get_option('tmon_admin_pending_provision', []);
-    wp_send_json_success(['queue'=>$queue]);
-});
-
-// Admin ajax to manage queue (delete/reenqueue) invoked by UI above
-add_action('wp_ajax_tmon_admin_manage_pending', function() {
-    if (!current_user_can('manage_options')) wp_send_json_error(['message'=>'forbidden'], 403);
-    check_ajax_referer('tmon_admin_provision_ajax');
-    $action = sanitize_text_field($_POST['manage_action'] ?? '');
-    $key = sanitize_text_field($_POST['key'] ?? '');
-    $queue = get_option('tmon_admin_pending_provision', []);
-    if ($action === 'delete') {
-        if (isset($queue[$key])) { unset($queue[$key]); update_option('tmon_admin_pending_provision', $queue); wp_send_json_success(); }
-        wp_send_json_error(['message' => 'key_not_found']);
-    } elseif ($action === 'reenqueue') {
-        $payload = isset($_POST['payload']) ? json_decode(stripslashes($_POST['payload']), true) : null;
-        if ($payload === null) {
-            $payload = $queue[$key] ?? [];
-        }
-        if ($payload) {
-            $queue[$key] = $payload;
-            update_option('tmon_admin_pending_provision', $queue);
-            wp_send_json_success();
-        }
-        wp_send_json_error(['message' => 'invalid_payload']);
-    }
-    wp_send_json_error(['message' => 'unknown_action']);
-});
-
-// Confirm-applied REST route (with token validation)
+// REST: confirm-applied with token validation (X-TMON-CONFIRM or X-TMON-READ allowed)
 add_action('rest_api_init', function() {
     register_rest_route('tmon-admin/v1', '/device/confirm-applied', [
         'methods' => WP_REST_Server::CREATABLE,
-        'permission_callback' => function($request) {
-            // Validate either admin read token or admin confirm token set in options
-            $headers = getallheaders();
-            $read_token = $headers['X-TMON-READ'] ?? ($_SERVER['HTTP_X_TMON_READ'] ?? '');
-            $confirm_token = $headers['X-TMON-CONFIRM'] ?? ($_SERVER['HTTP_X_TMON_CONFIRM'] ?? '');
-            $expected_read = get_option('tmon_admin_uc_key') ?: get_option('tmon_uc_hub_read_token');
+        'permission_callback' => function($req) {
+            $headers = function_exists('getallheaders') ? getallheaders() : [];
+            $confirm = $headers['X-TMON-CONFIRM'] ?? ($_SERVER['HTTP_X_TMON_CONFIRM'] ?? '');
+            $read = $headers['X-TMON-READ'] ?? ($_SERVER['HTTP_X_TMON_READ'] ?? '');
             $expected_confirm = get_option('tmon_admin_confirm_token', '');
-            if ($expected_confirm && hash_equals($expected_confirm, (string)$confirm_token)) return true;
-            if ($expected_read && hash_equals($expected_read, (string)$read_token)) return true;
+            $expected_read_token = get_option('tmon_uc_hub_read_token', '');
+            if ($expected_confirm && hash_equals($expected_confirm, (string)$confirm)) return true;
+            if ($expected_read_token && hash_equals($expected_read_token, (string)$read)) return true;
             return false;
         },
-        'callback' => function($request){
-            // ... earlier confirm handler code ...
+        'callback' => function($request) {
+            global $wpdb;
+            $params = $request->get_json_params() ?: $request->get_params();
+            $unit_id = sanitize_text_field($params['unit_id'] ?? '');
+            $machine_id = sanitize_text_field($params['machine_id'] ?? '');
+            if (!$unit_id && !$machine_id) return rest_ensure_response(['status' => 'error','message'=>'unit_id or machine_id required'], 400);
+
+            $now = current_time('mysql');
+            $dev_table = $wpdb->prefix . 'tmon_devices';
+            if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+                $cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
+                $update = ['last_seen' => $now];
+                if (in_array('provisioned', $cols)) $update['provisioned'] = 1;
+                elseif (in_array('status', $cols)) $update['status'] = 'provisioned';
+                if (in_array('provisioned_at', $cols)) $update['provisioned_at'] = $now;
+                if ($unit_id) $wpdb->update($dev_table, $update, ['unit_id' => $unit_id]);
+                else $wpdb->update($dev_table, $update, ['machine_id' => $machine_id]);
+            }
+            // Clear staged in prov table as well
+            $prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+            if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $prov_table))) {
+                if ($unit_id) $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => $now], ['unit_id' => $unit_id]);
+                elseif ($machine_id) $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => $now], ['machine_id' => $machine_id]);
+            }
+
+            // Add audit and history
+            $hist = get_option('tmon_admin_provision_history', []);
+            $hist[] = ['ts' => $now, 'unit_id' => $unit_id, 'machine_id' => $machine_id, 'action' => 'confirmed'];
+            update_option('tmon_admin_provision_history', array_slice($hist, -500));
+
+            // Optional notifications
+            do_action('tmon_admin_notify', 'provision_confirmed', sprintf('Device %s confirmed provisioning', $unit_id ?: $machine_id));
+
+            return rest_ensure_response(['status'=>'ok']);
         }
     ]);
 });
-// --- END OF FILE ---
+
+// Admin AJAX endpoints for queue management are included earlier...

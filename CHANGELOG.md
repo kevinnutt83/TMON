@@ -12,9 +12,16 @@
  - Cross-site GPS overrides: Admin pushes GPS to UC via `/tmon/v1/admin/device/settings` using `X-TMON-ADMIN`.
  - Provisioned Devices in UC falls back to hub endpoint when local table is missing.
 
-# Changelog
+# CHANGELOG
 
 All notable changes to this project will be documented in this file.
+
+## v0.1.3 - 2025-11-28
+- Provisioning: Save & Provision now updates tmon_devices mirror (provisioned, provisioned_at, wordpress_api_url, unit_name).
+- Check-in: device check-in returns staged payload from queue or DB and clears settings_staged on delivery.
+- Confirm: Added /wp-json/tmon-admin/v1/device/confirm-applied REST route; requires X-TMON-CONFIRM token or read token.
+- Admin: Added Provisioning Activity admin UI to view pending queue and history; allow re-enqueue/delete actions.
+- Firmware: Device now persists UNIT_ID and WORDPRESS_API_URL, applies staged settings and posts confirm with X-TMON-CONFIRM.
 
 ## v2.01.0 - 2025-11-10
 

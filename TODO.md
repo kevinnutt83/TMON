@@ -224,3 +224,17 @@
 
 - [ ] Commit all code and UI/UX changes per feature.
 - [ ] Tag release after QA.
+
+# TODO
+
+- [x] Migrate DB: add tmon_devices.provisioned, provisioned_at, wordpress_api_url
+- [x] Admin: Mirror tmon_devices on save & set settings_staged=1
+- [x] REST check-in: return queued payload and DB staged payload fallback
+- [x] Confirm-applied route with token validation (X-TMON-CONFIRM)
+- [x] Device: apply staged settings persist WORDPRESS_API_URL/UNIT_ID and POST confirm
+- [x] Admin UI: Provisioning Activity page to view/manage queue + history
+- [ ] Audit: Add per-device audit logs and UI
+- [ ] Security: Add HMAC or device-key based confirmation (optional)
+- [ ] Notifications: Email to site admins on confirmed provisioning
+- [ ] Add tests for full provisioning flow
+- [ ] Unit Connector: validate provided site_url before attempting wp_remote_post

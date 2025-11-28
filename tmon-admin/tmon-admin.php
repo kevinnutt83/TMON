@@ -672,6 +672,16 @@ add_action('admin_init', function(){
     }
 });
 
+// Add setting to admin settings page (or include in settings.php, this is a small inline injection for brevity)
+add_action('admin_init', function() {
+    register_setting('tmon_admin', 'tmon_admin_confirm_token');
+    add_settings_field('tmon_admin_confirm_token', 'Provision Confirm Token', function() {
+        $val = esc_attr(get_option('tmon_admin_confirm_token', ''));
+        echo '<input type="text" name="tmon_admin_confirm_token" value="'. $val . '" class="regular-text" />';
+        echo '<p class="description">Optional secret token the device posts to confirm applied staging (X-TMON-CONFIRM header).</p>';
+    }, 'tmon-admin-settings', 'default');
+});
+
 // --- Consolidated manifest fetch helpers (used by both REST & admin-ajax) ---
 if (!function_exists('tmon_admin_build_manifest_try_urls')) {
 	function tmon_admin_build_manifest_try_urls($manifest_url = '', $repo = '', $branch = 'main') {
