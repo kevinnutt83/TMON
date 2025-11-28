@@ -1639,4 +1639,39 @@ add_action('rest_api_init', function() {
 	]);
 });
 
-// Admin AJAX endpoints for managing pending queue - already added earlier - ensure they exist and work as intended
+// Guard duplicates: only define queue helpers if not already declared
+if (!function_exists('tmon_admin_enqueue_provision')) {
+    function tmon_admin_enqueue_provision($key, $payload) {
+        if (!$key || !is_string($key)) return false;
+        $queue = get_option('tmon_admin_pending_provision', []);
+        if (!is_array($queue)) $queue = [];
+        $payload['requested_at'] = current_time('mysql');
+        $payload['status'] = 'pending';
+        $queue[$key] = $payload;
+        update_option('tmon_admin_pending_provision', $queue);
+        error_log("tmon-admin (includes): Enqueued provisioning for key={$key}");
+        return true;
+    }
+}
+
+if (!function_exists('tmon_admin_get_pending_provision')) {
+    function tmon_admin_get_pending_provision($key) {
+        if (!$key || !is_string($key)) return null;
+        $queue = get_option('tmon_admin_pending_provision', []);
+        if (!is_array($queue)) $queue = [];
+        return $queue[$key] ?? null;
+    }
+}
+
+if (!function_exists('tmon_admin_dequeue_provision')) {
+    function tmon_admin_dequeue_provision($key) {
+        if (!$key || !is_string($key)) return null;
+        $queue = get_option('tmon_admin_pending_provision', []);
+        if (!is_array($queue) || !isset($queue[$key])) return null;
+        $entry = $queue[$key];
+        unset($queue[$key]);
+        update_option('tmon_admin_pending_provision', $queue);
+        error_log("tmon-admin (includes): Dequeued provisioning for key={$key}");
+        return $entry;
+    }
+}
