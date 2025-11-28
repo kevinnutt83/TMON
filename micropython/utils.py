@@ -989,9 +989,7 @@ async def periodic_provision_check():
                             provisioning_log("periodic_provision_check: wrote REMOTE_SETTINGS_STAGED_FILE")
                         except Exception:
                             provisioning_log("periodic_provision_check: failed to write REMOTE_SETTINGS_STAGED_FILE")
-                        # Apply immediately and reboot
                         apply_staged_settings_and_reboot(payload)
-                        # Confirm applied POST happens in apply_staged_settings_and_reboot
                         await asyncio.sleep(PROVISION_CHECK_INTERVAL_S)
                 except Exception as e:
                     await debug_print(f'periodic_provision_check: {e}', 'ERROR')
