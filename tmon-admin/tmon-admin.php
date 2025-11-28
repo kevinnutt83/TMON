@@ -295,15 +295,26 @@ add_action('admin_post_tmon_admin_save_provision', function() {
         error_log('tmon-admin: Enqueued provisioning for key=' . $key2 . ' payload=' . wp_json_encode($payload2));
     }
 
-    // Mirror: update tmon_devices table to mark as provisioned and update site and unit name
+    // Mirror: update tmon_devices record to set provisioned and store wordpress_api_url and unit_name (if columns exist)
     $dev_table = $wpdb->prefix . 'tmon_devices';
     if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+        // get current columns
+        $dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
         $mirror_update = [
-            'provisioned' => 1,
-            'last_seen' => current_time('mysql'),
+            'last_seen' => current_time('mysql')
         ];
-        if (!empty($site_url)) $mirror_update['wordpress_api_url'] = $site_url;
-        if (!empty($unit_name)) $mirror_update['unit_name'] = $unit_name;
+        // prefer explicit provisioned column; fallback to 'status'
+        if (in_array('provisioned', $dev_cols)) {
+            $mirror_update['provisioned'] = 1;
+        } elseif (in_array('status', $dev_cols)) {
+            $mirror_update['status'] = 'provisioned';
+        }
+        if (!empty($site_url) && in_array('wordpress_api_url', $dev_cols)) {
+            $mirror_update['wordpress_api_url'] = $site_url;
+        }
+        if (!empty($unit_name) && in_array('unit_name', $dev_cols)) {
+            $mirror_update['unit_name'] = $unit_name;
+        }
         if (!empty($unit_id)) {
             $wpdb->update($dev_table, $mirror_update, ['unit_id' => $unit_id]);
         } elseif (!empty($machine_id)) {
@@ -384,9 +395,19 @@ add_action('wp_ajax_tmon_admin_update_device_repo', function() {
 
         $dev_table = $wpdb->prefix . 'tmon_devices';
         if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
-            $mirror_update = ['provisioned' => 1, 'last_seen' => current_time('mysql')];
-            if (!empty($site_url)) $mirror_update['wordpress_api_url'] = $site_url;
-            if (!empty($unit_name)) $mirror_update['unit_name'] = $unit_name;
+            $dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
+            $mirror_update = ['last_seen' => current_time('mysql')];
+            if (in_array('provisioned', $dev_cols)) {
+                $mirror_update['provisioned'] = 1;
+            } elseif (in_array('status', $dev_cols)) {
+                $mirror_update['status'] = 'provisioned';
+            }
+            if (!empty($site_url) && in_array('wordpress_api_url', $dev_cols)) {
+                $mirror_update['wordpress_api_url'] = $site_url;
+            }
+            if (!empty($unit_name) && in_array('unit_name', $dev_cols)) {
+                $mirror_update['unit_name'] = $unit_name;
+            }
             if (!empty($unit_id)) {
                 $wpdb->update($dev_table, $mirror_update, ['unit_id' => $unit_id]);
             } elseif (!empty($machine_id)) {

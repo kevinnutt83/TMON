@@ -889,75 +889,75 @@ def apply_staged_settings_and_reboot(staged):
     try:
         from config_persist import write_json, set_flag, write_text
         import settings as _settings
-        # Write the staged JSON to REMOTE_SETTINGS_APPLIED_FILE for record
+        # Persist applied snapshot
         try:
             write_json(_settings.REMOTE_SETTINGS_APPLIED_FILE, staged)
         except Exception:
             pass
-        # Update runtime settings selectively (best-effort)
+
+        # Map site/unit into runtime and persist them
         try:
-            if 'unit_id' in staged and staged['unit_id']:
+            if staged.get('unit_id'):
                 _settings.UNIT_ID = str(staged['unit_id'])
                 try:
-                    write_text(_settings.UNIT_ID_FILE, str(_settings.UNIT_ID))
+                    write_text(_settings.UNIT_ID_FILE, _settings.UNIT_ID)
                 except Exception:
                     pass
-            # Accept both 'site_url' and 'wordpress_api_url'
-            site_value = staged.get('site_url') or staged.get('wordpress_api_url') or staged.get('site') or None
-            if site_value:
-                _settings.WORDPRESS_API_URL = site_value
+            site_val = staged.get('site_url') or staged.get('wordpress_api_url') or staged.get('site')
+            if site_val:
+                _settings.WORDPRESS_API_URL = str(site_val)
                 try:
-                    write_text(getattr(_settings, 'WORDPRESS_API_URL_FILE', _settings.LOG_DIR + '/wordpress_api_url.txt'), str(_settings.WORDPRESS_API_URL))
+                    write_text(_settings.WORDPRESS_API_URL_FILE, _settings.WORDPRESS_API_URL)
                 except Exception:
                     pass
-            if 'unit_name' in staged and staged['unit_name']:
-                try:
-                    _settings.UNIT_Name = str(staged['unit_name'])
-                except Exception:
-                    pass
-            if 'wifi_ssid' in staged:
-                _settings.WIFI_SSID = staged['wifi_ssid']
-            if 'wifi_pass' in staged:
-                _settings.WIFI_PASS = staged['wifi_pass']
-            if 'firmware_version' in staged:
-                _settings.FIRMWARE_VERSION = staged['firmware_version']
-            # Mark device provisioned
+            if staged.get('unit_name'):
+                _settings.UNIT_Name = str(staged.get('unit_name'))
+            # apply other allowed settings accordingly...
+            _settings.UNIT_PROVISIONED = True
             try:
-                _settings.UNIT_PROVISIONED = True
                 write_text(_settings.PROVISIONED_FLAG_FILE, 'ok')
             except Exception:
                 pass
+            provisioning_log('apply_staged_settings: updated UNIT_ID/WORDPRESS_API_URL/UNIT_Name in settings and persisted')
+        except Exception as e:
+            provisioning_log(f'apply_staged_settings: setting update error: {e}')
+
+        # Optional: POST confirm to Admin to clear DB flags and mirror
+        try:
+            import urequests as requests, ujson
+            admin_url = getattr(_settings, 'TMON_ADMIN_API_URL', '').rstrip('/')
+            if admin_url:
+                confirm_url = admin_url + '/wp-json/tmon-admin/v1/device/confirm-applied'
+                payload = {'machine_id': getattr(_settings, 'MACHINE_ID', ''), 'unit_id': getattr(_settings, 'UNIT_ID', '')}
+                try:
+                    resp = requests.post(confirm_url, headers={'Content-Type':'application/json'}, data=ujson.dumps(payload), timeout=10)
+                    provisioning_log(f'apply_staged_settings: confirm posted to admin status={getattr(resp, "status_code", "noresp")}')
+                except Exception as e:
+                    provisioning_log(f'apply_staged_settings: confirm post failed: {e}')
         except Exception:
             pass
-        # Clear staged flag file if used
+
+        # clear staged file and mark applied
         try:
             import os
-            staged_file = _settings.REMOTE_SETTINGS_STAGED_FILE
-            if os.path.exists(staged_file):
-                try:
-                    os.remove(staged_file)
-                except Exception:
-                    try:
-                        write_text(staged_file, '')
-                    except Exception:
-                        pass
+            if os.path.exists(_settings.REMOTE_SETTINGS_STAGED_FILE):
+                os.remove(_settings.REMOTE_SETTINGS_STAGED_FILE)
         except Exception:
             pass
-        # persist applied file etc.
         try:
             set_flag(_settings.REMOTE_SETTINGS_APPLIED_FILE, True)
         except Exception:
             pass
-        # Soft-reset to apply new settings
+
+        # reboot to apply runtime changes
         try:
             import machine
-            provisioning_log("apply_staged_settings: performing soft_reset to apply changes")
+            provisioning_log('apply_staged_settings: soft reset to apply changes')
             machine.soft_reset()
-        except Exception as e:
-            provisioning_log(f"apply_staged_settings: soft_reset failed with {e}")
+        except Exception:
             pass
     except Exception as e:
-        provisioning_log(f"apply_staged_settings: exception {e}")
+        provisioning_log(f'apply_staged_settings: exception {e}')
         try:
             import uasyncio
             uasyncio.create_task(debug_print(f'apply_staged_settings: failed {e}', 'ERROR'))
