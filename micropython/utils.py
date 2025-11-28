@@ -804,13 +804,14 @@ def provisioning_log(msg):
 
 # New: provisioning check + apply
 async def fetch_admin_provisioning(machine_id=None, unit_id=None):
+    """Fetch pending provisioning from TMON Admin REST check-in endpoint."""
     provisioning_log(f"fetch_admin_provisioning: start (machine_id={machine_id}, unit_id={unit_id})")
     try:
         import urequests as requests, ujson
     except Exception:
         provisioning_log("fetch_admin_provisioning: urequests not available")
         return None
-    from settings import TMON_ADMIN_API_URL, UNIT_ID as LOCAL_UID, WORDPRESS_API_URL_FILE
+    from settings import TMON_ADMIN_API_URL, UNIT_ID as LOCAL_UID
     if not TMON_ADMIN_API_URL:
         provisioning_log("fetch_admin_provisioning: TMON_ADMIN_API_URL not set, abort")
         return None
@@ -820,9 +821,9 @@ async def fetch_admin_provisioning(machine_id=None, unit_id=None):
     elif unit_id:
         key_payload['unit_id'] = unit_id
     else:
+        # Use persisted or detected ids
         key_payload['machine_id'] = get_machine_id()
         key_payload['unit_id'] = getattr(settings, 'UNIT_ID', '')
-
     try:
         url = TMON_ADMIN_API_URL.rstrip('/') + '/wp-json/tmon-admin/v1/device/check-in'
         body = ujson.dumps(key_payload)
@@ -839,122 +840,127 @@ async def fetch_admin_provisioning(machine_id=None, unit_id=None):
                 except Exception:
                     data = None
             provisioning_log(f"fetch_admin_provisioning: response JSON: {data}")
-
             if isinstance(data, dict):
-                # If explicit queued 'provision' present, return it
-                if data.get('provision'):
-                    provisioning_log('fetch_admin_provisioning: returning queued provision payload')
-                    return data.get('provision')
-                # fallback: update UNIT_ID or site fields if present
-                if data.get('unit_id'):
-                    try:
-                        settings.UNIT_ID = str(data['unit_id'])
-                        write_text(getattr(settings,'UNIT_ID_FILE', settings.LOG_DIR + '/unit_id.txt'), settings.UNIT_ID)
-                        provisioning_log(f"fetch_admin_provisioning: UNIT_ID set to {settings.UNIT_ID} and persisted")
-                    except Exception:
-                        provisioning_log("fetch_admin_provisioning: failed to persist UNIT_ID")
-                maybe_site = data.get('site_url') or data.get('wordpress_api_url') or data.get('site')
+                # Top-level admin fields (not queued provision)
+                if 'unit_id' in data and data.get('unit_id'):
+                    new_uid = str(data.get('unit_id'))
+                    if new_uid and new_uid != getattr(settings, 'UNIT_ID', ''):
+                        settings.UNIT_ID = new_uid
+                        try:
+                            persist_unit_id(new_uid)
+                            provisioning_log(f"fetch_admin_provisioning: UNIT_ID set to {new_uid} and persisted")
+                        except Exception:
+                            provisioning_log(f"fetch_admin_provisioning: failed to persist UNIT_ID {new_uid}")
+                # Accept either 'site_url' or 'wordpress_api_url' to update server endpoint
+                maybe_site = data.get('site_url') or data.get('wordpress_api_url') or data.get('site') or None
                 if maybe_site:
                     try:
-                        settings.WORDPRESS_API_URL = str(maybe_site)
-                        write_text(getattr(settings,'WORDPRESS_API_URL_FILE', settings.LOG_DIR + '/wordpress_api_url.txt'), settings.WORDPRESS_API_URL)
-                        provisioning_log(f"fetch_admin_provisioning: WORDPRESS_API_URL set to {settings.WORDPRESS_API_URL} and persisted")
-                    except Exception:
-                        provisioning_log("fetch_admin_provisioning: failed to persist WORDPRESS_API_URL")
+                        settings.WORDPRESS_API_URL = maybe_site
+                        try:
+                            write_text(getattr(settings, 'WORDPRESS_API_URL_FILE', settings.LOG_DIR + '/wordpress_api_url.txt'), str(maybe_site))
+                            provisioning_log(f"fetch_admin_provisioning: WORDPRESS_API_URL set to {maybe_site} and persisted")
+                        except Exception:
+                            provisioning_log("fetch_admin_provisioning: failed to persist WORDPRESS_API_URL")
+                    except Exception as e:
+                        provisioning_log(f"fetch_admin_provisioning: failed to apply site_url {maybe_site}: {e}")
+                # Persist on 'provisioned' flag if present
                 if data.get('provisioned') is True:
                     try:
                         settings.UNIT_PROVISIONED = True
-                        write_text(getattr(settings, 'PROVISIONED_FLAG_FILE', settings.LOG_DIR + '/provisioned.flag'), 'ok')
-                        provisioning_log("fetch_admin_provisioning: marked UNIT_PROVISIONED and persisted")
+                        write_text(getattr(settings, 'PROVISIONED_FLAG_FILE', '/logs/provisioned.flag'), 'ok')
+                        provisioning_log("fetch_admin_provisioning: marked UNIT_PROVISIONED True and wrote flag")
                     except Exception:
-                        pass
-        return None
+                        provisioning_log("fetch_admin_provisioning: failed to write PROVISIONED_FLAG_FILE")
+
+                # Deliver explicit queued provision payload if present
+                if data.get('provision'):
+                    provisioning_log("fetch_admin_provisioning: found explicit 'provision' payload")
+                    return data.get('provision')
+                # Otherwise return None (no queued provision)
+                return None
     except Exception as e:
         await debug_print(f'fetch_admin_provisioning: exception {e}', 'ERROR')
         provisioning_log(f"fetch_admin_provisioning: exception {e}")
     return None
 
 def apply_staged_settings_and_reboot(staged):
+    """Apply staged settings by persisting to REMOTE_SETTINGS_APPLIED_FILE and reseting device."""
     provisioning_log(f"apply_staged_settings: Begin apply staged settings: {staged}")
     try:
         from config_persist import write_json, set_flag, write_text
         import settings as _settings
-        write_json(_settings.REMOTE_SETTINGS_APPLIED_FILE, staged)
-        # Apply sensible keys
-        if 'unit_id' in staged and staged['unit_id']:
-            _settings.UNIT_ID = str(staged['unit_id'])
-            try:
-                write_text(_settings.UNIT_ID_FILE, _settings.UNIT_ID)
-            except Exception:
-                pass
-        site_value = staged.get('site_url') or staged.get('wordpress_api_url') or staged.get('site')
-        if site_value:
-            _settings.WORDPRESS_API_URL = str(site_value)
-            try:
-                write_text(_settings.WORDPRESS_API_URL_FILE, _settings.WORDPRESS_API_URL)
-            except Exception:
-                pass
-        if 'unit_name' in staged:
-            try:
-                _settings.UNIT_Name = str(staged['unit_name'])
-            except Exception:
-                pass
-        # apply other staged keys via existing allowlist
-        for k, v in staged.items():
-            if k in dir(_settings) and not k.startswith('__'):
+        # Write the staged JSON to REMOTE_SETTINGS_APPLIED_FILE for record
+        try:
+            write_json(_settings.REMOTE_SETTINGS_APPLIED_FILE, staged)
+        except Exception:
+            pass
+        # Update runtime settings selectively (best-effort)
+        try:
+            if 'unit_id' in staged and staged['unit_id']:
+                _settings.UNIT_ID = str(staged['unit_id'])
                 try:
-                    setattr(_settings, k, v)
+                    write_text(_settings.UNIT_ID_FILE, str(_settings.UNIT_ID))
                 except Exception:
                     pass
-
-        # set flags persist
-        _settings.UNIT_PROVISIONED = True
-        try:
-            write_text(_settings.PROVISIONED_FLAG_FILE, 'ok')
-        except Exception:
-            pass
-
-        # send confirm to admin
-        try:
-            import urequests as requests, ujson
-            admin_url = getattr(_settings, 'TMON_ADMIN_API_URL', '').rstrip('/')
-            if admin_url:
-                confirm_url = admin_url + '/wp-json/tmon-admin/v1/device/confirm-applied'
-                payload = {'machine_id': getattr(_settings, 'MACHINE_ID', ''), 'unit_id': getattr(_settings, 'UNIT_ID', '')}
+            # Accept both 'site_url' and 'wordpress_api_url'
+            site_value = staged.get('site_url') or staged.get('wordpress_api_url') or staged.get('site') or None
+            if site_value:
+                _settings.WORDPRESS_API_URL = site_value
                 try:
-                    resp = requests.post(confirm_url, headers={'Content-Type': 'application/json'}, data=ujson.dumps(payload), timeout=10)
-                    provisioning_log(f"apply_staged_settings: confirm-applied posted status={getattr(resp, 'status_code', 'noresp')}")
-                    try:
-                        resp.close()
-                    except Exception:
-                        pass
-                except Exception as e:
-                    provisioning_log(f"apply_staged_settings: confirm post failed: {e}")
+                    write_text(getattr(_settings, 'WORDPRESS_API_URL_FILE', _settings.LOG_DIR + '/wordpress_api_url.txt'), str(_settings.WORDPRESS_API_URL))
+                except Exception:
+                    pass
+            if 'unit_name' in staged and staged['unit_name']:
+                try:
+                    _settings.UNIT_Name = str(staged['unit_name'])
+                except Exception:
+                    pass
+            if 'wifi_ssid' in staged:
+                _settings.WIFI_SSID = staged['wifi_ssid']
+            if 'wifi_pass' in staged:
+                _settings.WIFI_PASS = staged['wifi_pass']
+            if 'firmware_version' in staged:
+                _settings.FIRMWARE_VERSION = staged['firmware_version']
+            # Mark device provisioned
+            try:
+                _settings.UNIT_PROVISIONED = True
+                write_text(_settings.PROVISIONED_FLAG_FILE, 'ok')
+            except Exception:
+                pass
         except Exception:
             pass
-
-        # clear staged file if present
+        # Clear staged flag file if used
         try:
             import os
-            if os.path.exists(_settings.REMOTE_SETTINGS_STAGED_FILE):
-                os.remove(_settings.REMOTE_SETTINGS_STAGED_FILE)
+            staged_file = _settings.REMOTE_SETTINGS_STAGED_FILE
+            if os.path.exists(staged_file):
+                try:
+                    os.remove(staged_file)
+                except Exception:
+                    try:
+                        write_text(staged_file, '')
+                    except Exception:
+                        pass
         except Exception:
             pass
-
-        set_flag(_settings.REMOTE_SETTINGS_APPLIED_FILE, True)
-
+        # persist applied file etc.
+        try:
+            set_flag(_settings.REMOTE_SETTINGS_APPLIED_FILE, True)
+        except Exception:
+            pass
         # Soft-reset to apply new settings
         try:
             import machine
             provisioning_log("apply_staged_settings: performing soft_reset to apply changes")
             machine.soft_reset()
-        except Exception:
+        except Exception as e:
+            provisioning_log(f"apply_staged_settings: soft_reset failed with {e}")
             pass
     except Exception as e:
         provisioning_log(f"apply_staged_settings: exception {e}")
         try:
-            import uasyncio as _a
-            _a.create_task(debug_print(f'apply_staged_settings: failed {e}', 'ERROR'))
+            import uasyncio
+            uasyncio.create_task(debug_print(f'apply_staged_settings: failed {e}', 'ERROR'))
         except Exception:
             pass
 
@@ -983,7 +989,9 @@ async def periodic_provision_check():
                             provisioning_log("periodic_provision_check: wrote REMOTE_SETTINGS_STAGED_FILE")
                         except Exception:
                             provisioning_log("periodic_provision_check: failed to write REMOTE_SETTINGS_STAGED_FILE")
+                        # Apply immediately and reboot
                         apply_staged_settings_and_reboot(payload)
+                        # Confirm applied POST happens in apply_staged_settings_and_reboot
                         await asyncio.sleep(PROVISION_CHECK_INTERVAL_S)
                 except Exception as e:
                     await debug_print(f'periodic_provision_check: {e}', 'ERROR')
