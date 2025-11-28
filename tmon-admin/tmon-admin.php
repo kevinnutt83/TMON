@@ -523,64 +523,72 @@ add_action('admin_enqueue_scripts', function () {
 });
 
 // Fix admin menu: ensure single "Provisioning" group + children
-add_action('admin_menu', 'tmon_admin_menu');
-function tmon_admin_menu() {
-	// Compute unread notifications count for bubble
-	$notices = get_option('tmon_admin_notifications', []);
-	$unread = 0;
-	foreach ($notices as $n) { if (empty($n['read'])) $unread++; }
-	$menu_title = 'TMON Admin' . ($unread ? ' <span class="update-plugins count-1" style="vertical-align:middle"><span class="plugin-count">'.intval($unread).'</span></span>' : '');
+if (!function_exists('tmon_admin_menu')) {
+	add_action('admin_menu', 'tmon_admin_menu');
+	function tmon_admin_menu() {
+		// Compute unread notifications count for bubble
+		$notices = get_option('tmon_admin_notifications', []);
+		$unread = 0;
+		foreach ($notices as $n) { if (empty($n['read'])) $unread++; }
+		$menu_title = 'TMON Admin' . ($unread ? ' <span class="update-plugins count-1" style="vertical-align:middle"><span class="plugin-count">'.intval($unread).'</span></span>' : '');
 
-	add_menu_page(
-		'TMON Admin',
-		$menu_title,
-		'manage_options',
-		'tmon-admin',
-		'tmon_admin_dashboard_page',
-		'dashicons-admin-generic',
-		2
-	);
+		add_menu_page(
+			'TMON Admin',
+			$menu_title,
+			'manage_options',
+			'tmon-admin',
+			'tmon_admin_dashboard_page',
+			'dashicons-admin-generic',
+			2
+		);
 
-	// Settings, Audit, etc.
-	add_submenu_page('tmon-admin', 'TMON Settings', 'Settings', 'manage_options', 'tmon-admin-settings', 'tmon_admin_settings_page');
-	add_submenu_page('tmon-admin', 'Audit Log', 'Audit Log', 'manage_options', 'tmon-admin-audit', 'tmon_admin_audit_page');
-	add_submenu_page('tmon-admin', 'Notifications', 'Notifications', 'manage_options', 'tmon-admin-notifications', 'tmon_admin_notifications_page');
-	add_submenu_page('tmon-admin', 'OTA Jobs', 'OTA Jobs', 'manage_options', 'tmon-admin-ota', 'tmon_admin_ota_page');
-	add_submenu_page('tmon-admin', 'Files', 'Files', 'manage_options', 'tmon-admin-files', 'tmon_admin_files_page');
-	add_submenu_page('tmon-admin', 'Groups', 'Groups', 'manage_options', 'tmon-admin-groups', 'tmon_admin_groups_page');
+		// Settings, Audit, etc.
+		add_submenu_page('tmon-admin', 'TMON Settings', 'Settings', 'manage_options', 'tmon-admin-settings', 'tmon_admin_settings_page');
+		add_submenu_page('tmon-admin', 'Audit Log', 'Audit Log', 'manage_options', 'tmon-admin-audit', 'tmon_admin_audit_page');
+		add_submenu_page('tmon-admin', 'Notifications', 'Notifications', 'manage_options', 'tmon-admin-notifications', 'tmon_admin_notifications_page');
+		add_submenu_page('tmon-admin', 'OTA Jobs', 'OTA Jobs', 'manage_options', 'tmon-admin-ota', 'tmon_admin_ota_page');
+		add_submenu_page('tmon-admin', 'Files', 'Files', 'manage_options', 'tmon-admin-files', 'tmon_admin_files_page');
+		add_submenu_page('tmon-admin', 'Groups', 'Groups', 'manage_options', 'tmon-admin-groups', 'tmon_admin_groups_page');
 
-	// Provisioning: top subpage with children
-	add_submenu_page('tmon-admin', 'Provisioning', 'Provisioning', 'manage_options', 'tmon-admin-provisioning', 'tmon_admin_provisioning_page');
-	add_submenu_page('tmon-admin', 'Provisioned Devices', 'Provisioned Devices', 'manage_options', 'tmon-admin-provisioned', 'tmon_admin_provisioned_devices_page');
-	add_submenu_page('tmon-admin', 'Provisioning Activity', 'Provisioning Activity', 'manage_options', 'tmon-admin-provisioning-activity', 'tmon_admin_provisioning_activity_page');
-	add_submenu_page('tmon-admin', 'Provisioning History', 'Provisioning History', 'manage_options', 'tmon-admin-provisioning-history', 'tmon_admin_provisioning_history_page');
+		// Provisioning: top subpage with children
+		add_submenu_page('tmon-admin', 'Provisioning', 'Provisioning', 'manage_options', 'tmon-admin-provisioning', 'tmon_admin_provisioning_page');
+		add_submenu_page('tmon-admin', 'Provisioned Devices', 'Provisioned Devices', 'manage_options', 'tmon-admin-provisioned', 'tmon_admin_provisioned_devices_page');
+		add_submenu_page('tmon-admin', 'Provisioning Activity', 'Provisioning Activity', 'manage_options', 'tmon-admin-provisioning-activity', 'tmon_admin_provisioning_activity_page');
+		add_submenu_page('tmon-admin', 'Provisioning History', 'Provisioning History', 'manage_options', 'tmon-admin-provisioning-history', 'tmon_admin_provisioning_history_page');
 
-	add_submenu_page('tmon-admin', 'Device Location', 'Device Location', 'manage_options', 'tmon-admin-location', 'tmon_admin_location_page');
-	add_submenu_page('tmon-admin', 'UC Pairings', 'UC Pairings', 'manage_options', 'tmon-admin-pairings', 'tmon_admin_pairings_page');
+		add_submenu_page('tmon-admin', 'Device Location', 'Device Location', 'manage_options', 'tmon-admin-location', 'tmon_admin_location_page');
+		add_submenu_page('tmon-admin', 'UC Pairings', 'UC Pairings', 'manage_options', 'tmon-admin-pairings', 'tmon_admin_pairings_page');
+	}
+} else {
+	error_log('tmon-admin: tmon_admin_menu already declared; add_action skipped to avoid redeclare');
 }
 
 // Ensure tmon_admin_provisioning_history_page exists, used by menu above
-function tmon_admin_provisioning_history_page() {
-    if (!current_user_can('manage_options')) wp_die('Forbidden');
-    echo '<div class="wrap"><h1>Provisioning History</h1>';
-    $history = get_option('tmon_admin_provision_history', []);
-    if (!is_array($history) || empty($history)) {
-        echo '<p>No provisioning history recorded.</p>';
-    } else {
-        echo '<table class="widefat"><thead><tr><th>Timestamp</th><th>User</th><th>Unit ID</th><th>Machine ID</th><th>Action</th><th>Payload</th></tr></thead><tbody>';
-        foreach (array_reverse($history) as $h) {
-            echo '<tr>';
-            echo '<td>' . esc_html($h['ts'] ?? '') . '</td>';
-            echo '<td>' . esc_html($h['user'] ?? '') . '</td>';
-            echo '<td>' . esc_html($h['unit_id'] ?? '') . '</td>';
-            echo '<td>' . esc_html($h['machine_id'] ?? '') . '</td>';
-            echo '<td>' . esc_html($h['action'] ?? 'saved') . '</td>';
-            echo '<td><pre>' . esc_html(wp_json_encode($h['meta'] ?? [])) . '</pre></td>';
-            echo '</tr>';
-        }
-        echo '</tbody></table>';
-    }
-    echo '</div>';
+if (!function_exists('tmon_admin_provisioning_history_page')) {
+	function tmon_admin_provisioning_history_page() {
+		if (!current_user_can('manage_options')) wp_die('Forbidden');
+		echo '<div class="wrap"><h1>Provisioning History</h1>';
+		$history = get_option('tmon_admin_provision_history', []);
+		if (!is_array($history) || empty($history)) {
+			echo '<p>No provisioning history recorded.</p>';
+		} else {
+			echo '<table class="widefat"><thead><tr><th>Timestamp</th><th>User</th><th>Unit ID</th><th>Machine ID</th><th>Action</th><th>Payload</th></tr></thead><tbody>';
+			foreach (array_reverse($history) as $h) {
+				echo '<tr>';
+				echo '<td>' . esc_html($h['ts'] ?? '') . '</td>';
+				echo '<td>' . esc_html($h['user'] ?? '') . '</td>';
+				echo '<td>' . esc_html($h['unit_id'] ?? '') . '</td>';
+				echo '<td>' . esc_html($h['machine_id'] ?? '') . '</td>';
+				echo '<td>' . esc_html($h['action'] ?? 'saved') . '</td>';
+				echo '<td><pre>' . esc_html(wp_json_encode($h['meta'] ?? [])) . '</pre></td>';
+				echo '</tr>';
+			}
+			echo '</tbody></table>';
+		}
+		echo '</div>';
+	}
+} else {
+	error_log('tmon-admin: tmon_admin_provisioning_history_page already declared; skipping duplicate definition');
 }
 
 // --- Provisioning queue helpers ---
@@ -944,64 +952,72 @@ add_action('admin_enqueue_scripts', function () {
 });
 
 // Fix admin menu: ensure single "Provisioning" group + children
-add_action('admin_menu', 'tmon_admin_menu');
-function tmon_admin_menu() {
-	// Compute unread notifications count for bubble
-	$notices = get_option('tmon_admin_notifications', []);
-	$unread = 0;
-	foreach ($notices as $n) { if (empty($n['read'])) $unread++; }
-	$menu_title = 'TMON Admin' . ($unread ? ' <span class="update-plugins count-1" style="vertical-align:middle"><span class="plugin-count">'.intval($unread).'</span></span>' : '');
+if (!function_exists('tmon_admin_menu')) {
+	add_action('admin_menu', 'tmon_admin_menu');
+	function tmon_admin_menu() {
+		// Compute unread notifications count for bubble
+		$notices = get_option('tmon_admin_notifications', []);
+		$unread = 0;
+		foreach ($notices as $n) { if (empty($n['read'])) $unread++; }
+		$menu_title = 'TMON Admin' . ($unread ? ' <span class="update-plugins count-1" style="vertical-align:middle"><span class="plugin-count">'.intval($unread).'</span></span>' : '');
 
-	add_menu_page(
-		'TMON Admin',
-		$menu_title,
-		'manage_options',
-		'tmon-admin',
-		'tmon_admin_dashboard_page',
-		'dashicons-admin-generic',
-		2
-	);
+		add_menu_page(
+			'TMON Admin',
+			$menu_title,
+			'manage_options',
+			'tmon-admin',
+			'tmon_admin_dashboard_page',
+			'dashicons-admin-generic',
+			2
+		);
 
-	// Settings, Audit, etc.
-	add_submenu_page('tmon-admin', 'TMON Settings', 'Settings', 'manage_options', 'tmon-admin-settings', 'tmon_admin_settings_page');
-	add_submenu_page('tmon-admin', 'Audit Log', 'Audit Log', 'manage_options', 'tmon-admin-audit', 'tmon_admin_audit_page');
-	add_submenu_page('tmon-admin', 'Notifications', 'Notifications', 'manage_options', 'tmon-admin-notifications', 'tmon_admin_notifications_page');
-	add_submenu_page('tmon-admin', 'OTA Jobs', 'OTA Jobs', 'manage_options', 'tmon-admin-ota', 'tmon_admin_ota_page');
-	add_submenu_page('tmon-admin', 'Files', 'Files', 'manage_options', 'tmon-admin-files', 'tmon_admin_files_page');
-	add_submenu_page('tmon-admin', 'Groups', 'Groups', 'manage_options', 'tmon-admin-groups', 'tmon_admin_groups_page');
+		// Settings, Audit, etc.
+		add_submenu_page('tmon-admin', 'TMON Settings', 'Settings', 'manage_options', 'tmon-admin-settings', 'tmon_admin_settings_page');
+		add_submenu_page('tmon-admin', 'Audit Log', 'Audit Log', 'manage_options', 'tmon-admin-audit', 'tmon_admin_audit_page');
+		add_submenu_page('tmon-admin', 'Notifications', 'Notifications', 'manage_options', 'tmon-admin-notifications', 'tmon_admin_notifications_page');
+		add_submenu_page('tmon-admin', 'OTA Jobs', 'OTA Jobs', 'manage_options', 'tmon-admin-ota', 'tmon_admin_ota_page');
+		add_submenu_page('tmon-admin', 'Files', 'Files', 'manage_options', 'tmon-admin-files', 'tmon_admin_files_page');
+		add_submenu_page('tmon-admin', 'Groups', 'Groups', 'manage_options', 'tmon-admin-groups', 'tmon_admin_groups_page');
 
-	// Provisioning: top subpage with children
-	add_submenu_page('tmon-admin', 'Provisioning', 'Provisioning', 'manage_options', 'tmon-admin-provisioning', 'tmon_admin_provisioning_page');
-	add_submenu_page('tmon-admin', 'Provisioned Devices', 'Provisioned Devices', 'manage_options', 'tmon-admin-provisioned', 'tmon_admin_provisioned_devices_page');
-	add_submenu_page('tmon-admin', 'Provisioning Activity', 'Provisioning Activity', 'manage_options', 'tmon-admin-provisioning-activity', 'tmon_admin_provisioning_activity_page');
-	add_submenu_page('tmon-admin', 'Provisioning History', 'Provisioning History', 'manage_options', 'tmon-admin-provisioning-history', 'tmon_admin_provisioning_history_page');
+		// Provisioning: top subpage with children
+		add_submenu_page('tmon-admin', 'Provisioning', 'Provisioning', 'manage_options', 'tmon-admin-provisioning', 'tmon_admin_provisioning_page');
+		add_submenu_page('tmon-admin', 'Provisioned Devices', 'Provisioned Devices', 'manage_options', 'tmon-admin-provisioned', 'tmon_admin_provisioned_devices_page');
+		add_submenu_page('tmon-admin', 'Provisioning Activity', 'Provisioning Activity', 'manage_options', 'tmon-admin-provisioning-activity', 'tmon_admin_provisioning_activity_page');
+		add_submenu_page('tmon-admin', 'Provisioning History', 'Provisioning History', 'manage_options', 'tmon-admin-provisioning-history', 'tmon_admin_provisioning_history_page');
 
-	add_submenu_page('tmon-admin', 'Device Location', 'Device Location', 'manage_options', 'tmon-admin-location', 'tmon_admin_location_page');
-	add_submenu_page('tmon-admin', 'UC Pairings', 'UC Pairings', 'manage_options', 'tmon-admin-pairings', 'tmon_admin_pairings_page');
+		add_submenu_page('tmon-admin', 'Device Location', 'Device Location', 'manage_options', 'tmon-admin-location', 'tmon_admin_location_page');
+		add_submenu_page('tmon-admin', 'UC Pairings', 'UC Pairings', 'manage_options', 'tmon-admin-pairings', 'tmon_admin_pairings_page');
+	}
+} else {
+	error_log('tmon-admin: tmon_admin_menu already declared; add_action skipped to avoid redeclare');
 }
 
 // Ensure tmon_admin_provisioning_history_page exists, used by menu above
-function tmon_admin_provisioning_history_page() {
-    if (!current_user_can('manage_options')) wp_die('Forbidden');
-    echo '<div class="wrap"><h1>Provisioning History</h1>';
-    $history = get_option('tmon_admin_provision_history', []);
-    if (!is_array($history) || empty($history)) {
-        echo '<p>No provisioning history recorded.</p>';
-    } else {
-        echo '<table class="widefat"><thead><tr><th>Timestamp</th><th>User</th><th>Unit ID</th><th>Machine ID</th><th>Action</th><th>Payload</th></tr></thead><tbody>';
-        foreach (array_reverse($history) as $h) {
-            echo '<tr>';
-            echo '<td>' . esc_html($h['ts'] ?? '') . '</td>';
-            echo '<td>' . esc_html($h['user'] ?? '') . '</td>';
-            echo '<td>' . esc_html($h['unit_id'] ?? '') . '</td>';
-            echo '<td>' . esc_html($h['machine_id'] ?? '') . '</td>';
-            echo '<td>' . esc_html($h['action'] ?? 'saved') . '</td>';
-            echo '<td><pre>' . esc_html(wp_json_encode($h['meta'] ?? [])) . '</pre></td>';
-            echo '</tr>';
-        }
-        echo '</tbody></table>';
-    }
-    echo '</div>';
+if (!function_exists('tmon_admin_provisioning_history_page')) {
+	function tmon_admin_provisioning_history_page() {
+		if (!current_user_can('manage_options')) wp_die('Forbidden');
+		echo '<div class="wrap"><h1>Provisioning History</h1>';
+		$history = get_option('tmon_admin_provision_history', []);
+		if (!is_array($history) || empty($history)) {
+			echo '<p>No provisioning history recorded.</p>';
+		} else {
+			echo '<table class="widefat"><thead><tr><th>Timestamp</th><th>User</th><th>Unit ID</th><th>Machine ID</th><th>Action</th><th>Payload</th></tr></thead><tbody>';
+			foreach (array_reverse($history) as $h) {
+				echo '<tr>';
+				echo '<td>' . esc_html($h['ts'] ?? '') . '</td>';
+				echo '<td>' . esc_html($h['user'] ?? '') . '</td>';
+				echo '<td>' . esc_html($h['unit_id'] ?? '') . '</td>';
+				echo '<td>' . esc_html($h['machine_id'] ?? '') . '</td>';
+				echo '<td>' . esc_html($h['action'] ?? 'saved') . '</td>';
+				echo '<td><pre>' . esc_html(wp_json_encode($h['meta'] ?? [])) . '</pre></td>';
+				echo '</tr>';
+			}
+			echo '</tbody></table>';
+		}
+		echo '</div>';
+	}
+} else {
+	error_log('tmon-admin: tmon_admin_provisioning_history_page already declared; skipping duplicate definition');
 }
 
 // --- Provisioning queue helpers ---
@@ -1361,68 +1377,76 @@ add_action('admin_enqueue_scripts', function () {
 	wp_localize_script('tmon-admin', 'TMON_ADMIN', $localized);
 
 	// For arbitrary data, prefer inline script:
-	// wp_add_inline_script('tmon-admin', 'window.TMON_ADMIN_EXTRA = ' . wp_json_encode($extra) . ';', 'before');
+		// wp_add_inline_script('tmon-admin', 'window.TMON_ADMIN_EXTRA = ' . wp_json_encode($extra) . ';', 'before');
 });
 
 // Fix admin menu: ensure single "Provisioning" group + children
-add_action('admin_menu', 'tmon_admin_menu');
-function tmon_admin_menu() {
-	// Compute unread notifications count for bubble
-	$notices = get_option('tmon_admin_notifications', []);
-	$unread = 0;
-	foreach ($notices as $n) { if (empty($n['read'])) $unread++; }
-	$menu_title = 'TMON Admin' . ($unread ? ' <span class="update-plugins count-1" style="vertical-align:middle"><span class="plugin-count">'.intval($unread).'</span></span>' : '');
+if (!function_exists('tmon_admin_menu')) {
+	add_action('admin_menu', 'tmon_admin_menu');
+	function tmon_admin_menu() {
+		// Compute unread notifications count for bubble
+		$notices = get_option('tmon_admin_notifications', []);
+		$unread = 0;
+		foreach ($notices as $n) { if (empty($n['read'])) $unread++; }
+		$menu_title = 'TMON Admin' . ($unread ? ' <span class="update-plugins count-1" style="vertical-align:middle"><span class="plugin-count">'.intval($unread).'</span></span>' : '');
 
-	add_menu_page(
-		'TMON Admin',
-		$menu_title,
-		'manage_options',
-		'tmon-admin',
-		'tmon_admin_dashboard_page',
-		'dashicons-admin-generic',
-		2
-	);
+		add_menu_page(
+			'TMON Admin',
+			$menu_title,
+			'manage_options',
+			'tmon-admin',
+			'tmon_admin_dashboard_page',
+			'dashicons-admin-generic',
+			2
+		);
 
-	// Settings, Audit, etc.
-	add_submenu_page('tmon-admin', 'TMON Settings', 'Settings', 'manage_options', 'tmon-admin-settings', 'tmon_admin_settings_page');
-	add_submenu_page('tmon-admin', 'Audit Log', 'Audit Log', 'manage_options', 'tmon-admin-audit', 'tmon_admin_audit_page');
-	add_submenu_page('tmon-admin', 'Notifications', 'Notifications', 'manage_options', 'tmon-admin-notifications', 'tmon_admin_notifications_page');
-	add_submenu_page('tmon-admin', 'OTA Jobs', 'OTA Jobs', 'manage_options', 'tmon-admin-ota', 'tmon_admin_ota_page');
-	add_submenu_page('tmon-admin', 'Files', 'Files', 'manage_options', 'tmon-admin-files', 'tmon_admin_files_page');
-	add_submenu_page('tmon-admin', 'Groups', 'Groups', 'manage_options', 'tmon-admin-groups', 'tmon_admin_groups_page');
+		// Settings, Audit, etc.
+		add_submenu_page('tmon-admin', 'TMON Settings', 'Settings', 'manage_options', 'tmon-admin-settings', 'tmon_admin_settings_page');
+		add_submenu_page('tmon-admin', 'Audit Log', 'Audit Log', 'manage_options', 'tmon-admin-audit', 'tmon_admin_audit_page');
+		add_submenu_page('tmon-admin', 'Notifications', 'Notifications', 'manage_options', 'tmon-admin-notifications', 'tmon_admin_notifications_page');
+		add_submenu_page('tmon-admin', 'OTA Jobs', 'OTA Jobs', 'manage_options', 'tmon-admin-ota', 'tmon_admin_ota_page');
+		add_submenu_page('tmon-admin', 'Files', 'Files', 'manage_options', 'tmon-admin-files', 'tmon_admin_files_page');
+		add_submenu_page('tmon-admin', 'Groups', 'Groups', 'manage_options', 'tmon-admin-groups', 'tmon_admin_groups_page');
 
-	// Provisioning: top subpage with children
-	add_submenu_page('tmon-admin', 'Provisioning', 'Provisioning', 'manage_options', 'tmon-admin-provisioning', 'tmon_admin_provisioning_page');
-	add_submenu_page('tmon-admin', 'Provisioned Devices', 'Provisioned Devices', 'manage_options', 'tmon-admin-provisioned', 'tmon_admin_provisioned_devices_page');
-	add_submenu_page('tmon-admin', 'Provisioning Activity', 'Provisioning Activity', 'manage_options', 'tmon-admin-provisioning-activity', 'tmon_admin_provisioning_activity_page');
-	add_submenu_page('tmon-admin', 'Provisioning History', 'Provisioning History', 'manage_options', 'tmon-admin-provisioning-history', 'tmon_admin_provisioning_history_page');
+		// Provisioning: top subpage with children
+		add_submenu_page('tmon-admin', 'Provisioning', 'Provisioning', 'manage_options', 'tmon-admin-provisioning', 'tmon_admin_provisioning_page');
+		add_submenu_page('tmon-admin', 'Provisioned Devices', 'Provisioned Devices', 'manage_options', 'tmon-admin-provisioned', 'tmon_admin_provisioned_devices_page');
+		add_submenu_page('tmon-admin', 'Provisioning Activity', 'Provisioning Activity', 'manage_options', 'tmon-admin-provisioning-activity', 'tmon_admin_provisioning_activity_page');
+		add_submenu_page('tmon-admin', 'Provisioning History', 'Provisioning History', 'manage_options', 'tmon-admin-provisioning-history', 'tmon_admin_provisioning_history_page');
 
-	add_submenu_page('tmon-admin', 'Device Location', 'Device Location', 'manage_options', 'tmon-admin-location', 'tmon_admin_location_page');
-	add_submenu_page('tmon-admin', 'UC Pairings', 'UC Pairings', 'manage_options', 'tmon-admin-pairings', 'tmon_admin_pairings_page');
+		add_submenu_page('tmon-admin', 'Device Location', 'Device Location', 'manage_options', 'tmon-admin-location', 'tmon_admin_location_page');
+		add_submenu_page('tmon-admin', 'UC Pairings', 'UC Pairings', 'manage_options', 'tmon-admin-pairings', 'tmon_admin_pairings_page');
+	}
+} else {
+	error_log('tmon-admin: tmon_admin_menu already declared; add_action skipped to avoid redeclare');
 }
 
 // Ensure tmon_admin_provisioning_history_page exists, used by menu above
-function tmon_admin_provisioning_history_page() {
-    if (!current_user_can('manage_options')) wp_die('Forbidden');
-    echo '<div class="wrap"><h1>Provisioning History</h1>';
-    $history = get_option('tmon_admin_provision_history', []);
-    if (!is_array($history) || empty($history)) {
-        echo '<p>No provisioning history recorded.</p>';
-    } else {
-        echo '<table class="widefat"><thead><tr><th>Timestamp</th><th>User</th><th>Unit ID</th><th>Machine ID</th><th>Action</th><th>Payload</th></tr></thead><tbody>';
-        foreach (array_reverse($history) as $h) {
-            echo '<tr>';
-            echo '<td>' . esc_html($h['ts'] ?? '') . '</td>';
-            echo '<td>' . esc_html($h['user'] ?? '') . '</td>';
-            echo '<td>' . esc_html($h['unit_id'] ?? '') . '</td>';
-            echo '<td>' . esc_html($h['machine_id'] ?? '') . '</td>';
-            echo '<td>' . esc_html($h['action'] ?? 'saved') . '</td>';
-            echo '<td><pre>' . esc_html(wp_json_encode($h['meta'] ?? [])) . '</pre></td>';
-            echo '</tr>';
-        }
-        echo '</tbody></table>';
-    }
-    echo '</div>';
+if (!function_exists('tmon_admin_provisioning_history_page')) {
+	function tmon_admin_provisioning_history_page() {
+		if (!current_user_can('manage_options')) wp_die('Forbidden');
+		echo '<div class="wrap"><h1>Provisioning History</h1>';
+		$history = get_option('tmon_admin_provision_history', []);
+		if (!is_array($history) || empty($history)) {
+			echo '<p>No provisioning history recorded.</p>';
+		} else {
+			echo '<table class="widefat"><thead><tr><th>Timestamp</th><th>User</th><th>Unit ID</th><th>Machine ID</th><th>Action</th><th>Payload</th></tr></thead><tbody>';
+			foreach (array_reverse($history) as $h) {
+				echo '<tr>';
+				echo '<td>' . esc_html($h['ts'] ?? '') . '</td>';
+				echo '<td>' . esc_html($h['user'] ?? '') . '</td>';
+				echo '<td>' . esc_html($h['unit_id'] ?? '') . '</td>';
+				echo '<td>' . esc_html($h['machine_id'] ?? '') . '</td>';
+				echo '<td>' . esc_html($h['action'] ?? 'saved') . '</td>';
+				echo '<td><pre>' . esc_html(wp_json_encode($h['meta'] ?? [])) . '</pre></td>';
+				echo '</tr>';
+			}
+			echo '</tbody></table>';
+		}
+		echo '</div>';
+	}
+} else {
+	error_log('tmon-admin: tmon_admin_provisioning_history_page already declared; skipping duplicate definition');
 }
 
 // --- Provisioning queue helpers ---
