@@ -1,4 +1,4 @@
-# Firmware Version: v2.00j
+# Firmware Version: v2.01.0
 
 # Move LOG_DIR and essential file paths near the top so other constants can reference them.
 LOG_DIR = '/logs'
@@ -21,11 +21,11 @@ FIELD_DATA_DELIVERED_LOG = LOG_DIR + '/field_data.delivered.log'
 
 # Then other vars
 UNIT_ID = "None"              # 6-digit assigned by Admin after first check-in (persisted locally)
-UNIT_Name = "Unnamed Unit"    # Human-friendly name (provisioned)
-NODE_TYPE = 'base'             # 'base' or 'remote'; base can host LoRa network & WiFi; remote uses LoRa primarily
+UNIT_Name = "No Device Name"    # Human-friendly name (provisioned)
+NODE_TYPE = 'base'             # 'base','wifi', or 'remote'; base can host LoRa network & WiFi; remote uses LoRa primarily
 #NODE_TYPE = 'remote'          # Uncomment for remote role during flashing
 
-FIRMWARE_VERSION = "v2.00j"    # Bumped automatically by OTA; compared during update check
+FIRMWARE_VERSION = "v2.01.0"    # Bumped automatically by OTA; compared during update check
 
  # WordPress Unit Connector API integration
 WORDPRESS_API_URL = ""   # Customer Unit Connector site for provisioned devices
