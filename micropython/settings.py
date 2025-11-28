@@ -1,18 +1,23 @@
 # Firmware Version: v2.00j
 
-# Logging dir and support file paths (moved near top so other values can reference them)
+# Move LOG_DIR and essential file paths near the top so other constants can reference them.
 LOG_DIR = '/logs'
+
+# Files used for persistence (UNIT_ID, staged/applied settings, provision flag)
+UNIT_ID_FILE = LOG_DIR + '/unit_id.txt'
+MACHINE_ID_FILE = LOG_DIR + '/machine_id.txt'
+WORDPRESS_API_URL_FILE = LOG_DIR + '/wordpress_api_url.txt'
+PROVISIONED_FLAG_FILE = LOG_DIR + '/provisioned.flag'
+REMOTE_SETTINGS_STAGED_FILE = LOG_DIR + '/remote_settings.staged.json'
+REMOTE_SETTINGS_APPLIED_FILE = LOG_DIR + '/remote_settings.applied.json'
+REMOTE_SETTINGS_PREV_FILE = LOG_DIR + '/remote_settings.prev.json'
+
+# Generic logs
 LOG_FILE = LOG_DIR + '/lora.log'
 ERROR_LOG_FILE = LOG_DIR + '/lora_errors.log'
 FIELD_DATA_LOG = LOG_DIR + '/field_data.log'
 DATA_HISTORY_LOG = LOG_DIR + '/data_history.log'
 FIELD_DATA_DELIVERED_LOG = LOG_DIR + '/field_data.delivered.log'
-UID_PERSIST_FILE = LOG_DIR + '/unit_id.txt'
-PROVISIONED_FLAG_FILE = LOG_DIR + '/provisioned.flag'
-WORDPRESS_API_URL_FILE = LOG_DIR + '/wordpress_api_url.txt'
-REMOTE_SETTINGS_STAGED_FILE = LOG_DIR + '/remote_settings.staged.json'
-REMOTE_SETTINGS_APPLIED_FILE = LOG_DIR + '/remote_settings.applied.json'
-REMOTE_SETTINGS_PREV_FILE = LOG_DIR + '/remote_settings.prev.json'
 
 # Then other vars
 UNIT_ID = "None"              # 6-digit assigned by Admin after first check-in (persisted locally)
