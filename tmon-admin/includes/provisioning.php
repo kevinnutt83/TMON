@@ -1649,4 +1649,56 @@ add_action('rest_api_init', function() {
 	]);
 });
 
+// Simple admin AJAX to fetch queue (also used by UI)
+add_action('wp_ajax_tmon_admin_get_pending_provisions', function() {
+    if (!current_user_can('manage_options')) wp_send_json_error(['message'=>'forbidden'], 403);
+    $queue = get_option('tmon_admin_pending_provision', []);
+    wp_send_json_success(['queue'=>$queue]);
+});
+
+// Admin ajax to manage queue (delete/reenqueue) invoked by UI above
+add_action('wp_ajax_tmon_admin_manage_pending', function() {
+    if (!current_user_can('manage_options')) wp_send_json_error(['message'=>'forbidden'], 403);
+    check_ajax_referer('tmon_admin_provision_ajax');
+    $action = sanitize_text_field($_POST['manage_action'] ?? '');
+    $key = sanitize_text_field($_POST['key'] ?? '');
+    $queue = get_option('tmon_admin_pending_provision', []);
+    if ($action === 'delete') {
+        if (isset($queue[$key])) { unset($queue[$key]); update_option('tmon_admin_pending_provision', $queue); wp_send_json_success(); }
+        wp_send_json_error(['message' => 'key_not_found']);
+    } elseif ($action === 'reenqueue') {
+        $payload = isset($_POST['payload']) ? json_decode(stripslashes($_POST['payload']), true) : null;
+        if ($payload === null) {
+            $payload = $queue[$key] ?? [];
+        }
+        if ($payload) {
+            $queue[$key] = $payload;
+            update_option('tmon_admin_pending_provision', $queue);
+            wp_send_json_success();
+        }
+        wp_send_json_error(['message' => 'invalid_payload']);
+    }
+    wp_send_json_error(['message' => 'unknown_action']);
+});
+
+// Confirm-applied REST route (with token validation)
+add_action('rest_api_init', function() {
+    register_rest_route('tmon-admin/v1', '/device/confirm-applied', [
+        'methods' => WP_REST_Server::CREATABLE,
+        'permission_callback' => function($request) {
+            // Validate either admin read token or admin confirm token set in options
+            $headers = getallheaders();
+            $read_token = $headers['X-TMON-READ'] ?? ($_SERVER['HTTP_X_TMON_READ'] ?? '');
+            $confirm_token = $headers['X-TMON-CONFIRM'] ?? ($_SERVER['HTTP_X_TMON_CONFIRM'] ?? '');
+            $expected_read = get_option('tmon_admin_uc_key') ?: get_option('tmon_uc_hub_read_token');
+            $expected_confirm = get_option('tmon_admin_confirm_token', '');
+            if ($expected_confirm && hash_equals($expected_confirm, (string)$confirm_token)) return true;
+            if ($expected_read && hash_equals($expected_read, (string)$read_token)) return true;
+            return false;
+        },
+        'callback' => function($request){
+            // ... earlier confirm handler code ...
+        }
+    ]);
+});
 // --- END OF FILE ---

@@ -925,47 +925,26 @@ def apply_staged_settings_and_reboot(staged):
         # Confirm applied POST back to Admin (requires confirm token option)
         try:
             import urequests, ujson
-            admin_url = getattr(_settings, 'TMON_ADMIN_API_URL', '').rstrip('/')
-            token = getattr(_settings, 'TMON_ADMIN_CONFIRM_TOKEN', '')
-            if admin_url and token:
-                confirm_url = admin_url + '/wp-json/tmon-admin/v1/device/confirm-applied'
-                headers = {'Content-Type': 'application/json', 'X-TMON-CONFIRM': token}
-                body = ujson.dumps({'unit_id': getattr(_settings, 'UNIT_ID', ''), 'machine_id': getattr(_settings, 'MACHINE_ID','')})
-                for attempt in range(3):
+            admin_url = getattr(settings, 'TMON_ADMIN_API_URL', '').rstrip('/')
+            confirm_token = getattr(settings, 'TMON_ADMIN_CONFIRM_TOKEN', '') or ''
+            if admin_url and confirm_token:
+                headers = {'Content-Type':'application/json', 'X-TMON-CONFIRM': confirm_token}
+                body = ujson.dumps({'unit_id': settings.UNIT_ID, 'machine_id': get_machine_id()})
+                # attempt with retry
+                for i in range(3):
                     try:
-                        resp = urequests.post(confirm_url, headers=headers, data=body, timeout=10)
+                        resp = urequests.post(admin_url + '/wp-json/tmon-admin/v1/device/confirm-applied', headers=headers, data=body, timeout=10)
                         if getattr(resp, 'status_code', 0) == 200:
-                            provisioning_log("apply_staged_settings: admin confirm successful")
+                            provisioning_log("apply_staged_settings: confirm-applied success")
                             try: resp.close()
                             except Exception: pass
                             break
-                        provisioning_log(f"apply_staged_settings: admin confirm attempt {attempt} failed: {getattr(resp,'status_code',0)}")
-                        try: resp.close()
-                        except Exception: pass
                     except Exception as e:
-                        provisioning_log(f"apply_staged_settings: admin confirm exception attempt {attempt}: {e}")
-                    time.sleep(2)
+                        provisioning_log(f"apply_staged_settings: confirm attempt {i} failed: {e}")
+                        time.sleep(2)
         except Exception as e:
-            provisioning_log(f"apply_staged_settings: confirm post exception {e}")
-        # clear staged file and mark applied
-        try:
-            import os
-            if os.path.exists(_settings.REMOTE_SETTINGS_STAGED_FILE):
-                os.remove(_settings.REMOTE_SETTINGS_STAGED_FILE)
-        except Exception:
-            pass
-        try:
-            set_flag(_settings.REMOTE_SETTINGS_APPLIED_FILE, True)
-        except Exception:
-            pass
+            provisioning_log(f"apply_staged_settings: confirm post exception: {e}")
 
-        # reboot to apply runtime changes
-        try:
-            import machine
-            provisioning_log('apply_staged_settings: soft reset to apply changes')
-            machine.soft_reset()
-        except Exception:
-            pass
     except Exception as e:
         provisioning_log(f"apply_staged_settings: exception {e}")
         try:

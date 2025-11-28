@@ -277,44 +277,25 @@ add_action('admin_post_tmon_admin_save_provision', function() {
         error_log('tmon-admin: Inserted provisioning row ID=' . intval($insert_id) . ' by user=' . get_current_user()->user_login . ' meta=' . wp_json_encode($meta));
     }
 
-    // Enqueue provisioning payload for the device (use machine_id if present else unit_id)
+    // Enqueue provisioning payload for both machine_id and unit_id
+    $meta['site_url'] = $site_url;
+    $meta['unit_name'] = $unit_name;
     $key1 = $machine_id ?: '';
     $key2 = $unit_id ?: '';
+    if ($key1) { tmon_admin_enqueue_provision($key1, $meta); error_log('tmon-admin: Enqueued provision for ' . $key1); }
+    if ($key2 && $key2 !== $key1) { tmon_admin_enqueue_provision($key2, $meta); error_log('tmon-admin: Enqueued provision for ' . $key2); }
 
-    // Enqueue for both machine and unit id (if available)
-    if ($key1) {
-        $payload = $meta;
-        $payload['requested_by_user'] = wp_get_current_user()->user_login;
-        tmon_admin_enqueue_provision($key1, $payload);
-        error_log('tmon-admin: Enqueued provisioning for key=' . $key1 . ' payload=' . wp_json_encode($payload));
-    }
-    if ($key2 && $key2 !== $key1) {
-        $payload2 = $meta;
-        $payload2['requested_by_user'] = wp_get_current_user()->user_login;
-        tmon_admin_enqueue_provision($key2, $payload2);
-        error_log('tmon-admin: Enqueued provisioning for key=' . $key2 . ' payload=' . wp_json_encode($payload2));
-    }
-
-    // Mirror: update tmon_devices record to set provisioned and store wordpress_api_url and unit_name (if columns exist)
+    // Mirror: update tmon_devices record to set provisioned, wordpress_api_url, unit_name, provisioned_at
+    global $wpdb;
     $dev_table = $wpdb->prefix . 'tmon_devices';
     if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
-        // get current columns
         $dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
-        $mirror_update = [
-            'last_seen' => current_time('mysql')
-        ];
-        // prefer explicit provisioned column; fallback to 'status'
-        if (in_array('provisioned', $dev_cols)) {
-            $mirror_update['provisioned'] = 1;
-        } elseif (in_array('status', $dev_cols)) {
-            $mirror_update['status'] = 'provisioned';
-        }
-        if (!empty($site_url) && in_array('wordpress_api_url', $dev_cols)) {
-            $mirror_update['wordpress_api_url'] = $site_url;
-        }
-        if (!empty($unit_name) && in_array('unit_name', $dev_cols)) {
-            $mirror_update['unit_name'] = $unit_name;
-        }
+        $mirror_update = ['last_seen' => current_time('mysql')];
+        if (in_array('provisioned', $dev_cols)) $mirror_update['provisioned'] = 1;
+        elseif (in_array('status', $dev_cols)) $mirror_update['status'] = 'provisioned';
+        if (in_array('wordpress_api_url', $dev_cols) && $site_url) $mirror_update['wordpress_api_url'] = $site_url;
+        if (in_array('unit_name', $dev_cols) && $unit_name) $mirror_update['unit_name'] = $unit_name;
+        if (in_array('provisioned_at', $dev_cols)) $mirror_update['provisioned_at'] = current_time('mysql');
         if (!empty($unit_id)) {
             $wpdb->update($dev_table, $mirror_update, ['unit_id' => $unit_id]);
         } elseif (!empty($machine_id)) {
@@ -322,18 +303,18 @@ add_action('admin_post_tmon_admin_save_provision', function() {
         }
     }
 
-    // Append to provisioning history for audit
-    $hist = get_option('tmon_admin_provision_history', []);
-    $hist[] = [
-        'timestamp' => current_time('mysql'),
-        'saved_by' => wp_get_current_user()->user_login,
+    // Append auditing history of this provisioning action
+    $history = get_option('tmon_admin_provision_history', []);
+    $history[] = [
+        'ts' => current_time('mysql'),
+        'user' => wp_get_current_user()->user_login,
         'unit_id' => $unit_id,
         'machine_id' => $machine_id,
         'site_url' => $site_url,
         'unit_name' => $unit_name,
         'meta' => $meta,
     ];
-    update_option('tmon_admin_provision_history', $hist);
+    update_option('tmon_admin_provision_history', array_slice($history, -500)); // keep last 500 entries
 
     // Add admin notice for save success
     add_action('admin_notices', function() {
@@ -345,7 +326,7 @@ add_action('admin_post_tmon_admin_save_provision', function() {
     exit;
 });
 
-// AJAX: Update device repo metadata inline (returns JSON)
+// AJAX: Enqueue from inline edit
 add_action('wp_ajax_tmon_admin_update_device_repo', function() {
     if (!current_user_can('manage_options')) {
         wp_send_json_error(['message' => 'forbidden']);
@@ -415,10 +396,10 @@ add_action('wp_ajax_tmon_admin_update_device_repo', function() {
             } elseif (in_array('status', $dev_cols)) {
                 $mirror_update['status'] = 'provisioned';
             }
-            if (!empty($site_url) && in_array('wordpress_api_url', $dev_cols)) {
+            if (in_array('wordpress_api_url', $dev_cols) && $site_url) {
                 $mirror_update['wordpress_api_url'] = $site_url;
             }
-            if (!empty($unit_name) && in_array('unit_name', $dev_cols)) {
+            if (in_array('unit_name', $dev_cols) && $unit_name) {
                 $mirror_update['unit_name'] = $unit_name;
             }
             if (!empty($unit_id)) {
@@ -570,6 +551,7 @@ function tmon_admin_menu() {
         add_submenu_page('tmon-admin', 'Data History Log', 'Data History Log', 'manage_options', 'tmon-admin-data-history', 'tmon_admin_data_history_page');
     add_submenu_page('tmon-admin', 'Device Location', 'Device Location', 'manage_options', 'tmon-admin-location', 'tmon_admin_location_page');
     add_submenu_page('tmon-admin', 'UC Pairings', 'UC Pairings', 'manage_options', 'tmon-admin-pairings', 'tmon_admin_pairings_page');
+    add_submenu_page('tmon-admin', 'Provisioning Activity', 'Provisioning', 'manage_options', 'tmon-admin-provisioning-activity', 'tmon_admin_provisioning_activity_page');
 }
 function tmon_admin_data_history_page() {
     require TMON_ADMIN_PATH . 'templates/data-history.php';
@@ -858,3 +840,63 @@ add_action('wp_ajax_tmon_admin_fetch_github_manifest', function() {
 		wp_send_json_error(['message' => 'manifest or version file not found', 'errors' => $result['errors'] ?? []]);
 	}
 });
+
+function tmon_admin_provisioning_activity_page() {
+    if (!current_user_can('manage_options')) wp_die('Forbidden');
+    // Render pending queue table and history
+    $queue = get_option('tmon_admin_pending_provision', []);
+    $history = get_option('tmon_admin_provision_history', []);
+    echo '<div class="wrap"><h1>Provisioning Activity</h1>';
+    echo '<h2>Pending Queue</h2>';
+    echo '<table class="widefat"><thead><tr><th>Key</th><th>Payload</th><th>Actions</th></tr></thead><tbody>';
+    foreach ($queue as $k => $payload) {
+        echo '<tr>';
+        echo '<td>' . esc_html($k) . '</td>';
+        echo '<td><pre style="max-width:70%;">' . esc_html(wp_json_encode($payload)) . '</pre></td>';
+        echo '<td>';
+        echo '<button class="button tmon-requeue" data-key="'.esc_attr($k).'">Re-enqueue</button> ';
+        echo '<button class="button tmon-delete" data-key="'.esc_attr($k).'">Delete</button>';
+        echo '</td>';
+        echo '</tr>';
+    }
+    echo '</tbody></table>';
+
+    echo '<h2>Recent Provisioning History</h2>';
+    echo '<table class="widefat"><thead><tr><th>Time</th><th>User</th><th>Unit ID</th><th>Machine ID</th><th>Site</th><th>Meta</th></tr></thead><tbody>';
+    $max = array_slice(array_reverse($history), 0, 200);
+    foreach ($max as $h) {
+        echo '<tr>';
+        echo '<td>' . esc_html($h['ts']) . '</td>';
+        echo '<td>' . esc_html($h['user']) . '</td>';
+        echo '<td>' . esc_html($h['unit_id']) . '</td>';
+        echo '<td>' . esc_html($h['machine_id']) . '</td>';
+        echo '<td>' . esc_html($h['site_url']) . '</td>';
+        echo '<td><pre style="max-width:70%;">' . esc_html(wp_json_encode($h['meta'])) . '</pre></td>';
+        echo '</tr>';
+    }
+    echo '</tbody></table>';
+    ?>
+    <script>
+    (function(){
+        jQuery(document).on('click', '.tmon-delete', function(){
+            const key = jQuery(this).attr('data-key');
+            if (!confirm('Delete pending entry for '+key+'?')) return;
+            jQuery.post(ajaxurl, { action: 'tmon_admin_manage_pending', manage_action: 'delete', key: key, _ajax_nonce: '<?php echo wp_create_nonce('tmon_admin_provision_ajax'); ?>' }, function(data){
+                if (data.success) location.reload();
+                else alert('Failed: ' + (data.data && data.data.message ? data.data.message : 'unknown'));
+            });
+        });
+        jQuery(document).on('click', '.tmon-requeue', function(){
+            const key = jQuery(this).attr('data-key');
+            let payload = prompt('Leave payload JSON to re-enqueue (blank = keep existing):');
+            try { payload = payload ? JSON.parse(payload) : null; } catch(e){ alert('Invalid JSON'); return; }
+            jQuery.post(ajaxurl, { action: 'tmon_admin_manage_pending', manage_action: 'reenqueue', key: key, payload: payload ? payload : '', _ajax_nonce: '<?php echo wp_create_nonce('tmon_admin_provision_ajax'); ?>' }, function(data){
+                if (data.success) location.reload();
+                else alert('Failed: ' + (data.data && data.data.message ? data.data.message : 'unknown'));
+            });
+        });
+    })();
+    </script>
+    <?php
+    echo '</div>';
+}
