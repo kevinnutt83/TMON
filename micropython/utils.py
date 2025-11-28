@@ -922,21 +922,31 @@ def apply_staged_settings_and_reboot(staged):
         except Exception as e:
             provisioning_log(f'apply_staged_settings: setting update error: {e}')
 
-        # Optional: POST confirm to Admin to clear DB flags and mirror
+        # Confirm applied POST back to Admin (requires confirm token option)
         try:
-            import urequests as requests, ujson
+            import urequests, ujson
             admin_url = getattr(_settings, 'TMON_ADMIN_API_URL', '').rstrip('/')
-            if admin_url:
+            token = getattr(_settings, 'TMON_ADMIN_CONFIRM_TOKEN', '')
+            if admin_url and token:
                 confirm_url = admin_url + '/wp-json/tmon-admin/v1/device/confirm-applied'
-                payload = {'machine_id': getattr(_settings, 'MACHINE_ID', ''), 'unit_id': getattr(_settings, 'UNIT_ID', '')}
-                try:
-                    resp = requests.post(confirm_url, headers={'Content-Type':'application/json'}, data=ujson.dumps(payload), timeout=10)
-                    provisioning_log(f'apply_staged_settings: confirm posted to admin status={getattr(resp, "status_code", "noresp")}')
-                except Exception as e:
-                    provisioning_log(f'apply_staged_settings: confirm post failed: {e}')
-        except Exception:
-            pass
-
+                headers = {'Content-Type': 'application/json', 'X-TMON-CONFIRM': token}
+                body = ujson.dumps({'unit_id': getattr(_settings, 'UNIT_ID', ''), 'machine_id': getattr(_settings, 'MACHINE_ID','')})
+                for attempt in range(3):
+                    try:
+                        resp = urequests.post(confirm_url, headers=headers, data=body, timeout=10)
+                        if getattr(resp, 'status_code', 0) == 200:
+                            provisioning_log("apply_staged_settings: admin confirm successful")
+                            try: resp.close()
+                            except Exception: pass
+                            break
+                        provisioning_log(f"apply_staged_settings: admin confirm attempt {attempt} failed: {getattr(resp,'status_code',0)}")
+                        try: resp.close()
+                        except Exception: pass
+                    except Exception as e:
+                        provisioning_log(f"apply_staged_settings: admin confirm exception attempt {attempt}: {e}")
+                    time.sleep(2)
+        except Exception as e:
+            provisioning_log(f"apply_staged_settings: confirm post exception {e}")
         # clear staged file and mark applied
         try:
             import os
@@ -957,7 +967,7 @@ def apply_staged_settings_and_reboot(staged):
         except Exception:
             pass
     except Exception as e:
-        provisioning_log(f'apply_staged_settings: exception {e}')
+        provisioning_log(f"apply_staged_settings: exception {e}")
         try:
             import uasyncio
             uasyncio.create_task(debug_print(f'apply_staged_settings: failed {e}', 'ERROR'))

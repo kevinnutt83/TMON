@@ -250,6 +250,8 @@ FIELD_DATA_HMAC_SECRET = ''               # Secret for field data HMAC (provisio
 FIELD_DATA_HMAC_INCLUDE_KEYS = ['unit_id','firmware_version','node_type']  # Keys guaranteed present (order stable)
 FIELD_DATA_HMAC_TRUNCATE = 32             # Hex chars of hash to include as signature
 
+TMON_ADMIN_CONFIRM_TOKEN = ''  # Optional small secret to confirm applied settings when device posts; set on Admin & device for security
+
 # NOTE:
 # - sdata.py should include LAST_ERROR_* when TELEMETRY_INCLUDE_LAST_ERROR is True.
 # - Sender must append delivered entries to FIELD_DATA_DELIVERED_LOG and truncate FIELD_DATA_LOG post-send.

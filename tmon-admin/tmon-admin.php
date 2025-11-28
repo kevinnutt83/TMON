@@ -322,6 +322,19 @@ add_action('admin_post_tmon_admin_save_provision', function() {
         }
     }
 
+    // Append to provisioning history for audit
+    $hist = get_option('tmon_admin_provision_history', []);
+    $hist[] = [
+        'timestamp' => current_time('mysql'),
+        'saved_by' => wp_get_current_user()->user_login,
+        'unit_id' => $unit_id,
+        'machine_id' => $machine_id,
+        'site_url' => $site_url,
+        'unit_name' => $unit_name,
+        'meta' => $meta,
+    ];
+    update_option('tmon_admin_provision_history', $hist);
+
     // Add admin notice for save success
     add_action('admin_notices', function() {
         echo '<div class="updated"><p>Provisioning saved and queued for next device check-in.</p></div>';

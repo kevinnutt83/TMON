@@ -111,10 +111,11 @@ function tmon_admin_maybe_migrate_tmon_devices_columns() {
     if (empty($cols['wordpress_api_url'])) {
         $wpdb->query("ALTER TABLE $table ADD COLUMN wordpress_api_url VARCHAR(255) DEFAULT ''");
     }
+    if (empty($cols['provisioned_at'])) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN provisioned_at DATETIME DEFAULT NULL");
+    }
 }
-add_action('admin_init', function() {
-    tmon_admin_maybe_migrate_tmon_devices_columns();
-});
+add_action('admin_init', function(){ tmon_admin_maybe_migrate_tmon_devices_columns(); });
 
 // Helper: Get all devices, provisioned and unprovisioned
 function tmon_admin_get_all_devices() {
@@ -1599,51 +1600,53 @@ add_action('rest_api_init', function() {
 
 			// 2) Fallback: check DB row where settings_staged=1
 			$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
-			$row = null;
-			if ($machine_id) { $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE machine_id=%s LIMIT 1", $machine_id), ARRAY_A); }
-			if (!$row && $unit_id) { $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE unit_id=%s LIMIT 1", $unit_id), ARRAY_A); }
+            $row = null;
+            if ($machine_id) { $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE machine_id=%s LIMIT 1", $machine_id), ARRAY_A); }
+            if (!$row && $unit_id) { $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE unit_id=%s LIMIT 1", $unit_id), ARRAY_A); }
 
-			if ($row && !empty($row['settings_staged']) && intval($row['settings_staged']) === 1) {
-				// Parse notes JSON if present to include metadata
-				$payload = [];
-				if (!empty($row['notes'])) {
-					$decoded = json_decode($row['notes'], true);
-					if (is_array($decoded)) {
-						$payload = $decoded;
-					}
-				}
-				// Ensure direct columns are present and override as needed
-				if (!empty($row['site_url'])) $payload['site_url'] = $row['site_url'];
-				if (!empty($row['unit_name'])) $payload['unit_name'] = $row['unit_name'];
-				if (!empty($row['firmware'])) $payload['firmware'] = $row['firmware'];
-				if (!empty($row['firmware_url'])) $payload['firmware_url'] = $row['firmware_url'];
+            if ($row && !empty($row['settings_staged']) && intval($row['settings_staged']) === 1) {
+                // Parse notes JSON if present to include metadata
+                $payload = [];
+                if (!empty($row['notes'])) {
+                    $decoded = json_decode($row['notes'], true);
+                    if (is_array($decoded)) {
+                        $payload = $decoded;
+                    }
+                }
+                // Ensure direct columns are present and override as needed
+                if (!empty($row['site_url'])) $payload['site_url'] = $row['site_url'];
+                if (!empty($row['unit_name'])) $payload['unit_name'] = $row['unit_name'];
+                if (!empty($row['firmware'])) $payload['firmware'] = $row['firmware'];
+                if (!empty($row['firmware_url'])) $payload['firmware_url'] = $row['firmware_url'];
 
-				// Clear staged flag and update dev mirror
-				$where = !empty($machine_id) ? ['machine_id' => $machine_id] : ['unit_id' => $unit_id];
-				$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], $where);
+                // Clear staged flag and update dev mirror
+                $where = !empty($machine_id) ? ['machine_id' => $machine_id] : ['unit_id' => $unit_id];
+                $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], $where);
 
-				$dev_table = $wpdb->prefix . 'tmon_devices';
-				if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
-					$dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
-					$mirror = ['last_seen' => current_time('mysql')];
-					if (in_array('provisioned', $dev_cols)) { $mirror['provisioned'] = 1; } elseif (in_array('status', $dev_cols)) { $mirror['status'] = 'provisioned'; }
-					if (!empty($payload['site_url']) && in_array('wordpress_api_url', $dev_cols)) { $mirror['wordpress_api_url'] = $payload['site_url']; }
-					if (!empty($payload['unit_name']) && in_array('unit_name', $dev_cols)) { $mirror['unit_name'] = $payload['unit_name']; }
-					if ($unit_id) { $wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]); } else { $wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]); }
-				}
+                $dev_table = $wpdb->prefix . 'tmon_devices';
+                if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+                    $dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
+                    $mirror = ['last_seen' => current_time('mysql')];
+                    if (in_array('provisioned', $dev_cols)) { $mirror['provisioned'] = 1; } elseif (in_array('status', $dev_cols)) { $mirror['status'] = 'provisioned'; }
+                    if (!empty($payload['site_url']) && in_array('wordpress_api_url', $dev_cols)) { $mirror['wordpress_api_url'] = $payload['site_url']; }
+                    if (!empty($payload['unit_name']) && in_array('unit_name', $dev_cols)) { $mirror['unit_name'] = $payload['unit_name']; }
+                    if ($unit_id) { $wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]); } else { $wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]); }
+                }
 
-				error_log('tmon-admin: delivering staged DB payload for key=' . $key . ' payload=' . wp_json_encode($payload));
-				return rest_ensure_response(['status'=>'ok','provision'=>$payload]);
-			}
+                error_log('tmon-admin: delivering staged DB payload for key=' . $key . ' payload=' . wp_json_encode($payload));
+                return rest_ensure_response(['status'=>'ok','provision'=>$payload]);
+            }
 
-			// Otherwise return state only
-			$status = ['status'=>'ok','provision'=>null,'provisioned' => false];
-			if ($row) {
-				$status['provisioned'] = (!empty($row['settings_staged']) && intval($row['settings_staged']) === 0) ? true : false;
-				$status['unit_id']=$row['unit_id'] ?? '';
-				$status['suspended']=($row['status'] ?? '') === 'suspended';
-			}
-			return rest_ensure_response($status);
+            // Otherwise return state only
+            $status = ['status'=>'ok','provision'=>null,'provisioned' => false];
+            if ($row) {
+                $status['provisioned'] = (!empty($row['settings_staged']) && intval($row['settings_staged']) === 0) ? true : false;
+                $status['unit_id']=$row['unit_id'] ?? '';
+                $status['suspended']=($row['status'] ?? '') === 'suspended';
+            }
+            return rest_ensure_response($status);
 		}
 	]);
 });
+
+// --- END OF FILE ---
