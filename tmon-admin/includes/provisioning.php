@@ -1542,77 +1542,77 @@ add_action('rest_api_init', function() {
 	register_rest_route('tmon-admin/v1', '/device/check-in', [
 		'methods' => WP_REST_Server::CREATABLE,
 		'permission_callback' => '__return_true',
-		'callback' => function( WP_REST_Request $request ) {
+		'callback' => function ( WP_REST_Request $request ) {
 			global $wpdb;
 			$params = $request->get_json_params() ?: $request->get_params();
 			$unit_id = isset($params['unit_id']) ? sanitize_text_field($params['unit_id']) : '';
 			$machine_id = isset($params['machine_id']) ? sanitize_text_field($params['machine_id']) : '';
 			$key = $machine_id ?: $unit_id;
 
-			error_log('tmon-admin: device check-in received for key=' . $key);
+			error_log("tmon-admin::check-in for key={$key}, unit={$unit_id}, machine={$machine_id}");
 
-			// 1) Deliver pending queued provision if present
-			$pending = null;
-			if ($key && function_exists('tmon_admin_get_pending_provision')) {
-				$pending = tmon_admin_get_pending_provision($key);
-			}
-
-			if ($pending) {
-				error_log('tmon-admin: queued provision found for key=' . $key);
-				// Dequeue & clear staged flag on DB row
-				if (function_exists('tmon_admin_dequeue_provision')) tmon_admin_dequeue_provision($key);
-				$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
-				if (!empty($machine_id)) {
-					$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
-				} elseif (!empty($unit_id)) {
-					$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
-				}
-				// Mark tmon_devices provisioned (mirror)
-				$dev_table = $wpdb->prefix . 'tmon_devices';
-				if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
-					if ($unit_id) $wpdb->update($dev_table, ['provisioned' => 1, 'last_seen' => current_time('mysql')], ['unit_id' => $unit_id]);
-					elseif ($machine_id) $wpdb->update($dev_table, ['provisioned' => 1, 'last_seen' => current_time('mysql')], ['machine_id' => $machine_id]);
-				}
-				return rest_ensure_response(['status' => 'ok', 'provision' => $pending]);
-			}
-
-			// 2) Fallback: check DB row where settings_staged===1
-            $prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
-            $row = null;
-            if (!empty($machine_id)) {
-                $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $prov_table WHERE machine_id = %s LIMIT 1", $machine_id), ARRAY_A);
-            }
-            if (!$row && !empty($unit_id)) {
-                $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $prov_table WHERE unit_id = %s LIMIT 1", $unit_id), ARRAY_A);
-            }
-
-            if ($row && intval($row['settings_staged'] ?? 0) === 1) {
-                $payload = null;
-                if (!empty($row['notes'])) {
-                    $p = json_decode($row['notes'], true);
-                    if (is_array($p)) $payload = $p;
-                }
-                if (!empty($payload)) {
-                    // Clear settings_staged if not forced to keep
-                    $where = !empty($machine_id) ? ['machine_id' => $machine_id] : ['unit_id' => $unit_id];
-                    $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], $where);
-                    // Mirror provisioned status
+			// 1) queued payload: prefer pending provision option
+            if ($key && function_exists('tmon_admin_get_pending_provision')) {
+                $pending = tmon_admin_get_pending_provision($key);
+                if ($pending) {
+                    // dequeue and clear staged flag if row exists
+                    if (function_exists('tmon_admin_dequeue_provision')) {
+                        tmon_admin_dequeue_provision($key);
+                    }
+                    $prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+                    if ($machine_id) {
+                        $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
+                    } elseif ($unit_id) {
+                        $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
+                    }
+                    // Set mirror provisioned
                     $dev_table = $wpdb->prefix . 'tmon_devices';
                     if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
                         if ($unit_id) $wpdb->update($dev_table, ['provisioned' => 1, 'last_seen' => current_time('mysql')], ['unit_id' => $unit_id]);
                         elseif ($machine_id) $wpdb->update($dev_table, ['provisioned' => 1, 'last_seen' => current_time('mysql')], ['machine_id' => $machine_id]);
                     }
-                    error_log('tmon-admin: delivered staged DB notes for key=' . $key);
-                    return rest_ensure_response(['status' => 'ok', 'provision' => $payload]);
+                    error_log("tmon-admin: delivered queued provision to key={$key}");
+                    return rest_ensure_response(['status' => 'ok', 'provision' => $pending]);
                 }
             }
 
-            // 3) no queued or staged: return mapping and current provisioned flag state if present
-            $mapping = ['provisioned' => false];
+            // 2) fallback DB check: provide row 'notes' if settings_staged=1
+            $prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+            $row = null;
+            if ($machine_id) {
+                $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE machine_id=%s LIMIT 1", $machine_id), ARRAY_A);
+            }
+            if (!$row && $unit_id) {
+                $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE unit_id=%s LIMIT 1", $unit_id), ARRAY_A);
+            }
+            if ($row) {
+                $settings_staged = intval($row['settings_staged'] ?? 0);
+                if ($settings_staged === 1) {
+                    $payload = null;
+                    if (!empty($row['notes'])) {
+                        $decoded = json_decode($row['notes'], true);
+                        if (is_array($decoded)) $payload = $decoded;
+                    }
+                    if ($payload) {
+                        // Clear staged flag & mark mirror provisioned
+                        $where = $machine_id ? ['machine_id' => $machine_id] : ['unit_id' => $unit_id];
+                        $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], $where);
+                        $dev_table = $wpdb->prefix . 'tmon_devices';
+                        if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+                            if ($unit_id) $wpdb->update($dev_table, ['provisioned' => 1, 'last_seen' => current_time('mysql')], ['unit_id' => $unit_id]);
+                            elseif ($machine_id) $wpdb->update($dev_table, ['provisioned' => 1, 'last_seen' => current_time('mysql')], ['machine_id' => $machine_id]);
+                        }
+                        error_log("tmon-admin: delivered DB staged notes to key={$key}, clearing settings_staged");
+                        return rest_ensure_response(['status' => 'ok', 'provision' => $payload]);
+                    }
+                }
+            }
+
+            // Nothing to deliver — return current mapping
+            $mapping = ['provisioned' => false, 'unit_id' => $unit_id, 'machine_id' => $machine_id];
             if ($row) {
                 $mapping['provisioned'] = true;
                 $mapping['status'] = $row['status'] ?? '';
-                $mapping['unit_id'] = $row['unit_id'];
             }
             return rest_ensure_response($mapping);
 		}

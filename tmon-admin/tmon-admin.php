@@ -278,36 +278,38 @@ add_action('admin_post_tmon_admin_save_provision', function() {
     }
 
     // Enqueue provisioning payload for the device (use machine_id if present else unit_id)
-    $key1 = $machine_id ?: '';
-    $key2 = $unit_id ?: '';
+    $key_machine = $machine_id ?: '';
+    $key_unit = $unit_id ?: '';
 
-    // Enqueue for both machine and unit id (if available)
-    if ($key1) {
-        $payload = $meta;
-        $payload['requested_by_user'] = wp_get_current_user()->user_login;
-        tmon_admin_enqueue_provision($key1, $payload);
-        error_log('tmon-admin: Enqueued provisioning for key=' . $key1 . ' payload=' . wp_json_encode($payload));
+    // Enqueue for both machine_id and unit_id
+    $payload_user = $meta;
+    $payload_user['requested_by_user'] = wp_get_current_user()->user_login;
+    if ($key_machine) {
+        tmon_admin_enqueue_provision($key_machine, $payload_user);
+        error_log('tmon-admin: enqueued provision for machine ' . $key_machine);
     }
-    if ($key2 && $key2 !== $key1) {
-        $payload2 = $meta;
-        $payload2['requested_by_user'] = wp_get_current_user()->user_login;
-        tmon_admin_enqueue_provision($key2, $payload2);
-        error_log('tmon-admin: Enqueued provisioning for key=' . $key2 . ' payload=' . wp_json_encode($payload2));
+    if ($key_unit && $key_unit !== $key_machine) {
+        tmon_admin_enqueue_provision($key_unit, $payload_user);
+        error_log('tmon-admin: enqueued provision for unit ' . $key_unit);
     }
 
-    // Mirror: update tmon_devices table to mark as provisioned and update site and unit name
+    // Mirror: update tmon_devices to reflect provisioned and set site/unit name
     $dev_table = $wpdb->prefix . 'tmon_devices';
     if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
-        $mirror_update = [
-            'provisioned' => 1,
-            'last_seen' => current_time('mysql'),
-        ];
-        if (!empty($site_url)) $mirror_update['wordpress_api_url'] = $site_url;
-        if (!empty($unit_name)) $mirror_update['unit_name'] = $unit_name;
-        if (!empty($unit_id)) {
-            $wpdb->update($dev_table, $mirror_update, ['unit_id' => $unit_id]);
-        } elseif (!empty($machine_id)) {
-            $wpdb->update($dev_table, $mirror_update, ['machine_id' => $machine_id]);
+        $upd = ['provisioned' => 1, 'last_seen' => current_time('mysql')];
+        if (!empty($site_url)) $upd['wordpress_api_url'] = $site_url;
+        if (!empty($unit_name)) $upd['unit_name'] = $unit_name;
+        $where = [];
+        if (!empty($unit_id)) $where = ['unit_id' => $unit_id];
+        elseif (!empty($machine_id)) $where = ['machine_id' => $machine_id];
+
+        if (!empty($where)) {
+            $ok = $wpdb->update($dev_table, $upd, $where);
+            if ($ok === false) {
+                error_log('tmon-admin: failed to update tmon_devices for provisioning: ' . $wpdb->last_error);
+            } else {
+                error_log('tmon-admin: updated tmon_devices provisioned state for ' . json_encode($where));
+            }
         }
     }
 
@@ -369,29 +371,26 @@ add_action('wp_ajax_tmon_admin_update_device_repo', function() {
         if (false === $updated) {
             wp_send_json_error(['message' => 'DB update failed']);
         }
-        $key1 = $machine_id ?: '';
-        $key2 = $unit_id ?: '';
-        $payload = $meta;
-        $payload['requested_by_user'] = wp_get_current_user()->user_login;
-        if ($key1) {
-            tmon_admin_enqueue_provision($key1, $payload);
-            error_log('tmon-admin: Ajax queued provisioning for key=' . $key1);
+        $key_machine = $machine_id ?: '';
+        $key_unit = $unit_id ?: '';
+        $payload = $meta; $payload['requested_by_user'] = wp_get_current_user()->user_login;
+        if ($key_machine) {
+            tmon_admin_enqueue_provision($key_machine, $payload);
+            error_log('tmon-admin: ajax enqueued provision for machine ' . $key_machine);
         }
-        if ($key2 && $key2 !== $key1) {
-            tmon_admin_enqueue_provision($key2, $payload);
-            error_log('tmon-admin: Ajax queued provisioning for key=' . $key2);
+        if ($key_unit && $key_unit !== $key_machine) {
+            tmon_admin_enqueue_provision($key_unit, $payload);
+            error_log('tmon-admin: ajax enqueued provision for unit ' . $key_unit);
         }
 
+        // Mirror update
         $dev_table = $wpdb->prefix . 'tmon_devices';
         if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
-            $mirror_update = ['provisioned' => 1, 'last_seen' => current_time('mysql')];
-            if (!empty($site_url)) $mirror_update['wordpress_api_url'] = $site_url;
-            if (!empty($unit_name)) $mirror_update['unit_name'] = $unit_name;
-            if (!empty($unit_id)) {
-                $wpdb->update($dev_table, $mirror_update, ['unit_id' => $unit_id]);
-            } elseif (!empty($machine_id)) {
-                $wpdb->update($dev_table, $mirror_update, ['machine_id' => $machine_id]);
-            }
+            $upd = ['provisioned' => 1, 'last_seen' => current_time('mysql')];
+            if (!empty($site_url)) $upd['wordpress_api_url'] = $site_url;
+            if (!empty($unit_name)) $upd['unit_name'] = $unit_name;
+            if (!empty($unit_id)) $wpdb->update($dev_table, $upd, ['unit_id' => $unit_id]);
+            elseif (!empty($machine_id)) $wpdb->update($dev_table, $upd, ['machine_id' => $machine_id]);
         }
 
         wp_send_json_success(['message' => 'updated', 'notes' => $new_notes]);
