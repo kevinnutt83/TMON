@@ -533,6 +533,7 @@ add_action('admin_enqueue_scripts', function () {
 	// wp_add_inline_script('tmon-admin', 'window.TMON_ADMIN_EXTRA = ' . wp_json_encode($extra) . ';', 'before');
 });
 
+// Fix admin menu: ensure single "Provisioning" group + children
 add_action('admin_menu', 'tmon_admin_menu');
 function tmon_admin_menu() {
     // Compute unread notifications count for bubble
@@ -568,65 +569,207 @@ function tmon_admin_menu() {
     add_submenu_page('tmon-admin', 'UC Pairings', 'UC Pairings', 'manage_options', 'tmon-admin-pairings', 'tmon_admin_pairings_page');
 }
 
-// Replace the previous single 'Provisioning' page with three pages:
-// - tmon_admin_provisioning_page (UI for adding/updating provisioning)
-// - tmon_admin_provisioned_devices_page (lists devices; fallback to hub REST if DB missing)
-// - tmon_admin_provisioning_activity_page (pending queue + history)
-// - tmon_admin_provisioning_history_page (historical events)
-
-function tmon_admin_provisioning_activity_page() {
+// Ensure tmon_admin_provisioning_history_page exists, used by menu above
+function tmon_admin_provisioning_history_page() {
     if (!current_user_can('manage_options')) wp_die('Forbidden');
-    $queue = get_option('tmon_admin_pending_provision', []);
+    echo '<div class="wrap"><h1>Provisioning History</h1>';
     $history = get_option('tmon_admin_provision_history', []);
-    echo '<div class="wrap"><h1>Provisioning Activity</h1>';
-    // Pending queue table
-    echo '<h2>Pending Provision Queue</h2>';
-    echo '<table class="widefat"><thead><tr><th>Key</th><th>Payload</th><th>Actions</th></tr></thead><tbody>';
-    foreach ((array)$queue as $k => $payload) {
-        echo '<tr>';
-        echo '<td>'.esc_html($k).'</td>';
-        echo '<td><pre>'.esc_html(wp_json_encode($payload)).'</pre></td>';
-        echo '<td>';
-        echo '<button class="button tmon-pending-requeue" data-key="'.esc_attr($k).'">Re-enqueue</button> ';
-        echo '<button class="button tmon-pending-delete" data-key="'.esc_attr($k).'">Delete</button>';
-        echo '</td>';
-        echo '</tr>';
+    if (!is_array($history) || empty($history)) {
+        echo '<p>No provisioning history recorded.</p>';
+    } else {
+        echo '<table class="widefat"><thead><tr><th>Timestamp</th><th>User</th><th>Unit ID</th><th>Machine ID</th><th>Action</th><th>Payload</th></tr></thead><tbody>';
+        foreach (array_reverse($history) as $h) {
+            echo '<tr>';
+            echo '<td>' . esc_html($h['ts'] ?? '') . '</td>';
+            echo '<td>' . esc_html($h['user'] ?? '') . '</td>';
+            echo '<td>' . esc_html($h['unit_id'] ?? '') . '</td>';
+            echo '<td>' . esc_html($h['machine_id'] ?? '') . '</td>';
+            echo '<td>' . esc_html($h['action'] ?? 'saved') . '</td>';
+            echo '<td><pre>' . esc_html(wp_json_encode($h['meta'] ?? [])) . '</pre></td>';
+            echo '</tr>';
+        }
+        echo '</tbody></table>';
     }
-    echo '</tbody></table>';
-
-    // History table
-    echo '<h2>Provisioning History</h2>';
-    echo '<table class="widefat"><thead><tr><th>Time</th><th>User</th><th>Unit ID</th><th>Machine ID</th><th>Site URL</th><th>Notes</th></tr></thead><tbody>';
-    foreach (array_reverse((array)$history) as $h) {
-        echo '<tr>';
-        echo '<td>'.esc_html($h['ts'] ?? '').'</td>';
-        echo '<td>'.esc_html($h['user'] ?? '').'</td>';
-        echo '<td>'.esc_html($h['unit_id'] ?? '').'</td>';
-        echo '<td>'.esc_html($h['machine_id'] ?? '').'</td>';
-        echo '<td>'.esc_html($h['site_url'] ?? '').'</td>';
-        echo '<td><pre>'.esc_html(wp_json_encode($h['meta'] ?? '')).'</pre></td>';
-        echo '</tr>';
-    }
-    echo '</tbody></table>';
     echo '</div>';
-
-    // JS for re-enqueue/delete actions calls tmon_admin_manage_pending AJAX endpoint (already implemented)
-    echo <<<JS
-<script>
-(function($){
-    $('.tmon-pending-delete').on('click', function(){
-        var key = $(this).data('key');
-        if (!confirm('Delete pending provision for ' + key + '?')) return;
-        $.post(ajaxurl, { action:'tmon_admin_manage_pending', manage_action:'delete', key:key, _ajax_nonce:'".wp_create_nonce('tmon_admin_provision_ajax')."' }, function(resp){
-            if (resp.success) location.reload();
-            else alert('Failed: '+(resp.data.message||'unknown'));
-        });
-    });
-    $('.tmon-pending-requeue').on('click', function(){ var key = $(this).data('key'); var payload = prompt('JSON payload to reenqueue (leave empty to reuse stored):'); try { if (payload) payload = JSON.parse(payload); else payload = ''; } catch(e){ alert('Invalid JSON'); return; } $.post(ajaxurl, { action:'tmon_admin_manage_pending', manage_action:'reenqueue', key:key, payload: JSON.stringify(payload), _ajax_nonce:'".wp_create_nonce('tmon_admin_provision_ajax')."' }, function(resp){ if (resp.success) location.reload(); else alert('Failed'); }); });
-})(jQuery);
-</script>
-JS;
 }
+
+// --- Provisioning queue helpers ---
+// Persist queued provisioning actions keyed by unit_id or machine_id.
+function tmon_admin_enqueue_provision($key, $payload) {
+    if (!$key || !is_string($key)) return false;
+    $queue = get_option('tmon_admin_pending_provision', []);
+    if (!is_array($queue)) $queue = [];
+    $payload['requested_at'] = current_time('mysql');
+    $payload['status'] = 'pending';
+    $queue[$key] = $payload;
+    update_option('tmon_admin_pending_provision', $queue);
+    return true;
+}
+
+function tmon_admin_get_pending_provision($key) {
+    if (!$key || !is_string($key)) return null;
+    $queue = get_option('tmon_admin_pending_provision', []);
+    if (!is_array($queue)) return null;
+    return $queue[$key] ?? null;
+}
+
+function tmon_admin_dequeue_provision($key) {
+    if (!$key || !is_string($key)) return null;
+    $queue = get_option('tmon_admin_pending_provision', []);
+    if (!is_array($queue) || !isset($queue[$key])) return null;
+    $entry = $queue[$key];
+    unset($queue[$key]);
+    update_option('tmon_admin_pending_provision', $queue);
+    return $entry;
+}
+
+// Admin-post: Save provisioning settings (persist repo/branch/manifest info for a unit)
+add_action('admin_post_tmon_admin_save_provision', function() {
+    if (!current_user_can('manage_options')) wp_die('Forbidden');
+    check_admin_referer('tmon_admin_provision');
+
+    global $wpdb;
+    $prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+    $dev_table = $wpdb->prefix . 'tmon_devices';
+
+    $unit_id = isset($_POST['unit_id']) ? sanitize_text_field($_POST['unit_id']) : '';
+    $machine_id = isset($_POST['machine_id']) ? sanitize_text_field($_POST['machine_id']) : '';
+    $repo = isset($_POST['repo']) ? sanitize_text_field($_POST['repo']) : '';
+    $branch = isset($_POST['branch']) ? sanitize_text_field($_POST['branch']) : 'main';
+    $manifest_url = isset($_POST['manifest_url']) ? esc_url_raw($_POST['manifest_url']) : '';
+    $version = isset($_POST['version']) ? sanitize_text_field($_POST['version']) : '';
+    $notes = isset($_POST['notes']) ? sanitize_textarea_field($_POST['notes']) : '';
+    $site_url = isset($_POST['site_url']) ? esc_url_raw($_POST['site_url']) : '';
+    $unit_name = isset($_POST['unit_name']) ? sanitize_text_field($_POST['unit_name']) : '';
+
+    if (!$unit_id && !$machine_id) {
+        wp_safe_redirect(add_query_arg('saved', '0', wp_get_referer() ?: admin_url('admin.php?page=tmon-admin-provisioning')));
+        exit;
+    }
+
+    // Build metadata for notes (preserve existing notes if JSON stored)
+    $meta = [
+        'repo' => $repo,
+        'branch' => $branch,
+        'manifest_url' => $manifest_url,
+        'firmware_version' => $version,
+        'site_url' => $site_url,
+        'unit_name' => $unit_name,
+    ];
+    if ($notes !== '') {
+        $meta['notes_text'] = $notes;
+    }
+
+    // Find existing row by unit_id or machine_id
+    $where_sql = '';
+    $params = [];
+    if ($unit_id) {
+        $where_sql = "unit_id = %s";
+        $params[] = $unit_id;
+    } elseif ($machine_id) {
+        $where_sql = "machine_id = %s";
+        $params[] = $machine_id;
+    }
+
+    $row = null;
+    if ($where_sql) {
+        $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE {$where_sql} LIMIT 1", $params));
+    }
+
+    if ($row) {
+        // Merge notes/meta and set staged
+        $old_notes = !empty($row->notes) ? json_decode($row->notes, true) : [];
+        if (!is_array($old_notes)) $old_notes = [];
+        $new_notes = array_merge($old_notes, $meta);
+        $wpdb->update($prov_table, [
+            'notes' => wp_json_encode($new_notes),
+            'status' => 'provisioned',
+            'settings_staged' => 1,
+            'site_url' => $site_url,
+            'unit_name' => $unit_name,
+            'firmware' => $version,
+            'firmware_url' => $manifest_url,
+            'updated_at' => current_time('mysql'),
+        ], ['id' => intval($row->id)]);
+        error_log("tmon-admin: Updated provisioned_devices id={$row->id} settings_staged=1");
+    } else {
+        // Insert
+        $insert = [
+            'unit_id' => $unit_id,
+            'machine_id' => $machine_id,
+            'company_id' => '',
+            'plan' => 'default',
+            'status' => 'provisioned',
+            'notes' => wp_json_encode($meta),
+            'settings_staged' => 1,
+            'site_url' => $site_url,
+            'unit_name' => $unit_name,
+            'firmware' => $version,
+            'firmware_url' => $manifest_url,
+            'created_at' => current_time('mysql'),
+            'updated_at' => current_time('mysql'),
+        ];
+        $wpdb->insert($prov_table, $insert, ['%s','%s','%d','%s','%s','%d','%s','%s','%s','%s','%s']);
+        $insert_id = $wpdb->insert_id;
+        error_log("tmon-admin: Inserted provision row id={$insert_id} settings_staged=1");
+    }
+
+    // Mirror to tmon_devices
+    if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+        $dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
+        $mirror_update = ['last_seen' => current_time('mysql')];
+        if (in_array('provisioned', $dev_cols)) $mirror_update['provisioned'] = 1;
+        elseif (in_array('status', $dev_cols)) $mirror_update['status'] = 'provisioned';
+        if (in_array('wordpress_api_url', $dev_cols)) $mirror_update['wordpress_api_url'] = $site_url;
+        if (in_array('unit_name', $dev_cols)) $mirror_update['unit_name'] = $unit_name;
+        if (in_array('provisioned_at', $dev_cols)) $mirror_update['provisioned_at'] = current_time('mysql');
+
+        if (!empty($unit_id)) {
+            $wpdb->update($dev_table, $mirror_update, ['unit_id' => $unit_id]);
+            error_log("tmon-admin: mirrored to tmon_devices for unit_id={$unit_id}");
+        } elseif (!empty($machine_id)) {
+            $wpdb->update($dev_table, $mirror_update, ['machine_id' => $machine_id]);
+            error_log("tmon-admin: mirrored to tmon_devices for machine_id={$machine_id}");
+        }
+    }
+
+    // Enqueue payload for both keys
+    $payload = $meta;
+    $payload['site_url'] = $site_url;
+    $payload['unit_name'] = $unit_name;
+    $key1 = $machine_id ?: '';
+    $key2 = $unit_id ?: '';
+    if ($key1) { tmon_admin_enqueue_provision($key1, $payload); error_log("tmon-admin: enqueued pending for {$key1}"); }
+    if ($key2 && $key2 !== $key1) { tmon_admin_enqueue_provision($key2, $payload); error_log("tmon-admin: enqueued pending for {$key2}"); }
+
+    // Add to history
+    $history = get_option('tmon_admin_provision_history', []);
+    $history[] = ['ts' => current_time('mysql'), 'user' => wp_get_current_user()->user_login, 'unit_id' => $unit_id, 'machine_id' => $machine_id, 'site' => $site_url, 'meta' => $meta];
+    update_option('tmon_admin_provision_history', array_slice($history, -500));
+
+    wp_redirect(add_query_arg('saved', '1', wp_get_referer() ?: admin_url('admin.php?page=tmon-admin-provisioning')));
+    exit;
+});
+
+// JS for re-enqueue/delete actions calls tmon_admin_manage_pending AJAX endpoint (already implemented)
+add_action('admin_footer', function() {
+    if (get_current_screen()->id !== 'tmon-admin_page_tmon-admin-provisioning-activity') return;
+    ?>
+    <script>
+    (function($){
+        $('.tmon-pending-delete').on('click', function(){
+            var key = $(this).data('key');
+            if (!confirm('Delete pending provision for ' + key + '?')) return;
+            $.post(ajaxurl, { action:'tmon_admin_manage_pending', manage_action:'delete', key:key, _ajax_nonce:'<?php echo wp_create_nonce('tmon_admin_provision_ajax'); ?>' }, function(resp){
+                if (resp.success) location.reload();
+                else alert('Failed: '+(resp.data.message||'unknown'));
+            });
+        });
+        $('.tmon-pending-requeue').on('click', function(){ var key = $(this).data('key'); var payload = prompt('JSON payload to reenqueue (leave empty to reuse stored):'); try { if (payload) payload = JSON.parse(payload); else payload = ''; } catch(e){ alert('Invalid JSON'); return; } $.post(ajaxurl, { action:'tmon_admin_manage_pending', manage_action:'reenqueue', key:key, payload: JSON.stringify(payload), _ajax_nonce:'<?php echo wp_create_nonce('tmon_admin_provision_ajax'); ?>' }, function(resp){ if (resp.success) location.reload(); else alert('Failed'); }); });
+    })(jQuery);
+    </script>
+    <?php
+} );
 
 // The existing "Provisioning" page function should remain but be renamed logically if desired.
 // Also implement tmon_admin_provisioning_history_page and tmon_admin_provisioned_devices_page (see provisioning.php)
