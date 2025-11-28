@@ -1,4 +1,20 @@
 # Firmware Version: v2.00j
+
+# Logging dir and support file paths (moved near top so other values can reference them)
+LOG_DIR = '/logs'
+LOG_FILE = LOG_DIR + '/lora.log'
+ERROR_LOG_FILE = LOG_DIR + '/lora_errors.log'
+FIELD_DATA_LOG = LOG_DIR + '/field_data.log'
+DATA_HISTORY_LOG = LOG_DIR + '/data_history.log'
+FIELD_DATA_DELIVERED_LOG = LOG_DIR + '/field_data.delivered.log'
+UID_PERSIST_FILE = LOG_DIR + '/unit_id.txt'
+PROVISIONED_FLAG_FILE = LOG_DIR + '/provisioned.flag'
+WORDPRESS_API_URL_FILE = LOG_DIR + '/wordpress_api_url.txt'
+REMOTE_SETTINGS_STAGED_FILE = LOG_DIR + '/remote_settings.staged.json'
+REMOTE_SETTINGS_APPLIED_FILE = LOG_DIR + '/remote_settings.applied.json'
+REMOTE_SETTINGS_PREV_FILE = LOG_DIR + '/remote_settings.prev.json'
+
+# Then other vars
 UNIT_ID = "None"              # 6-digit assigned by Admin after first check-in (persisted locally)
 UNIT_Name = "Unnamed Unit"    # Human-friendly name (provisioned)
 NODE_TYPE = 'base'             # 'base' or 'remote'; base can host LoRa network & WiFi; remote uses LoRa primarily
@@ -8,7 +24,6 @@ FIRMWARE_VERSION = "v2.00j"    # Bumped automatically by OTA; compared during up
 
  # WordPress Unit Connector API integration
 WORDPRESS_API_URL = ""   # Customer Unit Connector site for provisioned devices
-WORDPRESS_API_URL_FILE = LOG_DIR + '/wordpress_api_url.txt'  # persisted copy on device
 WORDPRESS_USERNAME = "agadmin"              # (Optional) Basic auth / future removal for token-based access
 WORDPRESS_PASSWORD = "Pepper-1"             # (Optional) Replace with secure secret storage in production
 
