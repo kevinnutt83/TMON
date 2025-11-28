@@ -227,14 +227,13 @@
 
 # TODO
 
-- [x] Migrate DB: add tmon_devices.provisioned, provisioned_at, wordpress_api_url
-- [x] Admin: Mirror tmon_devices on save & set settings_staged=1
-- [x] REST check-in: return queued payload and DB staged payload fallback
-- [x] Confirm-applied route with token validation (X-TMON-CONFIRM)
-- [x] Device: apply staged settings persist WORDPRESS_API_URL/UNIT_ID and POST confirm
-- [x] Admin UI: Provisioning Activity page to view/manage queue + history
-- [ ] Audit: Add per-device audit logs and UI
-- [ ] Security: Add HMAC or device-key based confirmation (optional)
-- [ ] Notifications: Email to site admins on confirmed provisioning
-- [ ] Add tests for full provisioning flow
-- [ ] Unit Connector: validate provided site_url before attempting wp_remote_post
+- [x] Mirror provisioned settings to tmon_devices (provisioned, wordpress_api_url, unit_name, provisioned_at) on Save & Provision.
+- [x] If tmon_devices lacks provisioned flags, add migration to add provisioned/provisioned_at/wordpress_api_url columns.
+- [x] Deliver staged provisioning to devices from queue or DB row (settings_staged).
+- [x] Add device confirm endpoint with token; device posts confirm after apply.
+- [x] Admin UI Provisioning Activity page with pending queue and history.
+- [x] Add history auditing/logging option in Admin.
+- [ ] Add per-device HMAC confirmation or device-specific key to confirm endpoint.
+- [ ] Add email notifications for provisioning events (optional).
+- [ ] Add per-device staging preview and direct push tools in UI.
+- [ ] Add tests to verify full provisioning lifecycle.

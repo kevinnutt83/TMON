@@ -104,3 +104,16 @@ MIT License – see `LICENSE` for full text.
 
 ---
 For detailed configuration keys, see the forthcoming `docs/FIRMWARE-SETTINGS.md`.
+
+## Provisioning Improvements (v0.1.4)
+- Admin Save & Provision now:
+  - Marks the provisioned_devices.settings_staged flag = 1.
+  - Mirrors provisioning info to the device mirror tmon_devices (wordpress_api_url, unit_name) and sets provisioned = 1 and provisioned_at timestamp.
+  - Enqueues pending payloads for both machine_id and unit_id waring keys.
+- Device check-in:
+  - Will receive queued payloads in tmon_admin_pending_provision or a DB-staged payload derived from provisioned_devices row when settings_staged=1.
+  - Device writes a staged file, applies settings and posts a confirm to Admin with header X-TMON-CONFIRM or X-TMON-READ.
+- Admin UI:
+  - New Provisioning Activity page shows pending queue, staged flags, and recent history; supports re-enqueue and delete.
+- Security:
+  - Device confirms applied settings using X-TMON-CONFIRM token; Admin validates token or existing read token.

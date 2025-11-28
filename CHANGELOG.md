@@ -23,6 +23,13 @@ All notable changes to this project will be documented in this file.
 - Admin: Added Provisioning Activity admin UI to view pending queue and history; allow re-enqueue/delete actions.
 - Firmware: Device now persists UNIT_ID and WORDPRESS_API_URL, applies staged settings and posts confirm with X-TMON-CONFIRM.
 
+## v0.1.4 - 2025-11-28
+- Save & Provision updates tmon_devices mirror and enqueues payloads for both keys.
+- Provisioning Activity admin UI added to show queue and history and manage queued payloads.
+- Check-in route enhanced to return queued payloads or DB-staged payloads; sets provisioned flags and clears staged state.
+- Device confirms applied settings to Admin via protected confirm endpoint.
+- DB migrations added to ensure tmon_devices has 'provisioned', 'provisioned_at' and 'wordpress_api_url'.
+
 ## v2.01.0 - 2025-11-10
 
 Foundation reboot for Phase 1 (no deletions, additive only):

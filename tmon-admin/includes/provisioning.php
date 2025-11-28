@@ -94,28 +94,19 @@ add_action('admin_init', function() {
     tmon_admin_maybe_migrate_tmon_devices();
 });
 
-// Ensure tmon_devices has provisioned and wordpress_api_url columns for mirror updates.
+// DB migration for tmon_devices fields (provisioned/provisioned_at/wordpress_api_url)
 function tmon_admin_maybe_migrate_tmon_devices_columns() {
     global $wpdb;
     $table = $wpdb->prefix . 'tmon_devices';
     $exists = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table));
     if (!$exists) return;
-
     $cols = [];
-    $result = $wpdb->get_results("SHOW COLUMNS FROM $table", ARRAY_A);
-    foreach (($result?:[]) as $c) { $cols[strtolower($c['Field'])] = true; }
-
-    if (empty($cols['provisioned'])) {
-        $wpdb->query("ALTER TABLE $table ADD COLUMN provisioned TINYINT(1) DEFAULT 0");
-    }
-    if (empty($cols['wordpress_api_url'])) {
-        $wpdb->query("ALTER TABLE $table ADD COLUMN wordpress_api_url VARCHAR(255) DEFAULT ''");
-    }
-    if (empty($cols['provisioned_at'])) {
-        $wpdb->query("ALTER TABLE $table ADD COLUMN provisioned_at DATETIME DEFAULT NULL");
-    }
+    foreach ($wpdb->get_results("SHOW COLUMNS FROM $table", ARRAY_A) as $c) { $cols[strtolower($c['Field'])] = true; }
+    if (empty($cols['provisioned'])) $wpdb->query("ALTER TABLE $table ADD COLUMN provisioned TINYINT(1) DEFAULT 0");
+    if (empty($cols['wordpress_api_url'])) $wpdb->query("ALTER TABLE $table ADD COLUMN wordpress_api_url VARCHAR(255) DEFAULT ''");
+    if (empty($cols['provisioned_at'])) $wpdb->query("ALTER TABLE $table ADD COLUMN provisioned_at DATETIME DEFAULT NULL");
 }
-add_action('admin_init', function(){ tmon_admin_maybe_migrate_tmon_devices_columns(); });
+add_action('admin_init', 'tmon_admin_maybe_migrate_tmon_devices_columns');
 
 // Helper: Get all devices, provisioned and unprovisioned
 function tmon_admin_get_all_devices() {
@@ -1619,18 +1610,19 @@ add_action('rest_api_init', function() {
                 if (!empty($row['firmware'])) $payload['firmware'] = $row['firmware'];
                 if (!empty($row['firmware_url'])) $payload['firmware_url'] = $row['firmware_url'];
 
-                // Clear staged flag and update dev mirror
-                $where = !empty($machine_id) ? ['machine_id' => $machine_id] : ['unit_id' => $unit_id];
+                // Clear staged flag and mirror to tmon_devices
+                $where = $machine_id ? ['machine_id' => $machine_id] : ['unit_id' => $unit_id];
                 $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], $where);
 
                 $dev_table = $wpdb->prefix . 'tmon_devices';
                 if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
-                    $dev_cols = $wpdb->get_col("SHOW COLUMNS FROM $dev_table");
+                    $cols = $wpdb->get_col("SHOW COLUMNS FROM $dev_table");
                     $mirror = ['last_seen' => current_time('mysql')];
-                    if (in_array('provisioned', $dev_cols)) $mirror['provisioned'] = 1; else $mirror['status'] = 'provisioned';
-                    if (!empty($payload['site_url']) && in_array('wordpress_api_url', $dev_cols)) $mirror['wordpress_api_url'] = $payload['site_url'];
-                    if (!empty($payload['unit_name']) && in_array('unit_name', $dev_cols)) $mirror['unit_name'] = $payload['unit_name'];
-                    if (in_array('provisioned_at', $dev_cols)) $mirror['provisioned_at'] = current_time('mysql');
+                    if (in_array('provisioned', $cols)) $mirror['provisioned'] = 1;
+                    elseif (in_array('status', $cols)) $mirror['status'] = 'provisioned';
+                    if (in_array('wordpress_api_url', $cols) && !empty($payload['site_url'])) $mirror['wordpress_api_url'] = $payload['site_url'];
+                    if (in_array('unit_name', $cols) && !empty($payload['unit_name'])) $mirror['unit_name'] = $payload['unit_name'];
+                    if (in_array('provisioned_at', $cols)) $mirror['provisioned_at'] = current_time('mysql');
                     if ($unit_id) $wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]);
                     elseif ($machine_id) $wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]);
                 }

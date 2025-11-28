@@ -909,28 +909,30 @@ def apply_staged_settings_and_reboot(staged):
         except Exception:
             pass
 
-        # Confirm-applied POST with token
+        # Post confirm to Admin with token header
         try:
             import urequests, ujson
-            admin_url = getattr(_settings, 'TMON_ADMIN_API_URL', '').rstrip('/')
-            confirm_token = getattr(_settings, 'TMON_ADMIN_CONFIRM_TOKEN', '')
+            admin_url = getattr(settings, 'TMON_ADMIN_API_URL', '').rstrip('/')
+            confirm_token = getattr(settings, 'TMON_ADMIN_CONFIRM_TOKEN', '') or ''
             if admin_url and confirm_token:
-                headers = {'Content-Type':'application/json', 'X-TMON-CONFIRM': confirm_token}
-                body = ujson.dumps({'unit_id': _settings.UNIT_ID, 'machine_id': get_machine_id()})
-                for attempt in range(3):
+                headers = {'Content-Type': 'application/json', 'X-TMON-CONFIRM': confirm_token}
+                payload = ujson.dumps({'unit_id': settings.UNIT_ID, 'machine_id': get_machine_id() or ''})
+                for i in range(3):
                     try:
-                        resp = urequests.post(admin_url + '/wp-json/tmon-admin/v1/device/confirm-applied', headers=headers, data=body, timeout=10)
-                        if getattr(resp, 'status_code', 0) == 200:
-                            provisioning_log('Confirmation sent successfully')
-                            try: resp.close()
+                        r = urequests.post(admin_url + '/wp-json/tmon-admin/v1/device/confirm-applied', headers=headers, data=payload, timeout=10)
+                        if getattr(r, 'status_code', 0) == 200:
+                            provisioning_log('apply_staged_settings: confirm-applied success')
+                            try: r.close()
                             except Exception: pass
                             break
+                        provisioning_log('apply_staged_settings: confirm-applied returned ' + str(getattr(r, 'status_code', 'no')))
+                        try: r.close()
+                        except Exception: pass
                     except Exception as e:
-                        provisioning_log(f'Confirm post attempt {attempt} failed: {e}')
-                    time.sleep(2)
+                        provisioning_log('apply_staged_settings: confirm-post error: ' + str(e))
+                        time.sleep(2)
         except Exception as e:
-            provisioning_log(f'apply_staged_settings: confirm-applied post error: {e}')
-
+            provisioning_log('apply_staged_settings: confirm post exception: ' + str(e))
         # clear staged file
         try:
             import os

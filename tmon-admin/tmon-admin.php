@@ -672,241 +672,212 @@ add_action('admin_init', function(){
     }
 });
 
-// Add setting to admin settings page (or include in settings.php, this is a small inline injection for brevity)
+// Register confirm token setting and basic UI
 add_action('admin_init', function() {
     register_setting('tmon_admin', 'tmon_admin_confirm_token');
-    add_settings_field('tmon_admin_confirm_token', 'Provision Confirm Token', function() {
+    add_settings_section('tmon_admin_provisioning_section', 'Provisioning Security', null, 'tmon-admin-settings');
+    add_settings_field('tmon_admin_confirm_token', 'Device Confirm Token', function() {
         $val = esc_attr(get_option('tmon_admin_confirm_token', ''));
         echo '<input type="text" name="tmon_admin_confirm_token" value="'. $val . '" class="regular-text" />';
-        echo '<p class="description">Optional secret token the device posts to confirm applied staging (X-TMON-CONFIRM header).</p>';
-    }, 'tmon-admin-settings', 'default');
+        echo '<p class="description">Optional secret token devices use to confirm staged settings (X-TMON-CONFIRM).</p>';
+    }, 'tmon-admin-settings', 'tmon_admin_provisioning_section');
 });
 
-// --- Consolidated manifest fetch helpers (used by both REST & admin-ajax) ---
-if (!function_exists('tmon_admin_build_manifest_try_urls')) {
-	function tmon_admin_build_manifest_try_urls($manifest_url = '', $repo = '', $branch = 'main') {
-		$try_urls = [];
+// Update Save & Provision handler: mirror tmon_devices and set staged flag.
+add_action('admin_post_tmon_admin_save_provision', function() {
+    if (!current_user_can('manage_options')) wp_die('Forbidden');
+    check_admin_referer('tmon_admin_provision');
 
-		// If explicit manifest URL provided, prefer that
-		if (!empty($manifest_url)) {
-			$manifest_url = trim($manifest_url);
-			// Convert GitHub 'blob' and 'tree' URL forms to raw.githubusercontent equivalents
-			if (preg_match('#^https?://github\.com/([^/]+/[^/]+)/(?:blob|tree)/([^/]+)/(.*)$#', $manifest_url, $m)) {
-				$ownerrepo = $m[1];      // owner/repo
-				$url_branch = $m[2];     // branch (may be 'main' etc.)
-				$path = $m[3];           // path inside repo
-				$try_urls[] = "https://raw.githubusercontent.com/{$ownerrepo}/{$url_branch}/{$path}";
-				// Also try the 'master' branch fallback if different
-				if ($url_branch !== 'master') {
-					$try_urls[] = "https://raw.githubusercontent.com/{$ownerrepo}/master/{$path}";
-				}
-			} elseif (preg_match('#^https?://github\.com/([^/]+/[^/]+)/(.*)$#', $manifest_url, $m)) {
-				// Generic GitHub URL (owner/repo/<something>), try store path as-is using default branch.
-				$ownerrepo = $m[1];
-				$path = $m[2];
-				$try_urls[] = "https://raw.githubusercontent.com/{$ownerrepo}/{$branch}/{$path}";
-				if ($branch !== 'master') {
-					$try_urls[] = "https://raw.githubusercontent.com/{$ownerrepo}/master/{$path}";
-				}
-			} else {
-				// Non-GitHub URL or raw already: use provided URL
-				$try_urls[] = esc_url_raw($manifest_url);
-			}
-			return $try_urls;
-		}
+    global $wpdb;
+    $table = $wpdb->prefix . 'tmon_provisioned_devices';
 
-		// Fallback default repo for firmware (explicit GitHub 'tree' URL).
-		// This was requested: https://github.com/kevinnutt83/TMON/tree/main/micropython
-		if (empty($repo)) {
-			$repo = 'https://github.com/kevinnutt83/TMON/tree/main/micropython';
-		}
+    $unit_id = isset($_POST['unit_id']) ? sanitize_text_field($_POST['unit_id']) : '';
+    $machine_id = isset($_POST['machine_id']) ? sanitize_text_field($_POST['machine_id']) : '';
+    $repo = isset($_POST['repo']) ? sanitize_text_field($_POST['repo']) : '';
+    $branch = isset($_POST['branch']) ? sanitize_text_field($_POST['branch']) : 'main';
+    $manifest_url = isset($_POST['manifest_url']) ? esc_url_raw($_POST['manifest_url']) : '';
+    $version = isset($_POST['version']) ? sanitize_text_field($_POST['version']) : '';
+    $notes = isset($_POST['notes']) ? sanitize_textarea_field($_POST['notes']) : '';
+    $site_url = isset($_POST['site_url']) ? esc_url_raw($_POST['site_url']) : '';
+    $unit_name = isset($_POST['unit_name']) ? sanitize_text_field($_POST['unit_name']) : '';
 
-		$repo = trim($repo, " \t\n\r/");
+    if (!$unit_id && !$machine_id) {
+        wp_safe_redirect(add_query_arg('saved', '0', wp_get_referer() ?: admin_url('admin.php?page=tmon-admin-provisioning')));
+        exit;
+    }
 
-		// If raw.githubusercontent URL passed directly, use it
-		if (preg_match('#^https?://raw\.githubusercontent\.com/#', $repo)) {
-			$try_urls[] = $repo;
-			return $try_urls;
-		}
+    // Build metadata for notes (preserve existing notes if JSON stored)
+    $meta = [
+        'repo' => $repo,
+        'branch' => $branch,
+        'manifest_url' => $manifest_url,
+        'firmware_version' => $version,
+        'site_url' => $site_url,
+        'unit_name' => $unit_name,
+    ];
+    if ($notes !== '') {
+        $meta['notes_text'] = $notes;
+    }
 
-		// If repo looks like a GitHub full URL with /tree or /blob, extract owner/repo/branch/path
-		if (preg_match('#^https?://github\.com/([^/]+/[^/]+)/(?:blob|tree)/([^/]+)/(.*)$#', $repo, $m)) {
-			$ownerrepo = $m[1];
-			$url_branch = $m[2];
-			$path = $m[3];
-			$try_urls[] = "https://raw.githubusercontent.com/{$ownerrepo}/{$url_branch}/{$path}";
-			if ($url_branch !== 'master') {
-				$try_urls[] = "https://raw.githubusercontent.com/{$ownerrepo}/master/{$path}";
-			}
-			return $try_urls;
-		}
+    // Find existing row by unit_id or machine_id
+    $where_sql = '';
+    $params = [];
+    if ($unit_id) {
+        $where_sql = "unit_id = %s";
+        $params[] = $unit_id;
+    } elseif ($machine_id) {
+        $where_sql = "machine_id = %s";
+        $params[] = $machine_id;
+    }
 
-		$parts = explode('/', $repo);
-		if (count($parts) > 2) {
-			// owner/repo/path/to/file
-			$owner = $parts[0];
-			$r = $parts[1];
-			$path = implode('/', array_slice($parts, 2));
-			$try_urls[] = "https://raw.githubusercontent.com/{$owner}/{$r}/{$branch}/{$path}";
-			if ($branch !== 'master') {
-				$try_urls[] = "https://raw.githubusercontent.com/{$owner}/{$r}/master/{$path}";
-			}
-		} else {
-			// owner/repo -> try root manifest.json and version.txt
-			$try_urls[] = "https://raw.githubusercontent.com/{$repo}/{$branch}/manifest.json";
-			$try_urls[] = "https://raw.githubusercontent.com/{$repo}/{$branch}/version.txt";
-			if ($branch !== 'master') {
-				$try_urls[] = "https://raw.githubusercontent.com/{$repo}/master/manifest.json";
-				$try_urls[] = "https://raw.githubusercontent.com/{$repo}/master/version.txt";
-			}
-		}
-		return $try_urls;
-	}
-}
+    $row = null;
+    if ($where_sql) {
+        $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$table} WHERE {$where_sql} LIMIT 1", $params));
+    }
 
-if (!function_exists('tmon_admin_fetch_manifest_from_try_urls')) {
-	function tmon_admin_fetch_manifest_from_try_urls($try_urls = []) {
-		$errors = [];
-		foreach ((array)$try_urls as $u) {
-			$u = esc_url_raw($u);
-			$res = wp_remote_get($u, [
-				'timeout' => 12,
-				'headers' => ['Accept' => 'application/json, text/plain'],
-			]);
-			if (is_wp_error($res)) {
-				$errors[] = sprintf('Request to %s failed: %s', $u, $res->get_error_message());
-				continue;
-			}
-			$code = intval(wp_remote_retrieve_response_code($res));
-			$body = wp_remote_retrieve_body($res);
-			if ($code !== 200 || !$body) {
-				$errors[] = sprintf('%s returned status %d', $u, $code);
-				continue;
-			}
-			$decoded = json_decode($body, true);
-			if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
-				return ['success' => true, 'source' => $u, 'data' => $decoded, 'errors' => []];
-			}
-			$trim = trim($body);
-			if (preg_match('/^v?\d+(\.\d+){0,3}$/', $trim) || strlen($trim) < 128) {
-				return ['success' => true, 'source' => $u, 'version_text' => $trim, 'errors' => []];
-			}
-			if (strlen($trim) > 0 && strlen($trim) < 100000) {
-				return ['success' => true, 'source' => $u, 'raw_text' => $trim, 'errors' => []];
-			}
-			$errors[] = sprintf('%s returned unknown content (len=%d)', $u, (int)strlen($body));
-		}
-		return ['success' => false, 'errors' => $errors];
-	}
-}
+    if ($row) {
+        // Merge incoming metadata into existing notes JSON (if present)
+        $old_notes = [];
+        if (!empty($row->notes)) {
+            $old = json_decode($row->notes, true);
+            if (is_array($old)) { $old_notes = $old; }
+        }
+        $new_notes = array_merge($old_notes, $meta);
+        $update = [
+            'notes' => wp_json_encode($new_notes),
+            'status' => 'provisioned',
+            'settings_staged' => 1, // mark staged
+        ];
+        $where = [ 'id' => intval($row->id) ];
+        $updated = $wpdb->update($table, $update, $where, ['%s','%s','%d'], ['%d']);
+        error_log('tmon-admin: Updated provisioning row ID=' . intval($row->id) . ' by user=' . get_current_user()->user_login . ' meta=' . wp_json_encode($meta));
+    } else {
+        // Insert new provisioned row
+        $insert = [
+            'unit_id' => $unit_id,
+            'machine_id' => $machine_id,
+            'company_id' => '',
+            'plan' => 'default',
+            'status' => 'provisioned',
+            'notes' => wp_json_encode($meta),
+            'settings_staged' => 1, // mark staged
+            'created_at' => current_time('mysql'),
+        ];
+        $wpdb->insert($table, $insert, ['%s','%s','%s','%s','%s','%d','%s']);
+        $insert_id = $wpdb->insert_id;
+        error_log('tmon-admin: Inserted provisioning row ID=' . intval($insert_id) . ' by user=' . get_current_user()->user_login . ' meta=' . wp_json_encode($meta));
+    }
 
-// Replace previous inline REST & admin-ajax manifest code with consolidated versions
-// REST route: /wp-json/tmon-admin/v1/github/manifest
-add_action('rest_api_init', function() {
-	register_rest_route('tmon-admin/v1', '/github/manifest', [
-		'methods' => WP_REST_Server::ALLMETHODS,
-		'permission_callback' => function() { return current_user_can('manage_options'); },
-		'callback' => function( WP_REST_Request $request ) {
-			$params = $request->get_params();
-			$manifest_url = isset($params['manifest_url']) ? trim($params['manifest_url']) : '';
-			$repo = isset($params['repo']) ? trim($params['repo']) : '';
-			$branch = isset($params['branch']) ? trim($params['branch']) : 'main';
+    // Mirror: update tmon_devices record to set provisioned, wordpress_api_url, unit_name, provisioned_at
+    $dev_table = $wpdb->prefix . 'tmon_devices';
+    if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+        $dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
+        $mirror_update = ['last_seen' => current_time('mysql')];
+        if (in_array('provisioned', $dev_cols)) $mirror_update['provisioned'] = 1;
+        elseif (in_array('status', $dev_cols)) $mirror_update['status'] = 'provisioned';
+        if (in_array('wordpress_api_url', $dev_cols) && !empty($site_url)) $mirror_update['wordpress_api_url'] = $site_url;
+        if (in_array('unit_name', $dev_cols) && !empty($unit_name)) $mirror_update['unit_name'] = $unit_name;
+        if (in_array('provisioned_at', $dev_cols)) $mirror_update['provisioned_at'] = current_time('mysql');
 
-			$try_urls = tmon_admin_build_manifest_try_urls($manifest_url, $repo, $branch);
-			if (empty($try_urls)) {
-				return rest_ensure_response(['success' => false, 'message' => 'manifest_url or repo parameter required', 'errors' => ['missing params']]);
-			}
-			$result = tmon_admin_fetch_manifest_from_try_urls($try_urls);
-			if ($result['success']) {
-				return rest_ensure_response($result);
-			}
-			return rest_ensure_response(['success' => false, 'message' => 'manifest or version file not found', 'errors' => $result['errors']]);
-		}
-	]);
+        if (!empty($unit_id)) {
+            $wpdb->update($dev_table, $mirror_update, ['unit_id' => $unit_id]);
+        } elseif (!empty($machine_id)) {
+            $wpdb->update($dev_table, $mirror_update, ['machine_id' => $machine_id]);
+        }
+    }
+
+    // Enqueue for both machine and unit id
+    $payload = $meta; // include site_url/unit_name earlier in $meta build
+    if ($machine_id) {
+        tmon_admin_enqueue_provision($machine_id, $payload);
+        error_log("tmon-admin: enqueued provision for machine_id={$machine_id}");
+    }
+    if ($unit_id && $unit_id !== $machine_id) {
+        tmon_admin_enqueue_provision($unit_id, $payload);
+        error_log("tmon-admin: enqueued provision for unit_id={$unit_id}");
+    }
+
+    // Append history entry
+    $hist = get_option('tmon_admin_provision_history', []);
+    $hist[] = [
+        'ts' => current_time('mysql'),
+        'user' => wp_get_current_user()->user_login,
+        'unit_id' => $unit_id,
+        'machine_id' => $machine_id,
+        'site_url' => $site_url,
+        'payload' => $payload
+    ];
+    update_option('tmon_admin_provision_history', array_slice($hist, -500)); // keep last 500
+
+    // Add admin notice for save success
+    add_action('admin_notices', function() {
+        echo '<div class="updated"><p>Provisioning saved and queued for next device check-in.</p></div>';
+    });
+
+    // Redirect back with status
+    wp_safe_redirect(add_query_arg('saved', '1', wp_get_referer() ?: admin_url('admin.php?page=tmon-admin-provisioning')));
+    exit;
 });
 
-// Backwards compatible admin-ajax endpoint (GET/POST).
-add_action('wp_ajax_tmon_admin_fetch_github_manifest', function() {
-	if (!current_user_can('manage_options')) {
-		wp_send_json_error(['message' => 'forbidden']);
-	}
-	$manifest_url = isset($_REQUEST['manifest_url']) ? sanitize_text_field(wp_unslash($_REQUEST['manifest_url'])) : '';
-	$repo = isset($_REQUEST['repo']) ? sanitize_text_field(wp_unslash($_REQUEST['repo'])) : '';
-	$branch = isset($_REQUEST['branch']) ? sanitize_text_field(wp_unslash($_REQUEST['branch'])) : 'main';
-
-	$try_urls = tmon_admin_build_manifest_try_urls($manifest_url, $repo, $branch);
-	if (empty($try_urls)) { wp_send_json_error(['message' => 'manifest_url or repo parameter required']); }
-
-	$result = tmon_admin_fetch_manifest_from_try_urls($try_urls);
-	if ($result['success']) {
-		$wp_data = [];
-		if (isset($result['data'])) $wp_data['data'] = $result['data'];
-		if (isset($result['version_text'])) $wp_data['version_text'] = $result['version_text'];
-		if (isset($result['raw_text'])) $wp_data['raw_text'] = $result['raw_text'];
-		$wp_data['source'] = $result['source'];
-		wp_send_json_success($wp_data);
-	} else {
-		// Return JSON error payload (HTTP 200) with extra errors to avoid 404 console noise.
-		wp_send_json_error(['message' => 'manifest or version file not found', 'errors' => $result['errors'] ?? []]);
-	}
+// Add the Provisioning Activity menu
+add_action('admin_menu', function() {
+    add_submenu_page('tmon-admin', 'Provisioning Activity', 'Provisioning Activity', 'manage_options', 'tmon-admin-provisioning-activity', 'tmon_admin_provisioning_activity_page');
 });
 
 function tmon_admin_provisioning_activity_page() {
     if (!current_user_can('manage_options')) wp_die('Forbidden');
-    // Render pending queue table and history
     $queue = get_option('tmon_admin_pending_provision', []);
-    $history = get_option('tmon_admin_provision_history', []);
-    echo '<div class="wrap"><h1>Provisioning Activity</h1>';
-    echo '<h2>Pending Queue</h2>';
-    echo '<table class="widefat"><thead><tr><th>Key</th><th>Payload</th><th>Actions</th></tr></thead><tbody>';
-    foreach ($queue as $k => $payload) {
-        echo '<tr>';
-        echo '<td>' . esc_html($k) . '</td>';
-        echo '<td><pre style="max-width:70%;">' . esc_html(wp_json_encode($payload)) . '</pre></td>';
-        echo '<td>';
-        echo '<button class="button tmon-requeue" data-key="'.esc_attr($k).'">Re-enqueue</button> ';
-        echo '<button class="button tmon-delete" data-key="'.esc_attr($k).'">Delete</button>';
-        echo '</td>';
-        echo '</tr>';
-    }
-    echo '</tbody></table>';
-
-    echo '<h2>Recent Provisioning History</h2>';
-    echo '<table class="widefat"><thead><tr><th>Time</th><th>User</th><th>Unit ID</th><th>Machine ID</th><th>Site</th><th>Meta</th></tr></thead><tbody>';
-    $max = array_slice(array_reverse($history), 0, 200);
-    foreach ($max as $h) {
-        echo '<tr>';
-        echo '<td>' . esc_html($h['ts']) . '</td>';
-        echo '<td>' . esc_html($h['user']) . '</td>';
-        echo '<td>' . esc_html($h['unit_id']) . '</td>';
-        echo '<td>' . esc_html($h['machine_id']) . '</td>';
-        echo '<td>' . esc_html($h['site_url']) . '</td>';
-        echo '<td><pre style="max-width:70%;">' . esc_html(wp_json_encode($h['meta'])) . '</pre></td>';
-        echo '</tr>';
-    }
-    echo '</tbody></table>';
+    $history = array_reverse(get_option('tmon_admin_provision_history', []));
     ?>
+    <div class="wrap">
+        <h1>Provisioning Activity</h1>
+        <h2>Pending Queue</h2>
+        <table class="widefat"><thead><tr><th>Key</th><th>Payload</th><th>Actions</th></tr></thead><tbody>
+            <?php foreach ((array)$queue as $k => $p): ?>
+                <tr>
+                    <td><?php echo esc_html($k); ?></td>
+                    <td><pre><?php echo esc_html(wp_json_encode($p, JSON_PRETTY_PRINT)); ?></pre></td>
+                    <td>
+                        <button class="button tmon-queue-requeue" data-key="<?php echo esc_attr($k); ?>">Re-enqueue</button>
+                        <button class="button tmon-queue-delete" data-key="<?php echo esc_attr($k); ?>">Delete</button>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+        </tbody></table>
+
+        <h2>Recent Provision History</h2>
+        <table class="widefat"><thead><tr><th>Time</th><th>User</th><th>Unit</th><th>Machine</th><th>Site</th></tr></thead><tbody>
+            <?php foreach (array_slice($history, 0, 200) as $h): ?>
+                <tr>
+                    <td><?php echo esc_html($h['ts']); ?></td>
+                    <td><?php echo esc_html($h['user']); ?></td>
+                    <td><?php echo esc_html($h['unit_id']); ?></td>
+                    <td><?php echo esc_html($h['machine_id']); ?></td>
+                    <td><?php echo esc_html($h['site_url']); ?></td>
+                </tr>
+            <?php endforeach; ?>
+        </tbody></table>
+    </div>
     <script>
-    (function(){
-        jQuery(document).on('click', '.tmon-delete', function(){
-            const key = jQuery(this).attr('data-key');
+    (function($){
+        $('.tmon-queue-delete').on('click', function(){
+            var key = $(this).attr('data-key');
             if (!confirm('Delete pending entry for '+key+'?')) return;
-            jQuery.post(ajaxurl, { action: 'tmon_admin_manage_pending', manage_action: 'delete', key: key, _ajax_nonce: '<?php echo wp_create_nonce('tmon_admin_provision_ajax'); ?>' }, function(data){
-                if (data.success) location.reload();
-                else alert('Failed: ' + (data.data && data.data.message ? data.data.message : 'unknown'));
+            $.post(ajaxurl, {action:'tmon_admin_manage_pending', manage_action:'delete', key:key, _ajax_nonce: '<?php echo wp_create_nonce('tmon_admin_provision_ajax'); ?>'}, function(res){
+                if (res.success) location.reload();
+                else alert('Failed: '+(res.data && res.data.message?res.data.message:'unknown'));
             });
         });
-        jQuery(document).on('click', '.tmon-requeue', function(){
-            const key = jQuery(this).attr('data-key');
-            let payload = prompt('Leave payload JSON to re-enqueue (blank = keep existing):');
-            try { payload = payload ? JSON.parse(payload) : null; } catch(e){ alert('Invalid JSON'); return; }
-            jQuery.post(ajaxurl, { action: 'tmon_admin_manage_pending', manage_action: 'reenqueue', key: key, payload: payload ? payload : '', _ajax_nonce: '<?php echo wp_create_nonce('tmon_admin_provision_ajax'); ?>' }, function(data){
-                if (data.success) location.reload();
-                else alert('Failed: ' + (data.data && data.data.message ? data.data.message : 'unknown'));
+        $('.tmon-queue-requeue').on('click', function(){
+            var key = $(this).attr('data-key');
+            var payload = prompt('JSON to re-enqueue (leave blank to keep stored payload):');
+            try { payload = payload ? JSON.parse(payload) : ''; } catch(e){ alert('Invalid JSON'); return; }
+            $.post(ajaxurl, {action:'tmon_admin_manage_pending', manage_action:'reenqueue', key:key, payload: JSON.stringify(payload), _ajax_nonce: '<?php echo wp_create_nonce('tmon_admin_provision_ajax'); ?>'}, function(res){
+                if (res.success) location.reload();
+                else alert('Failed: '+(res.data && res.data.message?res.data.message:'unknown'));
             });
         });
-    })();
+    })(jQuery);
     </script>
     <?php
-    echo '</div>';
 }
