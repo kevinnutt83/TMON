@@ -207,6 +207,8 @@ add_action('admin_post_tmon_admin_save_provision', function() {
     $manifest_url = isset($_POST['manifest_url']) ? esc_url_raw($_POST['manifest_url']) : '';
     $version = isset($_POST['version']) ? sanitize_text_field($_POST['version']) : '';
     $notes = isset($_POST['notes']) ? sanitize_textarea_field($_POST['notes']) : '';
+    $site_url = isset($_POST['site_url']) ? esc_url_raw($_POST['site_url']) : '';
+    $unit_name = isset($_POST['unit_name']) ? sanitize_text_field($_POST['unit_name']) : '';
 
     if (!$unit_id && !$machine_id) {
         wp_safe_redirect(add_query_arg('saved', '0', wp_get_referer() ?: admin_url('admin.php?page=tmon-admin-provisioning')));
@@ -219,6 +221,8 @@ add_action('admin_post_tmon_admin_save_provision', function() {
         'branch' => $branch,
         'manifest_url' => $manifest_url,
         'firmware_version' => $version,
+        'site_url' => $site_url,
+        'unit_name' => $unit_name,
     ];
     if ($notes !== '') {
         $meta['notes_text'] = $notes;
@@ -305,6 +309,8 @@ add_action('wp_ajax_tmon_admin_update_device_repo', function() {
     $branch = isset($_POST['branch']) ? sanitize_text_field($_POST['branch']) : 'main';
     $manifest_url = isset($_POST['manifest_url']) ? esc_url_raw($_POST['manifest_url']) : '';
     $version = isset($_POST['version']) ? sanitize_text_field($_POST['version']) : '';
+    $site_url = isset($_POST['site_url']) ? esc_url_raw($_POST['site_url']) : '';
+    $unit_name = isset($_POST['unit_name']) ? sanitize_text_field($_POST['unit_name']) : '';
 
     if (!$unit_id && !$machine_id) {
         wp_send_json_error(['message' => 'unit_id or machine_id is required'], 400);
@@ -323,6 +329,8 @@ add_action('wp_ajax_tmon_admin_update_device_repo', function() {
         'branch' => $branch,
         'manifest_url' => $manifest_url,
         'firmware_version' => $version,
+        'site_url' => $site_url,
+        'unit_name' => $unit_name,
     ];
 
     if ($row) {

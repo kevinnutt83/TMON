@@ -821,7 +821,7 @@ async def fetch_admin_provisioning(machine_id=None, unit_id=None):
     elif unit_id:
         key_payload['unit_id'] = unit_id
     else:
-        # Try to use persisted unit/machine id
+        # Use persisted or detected ids
         key_payload['machine_id'] = get_machine_id()
         key_payload['unit_id'] = getattr(settings, 'UNIT_ID', '')
     try:
@@ -840,9 +840,44 @@ async def fetch_admin_provisioning(machine_id=None, unit_id=None):
                 except Exception:
                     data = None
             provisioning_log(f"fetch_admin_provisioning: response JSON: {data}")
-            if isinstance(data, dict) and data.get('provision'):
-                provisioning_log("fetch_admin_provisioning: found provision payload")
-                return data.get('provision')
+            if isinstance(data, dict):
+                # Top-level admin fields (not queued provision)
+                if 'unit_id' in data and data.get('unit_id'):
+                    new_uid = str(data.get('unit_id'))
+                    if new_uid and new_uid != getattr(settings, 'UNIT_ID', ''):
+                        settings.UNIT_ID = new_uid
+                        try:
+                            persist_unit_id(new_uid)
+                            provisioning_log(f"fetch_admin_provisioning: UNIT_ID set to {new_uid} and persisted")
+                        except Exception:
+                            provisioning_log(f"fetch_admin_provisioning: failed to persist UNIT_ID {new_uid}")
+                # Accept either 'site_url' or 'wordpress_api_url' to update server endpoint
+                maybe_site = data.get('site_url') or data.get('wordpress_api_url') or data.get('site') or None
+                if maybe_site:
+                    try:
+                        settings.WORDPRESS_API_URL = maybe_site
+                        try:
+                            write_text(getattr(settings, 'WORDPRESS_API_URL_FILE', settings.LOG_DIR + '/wordpress_api_url.txt'), str(maybe_site))
+                            provisioning_log(f"fetch_admin_provisioning: WORDPRESS_API_URL set to {maybe_site} and persisted")
+                        except Exception:
+                            provisioning_log("fetch_admin_provisioning: failed to persist WORDPRESS_API_URL")
+                    except Exception as e:
+                        provisioning_log(f"fetch_admin_provisioning: failed to apply site_url {maybe_site}: {e}")
+                # Persist on 'provisioned' flag if present
+                if data.get('provisioned') is True:
+                    try:
+                        settings.UNIT_PROVISIONED = True
+                        write_text(getattr(settings, 'PROVISIONED_FLAG_FILE', '/logs/provisioned.flag'), 'ok')
+                        provisioning_log("fetch_admin_provisioning: marked UNIT_PROVISIONED True and wrote flag")
+                    except Exception:
+                        provisioning_log("fetch_admin_provisioning: failed to write PROVISIONED_FLAG_FILE")
+
+                # Deliver explicit queued provision payload if present
+                if data.get('provision'):
+                    provisioning_log("fetch_admin_provisioning: found explicit 'provision' payload")
+                    return data.get('provision')
+                # Otherwise return None (no queued provision)
+                return None
     except Exception as e:
         await debug_print(f'fetch_admin_provisioning: exception {e}', 'ERROR')
         provisioning_log(f"fetch_admin_provisioning: exception {e}")
@@ -867,23 +902,39 @@ def apply_staged_settings_and_reboot(staged):
                     write_text(_settings.UNIT_ID_FILE, str(_settings.UNIT_ID))
                 except Exception:
                     pass
-            if 'site_url' in staged and staged['site_url']:
-                _settings.WORDPRESS_API_URL = staged['site_url']
+            # Accept both 'site_url' and 'wordpress_api_url'
+            site_value = staged.get('site_url') or staged.get('wordpress_api_url') or staged.get('site') or None
+            if site_value:
+                _settings.WORDPRESS_API_URL = site_value
+                try:
+                    write_text(getattr(_settings, 'WORDPRESS_API_URL_FILE', _settings.LOG_DIR + '/wordpress_api_url.txt'), str(_settings.WORDPRESS_API_URL))
+                except Exception:
+                    pass
+            if 'unit_name' in staged and staged['unit_name']:
+                try:
+                    _settings.UNIT_Name = str(staged['unit_name'])
+                except Exception:
+                    pass
             if 'wifi_ssid' in staged:
                 _settings.WIFI_SSID = staged['wifi_ssid']
             if 'wifi_pass' in staged:
                 _settings.WIFI_PASS = staged['wifi_pass']
             if 'firmware_version' in staged:
                 _settings.FIRMWARE_VERSION = staged['firmware_version']
+            # Mark device provisioned
+            try:
+                _settings.UNIT_PROVISIONED = True
+                write_text(_settings.PROVISIONED_FLAG_FILE, 'ok')
+            except Exception:
+                pass
         except Exception:
             pass
         # Clear staged flag file if used
         try:
             import os
             staged_file = _settings.REMOTE_SETTINGS_STAGED_FILE
-            if os.stat(staged_file):
+            if os.path.exists(staged_file):
                 try:
-                    # write empty file or delete
                     os.remove(staged_file)
                 except Exception:
                     try:
@@ -894,20 +945,19 @@ def apply_staged_settings_and_reboot(staged):
             pass
         # persist applied file etc.
         try:
-            # Mark 'settings applied' flag
             set_flag(_settings.REMOTE_SETTINGS_APPLIED_FILE, True)
         except Exception:
             pass
         # Soft-reset to apply new settings
         try:
             import machine
+            provisioning_log("apply_staged_settings: performing soft_reset to apply changes")
             machine.soft_reset()
         except Exception as e:
             provisioning_log(f"apply_staged_settings: soft_reset failed with {e}")
             pass
     except Exception as e:
         provisioning_log(f"apply_staged_settings: exception {e}")
-        # best effort logging
         try:
             import uasyncio
             uasyncio.create_task(debug_print(f'apply_staged_settings: failed {e}', 'ERROR'))

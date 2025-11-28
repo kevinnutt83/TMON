@@ -8,6 +8,7 @@ FIRMWARE_VERSION = "v2.00j"    # Bumped automatically by OTA; compared during up
 
  # WordPress Unit Connector API integration
 WORDPRESS_API_URL = ""   # Customer Unit Connector site for provisioned devices
+WORDPRESS_API_URL_FILE = LOG_DIR + '/wordpress_api_url.txt'  # persisted copy on device
 WORDPRESS_USERNAME = "agadmin"              # (Optional) Basic auth / future removal for token-based access
 WORDPRESS_PASSWORD = "Pepper-1"             # (Optional) Replace with secure secret storage in production
 
