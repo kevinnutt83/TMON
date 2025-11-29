@@ -1062,7 +1062,7 @@ EOT;
                 console.error('GitHub manifest fetch failed (POST):', resp.status, text);
                 // fallback to GET attempt
                 return fallbackGet(row, params);
-                                                                                         }
+                                                                                                                                                         }
             const json = await resp.json().catch(()=>null);
             if (!json || !json.success) {
                 console.warn('GitHub manifest returned no data or not success:', json);
@@ -1289,6 +1289,64 @@ add_action('admin_init', function(){
     # previously handled purge_all / purge_unit here; this logic is now centralized in includes/settings.php
 });
 
+// Add missing callback used by admin menu: Provisioning History page
+if (!function_exists('tmon_admin_provisioning_history_page')) {
+	function tmon_admin_provisioning_history_page() {
+		if (!current_user_can('manage_options')) {
+			wp_die('Forbidden');
+		}
+
+		// Fetch history option
+		$history = get_option('tmon_admin_provision_history', []);
+		if (!is_array($history)) $history = [];
+
+		echo '<div class="wrap"><h1>TMON Admin — Provisioning History</h1>';
+		if (empty($history)) {
+			echo '<p>No provisioning history available.</p>';
+			echo '</div>';
+			return;
+		}
+
+		echo '<table class="wp-list-table widefat fixed striped"><thead><tr>';
+		echo '<th style="width:160px">Timestamp</th>';
+		echo '<th>Acting User</th>';
+		echo '<th style="width:120px">Unit ID</th>';
+		echo '<th style="width:220px">Machine ID</th>';
+		echo '<th>Action</th>';
+		echo '<th>Site</th>';
+		echo '<th>Payload / Meta</th>';
+		echo '</tr></thead><tbody>';
+
+		// Display most recent first
+		foreach (array_reverse($history) as $item) {
+			$ts = esc_html($item['ts'] ?? $item['time'] ?? '');
+			$user = esc_html($item['user'] ?? '');
+			$unit = esc_html($item['unit_id'] ?? '');
+			$machine = esc_html($item['machine_id'] ?? '');
+			$action = esc_html($item['action'] ?? '');
+			$site = esc_html($item['site'] ?? '');
+			$meta = $item['meta'] ?? $item['payload'] ?? null;
+			if (is_array($meta) || is_object($meta)) {
+				$meta_json = esc_html(wp_json_encode($meta, JSON_PRETTY_PRINT));
+			} else {
+				$meta_json = esc_html((string)$meta);
+			}
+
+			echo '<tr>';
+			echo '<td>' . $ts . '</td>';
+			echo '<td>' . $user . '</td>';
+			echo '<td>' . $unit . '</td>';
+			echo '<td>' . $machine . '</td>';
+			echo '<td>' . $action . '</td>';
+			echo '<td>' . $site . '</td>';
+			echo '<td><pre style="white-space:pre-wrap;max-width:520px;">' . $meta_json . '</pre></td>';
+			echo '</tr>';
+		}
+
+		echo '</tbody></table>';
+		echo '</div>';
+	}
+}
 
 // Admin-AJAX: Known Units typeahead for large datasets
 add_action('wp_ajax_tmon_admin_known_units', function(){
