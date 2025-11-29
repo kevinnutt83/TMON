@@ -1675,3 +1675,47 @@ if (!function_exists('tmon_admin_dequeue_provision')) {
         return $entry;
     }
 }
+
+// Ensure provisioning history admin page exists (submenu callback used in tmon_admin_menu)
+if (!function_exists('tmon_admin_provisioning_history_page')) {
+	function tmon_admin_provisioning_history_page() {
+		if (!current_user_can('manage_options')) wp_die('Forbidden');
+
+		$history = get_option('tmon_admin_provision_history', []);
+		echo '<div class="wrap"><h1>Provisioning History</h1>';
+
+		if (!is_array($history) || empty($history)) {
+			echo '<p><em>No provisioning history recorded.</em></p>';
+			echo '</div>';
+			return;
+		}
+
+		echo '<table class="widefat fixed striped" cellspacing="0" style="width:100%">
+		<thead><tr><th style="width:160px">Time</th><th>User</th><th>Unit</th><th>Machine</th><th>Action</th><th>Site</th><th>Meta</th></tr></thead>
+		<tbody>';
+		// Show most recent first
+		foreach (array_reverse($history) as $h) {
+			$ts = isset($h['ts']) ? esc_html($h['ts']) : '';
+			$user = isset($h['user']) ? esc_html($h['user']) : '';
+			$unit = isset($h['unit_id']) ? esc_html($h['unit_id']) : '';
+			$machine = isset($h['machine_id']) ? esc_html($h['machine_id']) : '';
+			$action = isset($h['action']) ? esc_html($h['action']) : esc_html('saved');
+			$site = isset($h['site']) ? esc_html($h['site']) : '';
+			$meta_pretty = '';
+			if (isset($h['meta'])) {
+				$meta_pretty = esc_html(wp_json_encode($h['meta'], JSON_PRETTY_PRINT));
+			}
+			echo '<tr>';
+			echo "<td>{$ts}</td>";
+			echo "<td>{$user}</td>";
+			echo "<td>{$unit}</td>";
+			echo "<td>{$machine}</td>";
+			echo "<td>{$action}</td>";
+			echo "<td>{$site}</td>";
+			echo "<td><pre style=\"white-space:pre-wrap;max-width:400px;overflow:auto\">{$meta_pretty}</pre></td>";
+			echo '</tr>';
+		}
+		echo '</tbody></table>';
+		echo '</div>';
+	}
+}
