@@ -444,6 +444,75 @@ if (!function_exists('tmon_admin_ajax_update_device_repo')) {
 }
 add_action('wp_ajax_tmon_admin_update_device_repo', 'tmon_admin_ajax_update_device_repo');
 
+// AJAX: Manage pending queue (delete / reenq) — centralized
+if (!function_exists('tmon_admin_ajax_manage_pending')) {
+	function tmon_admin_ajax_manage_pending() {
+		if (!current_user_can('manage_options')) wp_send_json_error(['message' => 'forbidden']);
+		check_ajax_referer('tmon_admin_provision_ajax');
+		global $wpdb;
+		$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+
+		$key = $_POST['key'] ?? '';
+		$action = $_POST['manage_action'] ?? '';
+		$payload = $_POST['payload'] ?? '';
+		$key_norm = tmon_admin_normalize_key($key);
+
+		if ($action === 'delete') {
+			tmon_admin_dequeue_provision($key_norm);
+			wp_send_json_success(['message' => 'deleted']);
+		} elseif ($action === 'reenqueue') {
+			// If empty payload, attempt to re-enqueue the existing queued payload;
+			// if none exists, attempt to derive from a DB row (settings_staged).
+			if (trim($payload) === '') {
+				$existing = tmon_admin_get_pending_provision($key_norm);
+				if (is_array($existing) && !empty($existing)) {
+					// Refresh timestamp/keep same payload
+					$existing['requested_at'] = current_time('mysql');
+					$existing['requested_by_user'] = wp_get_current_user()->user_login ?: ($existing['requested_by_user'] ?? 'system');
+					tmon_admin_enqueue_provision($key_norm, $existing);
+					wp_send_json_success(['message' => 'reenqueued existing']);
+				}
+				// fallback: try to build from DB row if staged settings exist
+				$row = null;
+				if ($key) {
+					// prefer machine_id match
+					$row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE machine_id=%s LIMIT 1", $key), ARRAY_A);
+					if (!$row) $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE unit_id=%s LIMIT 1", $key), ARRAY_A);
+				}
+				if ($row && intval($row['settings_staged'] ?? 0) === 1) {
+					$derived = [];
+					if (!empty($row['site_url'])) $derived['site_url'] = $row['site_url'];
+					if (!empty($row['unit_name'])) $derived['unit_name'] = $row['unit_name'];
+					if (!empty($row['firmware'])) $derived['firmware'] = $row['firmware'];
+					if (!empty($row['firmware_url'])) $derived['firmware_url'] = $row['firmware_url'];
+					if (!empty($row['role'])) $derived['role'] = $row['role'];
+					$derived['requested_by_user'] = wp_get_current_user()->user_login ?: 'system';
+					$derived['requested_at'] = current_time('mysql');
+					tmon_admin_enqueue_provision($key_norm, $derived);
+					wp_send_json_success(['message' => 'reenqueued from db']);
+				}
+				wp_send_json_error(['message' => 'no payload available to reenqueue']);
+			}
+
+			// If non-empty payload, validate as JSON and enqueue
+			$data = null;
+			if ($payload) {
+				$decoded = json_decode(stripslashes($payload), true);
+				if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) $data = $decoded;
+			}
+			if ($data) {
+				// ensure user attributed if missing
+				if (empty($data['requested_by_user'])) $data['requested_by_user'] = wp_get_current_user()->user_login ?: 'system';
+				tmon_admin_enqueue_provision($key_norm, $data);
+				wp_send_json_success(['message' => 'reenqueued']);
+			}
+			wp_send_json_error(['message' => 'invalid payload']);
+		}
+		wp_send_json_error(['message' => 'unknown action']);
+	}
+}
+add_action('wp_ajax_tmon_admin_manage_pending', 'tmon_admin_ajax_manage_pending');
+
 // Mark that centralized handlers have been registered to prevent duplicate registration.
 if (!defined('TMON_ADMIN_HANDLERS_INCLUDED')) {
 	define('TMON_ADMIN_HANDLERS_INCLUDED', true);

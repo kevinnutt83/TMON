@@ -1102,6 +1102,7 @@ add_action('admin_init', function(){
         if ($unit_id) {
             $wpdb->delete($wpdb->prefix.'tmon_provisioned_devices', ['unit_id'=>$unit_id]);
            
+
             $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->prefix}tmon_claim_requests WHERE unit_id=%s", $unit_id));
             if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $wpdb->prefix.'tmon_devices'))) {
                 $wpdb->delete($wpdb->prefix.'tmon_devices', ['unit_id'=>$unit_id]);
