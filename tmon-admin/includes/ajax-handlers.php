@@ -303,3 +303,8 @@ if (!function_exists('tmon_admin_ajax_update_device_repo')) {
 	}
 }
 add_action('wp_ajax_tmon_admin_update_device_repo', 'tmon_admin_ajax_update_device_repo');
+
+// Mark that centralized handlers have been registered to prevent duplicate registration.
+if (!defined('TMON_ADMIN_HANDLERS_INCLUDED')) {
+	define('TMON_ADMIN_HANDLERS_INCLUDED', true);
+}

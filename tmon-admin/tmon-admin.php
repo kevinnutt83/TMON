@@ -20,6 +20,20 @@ Provisioning:
 - Admin UI: TMON Admin → Provisioning.
 */
 
+// Ensure ABSPATH is defined
+if (!defined('ABSPATH')) exit;
+
+// Define plugin constants before requiring files (fixes undefined constant error)
+if (!defined('TMON_ADMIN_VERSION')) {
+	define('TMON_ADMIN_VERSION', '0.1.2');
+}
+if (!defined('TMON_ADMIN_PATH')) {
+	define('TMON_ADMIN_PATH', plugin_dir_path(__FILE__));
+}
+if (!defined('TMON_ADMIN_URL')) {
+	define('TMON_ADMIN_URL', plugin_dir_url(__FILE__));
+}
+
 // Guard include loader to prevent accidental redeclare.
 if (!function_exists('tmon_admin_include_files')) {
 	function tmon_admin_include_files() {
