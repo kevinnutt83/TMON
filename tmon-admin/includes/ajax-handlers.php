@@ -44,12 +44,12 @@ if (!function_exists('tmon_admin_prune_pending_queue')) {
 	}
 }
 
+// Updated enqueue helper: fill requested_by_user + both site_url & wordpress_api_url, improved logging + pruning
 if (!function_exists('tmon_admin_enqueue_provision')) {
 	function tmon_admin_enqueue_provision($key, $payload) {
 		$key = tmon_admin_normalize_key($key);
 		if (!$key) return false;
-		$queue = get_option('tmon_admin_pending_provision', []);
-		if (!is_array($queue)) $queue = [];
+		if (!is_array($payload)) $payload = (array)$payload;
 
 		// Ensure we have requested_by_user
 		if (empty($payload['requested_by_user']) && function_exists('wp_get_current_user')) {
@@ -58,7 +58,15 @@ if (!function_exists('tmon_admin_enqueue_provision')) {
 		}
 		$payload['requested_at'] = current_time('mysql');
 
-		// Prune old entries first
+		// Ensure both site_url and wordpress_api_url for device compatibility
+		if (!empty($payload['site_url']) && empty($payload['wordpress_api_url'])) {
+			$payload['wordpress_api_url'] = $payload['site_url'];
+		}
+		if (!empty($payload['wordpress_api_url']) && empty($payload['site_url'])) {
+			$payload['site_url'] = $payload['wordpress_api_url'];
+		}
+
+		// prune + per-site max enforcement (existing logic)
 		tmon_admin_prune_pending_queue();
 
 		// Enforce per-site max (if payload includes site_url)
@@ -88,7 +96,7 @@ if (!function_exists('tmon_admin_enqueue_provision')) {
 		$queue[$key] = $payload;
 		update_option('tmon_admin_pending_provision', $queue);
 
-		error_log("tmon-admin: enqueue_provision key={$key} by={$payload['requested_by_user']} site=" . ($site ?: '') . " payload=" . wp_json_encode($payload));
+		error_log("tmon-admin: enqueue_provision key={$key} by={$payload['requested_by_user']} site=" . ($payload['site_url'] ?? '') . ' payload=' . wp_json_encode($payload));
 		return true;
 	}
 }

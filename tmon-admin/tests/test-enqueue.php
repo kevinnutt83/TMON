@@ -7,7 +7,7 @@
  */
 
 class TMON_Admin_Enqueue_Test extends WP_UnitTestCase {
-	public function test_enqueue_provision_creates_option_entry_with_user() {
+	public function test_enqueue_provision_creates_option_entry_with_user_and_wpapiurl() {
 		$key = 'test-key-'.uniqid();
 		$payload = ['site_url' => 'https://example.com', 'note'=>'phpunit-test'];
 		// Ensure option cleared
@@ -24,6 +24,7 @@ class TMON_Admin_Enqueue_Test extends WP_UnitTestCase {
 		$this->assertIsArray($queue, 'pending_provision option is array');
 		$this->assertArrayHasKey($key, $queue, 'Enqueued key present in option');
 		$this->assertEquals('https://example.com', $queue[$key]['site_url']);
+		$this->assertEquals('https://example.com', $queue[$key]['wordpress_api_url'], 'wordpress_api_url should default to site_url');
 		$this->assertEquals('testadmin', $queue[$key]['requested_by_user']);
 	}
 }
