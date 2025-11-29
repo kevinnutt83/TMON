@@ -540,3 +540,62 @@ add_action('wp_ajax_tmon_admin_manage_pending', 'tmon_admin_ajax_manage_pending'
 if (!defined('TMON_ADMIN_HANDLERS_INCLUDED')) {
 	define('TMON_ADMIN_HANDLERS_INCLUDED', true);
 }
+
+if (!function_exists('tmon_admin_get_pending_provision')) {
+	function tmon_admin_get_pending_provision($key) {
+		$key_norm = tmon_admin_normalize_key($key);
+		if (!$key_norm) return null;
+		$queue = get_option('tmon_admin_pending_provision', []);
+		if (!is_array($queue) || empty($queue)) return null;
+		// Direct hit first
+		if (isset($queue[$key_norm])) return $queue[$key_norm];
+		// Try mac-stripped variant
+		$mac_stripped = tmon_admin_normalize_mac($key);
+		if ($mac_stripped && isset($queue[$mac_stripped])) return $queue[$mac_stripped];
+		// Fall back to payload search
+		foreach ($queue as $k => $v) {
+			$payload_mid = isset($v['machine_id']) ? tmon_admin_normalize_key($v['machine_id']) : '';
+			$payload_uid = isset($v['unit_id']) ? tmon_admin_normalize_key($v['unit_id']) : '';
+			if ($payload_mid === $key_norm || $payload_uid === $key_norm || $payload_mid === $mac_stripped) {
+				return $v;
+			}
+		}
+		return null;
+	}
+}
+
+if (!function_exists('tmon_admin_dequeue_provision')) {
+	function tmon_admin_dequeue_provision($key) {
+		$key_norm = tmon_admin_normalize_key($key);
+		if (!$key_norm) return null;
+		$queue = get_option('tmon_admin_pending_provision', []);
+		if (!is_array($queue) || empty($queue)) return null;
+
+		$mac_stripped = tmon_admin_normalize_mac($key);
+		$removed = [];
+
+		// Remove by queue key matches, and any queue entries where payload references the target key
+		foreach ($queue as $k => $v) {
+			$k_norm = tmon_admin_normalize_key($k);
+			$payload_mid = isset($v['machine_id']) ? tmon_admin_normalize_key($v['machine_id']) : '';
+			$payload_uid = isset($v['unit_id']) ? tmon_admin_normalize_key($v['unit_id']) : '';
+
+			$match = false;
+			if ($k_norm === $key_norm || ($mac_stripped && $k_norm === $mac_stripped)) $match = true;
+			if ($payload_mid === $key_norm || $payload_mid === $mac_stripped || $payload_uid === $key_norm) $match = true;
+
+			if ($match) {
+				$removed[$k] = $v;
+				unset($queue[$k]);
+			}
+		}
+
+		if (!empty($removed)) {
+			update_option('tmon_admin_pending_provision', $queue);
+			error_log('tmon-admin: Dequeued provision entries for key=' . $key_norm . ' removed=' . count($removed));
+			// Return the first removed payload as convenience
+			return array_shift($removed);
+		}
+		return null;
+	}
+}
