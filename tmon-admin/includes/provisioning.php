@@ -1855,24 +1855,17 @@ add_action('rest_api_init', function() {
 			$machine_id = isset($params['machine_id']) ? sanitize_text_field($params['machine_id']) : '';
 			$unit_id = isset($params['unit_id']) ? sanitize_text_field($params['unit_id']) : '';
 			$key = $machine_id ?: $unit_id;
+			$prov_table = $wpdb->prefix . 'tmon_provisioned_devices'; // ensure table var available
 
 			error_log('tmon-admin: check-in key=' . $key . ' machine=' . $machine_id . ' unit=' . $unit_id);
 
 			$found = tmon_admin_find_queued_or_staged($machine_id, $unit_id);
 			error_log('tmon-admin: find_queued_or_staged found=' . var_export($found['found'], true) . ' matched_key=' . var_export($found['key'], true));
 
-			if ($found['found'] === 'queue' && $found['queued']) {
+			if ($found['found'] === 'queue' && !empty($found['queued'])) {
 				$queued = $found['queued'];
-				// normalize parity and deliver
-				if (!empty($queued['site_url']) && empty($queued['wordpress_api_url'])) $queued['wordpress_api_url'] = $queued['site_url'];
-				if (!empty($queued['wordpress_api_url']) && empty($queued['site_url'])) $queued['site_url'] = $queued['wordpress_api_url'];
 
-				// Ensure queued payload contains identifying keys (used for mirrored lookup)
-				if (empty($queued['unit_id'])) $queued['unit_id'] = $unit_id ?: '';
-				if (empty($queued['machine_id'])) $queued['machine_id'] = $machine_id ?: '';
-
-				// If queued payload lacks site or other fields, attempt to fill from DB row
-				$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+				// Use DB row to fill missing fields if needed
 				$db_row = null;
 				if (!empty($machine_id)) {
 					$db_row = $wpdb->get_row($wpdb->prepare(
@@ -1883,7 +1876,16 @@ add_action('rest_api_init', function() {
 				if (!$db_row && !empty($unit_id)) {
 					$db_row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE LOWER(unit_id)=LOWER(%s) LIMIT 1", $unit_id), ARRAY_A);
 				}
-				// Merge db row into queued payload for missing fields
+
+				// Normalize parity: ensure wordpress_api_url and site_url present
+				if (!empty($queued['site_url']) && empty($queued['wordpress_api_url'])) $queued['wordpress_api_url'] = $queued['site_url'];
+				if (!empty($queued['wordpress_api_url']) && empty($queued['site_url'])) $queued['site_url'] = $queued['wordpress_api_url'];
+
+				// Ensure queue payload has both identity keys for device/diagnostics
+				if (empty($queued['unit_id'])) $queued['unit_id'] = $unit_id ?: ($db_row['unit_id'] ?? '');
+				if (empty($queued['machine_id'])) $queued['machine_id'] = $machine_id ?: ($db_row['machine_id'] ?? '');
+
+				// If missing important fields (site_url, wordpress_api_url), merge from DB row
 				if (is_array($db_row)) {
 					if (empty($queued['site_url']) && !empty($db_row['site_url'])) $queued['site_url'] = $db_row['site_url'];
 					if (empty($queued['wordpress_api_url']) && !empty($db_row['wordpress_api_url'])) $queued['wordpress_api_url'] = $db_row['wordpress_api_url'];
@@ -1891,16 +1893,9 @@ add_action('rest_api_init', function() {
 					if (empty($queued['firmware']) && !empty($db_row['firmware'])) $queued['firmware'] = $db_row['firmware'];
 					if (empty($queued['firmware_url']) && !empty($db_row['firmware_url'])) $queued['firmware_url'] = $db_row['firmware_url'];
 					if (empty($queued['role']) && !empty($db_row['role'])) $queued['role'] = $db_row['role'];
-					if (empty($queued['plan']) && !empty($db_row['plan'])) $queued['plan'] = $db_row['plan'];
-					// Merge notes (if JSON stored)
-					if (empty($queued['notes']) && !empty($db_row['notes'])) {
-						$maybe_json = json_decode($db_row['notes'], true);
-						if (is_array($maybe_json)) $queued = array_merge($queued, $maybe_json);
-						else $queued['notes_text'] = $db_row['notes'];
-					}
 				}
 
-				// Dequeue the matched key and clear DB staged flags (existing logic)
+				// Dequeue the matched key and clear DB staged flags
 				tmon_admin_dequeue_provision($found['key']);
 				if (!empty($machine_id)) {
 					$mac_stripped = tmon_admin_normalize_mac($machine_id);
@@ -1921,28 +1916,38 @@ add_action('rest_api_init', function() {
 					$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
 				}
 
-				// Debug log the outgoing payload keys
-				error_log('tmon-admin: queued payload delivered for matched_key=' . $found['key'] . ' payload_keys=' . (isset($queued['site_url']) ? 'site' : '') . (isset($queued['unit_name']) ? ',unit_name' : '') . (isset($queued['wordpress_api_url']) ? ',wordpress_api_url' : '') );
+				// Debug log the outgoing payload keys and core values
+				error_log('tmon-admin: queued payload delivered for matched_key=' . $found['key'] . ' unit=' . ($queued['unit_id'] ?? '') . ' machine=' . ($queued['machine_id'] ?? '') . ' site=' . ($queued['site_url'] ?? '') . ' wp_api=' . ($queued['wordpress_api_url'] ?? ''));
 
+				// Always return a non-empty 'provision' payload so device sees staged_exists true
 				return rest_ensure_response(['status' => 'ok', 'provisioned' => true, 'staged_exists' => true, 'provision' => $queued], 200);
 			}
 
-			if ($found['found'] === 'db' && $found['row']) {
+			if ($found['found'] === 'db' && !empty($found['row'])) {
 				$row = $found['row'];
 				$payload = [];
+
+				// Build payload from DB, ensuring it contains the identifying keys
 				if (!empty($row['site_url'])) $payload['site_url'] = $row['site_url'];
 				if (!empty($row['unit_name'])) $payload['unit_name'] = $row['unit_name'];
 				if (!empty($row['firmware'])) $payload['firmware'] = $row['firmware'];
 				if (!empty($row['firmware_url'])) $payload['firmware_url'] = $row['firmware_url'];
 				if (!empty($row['role'])) $payload['role'] = $row['role'];
 				if (!empty($row['plan'])) $payload['plan'] = $row['plan'];
+
+				// Try to decode notes and merge; preserve raw as notes_text if not JSON
 				if (!empty($row['notes'])) {
 					$maybe_json = json_decode($row['notes'], true);
 					if (is_array($maybe_json)) $payload = array_merge($payload, $maybe_json);
 					else $payload['notes_text'] = $row['notes'];
 				}
-				// Ensure wordpress_api_url parity
+
+				// Provide canonical wordpress_api_url if missing
 				if (!empty($payload['site_url']) && empty($payload['wordpress_api_url'])) $payload['wordpress_api_url'] = $payload['site_url'];
+
+				// Ensure the payload has machine_id and unit_id (DEVICE uses these for identity)
+				if (empty($payload['unit_id'])) $payload['unit_id'] = $row['unit_id'] ?? $unit_id;
+				if (empty($payload['machine_id'])) $payload['machine_id'] = $row['machine_id'] ?? $machine_id;
 
 				// Optionally clear DB staged flag unless forced
 				$force_flag = !empty($params['force']) && $params['force'] !== '0';
@@ -1966,6 +1971,7 @@ add_action('rest_api_init', function() {
 				}
 
 				error_log(sprintf('tmon-admin: DB staged payload delivered by matched_key=%s for unit=%s machine=%s', $found['key'], $row['unit_id'], $row['machine_id']));
+				// Ensure a non-empty payload is returned so device sees staged_exists true
 				return rest_ensure_response(['status' => 'ok', 'provisioned' => true, 'staged_exists' => true, 'provision' => $payload], 200);
 			}
 
