@@ -1809,60 +1809,37 @@ add_action('rest_api_init', function() {
 					error_log('tmon-admin: pending queue empty or not array');
 				}
 
-				// Try direct queue lookup by common key variants: raw machine, stripped machine, raw unit, stripped unit
+				// Prepare normalized test values for device
 				$machine_norm = tmon_admin_normalize_mac($machine_id);
 				$unit_norm = tmon_admin_normalize_key($unit_id);
-				$maybe_keys = [
-					$machine_id ?? '',
-					$machine_norm ?? '',
-					$unit_id ?? '',
-					$unit_norm ?? ''
-				];
-				$maybe_keys = array_values(array_unique(array_filter($maybe_keys)));
 
-				foreach ($maybe_keys as $qk) {
-					if (!$qk) continue;
-					$queueVal = is_array($queue) && isset($queue[$qk]) ? $queue[$qk] : null;
-					if ($queueVal) {
-						$found['found'] = 'queue';
-						$found['key'] = $qk;
-						$found['queued'] = $queueVal;
-						error_log("tmon-admin: queue fallback exact match for key={$qk} (queued)");
-						break;
-					}
-				}
+				// Scan the queued payloads directly (compare normalized machine/unit from queued values)
+				if (is_array($queue)) {
+					foreach ($queue as $qkey => $qp) {
+						// Normalize the queued payload's identity fields
+						$qp_machine = isset($qp['machine_id']) ? (string)$qp['machine_id'] : '';
+						$qp_unit = isset($qp['unit_id']) ? (string)$qp['unit_id'] : '';
+						$qp_machine_norm = tmon_admin_normalize_mac($qp_machine);
+						$qp_unit_norm = tmon_admin_normalize_key($qp_unit);
 
-				// If still unmatched, attempt payload-based matches where queued payload contains matching unit/machine
-				if (empty($found['found']) && is_array($queue)) {
-					foreach ($queue as $qk => $qp) {
-						$qp_mac_norm  = isset($qp['machine_id_norm']) ? $qp['machine_id_norm'] : (isset($qp['machine_id']) ? tmon_admin_normalize_mac($qp['machine_id']) : '');
-						$qp_unit_norm = isset($qp['unit_id_norm'])   ? $qp['unit_id_norm']   : (isset($qp['unit_id']) ? tmon_admin_normalize_key($qp['unit_id']) : '');
-						if (!empty($machine_norm) && $qp_mac_norm === $machine_norm) {
+						// Debug each normalized candidate (only log when we have a device value)
+						if ($machine_norm) error_log("tmon-admin: comparing device_machine_norm={$machine_norm} vs queued_machine_norm={$qp_machine_norm} (qkey={$qkey})");
+						if ($unit_norm) error_log("tmon-admin: comparing device_unit_norm={$unit_norm} vs queued_unit_norm={$qp_unit_norm} (qkey={$qkey})");
+
+						// Match by normalized machine OR normalized unit
+						$match = false;
+						if (!empty($machine_norm) && $qp_machine_norm === $machine_norm) $match = true;
+						if (!$match && !empty($unit_norm) && $qp_unit_norm === $unit_norm) $match = true;
+
+						// Also accept raw case-insensitive match as fallback
+						if (!$match && !empty($machine_id) && strcasecmp($qp_machine, $machine_id) === 0) $match = true;
+						if (!$match && !empty($unit_id) && strcasecmp($qp_unit, $unit_id) === 0) $match = true;
+
+						if ($match) {
 							$found['found'] = 'queue';
-							$found['key'] = $qk;
+							$found['key'] = $qkey;
 							$found['queued'] = $qp;
-							error_log("tmon-admin: queue fallback payload match by mac_norm={$machine_norm} queue_key={$qk}");
-							break;
-						}
-						if (!empty($unit_norm) && $qp_unit_norm === $unit_norm) {
-							$found['found'] = 'queue';
-							$found['key'] = $qk;
-							$found['queued'] = $qp;
-							error_log("tmon-admin: queue fallback payload match by unit_norm={$unit_norm} queue_key={$qk}");
-							break;
-						}
-						if (!empty($machine_id) && isset($qp['machine_id']) && strcasecmp($qp['machine_id'], $machine_id) === 0) {
-							$found['found'] = 'queue';
-							$found['key'] = $qk;
-							$found['queued'] = $qp;
-							error_log("tmon-admin: queue fallback payload match by machine raw={$machine_id} queue_key={$qk}");
-							break;
-						}
-						if (!empty($unit_id) && isset($qp['unit_id']) && strcasecmp($qp['unit_id'], $unit_id) === 0) {
-							$found['found'] = 'queue';
-							$found['key'] = $qk;
-							$found['queued'] = $qp;
-							error_log("tmon-admin: queue fallback payload match by unit raw={$unit_id} queue_key={$qk}");
+							error_log("tmon-admin: queue fallback matched payload key={$qkey} (machine={$qp_machine} unit={$qp_unit})");
 							break;
 						}
 					}
@@ -1894,8 +1871,15 @@ add_action('rest_api_init', function() {
                 if (empty($queued['machine_id']))  $queued['machine_id']  = $machine_id ?: ($db_row['machine_id'] ?? '');
                 if (empty($queued['unit_id']))     $queued['unit_id']     = $unit_id ?: ($db_row['unit_id'] ?? '');
 
-                // Remove queue entries matching the same payload (dequeue)
+                // Dequeue both machine and unit queue keys (if present), plus the matched key
+                // This ensures we don't leave a duplicate entry keyed by the other identifier
                 tmon_admin_dequeue_provision($found['key']);
+                if (!empty($queued['machine_id']) && $found['key'] !== $queued['machine_id']) {
+                    tmon_admin_dequeue_provision($queued['machine_id']);
+                }
+                if (!empty($queued['unit_id']) && $found['key'] !== $queued['unit_id']) {
+                    tmon_admin_dequeue_provision($queued['unit_id']);
+                }
 
                 // Clear DB staged flags by normalized columns if possible
                 $clear_machine_norm = tmon_admin_normalize_mac($queued['machine_id'] ?? '');
@@ -1903,13 +1887,17 @@ add_action('rest_api_init', function() {
 
                 if (!empty($clear_machine_norm)) {
                     $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id_norm' => $clear_machine_norm]);
+                    error_log("tmon-admin: cleared settings_staged for machine_id_norm={$clear_machine_norm}");
                 } elseif (!empty($queued['machine_id'])) {
                     $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id' => $queued['machine_id']]);
+                    error_log("tmon-admin: cleared settings_staged for machine_id raw={$queued['machine_id']}");
                 }
                 if (!empty($clear_unit_norm)) {
                     $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id_norm' => $clear_unit_norm]);
+                    error_log("tmon-admin: cleared settings_staged for unit_id_norm={$clear_unit_norm}");
                 } elseif (!empty($queued['unit_id'])) {
                     $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $queued['unit_id']]);
+                    error_log("tmon-admin: cleared settings_staged for unit_id raw={$queued['unit_id']}");
                 }
 
                 // Ensure a non-empty payload is returned so device sees staged_exists true
