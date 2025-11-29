@@ -202,7 +202,8 @@ function tmon_admin_provisioning_page() {
                     if ($do_provision) {
                         // mark staged on DB entry
                         $row_id = $exists ?: $wpdb->insert_id;
-                        if $row_id) {
+                        // FIXED: ensure proper parentheses in IF statement
+                        if ($row_id) {
                             $wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['id' => intval($row_id)]);
                             error_log(sprintf("tmon-admin: set settings_staged=1 for prov_row id=%d unit_id=%s machine_id=%s user=%s", intval($row_id), esc_html($unit_id), esc_html($machine_id), wp_get_current_user()->user_login));
                         }
