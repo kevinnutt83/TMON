@@ -71,6 +71,8 @@ if (!function_exists('tmon_admin_enqueue_provision')) {
 
 		// Enforce per-site max (if payload includes site_url)
 		$site = !empty($payload['site_url']) ? $payload['site_url'] : '';
+		$queue = get_option('tmon_admin_pending_provision', []);
+		if (!is_array($queue)) $queue = [];
 		if ($site) {
 			$max = tmon_admin_get_queue_max_per_site();
 			// Count existing entries for the same site

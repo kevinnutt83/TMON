@@ -204,6 +204,7 @@ function tmon_admin_provisioning_page() {
                         $row_id = $exists ?: $wpdb->insert_id;
                         if ($row_id) {
                             $wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['id' => intval($row_id)]);
+                            error_log(sprintf("tmon-admin: set settings_staged=1 for prov_row id=%d unit_id=%s machine_id=%s user=%s", intval($row_id), esc_html($unit_id), esc_html($machine_id), wp_get_current_user()->user_login));
                         }
                         // build payload to enqueue
                         $payload = [
@@ -272,6 +273,7 @@ function tmon_admin_provisioning_page() {
                     // If inline Save & Provision was clicked, mark staged and enqueue payload
                     if ($do_provision) {
                         $wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['id' => $id]);
+                        error_log(sprintf("tmon-admin: set settings_staged=1 for prov_row id=%d user=%s", intval($id), wp_get_current_user()->user_login));
                         // derive unit_id + machine_id from row
                         $row = $wpdb->get_row($wpdb->prepare("SELECT unit_id, machine_id, site_url, unit_name, firmware, firmware_url, role, plan, notes FROM {$prov_table} WHERE id=%d", $id), ARRAY_A);
                         $unit_id_r = $row['unit_id'] ?? '';
