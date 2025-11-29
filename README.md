@@ -72,6 +72,9 @@ TMON is a multi-component system for environmental sensing, secure device provis
 - WP-CLI: Inspect pending provisioning queue and assert keys:
   - wp tmon-admin queue — lists pending queue entries and provisioned device snapshot.
   - wp tmon-admin assert-queue --key=<machine_or_unit_id> — returns success if a queued payload exists for the key.
+- UI: Provisioning page includes per-row "Queue Provision" quick action and a banner showing the number of pending queued payloads.
+- Payload fields: Saved/queued payloads now include both 'site_url' and 'wordpress_api_url' (site_url is mirrored into wordpress_api_url) so devices set WORDPRESS_API_URL correctly after applying staged settings.
+- Re-enqueue: On Provisioning Activity, click "Re-enqueue". A dialog is pre-filled with the current payload JSON. Leave the field empty to re-enqueue unchanged payload; otherwise edit to change payload.
 
 ## Development Layout
 

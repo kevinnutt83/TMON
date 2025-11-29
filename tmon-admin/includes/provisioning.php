@@ -1638,7 +1638,8 @@ add_action('rest_api_init', function() {
 				if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
 					$dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
 					$mirror = ['last_seen' => current_time('mysql')];
-					if (in_array('provisioned', $dev_cols)) $mirror['provisioned'] = 1; else $mirror['status'] = 'provisioned';
+					if (in_array('provisioned', $dev_cols)) $mirror['provisioned'] = 1;
+					elseif (in_array('status', $dev_cols)) $mirror['status'] = 'provisioned';
 					if (in_array('site_url', $dev_cols)) $mirror['site_url'] = $queued['site_url'] ?? '';
 					if (in_array('wordpress_api_url', $dev_cols)) $mirror['wordpress_api_url'] = $queued['site_url'] ?? '';
 					if (in_array('unit_name', $dev_cols)) $mirror['unit_name'] = $queued['unit_name'] ?? '';
@@ -1689,7 +1690,6 @@ add_action('rest_api_init', function() {
 		}
 	);
 });
-
 
 // Guard duplicates: only define queue helpers if not already declared
 if (!function_exists('tmon_admin_enqueue_provision')) {
