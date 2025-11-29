@@ -64,8 +64,14 @@ if (!function_exists('tmon_admin_enqueue_provision')) {
 		if (!is_array($payload)) $payload = (array)$payload;
 
 		// Ensure unit_id/machine_id normalized in payload if present
-		if (!empty($payload['unit_id'])) $payload['unit_id'] = tmon_admin_normalize_key($payload['unit_id']);
-		if (!empty($payload['machine_id'])) $payload['machine_id'] = tmon_admin_normalize_key($payload['machine_id']);
+		if (!empty($payload['unit_id'])) {
+		    $payload['unit_id'] = tmon_admin_normalize_key($payload['unit_id']);
+		    $payload['unit_id_norm'] = tmon_admin_normalize_key($payload['unit_id']);
+		}
+		if (!empty($payload['machine_id'])) {
+		    $payload['machine_id'] = tmon_admin_normalize_key($payload['machine_id']);
+		    $payload['machine_id_norm'] = tmon_admin_normalize_mac($payload['machine_id']);
+		}
 
 		// Ensure we have requested_by_user
 		if (empty($payload['requested_by_user']) && function_exists('wp_get_current_user')) {
@@ -91,16 +97,22 @@ if (!function_exists('tmon_admin_enqueue_provision')) {
 		// Primary normalized enqueue
 		$queue[$key] = $payload;
 
-		// Also mirror to unit_id key (if present) and stripped mac key variants
+		// Also mirror to unit_id key (if present) and stripped mac key variants and normalized keys
 		if (!empty($payload['unit_id'])) {
 			$unit_key = tmon_admin_normalize_key($payload['unit_id']);
 			if ($unit_key && $unit_key !== $key) $queue[$unit_key] = $payload;
+			// normalized unit key variant
+			$unit_key_norm = tmon_admin_normalize_key($payload['unit_id']);
+			if ($unit_key_norm && $unit_key_norm !== $key && $unit_key_norm !== $unit_key) $queue[$unit_key_norm] = $payload;
 		}
 		if (!empty($payload['machine_id'])) {
 			$machine_key = tmon_admin_normalize_key($payload['machine_id']);
 			if ($machine_key && $machine_key !== $key) $queue[$machine_key] = $payload;
 			$machine_stripped = tmon_admin_normalize_mac($payload['machine_id']);
 			if ($machine_stripped && $machine_stripped !== $machine_key && $machine_stripped !== $key) $queue[$machine_stripped] = $payload;
+			// normalized machine key variant
+			$machine_norm_key = $machine_stripped;
+			if ($machine_norm_key && $machine_norm_key !== $key) $queue[$machine_norm_key] = $payload;
 		}
 
 		update_option('tmon_admin_pending_provision', $queue);
