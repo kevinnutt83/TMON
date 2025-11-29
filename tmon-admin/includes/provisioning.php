@@ -1062,7 +1062,7 @@ EOT;
                 console.error('GitHub manifest fetch failed (POST):', resp.status, text);
                 // fallback to GET attempt
                 return fallbackGet(row, params);
-                                                                                                                                                         }
+                                                                                                                                                                                                                                                                                         }
             const json = await resp.json().catch(()=>null);
             if (!json || !json.success) {
                 console.warn('GitHub manifest returned no data or not success:', json);
@@ -1577,7 +1577,7 @@ if (!function_exists('tmon_admin_ensure_columns')) {
         // Ensure unique index on (unit_id, machine_id)
         $indexes = $wpdb->get_results("SHOW INDEX FROM $table", ARRAY_A);
         $hasUnitMachineIdx = false;
-        foreach (($indexes ?: []) as $idx) {
+        foreach (($indexes?:[]) as $idx) {
             if (isset($idx['Key_name']) && $idx['Key_name'] === 'unit_machine') {
                 $hasUnitMachineIdx = true;
                 break;
@@ -1751,7 +1751,12 @@ add_action('admin_post_tmon_admin_provision_device', function() {
 	exit;
 });
 
-// Lightweight helper: strip mac separators and lowercase
+// Fallback normalize helpers if not defined earlier (some code defines these in ajax-handlers)
+if (!function_exists('tmon_admin_normalize_key')) {
+	function tmon_admin_normalize_key($key) {
+		return is_string($key) ? strtolower(trim($key)) : '';
+	}
+}
 if (!function_exists('tmon_admin_normalize_mac')) {
 	function tmon_admin_normalize_mac($mac) {
 		if (!is_string($mac)) return '';
@@ -1767,18 +1772,18 @@ if (!function_exists('tmon_admin_find_queued_or_staged')) {
 		$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
 		$result = ['found' => false, 'key' => null, 'queued' => null, 'row' => null];
 
-		// Normalize candidates
+		// Normalize candidates (machine colon-form, stripped hex, unit id)
 		$candidates = [];
 		if (!empty($machine_id)) {
-			$candidates[] = tmon_admin_normalize_key($machine_id);
-			$candidates[] = tmon_admin_normalize_mac($machine_id); // stripped
+			$candidates[] = tmon_admin_normalize_key($machine_id);            // machine raw normalized
+			$candidates[] = tmon_admin_normalize_mac($machine_id);            // machine stripped of separators
 		}
 		if (!empty($unit_id)) {
-			$candidates[] = tmon_admin_normalize_key($unit_id);
+			$candidates[] = tmon_admin_normalize_key($unit_id);               // unit id normalized
 		}
 		$candidates = array_values(array_unique(array_filter($candidates)));
 
-		// Search queue (prefer machine)
+		// Search queue (prefer machine variants)
 		foreach ($candidates as $k) {
 			if (!$k) continue;
 			$q = tmon_admin_get_pending_provision($k);
@@ -1786,27 +1791,30 @@ if (!function_exists('tmon_admin_find_queued_or_staged')) {
 				$result['found'] = 'queue';
 				$result['key'] = $k;
 				$result['queued'] = $q;
+				error_log(sprintf("tmon-admin: find_queued_or_staged -> queue match for key=%s", $k));
 				return $result;
 			}
 		}
 
-		// Search DB staged flag by normalized matching (case-insensitive)
+		// Search DB staged flag by iterating candidate forms (case-insensitive)
 		if ($machine_id || $unit_id) {
-			$params = [];
-			$where = [];
-			if ($machine_id) { $where[] = "LOWER(machine_id)=LOWER(%s)"; $params[] = $machine_id; }
-			if ($unit_id)    { $where[] = "LOWER(unit_id)=LOWER(%s)";    $params[] = $unit_id; }
-			if ($where) {
-				$sql = "SELECT * FROM {$prov_table} WHERE (" . implode(' OR ', $where) . ") LIMIT 1";
-				$row = $wpdb->get_row($wpdb->prepare($sql, ...$params), ARRAY_A);
+			foreach ($candidates as $k) {
+				if (!$k) continue;
+				// Try matching either unit_id or machine_id against this candidate
+				$sql = "SELECT * FROM {$prov_table} WHERE (LOWER(machine_id)=LOWER(%s) OR LOWER(unit_id)=LOWER(%s)) AND settings_staged=1 LIMIT 1";
+				$row = $wpdb->get_row($wpdb->prepare($sql, $k, $k), ARRAY_A);
 				if ($row && intval($row['settings_staged'] ?? 0) === 1) {
 					$result['found'] = 'db';
+					$result['key'] = $k;
 					$result['row'] = $row;
+					error_log(sprintf("tmon-admin: find_queued_or_staged -> db staged match for candidate=%s (unit=%s machine=%s staged=%d)",
+						$k, $row['unit_id'] ?? '', $row['machine_id'] ?? '', intval($row['settings_staged'] ?? 0)));
 					return $result;
 				}
 			}
 		}
 
+		// Nothing found
 		return $result;
 	}
 }
@@ -1826,31 +1834,26 @@ add_action('rest_api_init', function() {
 			error_log('tmon-admin: check-in key=' . $key . ' machine=' . $machine_id . ' unit=' . $unit_id);
 
 			$found = tmon_admin_find_queued_or_staged($machine_id, $unit_id);
-			error_log('tmon-admin: find_queued_or_staged found=' . var_export($found['found'], true) . ' key=' . var_export($found['key'], true));
+			error_log('tmon-admin: find_queued_or_staged found=' . var_export($found['found'], true) . ' matched_key=' . var_export($found['key'], true));
 
 			if ($found['found'] === 'queue' && $found['queued']) {
 				$queued = $found['queued'];
-				// parity & enqueue processing (existing behavior)
+				// normalize parity and deliver
 				if (!empty($queued['site_url']) && empty($queued['wordpress_api_url'])) $queued['wordpress_api_url'] = $queued['site_url'];
 				if (!empty($queued['wordpress_api_url']) && empty($queued['site_url'])) $queued['site_url'] = $queued['wordpress_api_url'];
 
-				// ensure the queue key we used (normalized) is dequeued
+				// Dequeue the matched key and clear DB staged flags
 				tmon_admin_dequeue_provision($found['key']);
-
-				// Clear staged flags in the DB for both keys (unit & machine)
 				$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
 				if (!empty($machine_id)) $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
 				if (!empty($unit_id))    $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
-				error_log("tmon-admin: queued delivered for key={$found['key']} cleared staged flags for unit={$unit_id} machine={$machine_id}");
 
-				// mirror and response (existing behavior)
-				return rest_ensure_response(['provisioned' => true, 'staged_exists' => true, 'provision' => $queued], 200);
+				error_log("tmon-admin: queued delivered for matched_key={$found['key']} (device: unit={$unit_id} machine={$machine_id})");
+				return rest_ensure_response(['status' => 'ok', 'provisioned' => true, 'staged_exists' => true, 'provision' => $queued], 200);
 			}
 
 			if ($found['found'] === 'db' && $found['row']) {
 				$row = $found['row'];
-				$staged_flag = true;
-
 				$payload = [];
 				if (!empty($row['site_url'])) $payload['site_url'] = $row['site_url'];
 				if (!empty($row['unit_name'])) $payload['unit_name'] = $row['unit_name'];
@@ -1863,21 +1866,36 @@ add_action('rest_api_init', function() {
 					if (is_array($maybe_json)) $payload = array_merge($payload, $maybe_json);
 					else $payload['notes_text'] = $row['notes'];
 				}
+				// Ensure wordpress_api_url parity
 				if (!empty($payload['site_url']) && empty($payload['wordpress_api_url'])) $payload['wordpress_api_url'] = $payload['site_url'];
 
-				// optional: clear staged flag if device isn't forcing a re-send
+				// Optionally clear DB staged flag unless forced
 				$force_flag = !empty($params['force']) && $params['force'] !== '0';
 				if (!$force_flag) {
 					$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $row['unit_id'], 'machine_id' => $row['machine_id']]);
-					error_log("tmon-admin: cleared staged DB flag for unit={$row['unit_id']} machine={$row['machine_id']}");
+					error_log(sprintf('tmon-admin: cleared settings_staged for unit=%s machine=%s after DB staged delivery', $row['unit_id'], $row['machine_id']));
 				}
 
-				// mirror & respond
-				return rest_ensure_response(['provisioned' => true, 'staged_exists' => true, 'provision' => $payload], 200);
+				// Mirror to device mirror and respond
+				$dev_table = $wpdb->prefix . 'tmon_devices';
+				if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+					$dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
+					$mirror = ['last_seen' => current_time('mysql')];
+					if (in_array('provisioned', $dev_cols)) $mirror['provisioned'] = 1; else $mirror['status'] = 'provisioned';
+					if (!empty($payload['site_url']) && in_array('site_url', $dev_cols)) $mirror['site_url'] = $payload['site_url'];
+					if (!empty($payload['site_url']) && in_array('wordpress_api_url', $dev_cols)) $mirror['wordpress_api_url'] = $payload['site_url'];
+					if (!empty($payload['unit_name']) && in_array('unit_name', $dev_cols)) $mirror['unit_name'] = $payload['unit_name'];
+					if (in_array('provisioned_at', $dev_cols)) $mirror['provisioned_at'] = current_time('mysql');
+					if ($unit_id) $wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]);
+					elseif ($machine_id) $wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]);
+				}
+
+				error_log(sprintf('tmon-admin: DB staged payload delivered by matched_key=%s for unit=%s machine=%s', $found['key'], $row['unit_id'], $row['machine_id']));
+				return rest_ensure_response(['status' => 'ok', 'provisioned' => true, 'staged_exists' => true, 'provision' => $payload], 200);
 			}
 
 			// Nothing staged/queued
-			return rest_ensure_response(['provisioned' => false, 'staged_exists' => false], 200);
+			return rest_ensure_response(['status' => 'ok', 'provisioned' => false, 'staged_exists' => false, 'provision' => null], 200);
 		}
 	]);
 });
