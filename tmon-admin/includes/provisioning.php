@@ -220,13 +220,17 @@ function tmon_admin_provisioning_page() {
                             'requested_by_user' => wp_get_current_user()->user_login ?: 'system',
                             'requested_at' => current_time('mysql'),
                         ];
+                        // Make sure payload contains canonical keys so enqueue mirrors correctly
+                        $payload['unit_id'] = $unit_id;
+                        $payload['machine_id'] = $machine_id;
+
                         if (!empty($machine_id)) {
                             tmon_admin_enqueue_provision($machine_id, $payload);
-                            error_log("tmon-admin: inline provisioning enqueued for machine_id={$machine_id}");
+                            error_log("tmon-admin: inline provisioning enqueued for machine_id={$machine_id} payload_keys=".(isset($payload['machine_id'])? 'yes':'no') . ',' . (isset($payload['unit_id']) ? 'yes':'no'));
                         }
                         if (!empty($unit_id) && $unit_id !== $machine_id) {
                             tmon_admin_enqueue_provision($unit_id, $payload);
-                            error_log("tmon-admin: inline provisioning enqueued for unit_id={$unit_id}");
+                            error_log("tmon-admin: inline provisioning enqueued for unit_id={$unit_id} payload_keys=".(isset($payload['machine_id'])? 'yes':'no') . ',' . (isset($payload['unit_id']) ? 'yes':'no'));
                         }
                         // Mirror to tmon_devices if present
                         $dev_table = $wpdb->prefix . 'tmon_devices';
@@ -238,8 +242,8 @@ function tmon_admin_provisioning_page() {
                             if (!empty($payload['site_url']) && in_array('wordpress_api_url', $dev_cols)) $mirror['wordpress_api_url'] = $payload['site_url'];
                             if (!empty($payload['unit_name']) && in_array('unit_name', $dev_cols)) $mirror['unit_name'] = $payload['unit_name'];
                             if (in_array('provisioned_at', $dev_cols)) $mirror['provisioned_at'] = current_time('mysql');
-                            if (!empty($unit_id)) $wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]);
-                            elseif (!empty($machine_id)) $wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]);
+                            if ($unit_id) $wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]);
+                            elseif ($machine_id) $wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]);
                         }
                         // Optionally push to UC site if site_url available (best-effort)
                         if (!empty($site_url)) {
@@ -291,6 +295,10 @@ function tmon_admin_provisioning_page() {
                             'requested_by_user' => wp_get_current_user()->user_login ?: 'system',
                             'requested_at' => current_time('mysql'),
                         ];
+                        // Ensure payload includes the identifying keys (used for mirror & diagnostics)
+                        $payload['unit_id'] = $unit_id_r;
+                        $payload['machine_id'] = $machine_id_r;
+
                         if (!empty($machine_id_r)) {
                             tmon_admin_enqueue_provision($machine_id_r, $payload);
                             error_log("tmon-admin: inline provisioning enqueued for machine_id={$machine_id_r}");
@@ -1732,13 +1740,17 @@ add_action('admin_post_tmon_admin_provision_device', function() {
 	        'requested_by_user' => wp_get_current_user()->user_login ?: 'system',
 	        'requested_at' => current_time('mysql'),
 	    ];
+	    // Make sure payload contains canonical keys so enqueue mirrors correctly
+	    $payload['unit_id'] = $unit_id;
+	    $payload['machine_id'] = $machine_id;
+
 	    if (!empty($machine_id)) {
 	        tmon_admin_enqueue_provision($machine_id, $payload);
-	        error_log("tmon-admin: inline provisioning enqueued for machine_id={$machine_id}");
+	        error_log("tmon-admin: inline provisioning enqueued for machine_id={$machine_id} payload_keys=".(isset($payload['machine_id'])? 'yes':'no') . ',' . (isset($payload['unit_id']) ? 'yes':'no'));
 	    }
 	    if (!empty($unit_id) && $unit_id !== $machine_id) {
 	        tmon_admin_enqueue_provision($unit_id, $payload);
-	        error_log("tmon-admin: inline provisioning enqueued for unit_id={$unit_id}");
+	        error_log("tmon-admin: inline provisioning enqueued for unit_id={$unit_id} payload_keys=".(isset($payload['machine_id'])? 'yes':'no') . ',' . (isset($payload['unit_id']) ? 'yes':'no'));
 	    }
 	    // Mirror to tmon_devices if present
 	    $dev_table = $wpdb->prefix . 'tmon_devices';
@@ -1865,8 +1877,8 @@ add_action('rest_api_init', function() {
 							$wpdb->prepare(
 								"UPDATE {$prov_table} SET settings_staged = 0, updated_at = %s WHERE LOWER(machine_id) = LOWER(%s) OR LOWER(REPLACE(REPLACE(REPLACE(machine_id,':',''),'-',''),' ','')) = %s",
 								current_time('mysql'),
-								$machine_id,
-								$mac_stripped
+							 $machine_id,
+							 $mac_stripped
 							)
 						);
 					} else {

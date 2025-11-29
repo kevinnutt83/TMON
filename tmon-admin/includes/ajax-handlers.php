@@ -179,7 +179,12 @@ if (!function_exists('tmon_admin_admin_post_queue_and_notify')) {
 		$key = $machine_id ?: $unit_id;
 		// Add user info
 		$payload['requested_by_user'] = wp_get_current_user()->user_login;
+		// Ensure payload retains identity keys used by queue detection
+		$payload['unit_id'] = $unit_id;
+		$payload['machine_id'] = $machine_id;
+
 		tmon_admin_enqueue_provision($key, $payload);
+		error_log("tmon-admin: admin_post_queue_and_notify enqueued for key={$key} payload_has_keys=" . (isset($payload['unit_id'])? '1':'0') . "/" . (isset($payload['machine_id'])? '1':'0'));
 
 		$notified = false;
 		if (!empty($payload['site_url'])) {
