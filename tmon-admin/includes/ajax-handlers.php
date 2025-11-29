@@ -67,6 +67,29 @@ if (!function_exists('tmon_admin_enqueue_provision')) {
 		if (!empty($payload['unit_id'])) $payload['unit_id'] = tmon_admin_normalize_key($payload['unit_id']);
 		if (!empty($payload['machine_id'])) $payload['machine_id'] = tmon_admin_normalize_key($payload['machine_id']);
 
+		// If the payload lacks identifying keys, attach them based on enqueue key
+		if (empty($payload['machine_id']) && empty($payload['unit_id'])) {
+			// If $key looks like a stripped MAC (12 hex chars), assume machine_id
+			$maybe_mac = tmon_admin_normalize_mac($key);
+			if ($maybe_mac && strlen($maybe_mac) >= 12) {
+				$payload['machine_id'] = $key;
+			} else {
+				// otherwise assume this is a unit_id
+				$payload['unit_id'] = $key;
+			}
+		} else {
+			// If one id missing, try to derive from the key
+			if (empty($payload['machine_id'])) {
+				// key might be machine id
+				$maybe_mac = tmon_admin_normalize_mac($key);
+				if ($maybe_mac && strlen($maybe_mac) >= 12) $payload['machine_id'] = $key;
+			}
+			if (empty($payload['unit_id'])) {
+				// key might be unit id
+				if (!empty($key) && (!isset($payload['machine_id']) || $payload['machine_id'] !== $key)) $payload['unit_id'] = $key;
+			}
+		}
+
 		// Ensure we have requested_by_user
 		if (empty($payload['requested_by_user']) && function_exists('wp_get_current_user')) {
 			$user = wp_get_current_user();
@@ -105,9 +128,9 @@ if (!function_exists('tmon_admin_enqueue_provision')) {
 
 		update_option('tmon_admin_pending_provision', $queue);
 
-		// diagnostics: log count and keys
+		// diagnostics: log count and keys + whether identifying keys were present
 		$keys = array_keys($queue);
-		error_log("tmon-admin: enqueue_provision key={$key} by={$payload['requested_by_user']} site=" . ($payload['site_url'] ?? '') . ' payload=' . wp_json_encode($payload));
+		error_log("tmon-admin: enqueue_provision key={$key} by={$payload['requested_by_user']} site=" . ($payload['site_url'] ?? '') . ' payload=' . wp_json_encode(array_intersect_key($payload, array_flip(['unit_id','machine_id','site_url','unit_name']))) );
 		error_log("tmon-admin: enqueue_provision current queue keys: " . implode(',', array_slice($keys,0,50)) . ' (count=' . count($keys) . ')');
 		return true;
 	}
@@ -449,6 +472,10 @@ if (!function_exists('tmon_admin_ajax_update_device_repo')) {
 			$payload['site_url'] = $site_url;
 			$payload['unit_name'] = $unit_name;
 			$payload['requested_by_user'] = wp_get_current_user()->user_login;
+			// Include IDs so queued payload is identifiable
+			$payload['unit_id'] = $unit_id;
+			$payload['machine_id'] = $machine_id;
+
 			if ($key1) tmon_admin_enqueue_provision($key1, $payload);
 			if ($key2 && $key2 !== $key1) tmon_admin_enqueue_provision($key2, $payload);
 			// Mirror to tmon_devices, like previous logic
@@ -481,6 +508,8 @@ if (!function_exists('tmon_admin_ajax_update_device_repo')) {
 				wp_send_json_error(['message' => 'insert failed']);
 			}
 			$key = $unit_id ?: $machine_id;
+            $meta['unit_id'] = $unit_id;
+            $meta['machine_id'] = $machine_id;
 			tmon_admin_enqueue_provision($key, $meta);
 			wp_send_json_success(['message' => 'inserted', 'notes' => $meta]);
 		}
@@ -510,9 +539,15 @@ if (!function_exists('tmon_admin_ajax_manage_pending')) {
 			if (trim($payload) === '') {
 				$existing = tmon_admin_get_pending_provision($key_norm);
 				if (is_array($existing) && !empty($existing)) {
-					// Refresh timestamp/keep same payload
 					$existing['requested_at'] = current_time('mysql');
 					$existing['requested_by_user'] = wp_get_current_user()->user_login ?: ($existing['requested_by_user'] ?? 'system');
+					// ensure identifying keys exist
+					if (empty($existing['unit_id']) && !empty($key)) {
+						$existing['unit_id'] = $key;
+					}
+					if (empty($existing['machine_id']) && !empty($key)) {
+						$existing['machine_id'] = $key;
+					}
 					tmon_admin_enqueue_provision($key_norm, $existing);
 					wp_send_json_success(['message' => 'reenqueued existing']);
 				}
@@ -532,6 +567,9 @@ if (!function_exists('tmon_admin_ajax_manage_pending')) {
 					if (!empty($row['role'])) $derived['role'] = $row['role'];
 					$derived['requested_by_user'] = wp_get_current_user()->user_login ?: 'system';
 					$derived['requested_at'] = current_time('mysql');
+					// attach identifying keys
+					$derived['unit_id'] = $row['unit_id'] ?? $key;
+					$derived['machine_id'] = $row['machine_id'] ?? $key;
 					tmon_admin_enqueue_provision($key_norm, $derived);
 					wp_send_json_success(['message' => 'reenqueued from db']);
 				}
