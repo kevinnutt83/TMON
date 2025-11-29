@@ -285,6 +285,79 @@ add_action('rest_api_init', function() {
             return rest_ensure_response(['status' => 'ok']);
         }
     ]);
+
+    // Proxy GitHub manifest for admin UI to fetch firmware metadata from micropython repo
+    register_rest_route('tmon-admin/v1', '/github/manifest', [
+        'methods' => 'GET',
+        'permission_callback' => '__return_true', // admin.js requests it from admin pages; keep public if needed
+        'callback' => function($wp_request) {
+            $repo_raw = trim((string) $wp_request->get_param('repo'));
+            if (!$repo_raw) {
+                // default to known repo path if missing
+                $repo_raw = 'kevinnutt83/TMON';
+            }
+
+            // Normalize repo param: accept "org/repo", or a GitHub web URL or a raw path
+            $repo = $repo_raw;
+            // If full GitHub URL, extract org/repo
+            if (stripos($repo_raw, 'github.com') !== false) {
+                // examples: https://github.com/org/repo/tree/main/micropython/
+                $parts = explode('github.com/', $repo_raw, 2);
+                if (count($parts) > 1) {
+                    $path = trim($parts[1], '/');
+                    // remove "tree/main..." suffix
+                    $path = preg_replace('#/tree/[^/]+.*$#', '', $path);
+                    $repo = $path;
+                }
+            }
+            // Make raw base URL for micropython folder
+            // Prefer 'main' branch by default:
+            $base_raw = 'https://raw.githubusercontent.com/' . trim($repo, '/') . '/main/micropython/';
+            $manifest_url = $base_raw . 'manifest.json';
+            $version_url  = $base_raw . 'version.txt';
+
+            // Attempt manifest.json
+            $out = ['success' => false, 'data' => null, 'error' => null];
+            // Use WP HTTP to fetch
+            $resp = wp_remote_get($manifest_url, ['timeout' => 10, 'headers' => ['Accept'=>'application/json']]);
+            if (!is_wp_error($resp) && wp_remote_retrieve_response_code($resp) === 200) {
+                $body = wp_remote_retrieve_body($resp);
+                $m = json_decode($body, true);
+                if (is_array($m)) {
+                    $version = $m['version'] ?? ($m['tag'] ?? '');
+                    $firmware_url = '';
+                    if (!empty($m['firmware'])) {
+                        $firmware_url = $base_raw . ltrim($m['firmware'], '/');
+                    } elseif (!empty($m['files']) && is_array($m['files'])) {
+                        foreach ($m['files'] as $f) {
+                            $p = is_array($f) ? ($f['path'] ?? '') : (is_string($f) ? $f : '');
+                            if ($p && preg_match('/firmware|\\.bin|\\.hex|\\.img/i', $p)) {
+                                $firmware_url = $base_raw . ltrim($p, '/');
+                                break;
+                            }
+                        }
+                    }
+                    $out['success'] = true;
+                    $out['data'] = ['version' => $version ?? '', 'firmware_url' => esc_url_raw($firmware_url)];
+                    return rest_ensure_response($out);
+                }
+            }
+
+            // Fallback to version.txt
+            $resp2 = wp_remote_get($version_url, ['timeout' => 10]);
+            if (!is_wp_error($resp2) && wp_remote_retrieve_response_code($resp2) === 200) {
+                $body2 = trim(wp_remote_retrieve_body($resp2));
+                $version_txt = $body2 ?: '';
+                $firmware_url_fallback = $base_raw . 'firmware.bin';
+                $out['success'] = true;
+                $out['data'] = ['version' => $version_txt, 'firmware_url' => esc_url_raw($firmware_url_fallback)];
+                return rest_ensure_response($out);
+            }
+
+            $out['error'] = 'manifest or version file not found';
+            return new WP_REST_Response($out, 404);
+        }
+    ]);
 });
 
 // Authorization: decide if a device is allowed to post data (fee-for-service, provisioning, etc.)

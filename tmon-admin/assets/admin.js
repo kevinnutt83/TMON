@@ -61,24 +61,42 @@
 		return false;
 	}
 
+	// Document ready
 	document.addEventListener('DOMContentLoaded', function () {
 		log('admin.js loaded');
 
-		if (!pageHasMap()) {
-			log('No TMON map detected; skipping Leaflet checks.');
-			return;
+		// Provide different localization variable fallbacks
+		const TMON_VAR = (typeof window.TMON_ADMIN !== 'undefined') ? window.TMON_ADMIN
+			: (typeof window.tmon_admin !== 'undefined') ? window.tmon_admin
+			: null;
+
+		if (!TMON_VAR) {
+			console.warn('TMON_ADMIN localization not present; admin.js will still run but some features may be limited.');
 		}
 
-		ensureLeaflet().then(ok=>{
-			if (!ok) {
-				showAdminNotice('Leaflet library not found — device map may be disabled. Click "Refresh from paired UC sites" to attempt to fetch known IDs.');
-				return;
-			}
-			log('Leaflet ready');
-			if (typeof window.tmon_hierarchy_init === 'function') {
-				try { window.tmon_hierarchy_init(); } catch(e) { warn('tmon_hierarchy_init failed: '+e.message); }
-			}
-		});
+		const restRoot = (TMON_VAR && (TMON_VAR.restRoot || TMON_VAR.rest_root)) ? (TMON_VAR.restRoot || TMON_VAR.rest_root) : (typeof rest_url !== 'undefined' ? rest_url : '');
+		const restNonce = TMON_VAR && (TMON_VAR.restNonce || TMON_VAR.rest_nonce) ? (TMON_VAR.restNonce || TMON_VAR.rest_nonce) : '';
+		const ajaxUrl   = (TMON_VAR && (TMON_VAR.ajaxUrl || TMON_VAR.ajaxurl)) ? (TMON_VAR.ajaxUrl || TMON_VAR.ajaxurl) : (window.ajaxurl || '/wp-admin/admin-ajax.php');
+		const ajaxNonce = (TMON_VAR && (TMON_VAR.nonce || TMON_VAR.noncev)) ? (TMON_VAR.nonce || TMON_VAR.noncev) : '';
+
+		// Save restRoot/nonce/nonce fallbacks on window for other scripts that expect them
+		window.TMON_ADMIN_FETCH = { restRoot, restNonce, ajaxUrl, ajaxNonce };
+
+		// Now continue existing code; but change the part which previously aborted manifest fetch:
+		if (!pageHasMap()) {
+			log('No TMON map detected; skipping Leaflet checks.');
+		} else {
+			ensureLeaflet().then(ok=>{
+				if (!ok) {
+					showAdminNotice('Leaflet library not loaded — device map may be disabled. Click "Refresh from paired UC sites" to attempt to fetch known IDs.');
+					return;
+				}
+				log('Leaflet ready');
+				if (typeof window.tmon_hierarchy_init === 'function') {
+					try { window.tmon_hierarchy_init(); } catch(e) { warn('tmon_hierarchy_init failed: '+e.message); }
+				}
+			});
+		}
 
 		// Prevent double submit for a few seconds
 		document.querySelectorAll('.wrap form').forEach(form => form.addEventListener('submit', function(){
@@ -87,58 +105,57 @@
 		}, {passive:true}));
 	});
 
+	// Fetch manifest modified to use either REST or admin-ajax depending on availability
 	(function(){
-		if (typeof window.TMON_ADMIN === 'undefined') {
-			console.warn('TMON_ADMIN localization not present; aborting admin.js manifest fetch.');
-			return;
-		}
-		const restRoot = (TMON_ADMIN.restRoot || '').replace(/\/$/, '');
-		const restNonce = TMON_ADMIN.restNonce;
-		const ajaxUrl = TMON_ADMIN.ajaxUrl || window.ajaxurl || '/wp-admin/admin-ajax.php';
-		const ajaxNonce = TMON_ADMIN.nonce || '';
+		let localized = (typeof window.TMON_ADMIN !== 'undefined') ? window.TMON_ADMIN : (typeof window.tmon_admin !== 'undefined' ? window.tmon_admin : null);
+		const restRoot = localized ? (localized.restRoot || localized.rest_root || '') : '';
+		const restNonce = localized ? (localized.restNonce || '') : '';
+		const ajaxUrl = localized ? (localized.ajaxUrl || localized.ajaxurl || window.ajaxurl || '/wp-admin/admin-ajax.php') : (window.ajaxurl || '/wp-admin/admin-ajax.php');
+		const ajaxNonce = localized ? (localized.nonce || '') : '';
 
 		async function fetchManifest(repoParam) {
-			// Try REST endpoint first
-			try {
-				const restUrl = `${restRoot}/tmon-admin/v1/github/manifest?repo=${encodeURIComponent(repoParam)}`;
-				const res = await fetch(restUrl, {
-					method: 'GET',
-					headers: { 'X-WP-Nonce': restNonce, 'Accept': 'application/json' },
-					credentials: 'same-origin'
-				});
-				if (res.ok) {
-					const json = await res.json();
-					if (json && json.success) {
-						console.log('Manifest (REST) success:', json);
-						displayManifest(json);
-						return json;
+			// If REST root is available, try REST endpoint first
+			if (restRoot) {
+				try {
+					const restUrl = `${restRoot.replace(/\/$/, '')}/tmon-admin/v1/github/manifest?repo=${encodeURIComponent(repoParam)}`;
+					const res = await fetch(restUrl, {
+						method: 'GET',
+						headers: (restNonce ? { 'X-WP-Nonce': restNonce, 'Accept': 'application/json' } : { 'Accept': 'application/json' }),
+						credentials: 'same-origin'
+					});
+					if (res.ok) {
+						const json = await res.json();
+						if (json && json.success && json.data) {
+							console.log('Manifest (REST) success:', json.data);
+							displayManifest(json.data);
+							return json.data;
+						}
+						// REST returned structured failure -> fall back to admin-ajax route
+						console.log('Manifest (REST) returned no success:', json);
+					} else {
+						console.warn('Manifest (REST) fetch failed with HTTP', res.status);
 					}
-					// REST returned structured failure -> fall through to fallback
-					console.log('Manifest (REST) returned no success:', json);
-				} else {
-					console.warn('Manifest (REST) fetch failed with HTTP', res.status);
+				} catch (e) {
+					console.warn('Manifest (REST) fetch failed:', e);
 				}
-			} catch (e) {
-				console.warn('Manifest (REST) fetch failed:', e);
 			}
 
-			// Fallback to admin-ajax (legacy)
+			// Fallback to admin-ajax
 			try {
-				const adminUrl = `${ajaxUrl}?action=tmon_admin_fetch_github_manifest&repo=${encodeURIComponent(repoParam)}&nonce=${encodeURIComponent(ajaxNonce)}`;
+				let adminUrl = `${ajaxUrl}?action=tmon_admin_fetch_github_manifest&repo=${encodeURIComponent(repoParam)}`;
+				if (ajaxNonce) adminUrl += `&nonce=${encodeURIComponent(ajaxNonce)}`;
 				const res2 = await fetch(adminUrl, { method: 'GET', credentials: 'same-origin' });
 				if (res2.ok) {
 					const json2 = await res2.json();
-					// WordPress admin-ajax uses wp_send_json_success/wp_send_json_error
 					if (json2 && json2.success) {
 						console.log('Manifest (admin-ajax) success:', json2.data);
 						displayManifest(json2.data || json2);
 						return json2.data || json2;
-					} else {
-						console.warn('Manifest (admin-ajax) returned no success:', json2);
-						displayManifest(json2);
 					}
+					console.warn('Manifest (admin-ajax) returned no success:', json2);
 				} else {
 					console.warn('Manifest (admin-ajax) fetch failed with HTTP', res2.status);
+					// If admin-ajax returned 403, it often means missing nonce or unprivileged. Do not throw; fallback gracefully.
 				}
 			} catch (e) {
 				console.warn('Manifest (admin-ajax) fetch failed:', e);
