@@ -62,31 +62,134 @@ if (!function_exists('tmon_admin_settings_page')) {
 	}
 }
 
-// Add action handler for the purge postbacks (mirrors what existed in provisioning, but now here)
+// Helper: delete rows from table if table exists
+if (!function_exists('tmon_admin_safe_delete_table_rows')) {
+	function tmon_admin_safe_delete_table_rows($table_name) {
+		global $wpdb;
+		if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table_name))) {
+			$wpdb->query("DELETE FROM {$table_name}");
+		}
+	}
+}
+
+// Helper: delete option if it's clearly a data store (not a settings key)
+if (!function_exists('tmon_admin_safe_delete_option')) {
+	function tmon_admin_safe_delete_option($option_key) {
+		// only delete some common data options (do not drop tmon-admin config keys)
+		$data_options = [
+			'tmon_admin_pending_provision',
+			'tmon_admin_provision_history',
+			'tmon_admin_known_ids_cache',
+			'tmon_admin_ota_jobs',
+			'tmon_admin_files',
+			'tmon_admin_notifications',
+		];
+		if (in_array($option_key, $data_options, true)) {
+			delete_option($option_key);
+		}
+	}
+}
+
+// Helper: remove stored files produced by plugin (field logs, uploaded packages)
+if (!function_exists('tmon_admin_safe_cleanup_files')) {
+	function tmon_admin_safe_cleanup_files() {
+		// Clear field logs directory (non-settings data)
+		$fld = WP_CONTENT_DIR . '/tmon-field-logs';
+		if (is_dir($fld)) {
+			foreach (glob($fld . '/*') as $f) { if (is_file($f)) @unlink($f); }
+		}
+		// Clear tmon-admin-packages directory (uploaded packages)
+		$pkg = WP_CONTENT_DIR . '/tmon-admin-packages';
+		if (is_dir($pkg)) {
+			foreach (glob($pkg . '/*') as $f) { if (is_file($f)) @unlink($f); }
+		}
+	}
+}
+
 add_action('admin_init', function(){
     if (!current_user_can('manage_options')) return;
+
     // Purge all
     if (isset($_POST['tmon_admin_action']) && $_POST['tmon_admin_action'] === 'purge_all' && check_admin_referer('tmon_admin_purge_all')) {
         global $wpdb;
-        $wpdb->query("DELETE FROM {$wpdb->prefix}tmon_provisioned_devices");
-        $wpdb->query("DELETE FROM {$wpdb->prefix}tmon_claim_requests");
-        $wpdb->query("DELETE FROM {$wpdb->prefix}tmon_audit");
-        if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $wpdb->prefix.'tmon_devices'))) {
-            $wpdb->query("DELETE FROM {$wpdb->prefix}tmon_devices");
+        // Plugin data tables
+        $tables = [
+            $wpdb->prefix . 'tmon_provisioned_devices',
+            $wpdb->prefix . 'tmon_claim_requests',
+            $wpdb->prefix . 'tmon_audit',
+            $wpdb->prefix . 'tmon_devices',
+            $wpdb->prefix . 'tmon_field_data',
+            $wpdb->prefix . 'tmon_ota_jobs',
+            $wpdb->prefix . 'tmon_files',
+        ];
+        foreach ($tables as $t) {
+            tmon_admin_safe_delete_table_rows($t);
         }
-        add_action('admin_notices', function(){ echo '<div class="updated"><p>Admin data purged.</p></div>'; });
+
+        // In-memory / option caches & queues (data, not settings)
+        $data_options = [
+            'tmon_admin_pending_provision',
+            'tmon_admin_provision_history',
+            'tmon_admin_known_ids_cache',
+            'tmon_admin_ota_jobs',
+            'tmon_admin_files',
+            'tmon_admin_notifications',
+        ];
+        foreach ($data_options as $opt) {
+            delete_option($opt);
+        }
+
+        // Cleanup generated files, logs, uploads
+        tmon_admin_safe_cleanup_files();
+
+        // Audit & notice
+        do_action('tmon_admin_audit', 'purge_all', sprintf('user=%s', wp_get_current_user()->user_login));
+        add_action('admin_notices', function(){ echo '<div class="updated"><p>All device & provisioning data purged (plugin settings preserved).</p></div>'; });
     }
-    // Purge unit
+
+    // Purge unit (delete rows for a specific unit)
     if (isset($_POST['tmon_admin_action']) && $_POST['tmon_admin_action'] === 'purge_unit' && check_admin_referer('tmon_admin_purge_unit')) {
         global $wpdb;
         $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
         if ($unit_id) {
-            $wpdb->delete($wpdb->prefix.'tmon_provisioned_devices', ['unit_id'=>$unit_id]);
-            $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->prefix}tmon_claim_requests WHERE unit_id=%s", $unit_id));
-            if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $wpdb->prefix.'tmon_devices'))) {
-                $wpdb->delete($wpdb->prefix.'tmon_devices', ['unit_id'=>$unit_id]);
+            $tbls_by_unit = [
+                $wpdb->prefix . 'tmon_provisioned_devices' => ['unit_id' => $unit_id],
+                // optionally delete any field data or audit records per unit
+                $wpdb->prefix . 'tmon_claim_requests' => ['unit_id' => $unit_id],
+                $wpdb->prefix . 'tmon_devices' => ['unit_id' => $unit_id],
+                $wpdb->prefix . 'tmon_field_data' => ['unit_id' => $unit_id],
+            ];
+            foreach ($tbls_by_unit as $tbl => $where) {
+                if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $tbl))) {
+                    $wpdb->delete($tbl, $where);
+                }
+            }
+            // Clean options and history for the unit
+            // Remove pending queue entries for this unit (key matches unit_id or machine_id)
+            $queue = get_option('tmon_admin_pending_provision', []);
+            if (is_array($queue)) {
+                foreach ($queue as $k => $v) {
+                    if ($k === $unit_id || (isset($v['unit_id']) && $v['unit_id'] === $unit_id) || (isset($v['machine_id']) && $v['machine_id'] === $unit_id)) {
+                        unset($queue[$k]);
+                    }
+                }
+                update_option('tmon_admin_pending_provision', $queue);
+            }
+            // Clear known IDs cache and provision history related to this unit
+            $known = get_option('tmon_admin_known_ids_cache', []);
+            if (is_array($known) && isset($known[$unit_id])) {
+                unset($known[$unit_id]);
+                update_option('tmon_admin_known_ids_cache', $known);
+            }
+            $history = get_option('tmon_admin_provision_history', []);
+            if (is_array($history)) {
+                $history = array_values(array_filter($history, function($h) use ($unit_id) {
+                    return !isset($h['unit_id']) || $h['unit_id'] !== $unit_id;
+                }));
+                update_option('tmon_admin_provision_history', $history);
             }
         }
+        do_action('tmon_admin_audit', 'purge_unit', sprintf('user=%s unit=%s', wp_get_current_user()->user_login, $unit_id));
         add_action('admin_notices', function(){ echo '<div class="updated"><p>Unit data purged.</p></div>'; });
     }
 });

@@ -1181,29 +1181,8 @@ function tmon_admin_push_to_uc_site($unit_id, $site_url, $role = 'base', $maybe_
 // Handle Admin purge actions from UI
 add_action('admin_init', function(){
     if (!current_user_can('manage_options')) return;
-    if (isset($_POST['tmon_admin_action']) && $_POST['tmon_admin_action'] === 'purge_all' && check_admin_referer('tmon_admin_purge_all')) {
-        global $wpdb;
-        $wpdb->query("DELETE FROM {$wpdb->prefix}tmon_provisioned_devices");
-        $wpdb->query("DELETE FROM {$wpdb->prefix}tmon_claim_requests");
-        $wpdb->query("DELETE FROM {$wpdb->prefix}tmon_audit");
-        if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $wpdb->prefix.'tmon_devices'))) {
-            $wpdb->query("DELETE FROM {$wpdb->prefix}tmon_devices");
-        }
-        add_action('admin_notices', function(){ echo '<div class="updated"><p>Admin data purged.</p></div>'; });
-    }
-    if (isset($_POST['tmon_admin_action']) && $_POST['tmon_admin_action'] === 'purge_unit' && check_admin_referer('tmon_admin_purge_unit')) {
-        global $wpdb;
-        $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
-        if ($unit_id) {
-            $wpdb->delete($wpdb->prefix.'tmon_provisioned_devices', ['unit_id'=>$unit_id]);
-                                            
-            $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->prefix}tmon_claim_requests WHERE unit_id=%s", $unit_id));
-            if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $wpdb->prefix.'tmon_devices'))) {
-                $wpdb->delete($wpdb->prefix.'tmon_devices', ['unit_id'=>$unit_id]);
-            }
-        }
-        add_action('admin_notices', function(){ echo '<div class="updated"><p>Unit data purged.</p></div>'; });
-    }
+    // Remove duplicate purge logic (moved to settings.php)
+    # previously handled purge_all / purge_unit here; this logic is now centralized in includes/settings.php
 });
 
 
