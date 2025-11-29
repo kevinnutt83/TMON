@@ -52,6 +52,27 @@ function tmon_admin_maybe_migrate_provisioned_devices() {
     if (empty($have['settings_staged'])) {
         $wpdb->query("ALTER TABLE $table ADD COLUMN settings_staged TINYINT(1) DEFAULT 0");
     }
+    // NEW: normalized machine/unit ids for consistent matching
+    if (empty($have['machine_id_norm'])) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN machine_id_norm VARCHAR(64) DEFAULT ''");
+    }
+    if (empty($have['unit_id_norm'])) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN unit_id_norm VARCHAR(64) DEFAULT ''");
+    }
+
+    // Backfill existing rows with normalized values (safe, idempotent)
+    $rows = $wpdb->get_results("SELECT id, machine_id, unit_id FROM {$table}", ARRAY_A);
+    if ($rows) {
+        foreach ($rows as $r) {
+            $norm_machine = '';
+            if (!empty($r['machine_id'])) $norm_machine = tmon_admin_normalize_mac($r['machine_id']);
+            $norm_unit = '';
+            if (!empty($r['unit_id'])) $norm_unit = tmon_admin_normalize_key($r['unit_id']);
+            if ($norm_machine || $norm_unit) {
+                $wpdb->update($table, ['machine_id_norm' => $norm_machine, 'unit_id_norm' => $norm_unit], ['id' => intval($r['id'])]);
+            }
+        }
+    }
 
     // Ensure unique index on (unit_id, machine_id)
     $indexes = $wpdb->get_results("SHOW INDEX FROM $table", ARRAY_A);
@@ -1026,7 +1047,7 @@ EOT;
             echo '<input type="hidden" name="action" value="approve_claim" />';
             echo '<input type="hidden" name="claim_id" value="'.intval($c['id']).'" />';
             submit_button('Approve', 'primary', '', false);
-            echo '</form>';
+                       echo '</form>';
             echo '<form method="post" style="display:inline-block;">';
             wp_nonce_field('tmon_admin_claim');
             echo '<input type="hidden" name="action" value="deny_claim" />';
@@ -1499,6 +1520,8 @@ if (!function_exists('tmon_admin_install_provisioning_schema')) {
             id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
             unit_id VARCHAR(64) NOT NULL,
             machine_id VARCHAR(64) NOT NULL,
+            unit_id_norm VARCHAR(64) DEFAULT '',
+            machine_id_norm VARCHAR(64) DEFAULT '',
             role VARCHAR(32) DEFAULT 'base',
             company_id BIGINT UNSIGNED DEFAULT NULL,
             plan VARCHAR(64) DEFAULT 'standard',
@@ -1506,11 +1529,11 @@ if (!function_exists('tmon_admin_install_provisioning_schema')) {
             notes TEXT,
             firmware VARCHAR(128) DEFAULT '',
             firmware_url VARCHAR(255) DEFAULT '',
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             site_url VARCHAR(255) DEFAULT '',
             unit_name VARCHAR(128) DEFAULT '',
             settings_staged TINYINT(1) DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             UNIQUE KEY unit_machine (unit_id, machine_id)
         ) $charset_collate;";
         require_once ABSPATH . 'wp-admin/includes/upgrade.php';
@@ -1544,236 +1567,137 @@ if (!function_exists('tmon_admin_install_provisioning_schema')) {
     }
 }
 
-// Add this function to avoid fatal error if not already defined elsewhere
-if (!function_exists('tmon_admin_ensure_columns')) {
-    /**
-     * Ensure required columns exist in the tmon_provisioned_devices table.
-     * Adds missing columns if necessary.
-     */
-    function tmon_admin_ensure_columns() {
-        global $wpdb;
-        $table = $wpdb->prefix . 'tmon_provisioned_devices';
-        $required = [
-            'role' => "ALTER TABLE $table ADD COLUMN role VARCHAR(32) DEFAULT 'base'",
-            'company_id' => "ALTER TABLE $table ADD COLUMN company_id BIGINT UNSIGNED NULL",
-            'plan' => "ALTER TABLE $table ADD COLUMN plan VARCHAR(64) DEFAULT 'standard'",
-            'status' => "ALTER TABLE $table ADD COLUMN status VARCHAR(32) DEFAULT 'active'",
-            'notes' => "ALTER TABLE $table ADD COLUMN notes TEXT",
-            'created_at' => "ALTER TABLE $table ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP",
-            'updated_at' => "ALTER TABLE $table ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP",
-            'site_url' => "ALTER TABLE $table ADD COLUMN site_url VARCHAR(255) DEFAULT ''",
-            'unit_name' => "ALTER TABLE $table ADD COLUMN unit_name VARCHAR(128) DEFAULT ''",
-            'firmware' => "ALTER TABLE $table ADD COLUMN firmware VARCHAR(128) DEFAULT ''",
-            'firmware_url' => "ALTER TABLE $table ADD COLUMN firmware_url VARCHAR(255) DEFAULT ''",
-            'settings_staged' => "ALTER TABLE $table ADD COLUMN settings_staged TINYINT(1) DEFAULT 0",
-        ];
-        $cols = $wpdb->get_results("SHOW COLUMNS FROM $table", ARRAY_A);
-        $have = [];
-        foreach (($cols ?: []) as $c) {
-            $have[strtolower($c['Field'])] = true;
-        }
-        // Previously broken: foreach $required as $col => $sql) {
-        foreach ($required as $col => $sql) {
-            if (empty($have[$col])) {
-                $wpdb->query($sql);
-                // Special handling for updated_at ON UPDATE
-                if ($col === 'updated_at') {
-                    $wpdb->query("ALTER TABLE $table MODIFY COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
-                }
-            }
-        }
-        // Ensure unique index on (unit_id, machine_id)
-        $indexes = $wpdb->get_results("SHOW INDEX FROM $table", ARRAY_A);
-        $hasUnitMachineIdx = false;
-        foreach (($indexes?:[]) as $idx) {
-            if (isset($idx['Key_name']) && $idx['Key_name'] === 'unit_machine') {
-                $hasUnitMachineIdx = true;
-                break;
-            }
-        }
-        if (!$hasUnitMachineIdx) {
-            $colsCheck = $wpdb->get_col("SHOW COLUMNS FROM $table LIKE 'unit_id'");
-            $colsCheck2 = $wpdb->get_col("SHOW COLUMNS FROM $table LIKE 'machine_id'");
-            if (!empty($colsCheck) && !empty($colsCheck2)) {
-                $wpdb->query("ALTER TABLE $table ADD UNIQUE KEY unit_machine (unit_id, machine_id)");
-            }
-        }
-        return true;
-    }
-}
-
-// Add fallback for missing admin.css and admin.js to avoid 404 errors in browser console
-add_action('admin_enqueue_scripts', function() {
-	// plugin base URL for assets
-	$assets_url = plugin_dir_url( dirname( __FILE__ ) ) . 'assets/';
-
-	// Check if CSS exists before enqueue
-	$css_path = dirname(__FILE__) . '/../assets/admin.css';
-	if (file_exists($css_path)) {
-		wp_enqueue_style('tmon-admin-css', $assets_url . 'admin.css', [], '0.1.2');
-	}
-
-	// Check if JS exists before enqueue
-	$js_path = dirname(__FILE__) . '/../assets/admin.js';
-
-	if (file_exists($js_path)) {
-		wp_enqueue_script('tmon-admin-js', $assets_url . 'admin.js', ['jquery'], '0.1.2', true);
-
-		// Pass dismiss flag and nonce to the script to avoid multiple notices (server-side persisted)
-		$leaflet_dismissed = false;
-		if (is_user_logged_in()) {
-			$leaflet_dismissed = (bool) get_user_meta(get_current_user_id(), 'tmon_leaflet_notice_dismissed', true);
-		}
-		wp_localize_script('tmon-admin-js', 'tmon_admin', [
-			'dismiss_nonce' => wp_create_nonce('tmon_admin_dismiss_notice'),
-			'leaflet_dismissed' => $leaflet_dismissed,
-		]);
-	}
-});
-
-// AJAX: persist admin dismissal of Leaflet missing notice
-add_action('wp_ajax_tmon_admin_dismiss_notice', function() {
-	if (!current_user_can('manage_options')) wp_send_json_error(['message'=>'forbidden'], 403);
-	check_ajax_referer('tmon_admin_dismiss_notice');
-	$uid = get_current_user_id();
-	if (!$uid) wp_send_json_error(['message'=>'no_user'], 403);
-	update_user_meta($uid, 'tmon_leaflet_notice_dismissed', '1');
-	wp_send_json_success([]);
-});
-
-// Handle provisioning form submission
+// Persist normalized values on admin create/update and queue operations
 add_action('admin_post_tmon_admin_provision_device', function() {
-	if (!current_user_can('manage_options')) wp_die('Forbidden');
-	check_admin_referer('tmon_admin_provision_device');
-	global $wpdb;
+    if (!current_user_can('manage_options')) wp_die('Forbidden');
+    check_admin_referer('tmon_admin_provision_device');
+    global $wpdb;
 
-	$unit_id    = sanitize_text_field($_POST['unit_id'] ?? '');
-	$machine_id = sanitize_text_field($_POST['machine_id'] ?? '');
-	$company_id = intval($_POST['company_id'] ?? 0);
-	$plan       = sanitize_text_field($_POST['plan'] ?? '');
-	$status     = sanitize_text_field($_POST['status'] ?? 'active');
-	$notes      = sanitize_textarea_field($_POST['notes'] ?? '');
-	$role       = sanitize_text_field($_POST['role'] ?? 'base');
-	$site_url   = esc_url_raw($_POST['site_url'] ?? '');
-	$unit_name  = isset($_POST['unit_name']) ? sanitize_text_field($_POST['unit_name']) : '';
-	// firmware fields
-	$firmware      = sanitize_text_field($_POST['firmware'] ?? '');
-	$firmware_url  = esc_url_raw($_POST['firmware_url'] ?? '');
-	$save_provision = isset($_POST['save_provision']);
+    $unit_id    = sanitize_text_field($_POST['unit_id'] ?? '');
+    $machine_id = sanitize_text_field($_POST['machine_id'] ?? '');
+    $company_id = intval($_POST['company_id'] ?? 0);
+    $plan       = sanitize_text_field($_POST['plan'] ?? '');
+    $status     = sanitize_text_field($_POST['status'] ?? 'active');
+    $notes      = sanitize_textarea_field($_POST['notes'] ?? '');
+    $role       = sanitize_text_field($_POST['role'] ?? 'base');
+    $site_url   = esc_url_raw($_POST['site_url'] ?? '');
+    $unit_name  = isset($_POST['unit_name']) ? sanitize_text_field($_POST['unit_name']) : '';
+    // firmware fields
+    $firmware      = sanitize_text_field($_POST['firmware'] ?? '');
+    $firmware_url  = esc_url_raw($_POST['firmware_url'] ?? '');
+    $save_provision = isset($_POST['save_provision']);
 
-	// Basic validation
-	if (!$unit_id || !$machine_id) {
-		wp_redirect(add_query_arg('provision', 'fail', wp_get_referer()));
-		exit;
-	}
+    // Basic validation
+    if (!$unit_id || !$machine_id) {
+        wp_redirect(add_query_arg('provision', 'fail', wp_get_referer()));
+        exit;
+    }
 
-	$table = $wpdb->prefix . 'tmon_provisioned_devices';
-	$exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM $table WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id));
+    $table = $wpdb->prefix . 'tmon_provisioned_devices';
+    $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM $table WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id));
 
-	$data = [
-		'unit_id'         => $unit_id,
-		'machine_id'      => $machine_id,
-		'company_id'      => $company_id,
-		'plan'            => $plan,
-		'status'          => $status,
-		'notes'           => $notes,
-		'role'            => $role,
-		'site_url'        => $site_url,
-		'unit_name'       => $unit_name,
-		'firmware'        => $firmware,
-		'firmware_url'    => $firmware_url,
-		'settings_staged' => 1,
-	];
+    $data = [
+        'unit_id'         => $unit_id,
+        'machine_id'      => $machine_id,
+        'company_id'      => $company_id,
+        'plan'            => $plan,
+        'status'          => $status,
+        'notes'           => $notes,
+        'role'            => $role,
+        'site_url'        => $site_url,
+        'unit_name'       => $unit_name,
+        'firmware'        => $firmware,
+        'firmware_url'    => $firmware_url,
+        'settings_staged' => 1,
+    ];
 
-	if ($exists) {
-		$wpdb->update($table, $data, ['id' => $exists]);
-	} else {
-		$wpdb->insert($table, $data);
-	}
+    // Ensure normalized fields are computed
+    $unit_norm = tmon_admin_normalize_key($unit_id);
+    $mac_norm = tmon_admin_normalize_mac($machine_id);
 
-	// Ensure staged set for both unit and machine (in case device checks by either key)
-	if (!empty($machine_id)) {
-	    $mac_stripped = tmon_admin_normalize_mac($machine_id);
-	    // use a prepared query to set settings_staged for either exact machine_id or stripped variant
-	    if ($mac_stripped) {
-	        $wpdb->query(
-	            $wpdb->prepare(
-	                "UPDATE {$table} SET settings_staged = 1, updated_at = %s WHERE LOWER(machine_id) = LOWER(%s) OR LOWER(REPLACE(REPLACE(REPLACE(machine_id,':',''),'-',''),' ','')) = %s",
-	                current_time('mysql'),
-	                $machine_id,
-	                $mac_stripped
-	            )
-	        );
-	    } else {
-	        $wpdb->update($table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
-	    }
-	    error_log("tmon-admin: settings_staged=1 set for machine_id={$machine_id} (stripped={$mac_stripped}) by user=" . wp_get_current_user()->user_login);
-	}
-	if (!empty($unit_id) && $unit_id !== $machine_id) {
-	    $wpdb->update($table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
-	    error_log("tmon-admin: settings_staged=1 set for unit_id={$unit_id} by user=" . wp_get_current_user()->user_login);
-	}
+    $data['unit_id_norm'] = $unit_norm;
+    $data['machine_id_norm'] = $mac_norm;
 
-	// Ensure payload contains the keys to be mirrored in enqueue
-	$payload['unit_id'] = $unit_id;
-	$payload['machine_id'] = $machine_id;
+    if ($exists) {
+        $wpdb->update($table, $data, ['id' => $exists]);
+    } else {
+        $wpdb->insert($table, $data);
+    }
 
-	// If inline Save & Provision was clicked, mark staged and enqueue payload
-	if ($save_provision) {
-	    // mark staged on DB entry
-	    $row_id = $exists ?: $wpdb->insert_id;
-	    // FIXED: ensure proper parentheses in IF statement
-	    if ($row_id) {
-	        $wpdb->update($table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['id' => intval($row_id)]);
-	        error_log(sprintf("tmon-admin: set settings_staged=1 for prov_row id=%d unit_id=%s machine_id=%s user=%s", intval($row_id), esc_html($unit_id), esc_html($machine_id), wp_get_current_user()->user_login));
-	    }
-	    // build payload to enqueue
-	    $payload = [
-	        'site_url' => $site_url,
-	        'wordpress_api_url' => $site_url,
-	        'unit_name' => $unit_name,
-	        'firmware' => $firmware,
-	        'firmware_url' => $firmware_url,
-	        'role' => $role,
-	        'plan' => $plan,
-	        'notes' => $notes,
-	        'requested_by_user' => wp_get_current_user()->user_login ?: 'system',
-	        'requested_at' => current_time('mysql'),
-	    ];
-	    // Make sure payload contains canonical keys so enqueue mirrors correctly
-	    $payload['unit_id'] = $unit_id;
-	    $payload['machine_id'] = $machine_id;
+    // Update staged flag using normalized columns for reliability
+    if (!empty($mac_norm)) {
+        $wpdb->update($table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['machine_id_norm' => $mac_norm]);
+    } else {
+        $wpdb->update($table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
+    }
+    if (!empty($unit_norm)) {
+        $wpdb->update($table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['unit_id_norm' => $unit_norm]);
+    } else {
+        $wpdb->update($table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
+    }
 
-	    if (!empty($machine_id)) {
-	        tmon_admin_enqueue_provision($machine_id, $payload);
-	        error_log("tmon-admin: inline provisioning enqueued for machine_id={$machine_id} payload_keys=".(isset($payload['machine_id'])? 'yes':'no') . ',' . (isset($payload['unit_id']) ? 'yes':'no'));
-	    }
-	    if (!empty($unit_id) && $unit_id !== $machine_id) {
-	        tmon_admin_enqueue_provision($unit_id, $payload);
-	        error_log("tmon-admin: inline provisioning enqueued for unit_id={$unit_id} payload_keys=".(isset($payload['machine_id'])? 'yes':'no') . ',' . (isset($payload['unit_id']) ? 'yes':'no'));
-	    }
-	    // Mirror to tmon_devices if present
-	    $dev_table = $wpdb->prefix . 'tmon_devices';
-	    if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
-	        $dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
-	        $mirror = ['last_seen' => current_time('mysql')];
-	        if (in_array('provisioned', $dev_cols)) $mirror['provisioned'] = 1; else $mirror['status'] = 'provisioned';
-	        if (!empty($payload['site_url']) && in_array('site_url', $dev_cols)) $mirror['site_url'] = $payload['site_url'];
-	        if (!empty($payload['site_url']) && in_array('wordpress_api_url', $dev_cols)) $mirror['wordpress_api_url'] = $payload['site_url'];
-	        if (!empty($payload['unit_name']) && in_array('unit_name', $dev_cols)) $mirror['unit_name'] = $payload['unit_name'];
-	        if (in_array('provisioned_at', $dev_cols)) $mirror['provisioned_at'] = current_time('mysql');
-	        if ($unit_id) $wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]);
-	        elseif ($machine_id) $wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]);
-	    }
-	    // Optionally push to UC site if site_url available (best-effort)
-	    if (!empty($site_url)) {
-	        tmon_admin_push_to_uc_site($unit_id, $site_url, $role, $unit_name, $company_id, null, null, $firmware, $firmware_url);
-	    }
-	}
+    // Enqueue with canonical keys
+    $payload['unit_id'] = $unit_id;
+    $payload['machine_id'] = $machine_id;
+    $payload['unit_id_norm'] = $unit_norm;
+    $payload['machine_id_norm'] = $mac_norm;
 
-	// Redirect with success
-	wp_redirect(add_query_arg('provision', 'success', admin_url('admin.php?page=tmon-admin-provisioning')));
-	exit;
+    // If inline Save & Provision was clicked, mark staged and enqueue payload
+    if ($save_provision) {
+        // mark staged on DB entry
+        $row_id = $exists ?: $wpdb->insert_id;
+        // FIXED: ensure proper parentheses in IF statement
+        if ($row_id) {
+            $wpdb->update($table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['id' => intval($row_id)]);
+            error_log(sprintf("tmon-admin: set settings_staged=1 for prov_row id=%d unit_id=%s machine_id=%s user=%s", intval($row_id), esc_html($unit_id), esc_html($machine_id), wp_get_current_user()->user_login));
+        }
+        // build payload to enqueue
+        $payload = [
+            'site_url' => $site_url,
+            'wordpress_api_url' => $site_url,
+            'unit_name' => $unit_name,
+            'firmware' => $firmware,
+            'firmware_url' => $firmware_url,
+            'role' => $role,
+            'plan' => $plan,
+            'notes' => $notes,
+            'requested_by_user' => wp_get_current_user()->user_login ?: 'system',
+            'requested_at' => current_time('mysql'),
+        ];
+        // Make sure payload contains canonical keys so enqueue mirrors correctly
+        $payload['unit_id'] = $unit_id;
+        $payload['machine_id'] = $machine_id;
+
+        if (!empty($machine_id)) {
+            tmon_admin_enqueue_provision($machine_id, $payload);
+            error_log("tmon-admin: inline provisioning enqueued for machine_id={$machine_id} payload_keys=".(isset($payload['machine_id'])? 'yes':'no') . ',' . (isset($payload['unit_id']) ? 'yes':'no'));
+        }
+        if (!empty($unit_id) && $unit_id !== $machine_id) {
+            tmon_admin_enqueue_provision($unit_id, $payload);
+            error_log("tmon-admin: inline provisioning enqueued for unit_id={$unit_id} payload_keys=".(isset($payload['machine_id'])? 'yes':'no') . ',' . (isset($payload['unit_id']) ? 'yes':'no'));
+        }
+        // Mirror to tmon_devices if present
+        $dev_table = $wpdb->prefix . 'tmon_devices';
+        if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+            $dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
+            $mirror = ['last_seen' => current_time('mysql')];
+            if (in_array('provisioned', $dev_cols)) $mirror['provisioned'] = 1; else $mirror['status'] = 'provisioned';
+            if (!empty($payload['site_url']) && in_array('site_url', $dev_cols)) $mirror['site_url'] = $payload['site_url'];
+            if (!empty($payload['site_url']) && in_array('wordpress_api_url', $dev_cols)) $mirror['wordpress_api_url'] = $payload['site_url'];
+            if (!empty($payload['unit_name']) && in_array('unit_name', $dev_cols)) $mirror['unit_name'] = $payload['unit_name'];
+            if (in_array('provisioned_at', $dev_cols)) $mirror['provisioned_at'] = current_time('mysql');
+            if ($unit_id) $wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]);
+            elseif ($machine_id) $wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]);
+        }
+        // Optionally push to UC site if site_url available (best-effort)
+        if (!empty($site_url)) {
+            tmon_admin_push_to_uc_site($unit_id, $site_url, $role, $unit_name, $company_id, null, null, $firmware, $firmware_url);
+        }
+    }
+
+    // Redirect with success
+    wp_redirect(add_query_arg('provision', 'success', admin_url('admin.php?page=tmon-admin-provisioning')));
+    exit;
 });
 
 // Fallback normalize helpers if not defined earlier (some code defines these in ajax-handlers)
