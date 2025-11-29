@@ -1867,9 +1867,41 @@ add_action('rest_api_init', function() {
 				if (!empty($queued['site_url']) && empty($queued['wordpress_api_url'])) $queued['wordpress_api_url'] = $queued['site_url'];
 				if (!empty($queued['wordpress_api_url']) && empty($queued['site_url'])) $queued['site_url'] = $queued['wordpress_api_url'];
 
-				// Dequeue the matched key and clear DB staged flags
-				tmon_admin_dequeue_provision($found['key']);
+				// Ensure queued payload contains identifying keys (used for mirrored lookup)
+				if (empty($queued['unit_id'])) $queued['unit_id'] = $unit_id ?: '';
+				if (empty($queued['machine_id'])) $queued['machine_id'] = $machine_id ?: '';
+
+				// If queued payload lacks site or other fields, attempt to fill from DB row
 				$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+				$db_row = null;
+				if (!empty($machine_id)) {
+					$db_row = $wpdb->get_row($wpdb->prepare(
+						"SELECT * FROM {$prov_table} WHERE LOWER(machine_id)=LOWER(%s) OR LOWER(REPLACE(REPLACE(REPLACE(machine_id,':',''),'-',''),' ','')) = LOWER(%s) LIMIT 1",
+						$machine_id, tmon_admin_normalize_mac($machine_id)
+					), ARRAY_A);
+				}
+				if (!$db_row && !empty($unit_id)) {
+					$db_row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE LOWER(unit_id)=LOWER(%s) LIMIT 1", $unit_id), ARRAY_A);
+				}
+				// Merge db row into queued payload for missing fields
+				if (is_array($db_row)) {
+					if (empty($queued['site_url']) && !empty($db_row['site_url'])) $queued['site_url'] = $db_row['site_url'];
+					if (empty($queued['wordpress_api_url']) && !empty($db_row['wordpress_api_url'])) $queued['wordpress_api_url'] = $db_row['wordpress_api_url'];
+					if (empty($queued['unit_name']) && !empty($db_row['unit_name'])) $queued['unit_name'] = $db_row['unit_name'];
+					if (empty($queued['firmware']) && !empty($db_row['firmware'])) $queued['firmware'] = $db_row['firmware'];
+					if (empty($queued['firmware_url']) && !empty($db_row['firmware_url'])) $queued['firmware_url'] = $db_row['firmware_url'];
+					if (empty($queued['role']) && !empty($db_row['role'])) $queued['role'] = $db_row['role'];
+					if (empty($queued['plan']) && !empty($db_row['plan'])) $queued['plan'] = $db_row['plan'];
+					// Merge notes (if JSON stored)
+					if (empty($queued['notes']) && !empty($db_row['notes'])) {
+						$maybe_json = json_decode($db_row['notes'], true);
+						if (is_array($maybe_json)) $queued = array_merge($queued, $maybe_json);
+						else $queued['notes_text'] = $db_row['notes'];
+					}
+				}
+
+				// Dequeue the matched key and clear DB staged flags (existing logic)
+				tmon_admin_dequeue_provision($found['key']);
 				if (!empty($machine_id)) {
 					$mac_stripped = tmon_admin_normalize_mac($machine_id);
 					if ($mac_stripped) {
@@ -1877,8 +1909,8 @@ add_action('rest_api_init', function() {
 							$wpdb->prepare(
 								"UPDATE {$prov_table} SET settings_staged = 0, updated_at = %s WHERE LOWER(machine_id) = LOWER(%s) OR LOWER(REPLACE(REPLACE(REPLACE(machine_id,':',''),'-',''),' ','')) = %s",
 								current_time('mysql'),
-							 $machine_id,
-							 $mac_stripped
+								$machine_id,
+								$mac_stripped
 							)
 						);
 					} else {
@@ -1889,7 +1921,9 @@ add_action('rest_api_init', function() {
 					$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
 				}
 
-				error_log("tmon-admin: queued delivered for matched_key={$found['key']} (device: unit={$unit_id} machine={$machine_id})");
+				// Debug log the outgoing payload keys
+				error_log('tmon-admin: queued payload delivered for matched_key=' . $found['key'] . ' payload_keys=' . (isset($queued['site_url']) ? 'site' : '') . (isset($queued['unit_name']) ? ',unit_name' : '') . (isset($queued['wordpress_api_url']) ? ',wordpress_api_url' : '') );
+
 				return rest_ensure_response(['status' => 'ok', 'provisioned' => true, 'staged_exists' => true, 'provision' => $queued], 200);
 			}
 

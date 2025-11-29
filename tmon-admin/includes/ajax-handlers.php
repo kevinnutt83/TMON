@@ -194,8 +194,21 @@ if (!function_exists('tmon_admin_admin_post_queue_and_notify')) {
 		if ($notified) {
 			// mirror and mark staged, similar to save_provision logic
 			if (!empty($machine_id)) {
-				$wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
-				error_log("tmon-admin: queue_notify set settings_staged=1 for machine_id={$machine_id}");
+				// Support stripped machine forms when updating staged flag in DB (machine_id may be formatted)
+				$mac_stripped = tmon_admin_normalize_mac($machine_id);
+				if ($mac_stripped) {
+					$wpdb->query(
+						$wpdb->prepare(
+							"UPDATE {$prov_table} SET settings_staged = 1, updated_at = %s WHERE LOWER(machine_id) = LOWER(%s) OR LOWER(REPLACE(REPLACE(REPLACE(machine_id,':',''),'-',''),' ','')) = %s",
+							current_time('mysql'),
+							$machine_id,
+							$mac_stripped
+						)
+					);
+				} else {
+					$wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
+				}
+				error_log("tmon-admin: queue_notify set settings_staged=1 for machine_id={$machine_id} (stripped={$mac_stripped})");
 			}
 			if (!empty($unit_id) && $unit_id !== $machine_id) {
 				$wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
