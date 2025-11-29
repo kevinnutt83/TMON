@@ -45,9 +45,21 @@ if (!function_exists('tmon_admin_prune_pending_queue')) {
 }
 
 // Updated enqueue helper: fill requested_by_user + both site_url & wordpress_api_url, improved logging + pruning
+if (!function_exists('tmon_admin_normalize_mac')) {
+	function tmon_admin_normalize_mac($mac) {
+		if (!is_string($mac)) return '';
+		// strip non-hex characters and lowercase
+		$stripped = preg_replace('/[^0-9a-fA-F]/', '', $mac);
+		return strtolower($stripped);
+	}
+}
+
 if (!function_exists('tmon_admin_enqueue_provision')) {
 	function tmon_admin_enqueue_provision($key, $payload) {
-		$key = tmon_admin_normalize_key($key);
+		// Normalize primary key
+		$raw_key = (string)$key;
+		$key = tmon_admin_normalize_key($raw_key);
+
 		if (!$key) return false;
 		if (!is_array($payload)) $payload = (array)$payload;
 
@@ -76,17 +88,19 @@ if (!function_exists('tmon_admin_enqueue_provision')) {
 		$queue = get_option('tmon_admin_pending_provision', []);
 		if (!is_array($queue)) $queue = [];
 
-		// Always set for provided key
+		// Primary normalized enqueue
 		$queue[$key] = $payload;
 
-		// If payload includes both keys, also enqueue for the alternate key so device finds by either
-		if (!empty($payload['machine_id'])) {
-			$queue[$payload['machine_id']] = $payload;
-			error_log("tmon-admin: enqueue_provision (mirror) key={$payload['machine_id']} by={$payload['requested_by_user']}");
-		}
+		// Also mirror to unit_id key (if present) and stripped mac key variants
 		if (!empty($payload['unit_id'])) {
-			$queue[$payload['unit_id']] = $payload;
-			error_log("tmon-admin: enqueue_provision (mirror) key={$payload['unit_id']} by={$payload['requested_by_user']}");
+			$unit_key = tmon_admin_normalize_key($payload['unit_id']);
+			if ($unit_key && $unit_key !== $key) $queue[$unit_key] = $payload;
+		}
+		if (!empty($payload['machine_id'])) {
+			$machine_key = tmon_admin_normalize_key($payload['machine_id']);
+			if ($machine_key && $machine_key !== $key) $queue[$machine_key] = $payload;
+			$machine_stripped = tmon_admin_normalize_mac($payload['machine_id']);
+			if ($machine_stripped && $machine_stripped !== $machine_key && $machine_stripped !== $key) $queue[$machine_stripped] = $payload;
 		}
 
 		update_option('tmon_admin_pending_provision', $queue);
