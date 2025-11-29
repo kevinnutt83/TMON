@@ -3,6 +3,8 @@
 add_action('admin_init', function() {
     register_setting('tmon_admin_settings_group', 'tmon_admin_uc_key');
     register_setting('tmon_admin_settings_group', 'tmon_admin_hub_url');
+    register_setting('tmon_admin_settings_group', 'tmon_admin_queue_lifetime');
+    register_setting('tmon_admin_settings_group', 'tmon_admin_queue_max_per_site');
     add_settings_section('tmon_admin_main', 'Main Settings', function(){
         echo '<p>Configure cross-site integration and defaults for TMON Admin.</p>';
     }, 'tmon-admin-settings');
@@ -42,7 +44,20 @@ if (!function_exists('tmon_admin_settings_page')) {
 		submit_button('Purge by Unit ID', 'delete', 'submit', false);
 		echo '</form>';
 
-		// Additional settings markup may continue...
+		// Settings forms
+		echo '<h2>Provisioning Queue Settings</h2>';
+		echo '<form method="post" action="options.php">';
+		settings_fields('tmon_admin_settings_group');
+		do_settings_sections('tmon-admin-settings');
+		echo '<table class="form-table">';
+		$cur_lifetime = intval(get_option('tmon_admin_queue_lifetime', 3600));
+		$cur_max = intval(get_option('tmon_admin_queue_max_per_site', 10));
+		echo '<tr><th scope="row">Queue Lifetime (seconds)</th><td><input name="tmon_admin_queue_lifetime" type="number" class="small-text" value="'.esc_attr($cur_lifetime).'" /></td></tr>';
+		echo '<tr><th scope="row">Max Pending Per Site</th><td><input name="tmon_admin_queue_max_per_site" type="number" min="1" class="small-text" value="'.esc_attr($cur_max).'" /></td></tr>';
+		echo '</table>';
+		submit_button('Save Queue Settings');
+		echo '</form>';
+
 		echo '</div>';
 	}
 }

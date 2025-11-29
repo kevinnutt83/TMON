@@ -492,6 +492,14 @@ function tmon_admin_provisioning_page() {
         }
     }
 
+    // Add top-page notices for queued and queued-notified
+    if (isset($_GET['provision']) && $_GET['provision'] === 'queued') {
+        echo '<div class="updated inline"><p>Device provisioning queued; devices will receive on next check-in.</p></div>';
+    }
+    if (isset($_GET['provision']) && $_GET['provision'] === 'queued-notified') {
+        echo '<div class="updated inline"><p>Device provisioning queued and UC notified (push attempt made).</p></div>';
+    }
+
     // Render UI
     echo '<div class="wrap tmon-admin"><h1>Provisioning</h1>';
     // Standalone refresh known IDs form (outside of create form to avoid nested forms)
@@ -1093,6 +1101,7 @@ add_action('admin_init', function(){
         $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
         if ($unit_id) {
             $wpdb->delete($wpdb->prefix.'tmon_provisioned_devices', ['unit_id'=>$unit_id]);
+           
             $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->prefix}tmon_claim_requests WHERE unit_id=%s", $unit_id));
             if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $wpdb->prefix.'tmon_devices'))) {
                 $wpdb->delete($wpdb->prefix.'tmon_devices', ['unit_id'=>$unit_id]);
