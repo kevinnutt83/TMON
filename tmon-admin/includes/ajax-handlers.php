@@ -186,9 +186,11 @@ if (!function_exists('tmon_admin_admin_post_queue_and_notify')) {
 		// Ensure payload retains identity keys used by queue detection
 		$payload['unit_id'] = $unit_id;
 		$payload['machine_id'] = $machine_id;
+		// compute normalized values for payload
+		$payload['unit_id_norm'] = tmon_admin_normalize_key($unit_id);
+		$payload['machine_id_norm'] = tmon_admin_normalize_mac($machine_id);
 
 		tmon_admin_enqueue_provision($key, $payload);
-		error_log("tmon-admin: admin_post_queue_and_notify enqueued for key={$key} payload_has_keys=" . (isset($payload['unit_id'])? '1':'0') . "/" . (isset($payload['machine_id'])? '1':'0'));
 
 		$notified = false;
 		if (!empty($payload['site_url'])) {
@@ -196,40 +198,36 @@ if (!function_exists('tmon_admin_admin_post_queue_and_notify')) {
 		}
 
 		if ($notified) {
-			// mirror and mark staged, similar to save_provision logic
-			if (!empty($machine_id)) {
-				// Support stripped machine forms when updating staged flag in DB (machine_id may be formatted)
-				$mac_stripped = tmon_admin_normalize_mac($machine_id);
-				if ($mac_stripped) {
-					$wpdb->query(
-						$wpdb->prepare(
-							"UPDATE {$prov_table} SET settings_staged = 1, updated_at = %s WHERE LOWER(machine_id) = LOWER(%s) OR LOWER(REPLACE(REPLACE(REPLACE(machine_id,':',''),'-',''),' ','')) = %s",
-							current_time('mysql'),
-							$machine_id,
-							$mac_stripped
-						)
-					);
-				} else {
-					$wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
-				}
-				error_log("tmon-admin: queue_notify set settings_staged=1 for machine_id={$machine_id} (stripped={$mac_stripped})");
-			}
-			if (!empty($unit_id) && $unit_id !== $machine_id) {
-				$wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
-				error_log("tmon-admin: queue_notify set settings_staged=1 for unit_id={$unit_id}");
-			}
+			// Mark staged using normalized columns if possible
+			global $wpdb;
+			$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+			$mac_norm = $payload['machine_id_norm'] ?? '';
+			$unit_norm = $payload['unit_id_norm'] ?? '';
 
-			// mirror to tmon_devices
-			$dev_table = $wpdb->prefix . 'tmon_devices';
-			if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
-				$dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
-				$mirror = ['last_seen' => current_time('mysql')];
-				if (in_array('wordpress_api_url', $dev_cols) && !empty($payload['site_url'])) $mirror['wordpress_api_url'] = $payload['site_url'];
-				if (in_array('unit_name', $dev_cols) && !empty($payload['unit_name'])) $mirror['unit_name'] = $payload['unit_name'];
-				if (in_array('provisioned_at', $dev_cols)) $mirror['provisioned_at'] = current_time('mysql');
-				if (!empty($unit_id)) $wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]);
-				elseif (!empty($machine_id)) $wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]);
+			if (!empty($mac_norm)) {
+				$wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['machine_id_norm' => $mac_norm]);
+			} elseif (!empty($machine_id)) {
+				$wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
 			}
+			if (!empty($unit_norm) && $unit_norm !== $mac_norm) {
+				$wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['unit_id_norm' => $unit_norm]);
+			} elseif (!empty($unit_id) && $unit_id !== $machine_id) {
+				$wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
+			}
+			// debug log showing normalized marking
+			error_log("tmon-admin: queue_notify set settings_staged=1 for unit_norm={$unit_norm} machine_norm={$mac_norm} notified={$notified}");
+		}
+
+		// mirror to tmon_devices
+		$dev_table = $wpdb->prefix . 'tmon_devices';
+		if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+			$dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
+			$mirror = ['last_seen' => current_time('mysql')];
+			if (in_array('wordpress_api_url', $dev_cols) && !empty($payload['site_url'])) $mirror['wordpress_api_url'] = $payload['site_url'];
+			if (in_array('unit_name', $dev_cols) && !empty($payload['unit_name'])) $mirror['unit_name'] = $payload['unit_name'];
+			if (in_array('provisioned_at', $dev_cols)) $mirror['provisioned_at'] = current_time('mysql');
+			if (!empty($unit_id)) $wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]);
+			elseif (!empty($machine_id)) $wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]);
 		}
 
 		// audit
