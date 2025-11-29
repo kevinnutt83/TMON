@@ -64,14 +64,8 @@ if (!function_exists('tmon_admin_enqueue_provision')) {
 		if (!is_array($payload)) $payload = (array)$payload;
 
 		// Ensure unit_id/machine_id normalized in payload if present
-		if (!empty($payload['unit_id'])) {
-		    $payload['unit_id'] = tmon_admin_normalize_key($payload['unit_id']);
-		    $payload['unit_id_norm'] = tmon_admin_normalize_key($payload['unit_id']);
-		}
-		if (!empty($payload['machine_id'])) {
-		    $payload['machine_id'] = tmon_admin_normalize_key($payload['machine_id']);
-		    $payload['machine_id_norm'] = tmon_admin_normalize_mac($payload['machine_id']);
-		}
+		if (!empty($payload['unit_id'])) $payload['unit_id'] = tmon_admin_normalize_key($payload['unit_id']);
+		if (!empty($payload['machine_id'])) $payload['machine_id'] = tmon_admin_normalize_key($payload['machine_id']);
 
 		// Ensure we have requested_by_user
 		if (empty($payload['requested_by_user']) && function_exists('wp_get_current_user')) {
@@ -88,6 +82,10 @@ if (!function_exists('tmon_admin_enqueue_provision')) {
 			$payload['site_url'] = $payload['wordpress_api_url'];
 		}
 
+		// Compute normalized keys and persist on payload for robust matching
+		$payload['unit_id_norm'] = !empty($payload['unit_id']) ? tmon_admin_normalize_key($payload['unit_id']) : '';
+		$payload['machine_id_norm'] = !empty($payload['machine_id']) ? tmon_admin_normalize_mac($payload['machine_id']) : '';
+
 		// prune + per-site max enforcement (existing logic)
 		tmon_admin_prune_pending_queue();
 
@@ -97,22 +95,16 @@ if (!function_exists('tmon_admin_enqueue_provision')) {
 		// Primary normalized enqueue
 		$queue[$key] = $payload;
 
-		// Also mirror to unit_id key (if present) and stripped mac key variants and normalized keys
+		// Also mirror to unit_id key (if present) and stripped mac key variants
 		if (!empty($payload['unit_id'])) {
 			$unit_key = tmon_admin_normalize_key($payload['unit_id']);
 			if ($unit_key && $unit_key !== $key) $queue[$unit_key] = $payload;
-			// normalized unit key variant
-			$unit_key_norm = tmon_admin_normalize_key($payload['unit_id']);
-			if ($unit_key_norm && $unit_key_norm !== $key && $unit_key_norm !== $unit_key) $queue[$unit_key_norm] = $payload;
 		}
 		if (!empty($payload['machine_id'])) {
 			$machine_key = tmon_admin_normalize_key($payload['machine_id']);
 			if ($machine_key && $machine_key !== $key) $queue[$machine_key] = $payload;
 			$machine_stripped = tmon_admin_normalize_mac($payload['machine_id']);
 			if ($machine_stripped && $machine_stripped !== $machine_key && $machine_stripped !== $key) $queue[$machine_stripped] = $payload;
-			// normalized machine key variant
-			$machine_norm_key = $machine_stripped;
-			if ($machine_norm_key && $machine_norm_key !== $key) $queue[$machine_norm_key] = $payload;
 		}
 
 		update_option('tmon_admin_pending_provision', $queue);
@@ -584,11 +576,13 @@ if (!function_exists('tmon_admin_get_pending_provision')) {
 		$mac = tmon_admin_normalize_mac($key);
 		if ($mac && isset($queue[$mac])) return $queue[$mac];
 
-		// Search payloads for matching unit_id or machine_id (normalized)
+		// Search payloads for matching normalized unit/machine keys
 		foreach ($queue as $k => $v) {
-			$payload_mid = isset($v['machine_id']) ? tmon_admin_normalize_key($v['machine_id']) : '';
-			$payload_uid = isset($v['unit_id']) ? tmon_admin_normalize_key($v['unit_id']) : '';
-			if ($payload_mid === $key_norm || $payload_uid === $key_norm || $payload_mid === $mac) return $v;
+			$payload_mid_norm = isset($v['machine_id_norm']) ? $v['machine_id_norm'] : (isset($v['machine_id']) ? tmon_admin_normalize_mac($v['machine_id']) : '');
+			$payload_uid_norm = isset($v['unit_id_norm']) ? $v['unit_id_norm'] : (isset($v['unit_id']) ? tmon_admin_normalize_key($v['unit_id']) : '');
+			if ($payload_mid_norm === $key_norm || $payload_uid_norm === $key_norm || $payload_mid_norm === $mac) {
+				return $v;
+			}
 		}
 		return null;
 	}
@@ -606,10 +600,10 @@ if (!function_exists('tmon_admin_dequeue_provision')) {
 
 		foreach ($queue as $k => $v) {
 			$k_norm = tmon_admin_normalize_key($k);
-			$payload_mid = isset($v['machine_id']) ? tmon_admin_normalize_key($v['machine_id']) : '';
-			$payload_uid = isset($v['unit_id']) ? tmon_admin_normalize_key($v['unit_id']) : '';
+			$payload_mid_norm = isset($v['machine_id_norm']) ? $v['machine_id_norm'] : (isset($v['machine_id']) ? tmon_admin_normalize_mac($v['machine_id']) : '');
+			$payload_uid_norm = isset($v['unit_id_norm']) ? $v['unit_id_norm'] : (isset($v['unit_id']) ? tmon_admin_normalize_key($v['unit_id']) : '');
 
-			$match = ($k_norm === $key_norm) || ($mac && $k_norm === $mac) || ($payload_mid === $key_norm) || ($payload_mid === $mac) || ($payload_uid === $key_norm);
+			$match = ($k_norm === $key_norm) || ($mac && $k_norm === $mac) || ($payload_mid_norm === $key_norm) || ($payload_mid_norm === $mac) || ($payload_uid_norm === $key_norm);
 			if ($match) {
 				$removed[$k] = $v;
 				unset($queue[$k]);
