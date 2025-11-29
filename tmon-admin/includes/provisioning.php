@@ -1799,6 +1799,48 @@ add_action('rest_api_init', function() {
 			$found = tmon_admin_find_queued_or_staged($machine_id, $unit_id);
 			error_log('tmon-admin: find_queued_or_staged found=' . var_export($found['found'], true) . ' matched_key=' . var_export($found['key'], true) . ' candidates=' . json_encode([$machine_id, $unit_id]) );
 
+			// If previous helper didn't find anything, attempt a direct DB search for any staged row
+			if (empty($found['found'])) {
+				$mac_norm  = tmon_admin_normalize_mac($machine_id);
+				$unit_norm = tmon_admin_normalize_key($unit_id);
+
+				// Build fallback clauses and args
+				$clauses = [];
+				$args = [];
+
+				if (!empty($mac_norm)) {
+					$clauses[] = "(machine_id_norm = %s)";
+					$args[] = $mac_norm;
+				}
+				if (!empty($unit_norm)) {
+					$clauses[] = "(unit_id_norm = %s)";
+					$args[] = $unit_norm;
+				}
+				if (!empty($machine_id)) {
+					$clauses[] = "(LOWER(machine_id) = LOWER(%s))";
+					$args[] = $machine_id;
+					$clauses[] = "(LOWER(REPLACE(REPLACE(REPLACE(machine_id,':',''),'-',''),' ','')) = LOWER(%s))";
+					$args[] = $mac_norm ?: $machine_id;
+				}
+				if (!empty($unit_id)) {
+					$clauses[] = "(LOWER(unit_id) = LOWER(%s))";
+					$args[] = $unit_id;
+				}
+
+				if (!empty($clauses)) {
+					$sql_fallback = "SELECT * FROM {$prov_table} WHERE settings_staged = 1 AND (" . implode(' OR ', $clauses) . ") LIMIT 1";
+					$row_fallback = $wpdb->get_row($wpdb->prepare($sql_fallback, ...$args), ARRAY_A);
+					if ($row_fallback && intval($row_fallback['settings_staged'] ?? 0) === 1) {
+						$found['found'] = 'db';
+						$found['key'] = $unit_norm ?: $mac_norm ?: strtolower($machine_id ?: $unit_id);
+						$found['row'] = $row_fallback;
+						error_log('tmon-admin: fallback db staged match: key=' . $found['key'] . ' unit=' . ($row_fallback['unit_id'] ?? '') . ' machine=' . ($row_fallback['machine_id'] ?? ''));
+					} else {
+						error_log('tmon-admin: fallback db staged search found nothing for candidates: ' . json_encode([$mac_norm, $unit_norm, $machine_id, $unit_id]));
+					}
+				}
+			}
+
 			if ($found['found'] === 'queue' && !empty($found['queued'])) {
 				$queued = $found['queued'];
 
@@ -1838,32 +1880,71 @@ add_action('rest_api_init', function() {
 
 			if ($found['found'] === 'db' && !empty($found['row'])) {
 				$row = $found['row'];
-				// build payload ...
+				$payload = [];
+
+				// Build payload from DB, ensuring it contains the identifying keys
+				if (!empty($row['site_url'])) $payload['site_url'] = $row['site_url'];
+				if (!empty($row['unit_name'])) $payload['unit_name'] = $row['unit_name'];
+				if (!empty($row['firmware'])) $payload['firmware'] = $row['firmware'];
+				if (!empty($row['firmware_url'])) $payload['firmware_url'] = $row['firmware_url'];
+				if (!empty($row['role'])) $payload['role'] = $row['role'];
+				if (!empty($row['plan'])) $payload['plan'] = $row['plan'];
+
+				// Try to decode notes and merge; preserve raw as notes_text if not JSON
+				if (!empty($row['notes'])) {
+					$maybe_json = json_decode($row['notes'], true);
+					if (is_array($maybe_json)) $payload = array_merge($payload, $maybe_json);
+					else $payload['notes_text'] = $row['notes'];
+				}
+
+				// Provide canonical wordpress_api_url if missing
+				if (!empty($payload['site_url']) && empty($payload['wordpress_api_url'])) $payload['wordpress_api_url'] = $payload['site_url'];
+
+				// Ensure the payload has machine_id and unit_id (DEVICE uses these for identity)
+				if (empty($payload['unit_id'])) $payload['unit_id'] = $row['unit_id'] ?? $unit_id;
+				if (empty($payload['machine_id'])) $payload['machine_id'] = $row['machine_id'] ?? $machine_id;
+
 				// Optionally clear DB staged flag unless forced
 				$force_flag = !empty($params['force']) && $params['force'] !== '0';
-				if (!$force_flag) {
-					// Prefer normalized clearing
-					$mac_norm_row = $row['machine_id_norm'] ?? '';
-					$unit_norm_row = $row['unit_id_norm'] ?? '';
-					if (!empty($mac_norm_row)) {
-						$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id_norm' => $mac_norm_row]);
-						error_log("tmon-admin: cleared settings_staged for machine_norm={$mac_norm_row}");
-					} else {
-						$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id' => $row['machine_id']]);
-						error_log("tmon-admin: cleared settings_staged for machine_raw={$row['machine_id']}");
-					}
-					if (!empty($unit_norm_row)) {
-						$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id_norm' => $unit_norm_row]);
-						error_log("tmon-admin: cleared settings_staged for unit_norm={$unit_norm_row}");
-					} else {
-						$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $row['unit_id']]);
-						error_log("tmon-admin: cleared settings_staged for unit_raw={$row['unit_id']}");
-					}
+                if (!$force_flag) {
+                    // Prefer normalized clearing where available
+                    if (!empty($row['machine_id_norm'])) {
+                        $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id_norm' => $row['machine_id_norm']]);
+                        error_log("tmon-admin: cleared settings_staged by machine_id_norm={$row['machine_id_norm']}");
+                    } else {
+                        $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id' => $row['machine_id']]);
+                        error_log("tmon-admin: cleared settings_staged by machine_id raw={$row['machine_id']}");
+                    }
+                    if (!empty($row['unit_id_norm'])) {
+                        $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id_norm' => $row['unit_id_norm']]);
+                        error_log("tmon-admin: cleared settings_staged by unit_id_norm={$row['unit_id_norm']}");
+                    } else {
+                        $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $row['unit_id']]);
+                        error_log("tmon-admin: cleared settings_staged by unit_id raw={$row['unit_id']}");
+                    }
+                }
+
+				// Mirror to device mirror and respond
+				$dev_table = $wpdb->prefix . 'tmon_devices';
+				if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+					$dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
+					$mirror = ['last_seen' => current_time('mysql')];
+					if (in_array('provisioned', $dev_cols)) $mirror['provisioned'] = 1; else $mirror['status'] = 'provisioned';
+					if (!empty($payload['site_url']) && in_array('site_url', $dev_cols)) $mirror['site_url'] = $payload['site_url'];
+					if (!empty($payload['site_url']) && in_array('wordpress_api_url', $dev_cols)) $mirror['wordpress_api_url'] = $payload['site_url'];
+					if (!empty($payload['unit_name']) && in_array('unit_name', $dev_cols)) $mirror['unit_name'] = $payload['unit_name'];
+					if (in_array('provisioned_at', $dev_cols)) $mirror['provisioned_at'] = current_time('mysql');
+					if ($unit_id) $wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]);
+					elseif ($machine_id) $wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]);
 				}
-				// ...existing mirror + return of payload...
+
+				error_log(sprintf('tmon-admin: DB staged payload delivered by matched_key=%s for unit=%s machine=%s', $found['key'], $row['unit_id'], $row['machine_id']));
+				// Ensure a non-empty payload is returned so device sees staged_exists true
+				return rest_ensure_response(['status' => 'ok', 'provisioned' => true, 'staged_exists' => true, 'provision' => $payload], 200);
 			}
 
-			// ...rest of handler unchanged...
+			// Nothing found, return empty response
+			return rest_ensure_response(['status' => 'ok', 'provisioned' => false, 'staged_exists' => false], 200);
 		}
 	]);
 });
