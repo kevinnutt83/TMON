@@ -198,24 +198,42 @@ if (!function_exists('tmon_admin_admin_post_queue_and_notify')) {
 		}
 
 		if ($notified) {
-			// Mark staged using normalized columns if possible
+			// mirror and mark staged, similar to save_provision logic
 			global $wpdb;
 			$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
-			$mac_norm = $payload['machine_id_norm'] ?? '';
-			$unit_norm = $payload['unit_id_norm'] ?? '';
+			$mac_norm = tmon_admin_normalize_mac($machine_id);
+			$unit_norm = tmon_admin_normalize_key($unit_id);
 
-			if (!empty($mac_norm)) {
-				$wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['machine_id_norm' => $mac_norm]);
-			} elseif (!empty($machine_id)) {
-				$wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
+			if (!empty($machine_id)) {
+				// Update normalized columns in DB if they do not exist for the row
+				if ($mac_norm) {
+					// If a row exists with raw machine_id, ensure its normalized column is populated
+					$prov_row_id = $wpdb->get_var($wpdb->prepare("SELECT id FROM {$prov_table} WHERE machine_id=%s LIMIT 1", $machine_id));
+					if ($prov_row_id) {
+						$wpdb->update($prov_table, ['machine_id_norm' => $mac_norm], ['id' => intval($prov_row_id)]);
+						error_log("tmon-admin: ensured machine_id_norm set for prov_row id={$prov_row_id} machine_norm={$mac_norm}");
+					}
+					// mark staged by normalized column
+					$wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['machine_id_norm' => $mac_norm]);
+				} else {
+					$wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
+				}
+				error_log("tmon-admin: queue_notify set settings_staged=1 for machine_id={$machine_id} (stripped={$mac_norm})");
 			}
-			if (!empty($unit_norm) && $unit_norm !== $mac_norm) {
-				$wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['unit_id_norm' => $unit_norm]);
-			} elseif (!empty($unit_id) && $unit_id !== $machine_id) {
-				$wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
+			if (!empty($unit_id) && $unit_id !== $machine_id) {
+				// Ensure normalized column persisted
+				if ($unit_norm) {
+					$prov_row_id = $wpdb->get_var($wpdb->prepare("SELECT id FROM {$prov_table} WHERE unit_id=%s LIMIT 1", $unit_id));
+					if ($prov_row_id) {
+						$wpdb->update($prov_table, ['unit_id_norm' => $unit_norm], ['id' => intval($prov_row_id)]);
+						error_log("tmon-admin: ensured unit_id_norm set for prov_row id={$prov_row_id} unit_norm={$unit_norm}");
+					}
+					$wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['unit_id_norm' => $unit_norm]);
+				} else {
+					$wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
+				}
+				error_log("tmon-admin: queue_notify set settings_staged=1 for unit_id={$unit_id}");
 			}
-			// debug log showing normalized marking
-			error_log("tmon-admin: queue_notify set settings_staged=1 for unit_norm={$unit_norm} machine_norm={$mac_norm} notified={$notified}");
 		}
 
 		// mirror to tmon_devices

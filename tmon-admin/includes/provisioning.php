@@ -1699,77 +1699,81 @@ if (!function_exists('tmon_admin_normalize_mac')) {
 
 // Update tmon_admin_find_queued_or_staged to prefer normalized columns for DB match
 if (!function_exists('tmon_admin_find_queued_or_staged')) {
-	function tmon_admin_find_queued_or_staged($machine_id, $unit_id) {
-		global $wpdb;
-		$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
-		$result = ['found' => false, 'key' => null, 'queued' => null, 'row' => null];
+		function tmon_admin_find_queued_or_staged($machine_id, $unit_id) {
+			global $wpdb;
+			$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+			$result = ['found' => false, 'key' => null, 'queued' => null, 'row' => null];
 
-		// Normalize candidates
-		$candidates = [];
-		$machine_norm = '';
-		$unit_norm = '';
-		if (!empty($machine_id)) {
-			$machine_norm = tmon_admin_normalize_mac($machine_id); // stripped hex
-			$candidates[] = $machine_norm;
-			$candidates[] = tmon_admin_normalize_key($machine_id); // raw-normalized lower
-		}
-		if (!empty($unit_id)) {
-			$unit_norm = tmon_admin_normalize_key($unit_id);
-			$candidates[] = $unit_norm;
-		}
-		$candidates = array_values(array_unique(array_filter($candidates)));
-
-		// Check queue first (prefer machine variants)
-		foreach ($candidates as $k) {
-			if (!$k) continue;
-			$q = function_exists('tmon_admin_get_pending_provision') ? tmon_admin_get_pending_provision($k) : null;
-			if ($q) {
-				$result['found'] = 'queue';
-				$result['key'] = $k;
-				$result['queued'] = $q;
-				error_log(sprintf("tmon-admin: find_queued_or_staged -> queue match for key=%s", $k));
-				return $result;
+			// Normalize candidates
+			$candidates = [];
+			$machine_norm = '';
+			$unit_norm = '';
+			if (!empty($machine_id)) {
+				$machine_norm = tmon_admin_normalize_mac($machine_id); // stripped hex
+				$candidates[] = $machine_norm;
+				$candidates[] = tmon_admin_normalize_key($machine_id); // raw-normalized lower
 			}
-		}
-
-		// Search DB via normalized columns first (machine_id_norm/unit_id_norm)
-		foreach ($candidates as $k) {
-			if (!$k) continue;
-			// prefer normalized column matching (machine_id_norm / unit_id_norm)
-			$sql_norm = "SELECT * FROM {$prov_table} WHERE (machine_id_norm = %s OR unit_id_norm = %s) AND settings_staged = 1 LIMIT 1";
-			$row_norm = $wpdb->get_row($wpdb->prepare($sql_norm, $k, $k), ARRAY_A);
-			if ($row_norm && intval($row_norm['settings_staged'] ?? 0) === 1) {
-				$result['found'] = 'db';
-				$result['key'] = $k;
-				$result['row'] = $row_norm;
-				error_log(sprintf("tmon-admin: find_queued_or_staged -> db staged match (norm) candidate=%s (unit=%s machine=%s staged=%d)",
-					$k, $row_norm['unit_id'] ?? '', $row_norm['machine_id'] ?? '', intval($row_norm['settings_staged'] ?? 0)));
-				return $result;
+			if (!empty($unit_id)) {
+				$unit_norm = tmon_admin_normalize_key($unit_id);
+				$candidates[] = $unit_norm;
 			}
-		}
+			$candidates = array_values(array_unique(array_filter($candidates)));
 
-		// Fallback: legacy matching via raw machine_id/unit_id and stripped REPLACE() matching
-		if ($machine_id || $unit_id) {
+			// Debug: show candidates tried (normalized)
+			error_log('tmon-admin: find_queued_or_staged candidates=' . implode(',', $candidates));
+
+			// Check queue first (prefer machine variants)
 			foreach ($candidates as $k) {
 				if (!$k) continue;
-				$sql = "SELECT * FROM {$prov_table} WHERE (LOWER(machine_id)=LOWER(%s) OR LOWER(REPLACE(REPLACE(REPLACE(machine_id,':',''),'-',''),' ','')) = LOWER(%s)) OR (LOWER(unit_id)=LOWER(%s)) AND settings_staged=1 LIMIT 1";
-				$row = $wpdb->get_row($wpdb->prepare($sql, $k, $k, $k), ARRAY_A);
-				if ($row && intval($row['settings_staged'] ?? 0) === 1) {
-					$result['found'] = 'db';
+				$q = function_exists('tmon_admin_get_pending_provision') ? tmon_admin_get_pending_provision($k) : null;
+				if ($q) {
+					$result['found'] = 'queue';
 					$result['key'] = $k;
-					$result['row'] = $row;
-					error_log(sprintf("tmon-admin: find_queued_or_staged -> db staged match (legacy) candidate=%s (unit=%s machine=%s staged=%d)",
-						$k, $row['unit_id'] ?? '', $row['machine_id'] ?? '', intval($row['settings_staged'] ?? 0)));
+					$result['queued'] = $q;
+					error_log(sprintf("tmon-admin: find_queued_or_staged -> queue match for key=%s", $k));
 					return $result;
 				}
 			}
+
+			// Search DB via normalized columns first (machine_id_norm/unit_id_norm)
+			foreach ($candidates as $k) {
+				if (!$k) continue;
+				// prefer normalized column matching (machine_id_norm / unit_id_norm)
+				$sql_norm = "SELECT * FROM {$prov_table} WHERE (machine_id_norm = %s OR unit_id_norm = %s) AND settings_staged = 1 LIMIT 1";
+				$row_norm = $wpdb->get_row($wpdb->prepare($sql_norm, $k, $k), ARRAY_A);
+				if ($row_norm && intval($row_norm['settings_staged'] ?? 0) === 1) {
+					$result['found'] = 'db';
+					$result['key'] = $k;
+					$result['row'] = $row_norm;
+					error_log(sprintf("tmon-admin: find_queued_or_staged -> db staged match (norm) candidate=%s (unit=%s machine=%s staged=%d)",
+						$k, $row_norm['unit_id'] ?? '', $row_norm['machine_id'] ?? '', intval($row_norm['settings_staged'] ?? 0)));
+					return $result;
+				}
+			}
+
+			// Fallback: legacy matching via raw machine_id/unit_id and stripped REPLACE() matching
+			if ($machine_id || $unit_id) {
+				foreach ($candidates as $k) {
+					if (!$k) continue;
+					// FIX: ensure settings_staged applies to the entire OR block
+					$sql = "SELECT * FROM {$prov_table} WHERE ((LOWER(machine_id)=LOWER(%s) OR LOWER(REPLACE(REPLACE(REPLACE(machine_id,':',''),'-',''),' ','')) = LOWER(%s)) OR (LOWER(unit_id)=LOWER(%s))) AND settings_staged = 1 LIMIT 1";
+					$row = $wpdb->get_row($wpdb->prepare($sql, $k, $k, $k), ARRAY_A);
+					if ($row && intval($row['settings_staged'] ?? 0) === 1) {
+						$result['found'] = 'db';
+						$result['key'] = $k;
+						$result['row'] = $row;
+						error_log(sprintf("tmon-admin: find_queued_or_staged -> db staged match (legacy) candidate=%s (unit=%s machine=%s staged=%d)",
+							$k, $row['unit_id'] ?? '', $row['machine_id'] ?? '', intval($row['settings_staged'] ?? 0)));
+						return $result;
+					}
+				}
+			}
+
+			return $result;
 		}
-
-		return $result;
 	}
-}
 
-// Use normalized columns to clear staged flags in REST route
+// In the rest_api_init handler: log normalized candidates & DB clearance details
 add_action('rest_api_init', function() {
 	register_rest_route('tmon-admin/v1', '/device/check-in', [
 		'methods'  => WP_REST_Server::CREATABLE,
@@ -1783,42 +1787,70 @@ add_action('rest_api_init', function() {
 			$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
 
 			$found = tmon_admin_find_queued_or_staged($machine_id, $unit_id);
+			error_log('tmon-admin: find_queued_or_staged found=' . var_export($found['found'], true) . ' matched_key=' . var_export($found['key'], true) . ' candidates=' . json_encode([$machine_id, $unit_id]) );
 
 			if ($found['found'] === 'queue' && !empty($found['queued'])) {
 				$queued = $found['queued'];
-				// merge from DB row if needed (existing code)
-				// clear staged by normalized columns if possible
-				$mac_norm = tmon_admin_normalize_mac($machine_id);
-				$unit_norm = tmon_admin_normalize_key($unit_id);
-				if (!empty($mac_norm)) {
-					$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id_norm' => $mac_norm]);
-				} else {
-					$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
+
+				// Dequeue the matched key and clear DB staged flags
+				tmon_admin_dequeue_provision($found['key']);
+				if (!empty($machine_id)) {
+					$mac_stripped = tmon_admin_normalize_mac($machine_id);
+					if ($mac_stripped) {
+						$wpdb->query(
+							$wpdb->prepare(
+								"UPDATE {$prov_table} SET settings_staged = 0, updated_at = %s WHERE LOWER(machine_id_norm) = LOWER(%s) OR LOWER(machine_id) = LOWER(%s) OR LOWER(REPLACE(REPLACE(REPLACE(machine_id,':',''),'-',''),' ','')) = %s",
+								current_time('mysql'),
+								$mac_stripped,
+								$machine_id,
+								$mac_stripped
+							)
+						);
+						error_log("tmon-admin: cleared settings_staged by machine_id_norm={$mac_stripped}");
+					} else {
+						$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
+						error_log("tmon-admin: cleared settings_staged by machine_id raw={$machine_id}");
+					}
 				}
-				if (!empty($unit_norm)) {
-					$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id_norm' => $unit_norm]);
-				} else {
-					$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
+				if (!empty($unit_id)) {
+					$unit_norm = tmon_admin_normalize_key($unit_id);
+					if (!empty($unit_norm)) {
+						$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id_norm' => $unit_norm]);
+						error_log("tmon-admin: cleared settings_staged by unit_id_norm={$unit_norm}");
+					} else {
+						$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
+						error_log("tmon-admin: cleared settings_staged by unit_id raw={$unit_id}");
+					}
 				}
-				// ...return queue payload...
+				// debug log
+				error_log('tmon-admin: queued payload delivered for matched_key=' . $found['key'] . ' unit=' . ($queued['unit_id'] ?? '') . ' machine=' . ($queued['machine_id'] ?? '') . ' site=' . ($queued['site_url'] ?? '') . ' wp_api=' . ($queued['wordpress_api_url'] ?? ''));
 			}
 
-			// DB branch: clear using normalized columns if available
 			if ($found['found'] === 'db' && !empty($found['row'])) {
 				$row = $found['row'];
-				$mac_norm_row = $row['machine_id_norm'] ?? '';
-				$unit_norm_row = $row['unit_id_norm'] ?? '';
-				if (!empty($mac_norm_row)) {
-					$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id_norm' => $mac_norm_row]);
-				} elseif (!empty($row['machine_id'])) {
-					$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id' => $row['machine_id']]);
+				// build payload ...
+				// Optionally clear DB staged flag unless forced
+				$force_flag = !empty($params['force']) && $params['force'] !== '0';
+				if (!$force_flag) {
+					// Prefer normalized clearing
+					$mac_norm_row = $row['machine_id_norm'] ?? '';
+					$unit_norm_row = $row['unit_id_norm'] ?? '';
+					if (!empty($mac_norm_row)) {
+						$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id_norm' => $mac_norm_row]);
+						error_log("tmon-admin: cleared settings_staged for machine_norm={$mac_norm_row}");
+					} else {
+						$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id' => $row['machine_id']]);
+						error_log("tmon-admin: cleared settings_staged for machine_raw={$row['machine_id']}");
+					}
+					if (!empty($unit_norm_row)) {
+						$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id_norm' => $unit_norm_row]);
+						error_log("tmon-admin: cleared settings_staged for unit_norm={$unit_norm_row}");
+					} else {
+						$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $row['unit_id']]);
+						error_log("tmon-admin: cleared settings_staged for unit_raw={$row['unit_id']}");
+					}
 				}
-				if (!empty($unit_norm_row)) {
-					$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id_norm' => $unit_norm_row]);
-				} elseif (!empty($row['unit_id'])) {
-					$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $row['unit_id']]);
-				}
-				// ...return DB payload...
+				// ...existing mirror + return of payload...
 			}
 
 			// ...rest of handler unchanged...
