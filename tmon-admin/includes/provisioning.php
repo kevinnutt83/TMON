@@ -1802,32 +1802,70 @@ add_action('rest_api_init', function() {
 			// FALLBACK: If helper didn't find anything, scan the pending queue for a usable payload
 			if (empty($found['found'])) {
 				$queue = get_option('tmon_admin_pending_provision', []);
-				if (is_array($queue) && count($queue)) {
-					$mac_norm = tmon_admin_normalize_mac($machine_id);
-					$unit_norm = tmon_admin_normalize_key($unit_id);
-					foreach ($queue as $qkey => $qp) {
-						// compute canonical norms from payload if present
+				// Debug: report queue keys so we can see what keys exist at check-in time
+				if (is_array($queue)) {
+					error_log('tmon-admin: pending queue keys at check-in: ' . implode(',', array_keys($queue)));
+				} else {
+					error_log('tmon-admin: pending queue empty or not array');
+				}
+
+				// Try direct queue lookup by common key variants: raw machine, stripped machine, raw unit, stripped unit
+				$machine_norm = tmon_admin_normalize_mac($machine_id);
+				$unit_norm = tmon_admin_normalize_key($unit_id);
+				$maybe_keys = [
+					$machine_id ?? '',
+					$machine_norm ?? '',
+					$unit_id ?? '',
+					$unit_norm ?? ''
+				];
+				$maybe_keys = array_values(array_unique(array_filter($maybe_keys)));
+
+				foreach ($maybe_keys as $qk) {
+					if (!$qk) continue;
+					$queueVal = is_array($queue) && isset($queue[$qk]) ? $queue[$qk] : null;
+					if ($queueVal) {
+						$found['found'] = 'queue';
+						$found['key'] = $qk;
+						$found['queued'] = $queueVal;
+						error_log("tmon-admin: queue fallback exact match for key={$qk} (queued)");
+						break;
+					}
+				}
+
+				// If still unmatched, attempt payload-based matches where queued payload contains matching unit/machine
+				if (empty($found['found']) && is_array($queue)) {
+					foreach ($queue as $qk => $qp) {
 						$qp_mac_norm  = isset($qp['machine_id_norm']) ? $qp['machine_id_norm'] : (isset($qp['machine_id']) ? tmon_admin_normalize_mac($qp['machine_id']) : '');
-						$qp_unit_norm = isset($qp['unit_id_norm'])    ? $qp['unit_id_norm']    : (isset($qp['unit_id'])    ? tmon_admin_normalize_key($qp['unit_id']) : '');
-
-						// match by normalized forms or raw values
-						$match = false;
-						if (!empty($mac_norm) && $qp_mac_norm === $mac_norm) $match = true;
-						if (!$match && !empty($unit_norm) && $qp_unit_norm === $unit_norm) $match = true;
-						if (!$match && !empty($machine_id) && isset($qp['machine_id']) && strcasecmp($qp['machine_id'], $machine_id) === 0) $match = true;
-						if (!$match && !empty($unit_id) && isset($qp['unit_id']) && strcasecmp($qp['unit_id'], $unit_id) === 0) $match = true;
-
-						if ($match) {
-							// Found queue-provisioned payload that matches the device
+						$qp_unit_norm = isset($qp['unit_id_norm'])   ? $qp['unit_id_norm']   : (isset($qp['unit_id']) ? tmon_admin_normalize_key($qp['unit_id']) : '');
+						if (!empty($machine_norm) && $qp_mac_norm === $machine_norm) {
 							$found['found'] = 'queue';
-							$found['key'] = $qkey;
+							$found['key'] = $qk;
 							$found['queued'] = $qp;
-							error_log(sprintf('tmon-admin: queue fallback match for key=%s matched_qkey=%s', $qkey, $qkey));
+							error_log("tmon-admin: queue fallback payload match by mac_norm={$machine_norm} queue_key={$qk}");
+							break;
+						}
+						if (!empty($unit_norm) && $qp_unit_norm === $unit_norm) {
+							$found['found'] = 'queue';
+							$found['key'] = $qk;
+							$found['queued'] = $qp;
+							error_log("tmon-admin: queue fallback payload match by unit_norm={$unit_norm} queue_key={$qk}");
+							break;
+						}
+						if (!empty($machine_id) && isset($qp['machine_id']) && strcasecmp($qp['machine_id'], $machine_id) === 0) {
+							$found['found'] = 'queue';
+							$found['key'] = $qk;
+							$found['queued'] = $qp;
+							error_log("tmon-admin: queue fallback payload match by machine raw={$machine_id} queue_key={$qk}");
+							break;
+						}
+						if (!empty($unit_id) && isset($qp['unit_id']) && strcasecmp($qp['unit_id'], $unit_id) === 0) {
+							$found['found'] = 'queue';
+							$found['key'] = $qk;
+							$found['queued'] = $qp;
+							error_log("tmon-admin: queue fallback payload match by unit raw={$unit_id} queue_key={$qk}");
 							break;
 						}
 					}
-				} else {
-					error_log('tmon-admin: queue fallback scan: no pending provision queue or empty');
 				}
 			}
 
