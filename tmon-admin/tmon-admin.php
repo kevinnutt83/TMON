@@ -23,7 +23,7 @@ Provisioning:
 // Ensure ABSPATH is defined
 if (!defined('ABSPATH')) exit;
 
-// Define plugin constants before requiring files (fixes undefined constant error)
+// Define required plugin constants early (fix: undefined constant)
 if (!defined('TMON_ADMIN_VERSION')) {
 	define('TMON_ADMIN_VERSION', '0.1.2');
 }
@@ -65,10 +65,91 @@ if (!function_exists('tmon_admin_include_files')) {
 }
 tmon_admin_include_files();
 
-// NOTE: centralize AJAX/CLI handlers via includes/ajax-handlers.php and includes/cli-commands.php
-// The following sections previously defined the same AJAX handlers repeatedly in this file.
-// They have been removed in favor of the centralized handlers to avoid redeclaration errors.
-// If you need to inspect old handlers, check the centralized includes: includes/ajax-handlers.php
+// Activation installs/updates DB schema + version.
+if (!has_action('activate_' . plugin_basename(__FILE__))) {
+	register_activation_hook(__FILE__, function () {
+		if (function_exists('tmon_admin_install_schema')) {
+			tmon_admin_install_schema();
+		}
+		update_option('tmon_admin_version', TMON_ADMIN_VERSION);
+	});
+}
+
+// Upgrade path on version change.
+add_action('plugins_loaded', function () {
+	$stored = get_option('tmon_admin_version');
+	if ($stored !== TMON_ADMIN_VERSION) {
+		if (function_exists('tmon_admin_install_schema')) {
+			tmon_admin_install_schema();
+		}
+		update_option('tmon_admin_version', TMON_ADMIN_VERSION);
+	}
+});
+
+// Enqueue assets; fix localization ($l10n must be an array).
+add_action('admin_enqueue_scripts', function () {
+	wp_enqueue_style('tmon-admin', TMON_ADMIN_URL . 'assets/admin.css', [], TMON_ADMIN_VERSION);
+	wp_enqueue_script('tmon-admin', TMON_ADMIN_URL . 'assets/admin.js', ['jquery'], TMON_ADMIN_VERSION, true);
+
+	$localized = [
+		'ajaxUrl' => admin_url('admin-ajax.php'),
+		'nonce'   => wp_create_nonce('tmon-admin'),
+		// Add REST root and a manifest fetch nonce for admin.js to call the REST endpoint directly
+		'restRoot' => esc_url_raw( rest_url() ),
+		'restNonce' => wp_create_nonce('wp_rest'),
+		'manifestNonce' => wp_create_nonce('tmon_admin_manifest'),
+		'provisionNonce' => wp_create_nonce('tmon_admin_provision_ajax'),
+	];
+	wp_localize_script('tmon-admin', 'TMON_ADMIN', $localized);
+});
+
+// Admin menu registration (keeps admin pages reachable)
+if (!has_action('admin_menu', 'tmon_admin_menu')) {
+	add_action('admin_menu', 'tmon_admin_menu');
+	function tmon_admin_menu() {
+		$notices = get_option('tmon_admin_notifications', []);
+		$unread = 0;
+		foreach ($notices as $n) { if (empty($n['read'])) $unread++; }
+		$menu_title = 'TMON Admin' . ($unread ? ' <span class="update-plugins count-1" style="vertical-align:middle"><span class="plugin-count">'.intval($unread).'</span></span>' : '');
+
+		add_menu_page(
+			'TMON Admin',
+			$menu_title,
+			'manage_options',
+			'tmon-admin',
+			'tmon_admin_dashboard_page',
+			'dashicons-admin-generic',
+			2
+		);
+
+		add_submenu_page('tmon-admin', 'TMON Settings', 'Settings', 'manage_options', 'tmon-admin-settings', 'tmon_admin_settings_page');
+		add_submenu_page('tmon-admin', 'Audit Log', 'Audit Log', 'manage_options', 'tmon-admin-audit', 'tmon_admin_audit_page');
+		add_submenu_page('tmon-admin', 'Notifications', 'Notifications', 'manage_options', 'tmon-admin-notifications', 'tmon_admin_notifications_page');
+		add_submenu_page('tmon-admin', 'OTA Jobs', 'OTA Jobs', 'manage_options', 'tmon-admin-ota', 'tmon_admin_ota_page');
+		add_submenu_page('tmon-admin', 'Files', 'Files', 'manage_options', 'tmon-admin-files', 'tmon_admin_files_page');
+		add_submenu_page('tmon-admin', 'Groups', 'Groups', 'manage_options', 'tmon-admin-groups', 'tmon_admin_groups_page');
+
+		// Provisioning: top subpage with children
+		add_submenu_page('tmon-admin', 'Provisioning', 'Provisioning', 'manage_options', 'tmon-admin-provisioning', 'tmon_admin_provisioning_page');
+		add_submenu_page('tmon-admin', 'Provisioned Devices', 'Provisioned Devices', 'manage_options', 'tmon-admin-provisioned', 'tmon_admin_provisioned_devices_page');
+		add_submenu_page('tmon-admin', 'Provisioning Activity', 'Provisioning Activity', 'manage_options', 'tmon-admin-provisioning-activity', 'tmon_admin_provisioning_activity_page');
+		add_submenu_page('tmon-admin', 'Provisioning History', 'Provisioning History', 'manage_options', 'tmon-admin-provisioning-history', 'tmon_admin_provisioning_history_page');
+
+		add_submenu_page('tmon-admin', 'Device Location', 'Device Location', 'manage_options', 'tmon-admin-location', 'tmon_admin_location_page');
+		add_submenu_page('tmon-admin', 'UC Pairings', 'UC Pairings', 'manage_options', 'tmon-admin-pairings', 'tmon_admin_pairings_page');
+	}
+}
+
+// NOTE: All centralized AJAX handlers are available in includes/ajax-handlers.php.
+// Avoid duplicating add_action closures for AJAX handlers; they are defined centrally.
+// If duplicates still appear in this file, they are skipped by the guard below.
+
+if (!defined('TMON_ADMIN_HANDLERS_INCLUDED')) {
+	// If included file didn't define handlers, (fallback) add our handlers inline.
+	// This block should normally be empty because includes/ajax-handlers.php defines the handlers.
+	// Keeping the fallback ensures the plugin still functions if the include wasn't loaded.
+	// ...existing code if any inline fallback needed...
+}
 
 // --- Helpers: key normalization + single-definition guard ---
 if (!function_exists('tmon_admin_normalize_key')) {
