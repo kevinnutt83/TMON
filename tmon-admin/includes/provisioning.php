@@ -569,7 +569,7 @@ function tmon_admin_provisioning_page() {
         if ($claim_id && in_array($action, ['approve_claim','deny_claim'], true)) {
             $claims_table = $wpdb->prefix . 'tmon_claim_requests';
             $claim_row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $claims_table WHERE id=%d", $claim_id), ARRAY_A);
-            if $claim_row) {
+            if ($claim_row) {
                 if ($action === 'approve_claim') {
                     // Ensure provisioned entry exists
                     $prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
@@ -1031,7 +1031,7 @@ EOT;
             echo '<input type="hidden" name="action" value="approve_claim" />';
             echo '<input type="hidden" name="claim_id" value="'.intval($c['id']).'" />';
             submit_button('Approve', 'primary', '', false);
-                                  echo '</form>';
+            echo '</form>';
             echo '<form method="post" style="display:inline-block;">';
             wp_nonce_field('tmon_admin_claim');
             echo '<input type="hidden" name="action" value="deny_claim" />';
