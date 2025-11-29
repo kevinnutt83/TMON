@@ -1062,7 +1062,7 @@ EOT;
                 console.error('GitHub manifest fetch failed (POST):', resp.status, text);
                 // fallback to GET attempt
                 return fallbackGet(row, params);
-                       }
+                                             }
             const json = await resp.json().catch(()=>null);
             if (!json || !json.success) {
                 console.warn('GitHub manifest returned no data or not success:', json);
@@ -1140,6 +1140,107 @@ EOT;
 })();
 </script>
 EOT;
+
+    // --- Diagnostic form handler (admin-side) ---
+    if ($_SERVER['REQUEST_METHOD'] === 'POST'
+        && function_exists('tmon_admin_verify_nonce')
+        && tmon_admin_verify_nonce('tmon_admin_provision_diag')) {
+
+        $diag_key = sanitize_text_field($_POST['diag_key'] ?? '');
+        if ($diag_key) {
+            $k = function_exists('tmon_admin_normalize_key') ? tmon_admin_normalize_key($diag_key) : strtolower(trim($diag_key));
+            $queued = function_exists('tmon_admin_get_pending_provision') ? tmon_admin_get_pending_provision($k) : null;
+
+            // DB lookup (case-insensitive) for both unit_id and machine_id
+            $prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+            $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE LOWER(machine_id)=LOWER(%s) OR LOWER(unit_id)=LOWER(%s) LIMIT 1", $k, $k), ARRAY_A);
+            $staged = intval($row['settings_staged'] ?? 0) === 1;
+
+            // Last few history entries for the key
+            $history = get_option('tmon_admin_provision_history', []);
+            $matching_history = [];
+            if (is_array($history)) {
+                foreach (array_reverse($history) as $h) {
+                    if (isset($h['unit_id']) && (strcasecmp($h['unit_id'], $k) === 0)) {
+                        $matching_history[] = $h; if (count($matching_history) >= 10) break;
+                    }
+                    if (isset($h['machine_id']) && (strcasecmp($h['machine_id'], $k) === 0)) {
+                        $matching_history[] = $h; if (count($matching_history) >= 10) break;
+                    }
+                }
+            }
+            // Render diagnostics immediately above the page; admin page will display this (escaped)
+            echo '<div class="notice notice-info inline"><p><strong>Provisioning Diagnostic:</strong></p>';
+            echo '<pre style="max-width:100%;white-space:pre-wrap;">' . esc_html( wp_json_encode([
+                'key' => $k, 'queued' => $queued, 'db_row' => $row ? $row : null, 'staged_db' => $staged, 'history' => $matching_history
+            ], JSON_PRETTY_PRINT) ) . '</pre></div>';
+            error_log("tmon-admin: admin diagnostic for key={$k} (queued=" . ($queued? '1' : '0') . " staged_db=" . ($staged ? '1':'0') . ")");
+        } else {
+            echo '<div class="notice notice-warning inline"><p>Provisioning Diagnostic: No key provided.</p></div>';
+        }
+    }
+
+    // Diagnostic & Debug section
+    echo '<h2>Diagnostic & Debug</h2>';
+    echo '<p>Enter a Unit ID or Machine ID and click Diagnose to inspect queued payloads, DB staging flag, and recent provisioning history for that key.</p>';
+    echo '<form method="post" style="margin-bottom:12px">';
+    wp_nonce_field('tmon_admin_provision_diag');
+    echo '<input type="hidden" name="action" value="diagnose_provision" />';
+    echo '<input type="text" name="diag_key" placeholder="unit id or machine id" class="regular-text" />';
+    submit_button('Diagnose Provisoning Key', 'secondary', 'diagnose', false);
+    echo '</form>';
+
+    // --- Debug: REST API call history ---
+    echo '<h2>API Call History</h2>';
+    $history = get_option('tmon_admin_api_history', []);
+    if (!is_array($history)) $history = [];
+    if (count($history) === 0) {
+        echo '<p class="description">No recent API calls found. Trigger a check-in or other actions to log API call history.</p>';
+    } else {
+        echo '<table class="wp-list-table widefat"><thead><tr><th>Time</th><th>Type</th><th>Key</th><th>Payload</th><th>Status</th><th>Response</th></tr></thead><tbody>';
+        foreach (array_reverse($history) as $h) {
+            $time = esc_html($h['time'] ?? '');
+            $type = esc_html($h['type'] ?? '');
+            $key = esc_html($h['key'] ?? '');
+            $payload = esc_html(wp_json_encode($h['payload'] ?? [], JSON_PRETTY_PRINT));
+            $status = esc_html($h['status'] ?? '');
+            $response = esc_html($h['response'] ?? '');
+            echo "<tr>
+                    <td>$time</td>
+                    <td>$type</td>
+                    <td>$key</td>
+                    <td><pre>$payload</pre></td>
+                    <td>$status</td>
+                    <td><pre>$response</pre></td>
+                  </tr>";
+        }
+        echo '</tbody></table>';
+    }
+
+    // --- Debug: Recent Provisioning History ---
+    echo '<h2>Recent Provisioning History</h2>';
+    $prov_history = get_option('tmon_admin_provision_history', []);
+    if (!is_array($prov_history)) $prov_history = [];
+    if (count($prov_history) === 0) {
+        echo '<p class="description">No recent provisioning history found. Provision devices to generate history records.</p>';
+    } else {
+        echo '<table class="wp-list-table widefat"><thead><tr><th>Time</th><th>Unit ID</th><th>Machine ID</th><th>Status</th><th>Notes</th></tr></thead><tbody>';
+        foreach (array_reverse($prov_history) as $h) {
+            $time = esc_html($h['time'] ?? '');
+            $unit_id = esc_html($h['unit_id'] ?? '');
+            $machine_id = esc_html($h['machine_id'] ?? '');
+            $status = esc_html($h['status'] ?? '');
+            $notes = esc_html($h['notes'] ?? '');
+            echo "<tr>
+                    <td>$time</td>
+                    <td>$unit_id</td>
+                    <td>$machine_id</td>
+                    <td>$status</td>
+                    <td>$notes</td>
+                  </tr>";
+        }
+        echo '</tbody></table>';
+    }
 
     echo '</div>'; // end of provisioning page markup
 }
@@ -1662,7 +1763,7 @@ add_action('rest_api_init', function() {
 				$orSearch = [];
 				$paramsArr = [];
 				if ($machine_id) { $orSearch[] = "LOWER(machine_id)=LOWER(%s)"; $paramsArr[] = $machine_id; }
-				if ($unit_id) { $orSearch[] = "LOWER(unit_id)=LOWER(%s)"; $paramsArr[] = $unit_id; }
+				if ($unit_id)    { $orSearch[] = "LOWER(unit_id)=LOWER(%s)";    $paramsArr[] = $unit_id; }
 				if ($orSearch) {
 					$sql = "SELECT * FROM {$prov_table} WHERE " . implode(' OR ', $orSearch) . " LIMIT 1";
 					$row = $wpdb->get_row($wpdb->prepare($sql, ...$paramsArr), ARRAY_A);
@@ -1719,6 +1820,112 @@ add_action('rest_api_init', function() {
 			}
 			// no payload
 			return rest_ensure_response(['status' => 'ok', 'provisioned' => false, 'staged_exists' => false, 'provision' => null], 200);
+		}
+	]);
+});
+
+// --- PATCH: Debugging endpoint to preview check-in payload ---
+add_action('rest_api_init', function() {
+	register_rest_route('tmon-admin/v1', '/debug/preview-check-in', [
+		'methods' => ['GET','POST'],
+		'permission_callback' => function() { return current_user_can('manage_options'); },
+		'callback' => function( WP_REST_Request $request ) {
+			global $wpdb;
+			$params = $request->get_json_params() ?: $request->get_params();
+
+			$unit_id     = isset($params['unit_id']) ? sanitize_text_field($params['unit_id']) : '';
+			$machine_id  = isset($params['machine_id']) ? sanitize_text_field($params['machine_id']) : '';
+			$key         = $machine_id ?: $unit_id;
+			$force_flag  = !empty($params['force']) && $params['force'] !== '0';
+			$apply       = !empty($params['apply']) && $params['apply'] !== '0';
+
+			// Diagnostic response object
+			$resp = [
+				'request_key'  => $key,
+				'unit_id'      => $unit_id,
+				'machine_id'   => $machine_id,
+				'queued'       => null,
+				'db_row'       => null,
+				'staged_db'    => false,
+				'preview'      => null,
+				'actions'      => [],
+			];
+
+			// 1) queued check both keys
+			$queued = null;
+			if ($machine_id) $queued = tmon_admin_get_pending_provision($machine_id);
+			if (!$queued && $unit_id) $queued = tmon_admin_get_pending_provision($unit_id);
+			$resp['queued'] = $queued;
+			if ($queued) {
+				// Ensure parity keys
+				if (!empty($queued['site_url']) && empty($queued['wordpress_api_url'])) $queued['wordpress_api_url'] = $queued['site_url'];
+				if (!empty($queued['wordpress_api_url']) && empty($queued['site_url'])) $queued['site_url'] = $queued['wordpress_api_url'];
+				$resp['preview'] = $queued;
+				$resp['staged_db'] = false;
+
+				// Mutate only if apply=true
+				if ($apply) {
+					$queued_key = $machine_id ?: $unit_id;
+					tmon_admin_dequeue_provision($queued_key);
+					$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+					if (!empty($machine_id)) $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
+					if (!empty($unit_id)) $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
+					$resp['actions'][] = 'dequeued and cleared staged flags';
+				}
+				return rest_ensure_response($resp, 200);
+			}
+
+			// 2) fallback DB row
+			$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+			$row = null;
+			if ($machine_id) {
+				$row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE LOWER(machine_id)=LOWER(%s) LIMIT 1", $machine_id), ARRAY_A);
+			}
+			if (!$row && $unit_id) {
+				$row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE LOWER(unit_id)=LOWER(%s) LIMIT 1", $unit_id), ARRAY_A);
+			}
+			if (!$row && ($machine_id || $unit_id)) {
+				$orSearch = [];
+				$paramsArr = [];
+				if ($machine_id) { $orSearch[] = "LOWER(machine_id)=LOWER(%s)"; $paramsArr[] = $machine_id; }
+				if ($unit_id)    { $orSearch[] = "LOWER(unit_id)=LOWER(%s)";    $paramsArr[] = $unit_id; }
+				if ($orSearch) {
+					$sql = "SELECT * FROM {$prov_table} WHERE " . implode(' OR ', $orSearch) . " LIMIT 1";
+					$row = $wpdb->get_row($wpdb->prepare($sql, ...$paramsArr), ARRAY_A);
+				}
+			}
+
+			$resp['db_row'] = $row ?: null;
+			$staged_flag = intval($row['settings_staged'] ?? 0) === 1;
+			$resp['staged_db'] = $staged_flag;
+
+			if ($staged_flag) {
+				// Build preview payload but don't mutate unless apply=true
+				$payload = [];
+				if (!empty($row['site_url'])) $payload['site_url'] = $row['site_url'];
+				if (!empty($row['unit_name'])) $payload['unit_name'] = $row['unit_name'];
+				if (!empty($row['firmware'])) $payload['firmware'] = $row['firmware'];
+				if (!empty($row['firmware_url'])) $payload['firmware_url'] = $row['firmware_url'];
+				if (!empty($row['role'])) $payload['role'] = $row['role'];
+				if (!empty($row['plan'])) $payload['plan'] = $row['plan'];
+				if (!empty($row['notes'])) {
+					$maybe_json = json_decode($row['notes'], true);
+					if (is_array($maybe_json)) $payload = array_merge($payload, $maybe_json);
+					else $payload['notes_text'] = $row['notes'];
+				}
+				if (!empty($payload['site_url']) && empty($payload['wordpress_api_url'])) $payload['wordpress_api_url'] = $payload['site_url'];
+				$resp['preview'] = $payload;
+
+				if ($apply) {
+					$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $row['unit_id'], 'machine_id' => $row['machine_id']]);
+					$resp['actions'][] = 'cleared staged flags (apply=true)';
+				}
+			}
+
+			// Add a note about what we would do on a real check-in
+			$resp['explain'] = $apply ? 'apply mode: will perform dequeue/clear staged' : 'preview mode: no mutations';
+
+			return rest_ensure_response($resp, 200);
 		}
 	]);
 });
