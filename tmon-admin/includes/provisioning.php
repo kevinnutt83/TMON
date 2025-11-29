@@ -202,7 +202,7 @@ function tmon_admin_provisioning_page() {
                     if ($do_provision) {
                         // mark staged on DB entry
                         $row_id = $exists ?: $wpdb->insert_id;
-                        if ($row_id) {
+                        if $row_id) {
                             $wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['id' => intval($row_id)]);
                             error_log(sprintf("tmon-admin: set settings_staged=1 for prov_row id=%d unit_id=%s machine_id=%s user=%s", intval($row_id), esc_html($unit_id), esc_html($machine_id), wp_get_current_user()->user_login));
                         }
@@ -1621,23 +1621,36 @@ add_action('rest_api_init', function() {
 
 			error_log('tmon-admin: check-in key=' . $key . ' (' . ($machine_id ?: $unit_id) . ')');
 
-			// 1) Check queued option
-			$queued = tmon_admin_get_pending_provision($key);
+			// --- 1) Check queued option under both keys (machine first, then unit) ---
+			$queued = null;
+			if ($machine_id) {
+				$queued = tmon_admin_get_pending_provision($machine_id);
+				if ($queued) error_log("tmon-admin: found queued payload for machine_id={$machine_id}");
+			}
+			if (!$queued && $unit_id) {
+				$queued = tmon_admin_get_pending_provision($unit_id);
+				if ($queued) error_log("tmon-admin: found queued payload for unit_id={$unit_id}");
+			}
 			if ($queued) {
-				// Normalize both site_url and wordpress_api_url
+				// normalize site_url->wordpress_api_url parity
 				if (!empty($queued['site_url']) && empty($queued['wordpress_api_url'])) $queued['wordpress_api_url'] = $queued['site_url'];
 				if (!empty($queued['wordpress_api_url']) && empty($queued['site_url'])) $queued['site_url'] = $queued['wordpress_api_url'];
 
-				// Dequeue and clear staged flag if present in DB
-				tmon_admin_dequeue_provision($key);
+				// Dequeue by the actual key where we found it
+				$queued_key = (isset($queued['machine_id']) && $queued['machine_id'] === ($machine_id ?: '')) ? $machine_id : ($unit_id ?: $machine_id);
+				tmon_admin_dequeue_provision($queued_key ?: $key);
+
+				// Clear settings_staged if present in record
 				$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
 				if (!empty($machine_id)) {
 					$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
-				} elseif (!empty($unit_id)) {
+				}
+				if (!empty($unit_id)) {
 					$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
 				}
+				error_log("tmon-admin: queued payload delivered and staged flag cleared for keys machine={$machine_id} unit={$unit_id}");
 
-				// Mirror to device table
+				// Mirror to device mirror table if present
 				$dev_table = $wpdb->prefix . 'tmon_devices';
 				if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
 					$dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
@@ -1651,46 +1664,51 @@ add_action('rest_api_init', function() {
 					elseif ($machine_id) $wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]);
 				}
 
-				// Audit/log
 				do_action('tmon_admin_audit', 'device_provision_sent', sprintf('queue delivered key=%s', $key));
-				error_log(sprintf("tmon-admin: delivered queued provision for key=%s (requested_by=%s)", $key, $queued['requested_by_user'] ?? 'unknown'));
-
-				// Return staged_exists true and provision payload
 				return rest_ensure_response(['status' => 'ok', 'provisioned' => true, 'staged_exists' => true, 'provision' => $queued], 200);
 			}
 
-			// 2) fallback: DB row with settings_staged
+			// --- 2) Fallback: DB row with settings_staged; check both machine_id and unit_id for staged rows ---
 			$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
 			$row = null;
-			if ($machine_id)  $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE machine_id=%s LIMIT 1", $machine_id), ARRAY_A);
-			if (!$row && $unit_id) $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE unit_id=%s LIMIT 1", $unit_id), ARRAY_A);
+			if ($machine_id) {
+				$row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE machine_id=%s LIMIT 1", $machine_id), ARRAY_A);
+				if ($row) error_log("tmon-admin: found DB provision row for machine_id={$machine_id} (staged=" . intval($row['settings_staged'] ?? 0) . ')');
+			}
+			if (!$row && $unit_id) {
+				$row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE unit_id=%s LIMIT 1", $unit_id), ARRAY_A);
+				if ($row) error_log("tmon-admin: found DB provision row for unit_id={$unit_id} (staged=" . intval($row['settings_staged'] ?? 0) . ')');
+			}
 
 			if ($row) {
 				$staged_flag = intval($row['settings_staged'] ?? 0) === 1;
-				error_log(sprintf("tmon-admin: check-in found DB row for unit=%s machine=%s settings_staged=%d", $row['unit_id'] ?? '', $row['machine_id'] ?? '', intval($row['settings_staged'] ?? 0)));
+				error_log(sprintf('tmon-admin: DB row settings_staged=%d for unit=%s machine=%s', intval($row['settings_staged'] ?? 0), $row['unit_id'] ?? '', $row['machine_id'] ?? ''));
 				if ($staged_flag) {
 					$payload = [];
 					if (!empty($row['site_url'])) $payload['site_url'] = $row['site_url'];
 					if (!empty($row['unit_name'])) $payload['unit_name'] = $row['unit_name'];
 					if (!empty($row['firmware'])) $payload['firmware'] = $row['firmware'];
 					if (!empty($row['firmware_url'])) $payload['firmware_url'] = $row['firmware_url'];
+					if (!empty($row['role'])) $payload['role'] = $row['role'];
+					if (!empty($row['plan'])) $payload['plan'] = $row['plan'];
 					if (!empty($row['notes'])) {
 						$maybe_json = json_decode($row['notes'], true);
 						if (is_array($maybe_json)) $payload = array_merge($payload, $maybe_json);
 						else $payload['notes_text'] = $row['notes'];
 					}
+
 					// Ensure wordpress_api_url parity
 					if (!empty($payload['site_url']) && empty($payload['wordpress_api_url'])) $payload['wordpress_api_url'] = $payload['site_url'];
-					if (!empty($payload['wordpress_api_url']) && empty($payload['site_url'])) $payload['site_url'] = $payload['wordpress_api_url'];
+					if (empty($payload['site_url']) && !empty($payload['wordpress_api_url'])) $payload['site_url'] = $payload['wordpress_api_url'];
 
-					// Clear staged flag unless force is set by device
+					// Clear staged flag unless device forced a re-check (force param)
 					$force_flag = !empty($params['force']) && $params['force'] !== '0';
 					if (!$force_flag) {
 						$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $row['unit_id'], 'machine_id' => $row['machine_id']]);
-						error_log(sprintf("tmon-admin: cleared settings_staged for unit=%s machine=%s after delivering payload", $row['unit_id'], $row['machine_id']));
+						error_log(sprintf('tmon-admin: cleared settings_staged for unit=%s machine=%s after DB staged delivery', $row['unit_id'], $row['machine_id']));
 					}
 
-					// mirror to tmon_devices
+					// Mirror to tmon_devices (as before)
 					$dev_table = $wpdb->prefix . 'tmon_devices';
 					if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
 						$dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
@@ -1705,16 +1723,15 @@ add_action('rest_api_init', function() {
 					}
 
 					do_action('tmon_admin_audit', 'device_provision_sent', sprintf('unit_id=%s machine_id=%s site=%s', $row['unit_id'], $row['machine_id'], $row['site_url'] ?? ''));
-					error_log(sprintf("tmon-admin: delivered staged DB payload for unit=%s machine=%s (staged flag=%d)", $row['unit_id'], $row['machine_id'], intval($row['settings_staged'] ?? 0)));
 					return rest_ensure_response(['status' => 'ok', 'provisioned' => true, 'staged_exists' => true, 'provision' => $payload], 200);
-				} else {
-					// No settings staged for this DB row
-					return rest_ensure_response(['status' => 'ok', 'provisioned' => true, 'staged_exists' => false, 'provision' => null], 200);
 				}
+
+				// If DB row found but not staged
+				return rest_ensure_response(['status' => 'ok', 'provisioned' => true, 'staged_exists' => false, 'provision' => null], 200);
 			}
 
-			// Nothing to send at all
-			return rest_ensure_response(['status' => 'ok', 'provisioned' => false, 'staged_exists' => false], 200);
+			// No queued or staged row to send
+			return rest_ensure_response(['status' => 'ok', 'provisioned' => false, 'staged_exists' => false, 'provision' => null], 200);
 		}
 	]);
 });
