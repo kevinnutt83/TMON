@@ -105,7 +105,10 @@ if (!function_exists('tmon_admin_enqueue_provision')) {
 
 		update_option('tmon_admin_pending_provision', $queue);
 
+		// diagnostics: log count and keys
+		$keys = array_keys($queue);
 		error_log("tmon-admin: enqueue_provision key={$key} by={$payload['requested_by_user']} site=" . ($payload['site_url'] ?? '') . ' payload=' . wp_json_encode($payload));
+		error_log("tmon-admin: enqueue_provision current queue keys: " . implode(',', array_slice($keys,0,50)) . ' (count=' . count($keys) . ')');
 		return true;
 	}
 }
@@ -536,29 +539,26 @@ if (!function_exists('tmon_admin_ajax_manage_pending')) {
 }
 add_action('wp_ajax_tmon_admin_manage_pending', 'tmon_admin_ajax_manage_pending');
 
-// Mark that centralized handlers have been registered to prevent duplicate registration.
-if (!defined('TMON_ADMIN_HANDLERS_INCLUDED')) {
-	define('TMON_ADMIN_HANDLERS_INCLUDED', true);
-}
-
+// Ensure helpers to read & remove queue entries exist
 if (!function_exists('tmon_admin_get_pending_provision')) {
 	function tmon_admin_get_pending_provision($key) {
 		$key_norm = tmon_admin_normalize_key($key);
 		if (!$key_norm) return null;
 		$queue = get_option('tmon_admin_pending_provision', []);
 		if (!is_array($queue) || empty($queue)) return null;
-		// Direct hit first
+
+		// Direct match (normalized)
 		if (isset($queue[$key_norm])) return $queue[$key_norm];
-		// Try mac-stripped variant
-		$mac_stripped = tmon_admin_normalize_mac($key);
-		if ($mac_stripped && isset($queue[$mac_stripped])) return $queue[$mac_stripped];
-		// Fall back to payload search
+
+		// Try stripped mac form
+		$mac = tmon_admin_normalize_mac($key);
+		if ($mac && isset($queue[$mac])) return $queue[$mac];
+
+		// Search payloads for matching unit_id or machine_id (normalized)
 		foreach ($queue as $k => $v) {
 			$payload_mid = isset($v['machine_id']) ? tmon_admin_normalize_key($v['machine_id']) : '';
 			$payload_uid = isset($v['unit_id']) ? tmon_admin_normalize_key($v['unit_id']) : '';
-			if ($payload_mid === $key_norm || $payload_uid === $key_norm || $payload_mid === $mac_stripped) {
-				return $v;
-			}
+			if ($payload_mid === $key_norm || $payload_uid === $key_norm || $payload_mid === $mac) return $v;
 		}
 		return null;
 	}
@@ -571,19 +571,15 @@ if (!function_exists('tmon_admin_dequeue_provision')) {
 		$queue = get_option('tmon_admin_pending_provision', []);
 		if (!is_array($queue) || empty($queue)) return null;
 
-		$mac_stripped = tmon_admin_normalize_mac($key);
+		$mac = tmon_admin_normalize_mac($key);
 		$removed = [];
 
-		// Remove by queue key matches, and any queue entries where payload references the target key
 		foreach ($queue as $k => $v) {
 			$k_norm = tmon_admin_normalize_key($k);
 			$payload_mid = isset($v['machine_id']) ? tmon_admin_normalize_key($v['machine_id']) : '';
 			$payload_uid = isset($v['unit_id']) ? tmon_admin_normalize_key($v['unit_id']) : '';
 
-			$match = false;
-			if ($k_norm === $key_norm || ($mac_stripped && $k_norm === $mac_stripped)) $match = true;
-			if ($payload_mid === $key_norm || $payload_mid === $mac_stripped || $payload_uid === $key_norm) $match = true;
-
+			$match = ($k_norm === $key_norm) || ($mac && $k_norm === $mac) || ($payload_mid === $key_norm) || ($payload_mid === $mac) || ($payload_uid === $key_norm);
 			if ($match) {
 				$removed[$k] = $v;
 				unset($queue[$k]);
@@ -593,9 +589,13 @@ if (!function_exists('tmon_admin_dequeue_provision')) {
 		if (!empty($removed)) {
 			update_option('tmon_admin_pending_provision', $queue);
 			error_log('tmon-admin: Dequeued provision entries for key=' . $key_norm . ' removed=' . count($removed));
-			// Return the first removed payload as convenience
 			return array_shift($removed);
 		}
 		return null;
 	}
+}
+
+// Mark that centralized handlers have been registered to prevent duplicate registration.
+if (!defined('TMON_ADMIN_HANDLERS_INCLUDED')) {
+	define('TMON_ADMIN_HANDLERS_INCLUDED', true);
 }

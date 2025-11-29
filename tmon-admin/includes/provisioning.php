@@ -1062,7 +1062,7 @@ EOT;
                 console.error('GitHub manifest fetch failed (POST):', resp.status, text);
                 // fallback to GET attempt
                 return fallbackGet(row, params);
-                                                                                                                                                                                                                                                                                         }
+                                                                                                                                                                                                                                                                                                                                                                                                                         }
             const json = await resp.json().catch(()=>null);
             if (!json || !json.success) {
                 console.warn('GitHub manifest returned no data or not success:', json);
@@ -1685,8 +1685,21 @@ add_action('admin_post_tmon_admin_provision_device', function() {
 
 	// Ensure staged set for both unit and machine (in case device checks by either key)
 	if (!empty($machine_id)) {
-	    $wpdb->update($table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
-	    error_log("tmon-admin: settings_staged=1 set for machine_id={$machine_id} by user=" . wp_get_current_user()->user_login);
+	    $mac_stripped = tmon_admin_normalize_mac($machine_id);
+	    // use a prepared query to set settings_staged for either exact machine_id or stripped variant
+	    if ($mac_stripped) {
+	        $wpdb->query(
+	            $wpdb->prepare(
+	                "UPDATE {$table} SET settings_staged = 1, updated_at = %s WHERE LOWER(machine_id) = LOWER(%s) OR LOWER(REPLACE(REPLACE(REPLACE(machine_id,':',''),'-',''),' ','')) = %s",
+	                current_time('mysql'),
+	                $machine_id,
+	                $mac_stripped
+	            )
+	        );
+	    } else {
+	        $wpdb->update($table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
+	    }
+	    error_log("tmon-admin: settings_staged=1 set for machine_id={$machine_id} (stripped={$mac_stripped}) by user=" . wp_get_current_user()->user_login);
 	}
 	if (!empty($unit_id) && $unit_id !== $machine_id) {
 	    $wpdb->update($table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
@@ -1737,8 +1750,8 @@ add_action('admin_post_tmon_admin_provision_device', function() {
 	        if (!empty($payload['site_url']) && in_array('wordpress_api_url', $dev_cols)) $mirror['wordpress_api_url'] = $payload['site_url'];
 	        if (!empty($payload['unit_name']) && in_array('unit_name', $dev_cols)) $mirror['unit_name'] = $payload['unit_name'];
 	        if (in_array('provisioned_at', $dev_cols)) $mirror['provisioned_at'] = current_time('mysql');
-	        if (!empty($unit_id)) $wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]);
-	        elseif (!empty($machine_id)) $wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]);
+	        if ($unit_id) $wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]);
+	        elseif ($machine_id) $wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]);
 	    }
 	    // Optionally push to UC site if site_url available (best-effort)
 	    if (!empty($site_url)) {
@@ -1801,8 +1814,8 @@ if (!function_exists('tmon_admin_find_queued_or_staged')) {
 			foreach ($candidates as $k) {
 				if (!$k) continue;
 				// Try matching either unit_id or machine_id against this candidate
-				$sql = "SELECT * FROM {$prov_table} WHERE (LOWER(machine_id)=LOWER(%s) OR LOWER(unit_id)=LOWER(%s)) AND settings_staged=1 LIMIT 1";
-				$row = $wpdb->get_row($wpdb->prepare($sql, $k, $k), ARRAY_A);
+				$sql = "SELECT * FROM {$prov_table} WHERE (LOWER(machine_id)=LOWER(%s) OR LOWER(REPLACE(REPLACE(REPLACE(machine_id,':',''),'-',''),' ','')) = LOWER(%s)) OR (LOWER(unit_id)=LOWER(%s)) LIMIT 1";
+				$row = $wpdb->get_row($wpdb->prepare($sql, $k, $k, $k), ARRAY_A);
 				if ($row && intval($row['settings_staged'] ?? 0) === 1) {
 					$result['found'] = 'db';
 					$result['key'] = $k;
@@ -1845,8 +1858,24 @@ add_action('rest_api_init', function() {
 				// Dequeue the matched key and clear DB staged flags
 				tmon_admin_dequeue_provision($found['key']);
 				$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
-				if (!empty($machine_id)) $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
-				if (!empty($unit_id))    $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
+				if (!empty($machine_id)) {
+					$mac_stripped = tmon_admin_normalize_mac($machine_id);
+					if ($mac_stripped) {
+						$wpdb->query(
+							$wpdb->prepare(
+								"UPDATE {$prov_table} SET settings_staged = 0, updated_at = %s WHERE LOWER(machine_id) = LOWER(%s) OR LOWER(REPLACE(REPLACE(REPLACE(machine_id,':',''),'-',''),' ','')) = %s",
+								current_time('mysql'),
+								$machine_id,
+								$mac_stripped
+							)
+						);
+					} else {
+						$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
+					}
+				}
+				if (!empty($unit_id)) {
+					$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
+				}
 
 				error_log("tmon-admin: queued delivered for matched_key={$found['key']} (device: unit={$unit_id} machine={$machine_id})");
 				return rest_ensure_response(['status' => 'ok', 'provisioned' => true, 'staged_exists' => true, 'provision' => $queued], 200);
