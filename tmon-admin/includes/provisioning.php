@@ -1525,268 +1525,128 @@ add_action('admin_post_tmon_admin_provision_device', function() {
 add_action('rest_api_init', function() {
     $handler = function($request) {
         global $wpdb;
+
         // Accept either unit_id or machine_id (or mac)
         $unit_id = sanitize_text_field((string)$request->get_param('unit_id'));
-        $machine_id = sanitize_text_field((string)$request->get_param('machine_id') ?: (string)$request->get_param('mac'));
-        $machine_id = sanitize_text_field((string)$request->get_param('machine_id') ?: (string)$request->get_param('mac'));
-        // Accept ?force=1 for debugging (do not clear staged flag)
-        $force = $request->get_param('force');
-        $force_flag = !empty($force) && $force !== '0' && $force !== false;
-        $force_flag = !empty($force) && $force !== '0' && $force !== false;
+        $machine_id = sanitize_text_field((string)($request->get_param('machine_id') ?: $request->get_param('mac')));
+        $force_flag = (bool) $request->get_param('force');
+
         if (!$unit_id && !$machine_id) {
             return new WP_REST_Response(['error' => 'unit_id or machine_id required'], 400);
         }
-        $table = $wpdb->prefix . 'tmon_provisioned_devices';
-        $table = $wpdb->prefix . 'tmon_provisioned_devices';
-        // Prefer strict match (unit+machine). Fallback to match by machine_id or unit_id.
-        if ($unit_id && $machine_id) {
-            $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id), ARRAY_A);
-        } elseif ($machine_id) {
-            $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE machine_id=%s ORDER BY created_at DESC LIMIT 1", $machine_id), ARRAY_A);
-        } else {
-            $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table WHERE unit_id=%s ORDER BY created_at DESC LIMIT 1", $unit_id), ARRAY_A);
+
+        $key = $machine_id ?: $unit_id;
+
+        // 1) Check queued option first (machine id preferred)
+        $queued = tmon_admin_get_pending_provision($key);
+        if ($queued) {
+            // Ensure both fields exist for compatibility
+            if (!empty($queued['site_url']) && empty($queued['wordpress_api_url'])) {
+                $queued['wordpress_api_url'] = $queued['site_url'];
+            }
+            if (!empty($queued['wordpress_api_url']) && empty($queued['site_url'])) {
+                $queued['site_url'] = $queued['wordpress_api_url'];
+            }
+
+            // Dequeue and mirror
+            tmon_admin_dequeue_provision($key);
+
+            $prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+            if (!empty($machine_id)) {
+                $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
+            } elseif (!empty($unit_id)) {
+                $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
+            }
+
+            // Mirror to tmon_devices (if present)
+            $dev_table = $wpdb->prefix . 'tmon_devices';
+            if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+                $dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
+                $mirror = ['last_seen' => current_time('mysql')];
+                if (in_array('provisioned', $dev_cols)) $mirror['provisioned'] = 1; else $mirror['status'] = 'provisioned';
+                if (!empty($queued['site_url']) && in_array('site_url', $dev_cols)) $mirror['site_url'] = $queued['site_url'];
+                if (!empty($queued['site_url']) && in_array('wordpress_api_url', $dev_cols)) $mirror['wordpress_api_url'] = $queued['site_url'];
+                if (!empty($queued['unit_name']) && in_array('unit_name', $dev_cols)) $mirror['unit_name'] = $queued['unit_name'];
+                if (in_array('provisioned_at', $dev_cols)) $mirror['provisioned_at'] = current_time('mysql');
+                if (!empty($unit_id)) $wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]);
+                elseif (!empty($machine_id)) $wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]);
+            }
+
+            do_action('tmon_admin_audit', 'device_provision_sent', sprintf('queue delivered key=%s', $key));
+            return new WP_REST_Response(['provisioned' => true, 'settings' => $queued], 200);
         }
+
+        // 2) Fallback: DB row with settings_staged
+        $prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+        if ($machine_id) {
+            $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE machine_id=%s LIMIT 1", $machine_id), ARRAY_A);
+        } else {
+            $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE unit_id=%s LIMIT 1", $unit_id), ARRAY_A);
+        }
+
         if (!$row) {
             return new WP_REST_Response(['provisioned' => false], 200);
         }
-        // Send settings if staged OR forced
+
         $should_send = (!empty($row['settings_staged']) && intval($row['settings_staged']) === 1) || $force_flag;
         if (!$should_send) {
             return new WP_REST_Response(['provisioned' => true, 'settings' => null], 200);
         }
-        // Parse JSON fields that may be stored as strings
-        $db_settings = [];
-        if (!empty($row['settings'])) {
-            $decoded = json_decode($row['settings'], true);
-            if (is_array($decoded)) { $db_settings = $decoded; }
+
+        // Build payload derived from DB row
+        $payload = [];
+        if (!empty($row['site_url'])) $payload['site_url'] = $row['site_url'];
+        if (!empty($row['unit_name'])) $payload['unit_name'] = $row['unit_name'];
+        if (!empty($row['firmware'])) $payload['firmware'] = $row['firmware'];
+        if (!empty($row['firmware_url'])) $payload['firmware_url'] = $row['firmware_url'];
+        if (!empty($row['role'])) $payload['role'] = $row['role'];
+        if (!empty($row['plan'])) $payload['plan'] = $row['plan'];
+        if (!empty($row['notes'])) {
+            $maybe_json = json_decode($row['notes'], true);
+            if (is_array($maybe_json)) $payload = array_merge($payload, $maybe_json);
+            else $payload['notes_text'] = $row['notes'];
         }
-        $prev_settings = [];
-        if (!empty($row['prev_settings'])) {
-            $decoded_prev = json_decode($row['prev_settings'], true);
-            if (is_array($decoded_prev)) { $prev_settings = $decoded_prev; }
-        }
-        // Build computed defaults for device consumption, then allow DB settings to override
-        $role = $row['role'] ?? '';
-        $device_defaults = array(
-            'NODE_TYPE' => $role,
-            'UNIT_Name' => $row['unit_name'] ?? '',
-            'COMPANY_ID' => (!empty($row['company_id']) ? intval($row['company_id']) : null),
-            'PLAN' => $row['plan'] ?? '',
-            'PROVISION_STATUS' => $row['status'] ?? '',
-            'NOTES' => $row['notes'] ?? '',
-            'WIFI_DISABLE_AFTER_PROVISION' => ($role === 'remote'),
-            'SITE_URL' => $row['site_url'] ?? '',
-            'CHECKIN_TIME' => $row['checkin_time'] ?? '',
-            'FIRMWARE' => $row['firmware'] ?? '',
-            'FIRMWARE_URL' => $row['firmware_url'] ?? '',
-            'unit_id' => $row['unit_id'] ?? '',
-            'machine_id' => $row['machine_id'] ?? '',
-        );
-        // DB settings override defaults (explicit settings column should control values)
-        $device_settings = array_merge($device_defaults, $db_settings);
-        // Clear staged flag if not forced
+
+        // Ensure both site_url and wordpress_api_url
+        if (!empty($payload['site_url']) && empty($payload['wordpress_api_url'])) $payload['wordpress_api_url'] = $payload['site_url'];
+        if (empty($payload['site_url']) && !empty($payload['wordpress_api_url'])) $payload['site_url'] = $payload['wordpress_api_url'];
+
+        // Clear settings_staged if not forced
         if (!$force_flag) {
-            $wpdb->update({
-                $table,te(
-                ['settings_staged' => 0],
-                ['unit_id' => $row['unit_id'], 'machine_id' => $row['machine_id']]
-            );
+            $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $row['unit_id'], 'machine_id' => $row['machine_id']]);
         }
-        // Audit/log the provision sent
-        do_action('tmon_admin_audit', 'device_provision_sent', sprintf('unit_id=%s machine_id=%s site=%s', $row['unit_id'], $row['machine_id'], $row['site_url'] ?? ''));
+
+        // Mirror to tmon_devices
+        $dev_table = $wpdb->prefix . 'tmon_devices';
+        if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+            $dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
+            $mirror = ['last_seen' => current_time('mysql')];
+            if (in_array('provisioned', $dev_cols)) $mirror['provisioned'] = 1; else $mirror['status'] = 'provisioned';
+            if (!empty($payload['site_url']) && in_array('site_url', $dev_cols)) $mirror['site_url'] = $payload['site_url'];
+            if (!empty($payload['site_url']) && in_array('wordpress_api_url', $dev_cols)) $mirror['wordpress_api_url'] = $payload['site_url'];
+            if (!empty($payload['unit_name']) && in_array('unit_name', $dev_cols)) $mirror['unit_name'] = $payload['unit_name'];
+            if (in_array('provisioned_at', $dev_cols)) $mirror['provisioned_at'] = current_time('mysql');
+            if (!empty($unit_id)) $wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]);
+            elseif (!empty($machine_id)) $wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]);
+        }
+
         do_action('tmon_admin_audit', 'device_provision_sent', sprintf('unit_id=%s machine_id=%s site=%s', $row['unit_id'], $row['machine_id'], $row['site_url'] ?? ''));
         return new WP_REST_Response([
             'provisioned' => true,
-            'settings' => $device_settings,
-            'meta' => ['prev_settings' => $prev_settings],
+            'settings' => $payload,
+            'meta' => ['prev_settings' => []],
         ], 200);
     };
-    // New route: accept GET and POST
+
+    // Register routes
     register_rest_route('tmon/v1', '/device/provision', [
         'methods' => ['GET', 'POST'],
         'permission_callback' => '__return_true',
         'callback' => $handler,
     ]);
-    // Backwards-compatible alias for older devices
     register_rest_route('tmon/v1', '/provision', [
         'methods' => ['GET', 'POST'],
         'permission_callback' => '__return_true',
         'callback' => $handler,
     ]);
-});
-add_action('rest_api_init', function() {
-	register_rest_route('tmon-admin/v1', '/device/check-in', [
-		'methods'  => WP_REST_Server::CREATABLE,
-		'permission_callback' => '__return_true',
-		'callback' => function( WP_REST_Request $request ) {
-			global $wpdb;
-			$params = $request->get_json_params() ?: $request->get_params();
-			$unit_id = isset($params['unit_id']) ? sanitize_text_field($params['unit_id']) : '';
-			$machine_id = isset($params['machine_id']) ? sanitize_text_field($params['machine_id']) : '';
-			$key = $machine_id ?: $unit_id;
-			error_log('tmon-admin: check-in key=' . $key . ' (' . ($machine_id ?: $unit_id) . ')');
-			// 1) Check queued option
-			$queued = tmon_admin_get_pending_provision($key);
-			if ($queued) {
-				tmon_admin_dequeue_provision($key);
-				// clear staged and mirror
-				$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
-				if ($machine_id) $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
-				elseif ($unit_id) $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
-				// Mirror to tmon_devices (site_url + unit_name + provisioned)
-				$dev_table = $wpdb->prefix . 'tmon_devices';
-				if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
-					$dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
-					$mirror = ['last_seen' => current_time('mysql')];
-					if (in_array('provisioned', $dev_cols)) $mirror['provisioned'] = 1;
-					elseif (in_array('status', $dev_cols)) $mirror['status'] = 'provisioned';
-					if (in_array('site_url', $dev_cols)) $mirror['site_url'] = $queued['site_url'] ?? '';
-					if (in_array('wordpress_api_url', $dev_cols)) $mirror['wordpress_api_url'] = $queued['site_url'] ?? '';
-					if (in_array('unit_name', $dev_cols)) $mirror['unit_name'] = $queued['unit_name'] ?? '';
-					if (in_array('provisioned_at', $dev_cols)) $mirror['provisioned_at'] = current_time('mysql');
-					if ($unit_id) $wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]);
-					elseif ($machine_id) $wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]);
-				}
-				return rest_ensure_response(['status' => 'ok', 'provision' => $queued]);
-			}
-			// 2) fallback: DB row with settings_staged
-			$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
-			$row = null;
-			if ($machine_id)  $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE machine_id=%s LIMIT 1", $machine_id), ARRAY_A);
-			if (!$row && $unit_id) $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE unit_id=%s LIMIT 1", $unit_id), ARRAY_A);;
-			if (!$row && $unit_id) $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE unit_id=%s LIMIT 1", $unit_id), ARRAY_A);
-			if ($row && intval($row['settings_staged'] ?? 0) === 1) {
-				$payload = [];
-				// Prefer explicit site_url/unit_name columns
-				if (!empty($row['site_url'])) $payload['site_url'] = $row['site_url'];
-				if (!empty($row['unit_name'])) $payload['unit_name'] = $row['unit_name'];
-				if (!empty($row['firmware'])) $payload['firmware'] = $row['firmware'];
-				if (!empty($row['firmware_url'])) $payload['firmware_url'] = $row['firmware_url'];
-				// If notes is JSON, merge; otherwise include as notes_text
-				if (!empty($row['notes'])) {
-					$maybe_json = json_decode($row['notes'], true);
-					if (is_array($maybe_json)) $payload = array_merge($payload, $maybe_json);
-					else $payload['notes_text'] = $row['notes'];
-				}
-
-				// Clear settings_staged and mirror
-				$where = !empty($machine_id) ? ['machine_id' => $machine_id] : ['unit_id' => $unit_id];
-				$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], $where);
-
-				$dev_table = $wpdb->prefix . 'tmon_devices';
-				if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
-					$dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
-					$mirror = ['last_seen' => current_time('mysql')];
-					if (in_array('provisioned', $dev_cols)) $mirror['provisioned'] = 1; else $mirror['status'] = 'provisioned';
-					if (!empty($payload['site_url']) && in_array('site_url', $dev_cols)) $mirror['site_url'] = $payload['site_url'];
-					if (!empty($payload['site_url']) && in_array('wordpress_api_url', $dev_cols)) $mirror['wordpress_api_url'] = $payload['site_url'];
-					if (!empty($payload['unit_name']) && in_array('unit_name', $dev_cols)) $mirror['unit_name'] = $payload['unit_name'];
-					if (in_array('provisioned_at', $dev_cols)) $mirror['provisioned_at'] = current_time('mysql');
-					if ($unit_id) $wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]);
-					elseif ($machine_id) $wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]);
-				}
-				return rest_ensure_response(['status' => 'ok', 'provision' => $payload]);
-			}
-		}
-	);
-});
-
-// Guard duplicates: only define queue helpers if not already declared
-if (!function_exists('tmon_admin_enqueue_provision')) {
-    function tmon_admin_enqueue_provision($key, $payload) {
-        if (!$key || !is_string($key)) return false;
-        $queue = get_option('tmon_admin_pending_provision', []);
-        if (!is_array($queue)) $queue = [];
-        $payload['requested_at'] = current_time('mysql');
-        $payload['status'] = 'pending';
-        $queue[$key] = $payload;
-        update_option('tmon_admin_pending_provision', $queue);
-        error_log("tmon-admin (includes): Enqueued provisioning for key={$key}");
-        return true;
-    }
-}
-
-if (!function_exists('tmon_admin_dequeue_provision')) {
-    function tmon_admin_dequeue_provision($key) {
-        if (!$key || !is_string($key)) return null;
-        $queue = get_option('tmon_admin_pending_provision', []);
-        if (!is_array($queue) || !isset($queue[$key])) return null;
-        $entry = $queue[$key];
-        unset($queue[$key]);
-        update_option('tmon_admin_pending_provision', $queue);
-        error_log("tmon-admin (includes): Dequeued provisioning for key={$key}");
-        return $entry;
-    }
-}
-
-if (!function_exists('tmon_admin_get_pending_provision')) {
-    function tmon_admin_get_pending_provision($key) {
-        if (!$key || !is_string($key)) return null;
-        $queue = get_option('tmon_admin_pending_provision', []);
-        if (!is_array($queue)) $queue = [];
-        return $queue[$key] ?? null;
-    }
-}
-
-// Ensure provisioning history admin page exists (submenu callback used in tmon_admin_menu)
-if (!function_exists('tmon_admin_provisioning_history_page')) {
-	function tmon_admin_provisioning_history_page() {
-		global $wpdb;
-		$history = get_option('tmon_admin_provision_history', []);
-		echo '<div class="wrap"><h1>Provisioning History</h1>';
-		if (!is_array($history) || empty($history)) {
-			echo '<p><em>No provisioning history recorded.</em></p>';
-		} else {
-			echo '<table class="widefat fixed striped" cellspacing="0" style="width:100%">
-		<thead><tr><th style="width:160px">Time</th><th>User</th><th>Unit</th><th>Machine</th><th>Action</th><th>Site</th><th>Meta</th></tr></thead>
-		<tbody>';
-			// Show most recent first
-			foreach (array_reverse($history) as $h) {
-				$ts = isset($h['ts']) ? esc_html($h['ts']) : '';
-				$user = isset($h['user']) ? esc_html($h['user']) : '';
-				$unit = isset($h['unit_id']) ? esc_html($h['unit_id']) : '';
-				$machine = isset($h['machine_id']) ? esc_html($h['machine_id']) : '';
-				$action = isset($h['action']) ? esc_html($h['action']) : esc_html('saved');
-				$site = isset($h['site']) ? esc_html($h['site']) : '';
-				$meta_pretty = '';
-				if (isset($h['meta'])) {
-					$meta_pretty = esc_html(wp_json_encode($h['meta'], JSON_PRETTY_PRINT));
-				}
-				echo '<tr>';
-				echo "<td>{$ts}</td>";
-				echo "<td>{$user}</td>";
-				echo "<td>{$unit}</td>";
-				echo "<td>{$machine}</td>";
-				echo "<td>{$action}</td>";
-				echo "<td>{$site}</td>";
-				echo "<td><pre style=\"white-space:pre-wrap;max-width:400px;overflow:auto\">{$meta_pretty}</pre></td>";
-				echo '</tr>';
-			}
-			echo '</tbody></table>';
-		}
-		echo '</div>';
-	}
-}
-
-// --- PATCH: re-enqueue prompt wording change ---
-add_action('admin_footer', function() {
-    if (!current_user_can('manage_options')) return;
-    $nonce = wp_create_nonce('tmon_admin_manage_pending');
-    $ajax_url = admin_url('admin-ajax.php');
-    echo <<<EOT
-<script>
-jQuery(document).ready(function($){
-    $('.tmon-pq-reenqueue').on('click', function(){
-        const k=$(this).data('key');
-        const current=$(this).attr('data-payload') || '';
-        const msg = 'Edit the payload JSON to modify provisioning values. Leave the input empty to re-enqueue the existing payload without changes.\n\nCurrent payload:\n' + current;
-        const p = prompt(msg, current);
-        if (p === null) return;
-        $.post(ajaxUrl, {action:'tmon_admin_manage_pending', manage_action:'reenqueue', key:k, payload:p, _ajax_nonce:nonce}, function(r){
-            if (r.success) location.reload(); else alert('Failed: ' + (r.data && r.data.message ? r.data.message : 'Unknown'));
-        });
-    });
-});
-</script>
-EOT;
 });
