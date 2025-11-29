@@ -51,6 +51,10 @@ if (!function_exists('tmon_admin_enqueue_provision')) {
 		if (!$key) return false;
 		if (!is_array($payload)) $payload = (array)$payload;
 
+		// Ensure unit_id/machine_id normalized in payload if present
+		if (!empty($payload['unit_id'])) $payload['unit_id'] = tmon_admin_normalize_key($payload['unit_id']);
+		if (!empty($payload['machine_id'])) $payload['machine_id'] = tmon_admin_normalize_key($payload['machine_id']);
+
 		// Ensure we have requested_by_user
 		if (empty($payload['requested_by_user']) && function_exists('wp_get_current_user')) {
 			$user = wp_get_current_user();
@@ -69,33 +73,22 @@ if (!function_exists('tmon_admin_enqueue_provision')) {
 		// prune + per-site max enforcement (existing logic)
 		tmon_admin_prune_pending_queue();
 
-		// Enforce per-site max (if payload includes site_url)
-		$site = !empty($payload['site_url']) ? $payload['site_url'] : '';
 		$queue = get_option('tmon_admin_pending_provision', []);
 		if (!is_array($queue)) $queue = [];
-		if ($site) {
-			$max = tmon_admin_get_queue_max_per_site();
-			// Count existing entries for the same site
-			$same = [];
-			foreach ($queue as $kq => $qv) {
-				// check both explicit site and fallback in meta
-				if (!empty($qv['site_url']) && $qv['site_url'] === $site) $same[$kq] = $qv;
-			}
-			if (count($same) >= $max) {
-				// remove oldest same-site entry to make room
-				$oldest_key = null;
-				$oldest_ts = PHP_INT_MAX;
-				foreach ($same as $kq => $qv) {
-					$t = strtotime($qv['requested_at'] ?? '1970-01-01 00:00:00');
-					if ($t && $t < $oldest_ts) { $oldest_ts = $t; $oldest_key = $kq; }
-				}
-				if ($oldest_key) {
-					unset($queue[$oldest_key]);
-				}
-			}
+
+		// Always set for provided key
+		$queue[$key] = $payload;
+
+		// If payload includes both keys, also enqueue for the alternate key so device finds by either
+		if (!empty($payload['machine_id'])) {
+			$queue[$payload['machine_id']] = $payload;
+			error_log("tmon-admin: enqueue_provision (mirror) key={$payload['machine_id']} by={$payload['requested_by_user']}");
+		}
+		if (!empty($payload['unit_id'])) {
+			$queue[$payload['unit_id']] = $payload;
+			error_log("tmon-admin: enqueue_provision (mirror) key={$payload['unit_id']} by={$payload['requested_by_user']}");
 		}
 
-		$queue[$key] = $payload;
 		update_option('tmon_admin_pending_provision', $queue);
 
 		error_log("tmon-admin: enqueue_provision key={$key} by={$payload['requested_by_user']} site=" . ($payload['site_url'] ?? '') . ' payload=' . wp_json_encode($payload));
