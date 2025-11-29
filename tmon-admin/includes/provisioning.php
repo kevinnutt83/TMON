@@ -1799,54 +1799,31 @@ add_action('rest_api_init', function() {
 			$found = tmon_admin_find_queued_or_staged($machine_id, $unit_id);
 			error_log('tmon-admin: find_queued_or_staged found=' . var_export($found['found'], true) . ' matched_key=' . var_export($found['key'], true) . ' candidates=' . json_encode([$machine_id, $unit_id]) );
 
-			// FALLBACK: If helper didn't find anything, scan the pending queue for a usable payload
+			// DIRECT DB FALLBACK: If helper didn't find anything then look for any staged DB row directly.
+			// This covers any row that has settings_staged=1 and matches the device by normalized or raw forms.
 			if (empty($found['found'])) {
-				$queue = get_option('tmon_admin_pending_provision', []);
-				// Debug: report queue keys so we can see what keys exist at check-in time
-				if (is_array($queue)) {
-					error_log('tmon-admin: pending queue keys at check-in: ' . implode(',', array_keys($queue)));
-				} else {
-					error_log('tmon-admin: pending queue empty or not array');
-				}
-
-				// Prepare normalized test values for device
-				$machine_norm = tmon_admin_normalize_mac($machine_id);
+				$mac_norm = tmon_admin_normalize_mac($machine_id);
 				$unit_norm = tmon_admin_normalize_key($unit_id);
 
-				// Scan the queued payloads directly (compare normalized machine/unit from queued values)
-				if (is_array($queue)) {
-					foreach ($queue as $qkey => $qp) {
-						// Normalize the queued payload's identity fields
-						$qp_machine = isset($qp['machine_id']) ? (string)$qp['machine_id'] : '';
-						$qp_unit = isset($qp['unit_id']) ? (string)$qp['unit_id'] : '';
-						$qp_machine_norm = tmon_admin_normalize_mac($qp_machine);
-						$qp_unit_norm = tmon_admin_normalize_key($qp_unit);
-
-						// Debug each normalized candidate (only log when we have a device value)
-						if ($machine_norm) error_log("tmon-admin: comparing device_machine_norm={$machine_norm} vs queued_machine_norm={$qp_machine_norm} (qkey={$qkey})");
-						if ($unit_norm) error_log("tmon-admin: comparing device_unit_norm={$unit_norm} vs queued_unit_norm={$qp_unit_norm} (qkey={$qkey})");
-
-						// Match by normalized machine OR normalized unit
-						$match = false;
-						if (!empty($machine_norm) && $qp_machine_norm === $machine_norm) $match = true;
-						if (!$match && !empty($unit_norm) && $qp_unit_norm === $unit_norm) $match = true;
-
-						// Also accept raw case-insensitive match as fallback
-						if (!$match && !empty($machine_id) && strcasecmp($qp_machine, $machine_id) === 0) $match = true;
-						if (!$match && !empty($unit_id) && strcasecmp($qp_unit, $unit_id) === 0) $match = true;
-
-						if ($match) {
-							$found['found'] = 'queue';
-							$found['key'] = $qkey;
-							$found['queued'] = $qp;
-							error_log("tmon-admin: queue fallback matched payload key={$qkey} (machine={$qp_machine} unit={$qp_unit})");
-							break;
-						}
-					}
+				$sql_db_fallback = "SELECT * FROM {$prov_table} WHERE settings_staged = 1 AND (
+					LOWER(machine_id_norm) = LOWER(%s) OR LOWER(unit_id_norm) = LOWER(%s)
+					OR LOWER(machine_id) = LOWER(%s) OR LOWER(unit_id) = LOWER(%s)
+					OR LOWER(REPLACE(REPLACE(REPLACE(machine_id,':',''),'-',''),' ','')) = LOWER(%s)
+				) LIMIT 1";
+				// try normalized first, else raw
+				$try_key = $mac_norm ?: $unit_norm ?: strtolower($machine_id ?: $unit_id);
+				$row_db_fb = $wpdb->get_row($wpdb->prepare($sql_db_fallback, $try_key, $try_key, $try_key, $try_key, $try_key), ARRAY_A);
+				if ($row_db_fb && intval($row_db_fb['settings_staged'] ?? 0) === 1) {
+					$found['found'] = 'db';
+					$found['key'] = $try_key;
+					$found['row'] = $row_db_fb;
+					error_log(sprintf("tmon-admin: DB fallback staged match for key=%s (unit=%s machine=%s)", $try_key, $row_db_fb['unit_id'] ?? '', $row_db_fb['machine_id'] ?? ''));
+				} else {
+					error_log('tmon-admin: DB fallback staged search found nothing for candidates: ' . json_encode([$mac_norm, $unit_norm, $machine_id, $unit_id]));
 				}
 			}
 
-			// If queue/fallback matched, deliver payload and clear DB staged flags
+			// FALLBACK: If helper didn't find anything, deliver payload and clear DB staged flags
             if ($found['found'] === 'queue' && !empty($found['queued'])) {
                 $queued = $found['queued'];
 
