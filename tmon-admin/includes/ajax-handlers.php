@@ -178,8 +178,14 @@ if (!function_exists('tmon_admin_admin_post_queue_and_notify')) {
 
 		if ($notified) {
 			// mirror and mark staged, similar to save_provision logic
-			if (!empty($machine_id)) $wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
-			elseif (!empty($unit_id)) $wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
+			if (!empty($machine_id)) {
+				$wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
+				error_log("tmon-admin: queue_notify set settings_staged=1 for machine_id={$machine_id}");
+			}
+			if (!empty($unit_id) && $unit_id !== $machine_id) {
+				$wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
+				error_log("tmon-admin: queue_notify set settings_staged=1 for unit_id={$unit_id}");
+			}
 
 			// mirror to tmon_devices
 			$dev_table = $wpdb->prefix . 'tmon_devices';

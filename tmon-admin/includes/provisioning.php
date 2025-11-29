@@ -1523,6 +1523,16 @@ add_action('admin_post_tmon_admin_provision_device', function() {
 		$wpdb->insert($table, $data);
 	}
 
+	// Ensure staged set for both unit and machine (in case device checks by either key)
+	if (!empty($machine_id)) {
+	    $wpdb->update($table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['machine_id' => $machine_id]);
+	    error_log("tmon-admin: settings_staged=1 set for machine_id={$machine_id} by user=" . wp_get_current_user()->user_login);
+	}
+	if (!empty($unit_id) && $unit_id !== $machine_id) {
+	    $wpdb->update($table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
+	    error_log("tmon-admin: settings_staged=1 set for unit_id={$unit_id} by user=" . wp_get_current_user()->user_login);
+	}
+
 	// Enqueue payload for device to pick up on check-in
 	$payload = [
 		'site_url' => $site_url,
@@ -1657,6 +1667,7 @@ add_action('rest_api_init', function() {
 
 			if ($row) {
 				$staged_flag = intval($row['settings_staged'] ?? 0) === 1;
+				error_log(sprintf("tmon-admin: check-in found DB row for unit=%s machine=%s settings_staged=%d", $row['unit_id'] ?? '', $row['machine_id'] ?? '', intval($row['settings_staged'] ?? 0)));
 				if ($staged_flag) {
 					$payload = [];
 					if (!empty($row['site_url'])) $payload['site_url'] = $row['site_url'];
@@ -1676,7 +1687,7 @@ add_action('rest_api_init', function() {
 					$force_flag = !empty($params['force']) && $params['force'] !== '0';
 					if (!$force_flag) {
 						$wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $row['unit_id'], 'machine_id' => $row['machine_id']]);
-						error_log(sprintf("tmon-admin: cleared settings_staged for unit=%s machine=%s due to check-in delivery", $row['unit_id'], $row['machine_id']));
+						error_log(sprintf("tmon-admin: cleared settings_staged for unit=%s machine=%s after delivering payload", $row['unit_id'], $row['machine_id']));
 					}
 
 					// mirror to tmon_devices
