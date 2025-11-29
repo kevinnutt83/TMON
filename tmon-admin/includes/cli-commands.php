@@ -30,3 +30,24 @@ if (!function_exists('tmon_admin_cli_queue')) {
 	}
 }
 WP_CLI::add_command('tmon-admin queue', 'tmon_admin_cli_queue');
+
+if (!function_exists('tmon_admin_cli_assert_queue')) {
+	function tmon_admin_cli_assert_queue($args, $assoc_args) {
+		global $wpdb;
+		$key = $assoc_args['key'] ?? ($args[0] ?? '');
+		if (!$key) {
+			WP_CLI::error("Please provide a key via --key=<unit_or_machine_id>");
+			return;
+		}
+		$key_norm = strtolower(trim($key));
+		$queue = get_option('tmon_admin_pending_provision', []);
+		$found = is_array($queue) && isset($queue[$key_norm]);
+		if ($found) {
+			WP_CLI::success("Queue contains key: {$key_norm}");
+			WP_CLI::line("Payload: " . wp_json_encode($queue[$key_norm], JSON_PRETTY_PRINT));
+			return;
+		}
+		WP_CLI::error("No queued payload found for key: {$key_norm}");
+	}
+}
+WP_CLI::add_command('tmon-admin assert-queue', 'tmon_admin_cli_assert_queue');

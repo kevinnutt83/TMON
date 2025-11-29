@@ -127,6 +127,31 @@ function tmon_admin_provisioning_page() {
     if (!current_user_can('manage_options')) wp_die('Forbidden');
     global $wpdb;
 
+    // Show queue diagnostics at top of the page to help debugging
+    $queue = get_option('tmon_admin_pending_provision', []);
+    $queue_count = (is_array($queue)) ? count($queue) : 0;
+    $last_ts = '';
+    if ($queue_count) {
+        // try to find most-recent requested_at across queued entries
+        $most_recent = 0;
+        foreach ($queue as $key => $payload) {
+            $t = strtotime($payload['requested_at'] ?? '1970-01-01 00:00:00');
+            if ($t && $t > $most_recent) $most_recent = $t;
+        }
+        if ($most_recent) $last_ts = date('Y-m-d H:i:s', $most_recent);
+    }
+
+    // Small admin notice area with queued count and latest queue timestamp
+    echo '<div class="notice notice-info inline" style="margin-bottom:10px;">';
+    echo '<p><strong>Provisioning queue:</strong> ' . intval($queue_count) . ' pending payload' . ($queue_count !== 1 ? 's' : '') . '.';
+    if ($last_ts) echo ' (<em>last queued at ' . esc_html($last_ts) . '</em>)';
+    echo '</p>';
+    echo '<p class="description">Provisioning "Save & Provision" enqueues payloads for devices; use the Provisioning Activity page to review or re-enqueue / delete.</p>';
+    echo '</div>';
+
+    // Remove purge forms from this page (moved to Settings). Provide a hint.
+    echo '<p class="description"><em>Data maintenance (purge & other destructive ops) moved to <a href="'.esc_url(admin_url('admin.php?page=tmon-admin-settings')).'">Settings</a> to avoid accidental data loss.</em></p>';
+
     $prov_table = $wpdb->prefix . 'tmon_provisioned_devices'; // PATCH: ensure $prov_table is available to all branches below
     // --- PATCH: Handle POST with redirect-after-POST pattern ---
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && function_exists('tmon_admin_verify_nonce') && tmon_admin_verify_nonce('tmon_admin_provision')) {
@@ -748,18 +773,7 @@ EOT;
     echo '</tbody></table>';
 
     // Data Maintenance (Admin-side purge UI)
-    echo '<h2>Data Maintenance</h2>';
-    echo '<form method="post" onsubmit="return confirm(\'This will delete ALL provisioning and audit data on this Admin site. Continue?\');" style="margin-bottom:10px">';
-    wp_nonce_field('tmon_admin_purge_all');
-    echo '<input type="hidden" name="tmon_admin_action" value="purge_all" />';
-    submit_button('Purge ALL Admin data', 'delete', 'submit', false);
-    echo '</form>';
-    echo '<form method="post" onsubmit="return confirm(\'This will delete data for the specified Unit ID. Continue?\');">';
-    wp_nonce_field('tmon_admin_purge_unit');
-    echo '<input type="hidden" name="tmon_admin_action" value="purge_unit" />';
-    echo 'Unit ID <input type="text" name="unit_id" class="regular-text" placeholder="123456" /> ';
-    submit_button('Purge by Unit ID', 'delete', 'submit', false);
-    echo '</form>';
+    // Removed: now handled in Settings
 
     // Hierarchy Sync to UC
     echo '<h2>Hierarchy Sync to UC</h2>';
@@ -1087,6 +1101,7 @@ add_action('admin_init', function(){
         add_action('admin_notices', function(){ echo '<div class="updated"><p>Unit data purged.</p></div>'; });
     }
 });
+
 
 // Admin-AJAX: Known Units typeahead for large datasets
 add_action('wp_ajax_tmon_admin_known_units', function(){
@@ -1422,6 +1437,27 @@ add_action('admin_post_tmon_admin_provision_device', function() {
     } else {
         $wpdb->insert($table, $data);
     }
+
+    // --- START NEW: enqueue payload for device to pick up on check-in ---
+    $payload = [
+        'site_url' => $site_url,
+        'unit_name' => $unit_name,
+        'firmware' => $firmware,
+        'firmware_url' => $firmware_url,
+        'role' => $role,
+        'plan' => $plan,
+        'notes' => $notes,
+        'requested_by_user' => wp_get_current_user()->user_login,
+    ];
+    if (!empty($machine_id)) {
+        tmon_admin_enqueue_provision($machine_id, $payload);
+        error_log("tmon-admin: provisioning enqueued for machine_id={$machine_id}");
+    }
+    if (!empty($unit_id) && $unit_id !== $machine_id) {
+        tmon_admin_enqueue_provision($unit_id, $payload);
+        error_log("tmon-admin: provisioning enqueued for unit_id={$unit_id}");
+    }
+    // --- END NEW ---
 
     // PATCH: Also update tmon_devices.unit_name if present and changed
     $dev_table = $wpdb->prefix . 'tmon_devices';

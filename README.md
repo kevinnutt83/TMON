@@ -68,6 +68,11 @@ TMON is a multi-component system for environmental sensing, secure device provis
 4. Power device → confirm first-boot check-in appears in Admin dashboard.
 5. Observe field data ingestion in Unit Connector logs & Admin dashboards.
 
+## Quick Ops & Diagnostics
+- WP-CLI: Inspect pending provisioning queue and assert keys:
+  - wp tmon-admin queue — lists pending queue entries and provisioned device snapshot.
+  - wp tmon-admin assert-queue --key=<machine_or_unit_id> — returns success if a queued payload exists for the key.
+
 ## Development Layout
 
 | Path | Description |
