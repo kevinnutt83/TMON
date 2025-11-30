@@ -1689,6 +1689,33 @@ add_action('rest_api_init', function() {
             $found = tmon_admin_find_queued_or_staged($machine_id, $unit_id);
             error_log('tmon-admin: find_queued_or_staged found=' . var_export($found['found'], true) . ' matched_key=' . var_export($found['key'], true) . ' candidates=' . json_encode([$machine_id, $unit_id]) );
 
+            // NEW: If not found by helper, run a robust DB fallback (normalized + raw checks)
+            if (empty($found['found']) || $found['found'] === false) {
+                $candidates = [];
+                if (!empty($machine_id)) $candidates[] = tmon_admin_normalize_mac($machine_id);
+                if (!empty($machine_id)) $candidates[] = tmon_admin_normalize_key($machine_id);
+                if (!empty($unit_id)) $candidates[] = tmon_admin_normalize_key($unit_id);
+                $candidates = array_values(array_unique(array_filter($candidates)));
+                if (!empty($candidates)) {
+                    foreach ($candidates as $ck) {
+                        // robust SQL searching both normalized and raw columns
+                        $sql = "SELECT * FROM {$prov_table} WHERE settings_staged = 1 AND (
+                            machine_id_norm = %s OR unit_id_norm = %s
+                            OR LOWER(machine_id) = LOWER(%s) OR LOWER(unit_id) = LOWER(%s)
+                            OR LOWER(REPLACE(REPLACE(REPLACE(machine_id,':',''),'-',''),' ','')) = LOWER(%s)
+                        ) LIMIT 1";
+                        $row = $wpdb->get_row($wpdb->prepare($sql, $ck, $ck, $ck, $ck, $ck), ARRAY_A);
+                        if ($row && intval($row['settings_staged'] ?? 0) === 1) {
+                            $found = array('found' => 'db', 'key' => $ck, 'row' => $row);
+                            error_log(sprintf("tmon-admin: fallback DB staged match candidate=%s id=%d unit=%s machine=%s staged=%d",
+                                $ck, intval($row['id'] ?? 0), $row['unit_id'] ?? '', $row['machine_id'] ?? '', intval($row['settings_staged'] ?? 0)
+                            ));
+                            break;
+                        }
+                    }
+                }
+            }
+
             // DB staged path...
             if ($found['found'] === 'db' && !empty($found['row'])) {
                 $db_row = $found['row'];
@@ -1704,12 +1731,12 @@ add_action('rest_api_init', function() {
                     'role' => $db_row['role'] ?? '',
                     'plan' => $db_row['plan'] ?? '',
                     'notes' => $db_row['notes'] ?? '',
-                    'requested_by_user' => $db_row['notes'] ?? 'db-staged', // best-effort metadata
+                    'requested_by_user' => $db_row['notes'] ?? 'db-staged',
                     'requested_at' => $db_row['updated_at'] ?? $db_row['created_at'] ?? current_time('mysql'),
                 ];
                 // Ensure canonical identity keys set
-                $payload['unit_id'] = $db_row['unit_id'] ?? ($unit_id ?? '');
-                $payload['machine_id'] = $db_row['machine_id'] ?? ($machine_id ?? '');
+                if (empty($payload['unit_id'])) $payload['unit_id'] = $db_row['unit_id'] ?? ($unit_id ?? '');
+                if (empty($payload['machine_id'])) $payload['machine_id'] = $db_row['machine_id'] ?? ($machine_id ?? '');
 
                 // Dequeue any pending queue entries that reference this same payload (clean up)
                 $dequeued_keys = [];
