@@ -1708,7 +1708,7 @@ add_action('admin_post_tmon_admin_provision_device', function() {
                 'unit_id' => $unit_id,
                 'machine_id' => $machine_id,
             ];
-            // Enqueue for both machine and unit (best effort)
+            // Enqueue for both machine and unit (best-effort)
             if (!empty($machine_id)) {
                 tmon_admin_enqueue_provision($machine_id, $payload);
                 error_log("tmon-admin: enqueued provision (admin_post) for machine={$machine_id}");
