@@ -629,28 +629,6 @@ if (!function_exists('tmon_admin_dequeue_provision')) {
 		if (!empty($removed)) {
 			update_option('tmon_admin_pending_provision', $queue);
 			error_log('tmon-admin: Dequeued provision entries for key=' . $key_norm . ' removed=' . count($removed));
-
-			// Add audit/history for each removed queue entry
-			$history = get_option('tmon_admin_provision_history', []);
-			if (!is_array($history)) $history = [];
-			foreach ($removed as $rk => $rv) {
-				$entry = [
-					'ts' => current_time('mysql'),
-					'user' => (function_exists('wp_get_current_user') ? (wp_get_current_user()->user_login ?: 'system') : 'system'),
-					'action' => 'dequeued',
-					'meta' => [
-						'key' => $rk,
-						'unit_id' => $rv['unit_id'] ?? ($rv['unit_id_norm'] ?? ''),
-						'machine_id' => $rv['machine_id'] ?? ($rv['machine_id_norm'] ?? ''),
-					],
-					'payload' => $rv,
-				];
-				$history[] = $entry;
-			}
-			// truncate to last 500 entries
-			if (count($history) > 500) $history = array_slice($history, -500);
-			update_option('tmon_admin_provision_history', $history);
-
 			return array_shift($removed);
 		}
 		return null;
