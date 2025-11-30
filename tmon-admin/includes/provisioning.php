@@ -1621,26 +1621,26 @@ add_action('admin_post_tmon_admin_provision_device', function() {
         $wpdb->update($table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['unit_id' => $unit_id]);
     }
 
-    // New: Record provisioning history when settings are staged (admin action)
+    // Replace "New: Record provisioning history when settings are staged (admin action)"
     if (function_exists('tmon_admin_record_provision_history')) {
-        $history_entry = [
-            'action' => 'staged_set',
-            'unit_id' => $unit_id,
-            'machine_id' => $machine_id,
-            'user' => wp_get_current_user()->user_login ?: 'system',
-            'payload' => [
-                'site_url' => $site_url,
-                'unit_name' => $unit_name,
-                'firmware' => $firmware,
-                'firmware_url' => $firmware_url,
-                'role' => $role,
-                'plan' => $plan,
-                'notes' => $notes,
-            ],
-            'note' => 'Admin staged settings (Save & Provision or Set)'
-        ];
-        tmon_admin_record_provision_history($history_entry);
-        error_log("tmon-admin: recorded staged_set history for unit={$unit_id} machine={$machine_id}");
+	$history_entry = array(
+		'action' => 'staged_set',
+		'unit_id' => $unit_id,
+		'machine_id' => $machine_id,
+		'user' => wp_get_current_user()->user_login ?: 'system',
+		'payload' => array(
+			'site_url' => $site_url,
+			'unit_name' => $unit_name,
+			'firmware' => $firmware,
+			'firmware_url' => $firmware_url,
+			'role' => $role,
+			'plan' => $plan,
+			'notes' => $notes,
+		),
+		'note' => 'Admin staged settings (Save & Provision or Set)'
+	);
+	tmon_admin_record_provision_history($history_entry);
+	error_log("tmon-admin: recorded staged_set history for unit={$unit_id} machine={$machine_id}");
     }
 
     // Inline Save & Provision branch (existing code), ensure we use $prov_table
@@ -1652,16 +1652,16 @@ add_action('admin_post_tmon_admin_provision_device', function() {
             error_log(sprintf("tmon-admin: set settings_staged=1 for prov_row id=%d unit_id=%s machine_id=%s user=%s", intval($row_id), esc_html($unit_id), esc_html($machine_id), wp_get_current_user()->user_login));
             // Also record this as staged_set with a short note for auditing
             if (function_exists('tmon_admin_record_provision_history')) {
-                $history_entry = [
+                $history_entry = array(
                     'action' => 'staged_set',
                     'unit_id' => $unit_id,
                     'machine_id' => $machine_id,
                     'user' => wp_get_current_user()->user_login ?: 'system',
                     'payload' => $payload,
                     'note' => 'Inline Save & Provision: queued and staged'
-                ];
+                );
                 tmon_admin_record_provision_history($history_entry);
-                error_log("tmon-admin: recorded staged_set (inline) for unit={$unit_id} machine={$unit_id}");
+                error_log("tmon-admin: recorded staged_set (inline) for unit={$unit_id} machine={$machine_id}");
             }
         }
         // ...existing enqueue + mirror...
@@ -1730,13 +1730,13 @@ add_action('rest_api_init', function() {
                     $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id_norm' => $clear_machine_norm]);
                     error_log("tmon-admin: cleared settings_staged for machine_id_norm={$clear_machine_norm} (from db match)");
                     if (function_exists('tmon_admin_record_provision_history')) {
-                        $history_entry = [
+                        $history_entry = array(
                             'action' => 'staged_cleared',
                             'machine_id_norm' => $clear_machine_norm,
                             'unit_id' => $payload['unit_id'] ?? '',
                             'machine_id' => $payload['machine_id'] ?? '',
                             'note' => 'Cleared staged flag when delivering DB-based payload'
-                        ];
+                        );
                         tmon_admin_record_provision_history($history_entry);
                         error_log("tmon-admin: recorded staged_cleared history for machine_norm={$clear_machine_norm}");
                     }
@@ -1744,12 +1744,12 @@ add_action('rest_api_init', function() {
                     $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['machine_id' => $payload['machine_id']]);
                     error_log("tmon-admin: cleared settings_staged for machine_id raw={$payload['machine_id']} (from db match)");
                     if (function_exists('tmon_admin_record_provision_history')) {
-                        $history_entry = [
+                        $history_entry = array(
                             'action' => 'staged_cleared',
                             'machine_id' => $payload['machine_id'],
                             'unit_id' => $payload['unit_id'] ?? '',
                             'note' => 'Cleared staged flag when delivering DB-based payload'
-                        ];
+                        );
                         tmon_admin_record_provision_history($history_entry);
                         error_log("tmon-admin: recorded staged_cleared history for machine={$payload['machine_id']}");
                     }
@@ -1758,12 +1758,12 @@ add_action('rest_api_init', function() {
                     $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id_norm' => $clear_unit_norm]);
                     error_log("tmon-admin: cleared settings_staged for unit_id_norm={$clear_unit_norm} (from db match)");
                     if (function_exists('tmon_admin_record_provision_history')) {
-                        $history_entry = [
+                        $history_entry = array(
                             'action' => 'staged_cleared',
                             'unit_id_norm' => $clear_unit_norm,
                             'unit_id' => $payload['unit_id'] ?? '',
                             'note' => 'Cleared staged flag when delivering DB-based payload'
-                        ];
+                        );
                         tmon_admin_record_provision_history($history_entry);
                         error_log("tmon-admin: recorded staged_cleared history for unit_norm={$clear_unit_norm}");
                     }
@@ -1771,11 +1771,11 @@ add_action('rest_api_init', function() {
                     $wpdb->update($prov_table, ['settings_staged' => 0, 'updated_at' => current_time('mysql')], ['unit_id' => $payload['unit_id']]);
                     error_log("tmon-admin: cleared settings_staged for unit_id raw={$payload['unit_id']} (from db match)");
                     if (function_exists('tmon_admin_record_provision_history')) {
-                        $history_entry = [
+                        $history_entry = array(
                             'action' => 'staged_cleared',
                             'unit_id' => $payload['unit_id'],
                             'note' => 'Cleared staged flag when delivering DB-based payload'
-                        ];
+                        );
                         tmon_admin_record_provision_history($history_entry);
                         error_log("tmon-admin: recorded staged_cleared history for unit={$payload['unit_id']}");
                     }
@@ -1783,7 +1783,7 @@ add_action('rest_api_init', function() {
 
                 // Record audit in provisioning history for DB-based delivery
                 if (function_exists('tmon_admin_record_provision_history')) {
-                    $history_entry = [
+                    $history_entry = array(
                         'action' => 'db_delivered',
                         'unit_id' => $payload['unit_id'] ?? '',
                         'machine_id' => $payload['machine_id'] ?? '',
@@ -1791,7 +1791,7 @@ add_action('rest_api_init', function() {
                         'dequeued_keys' => array_values(array_filter($dequeued_keys)),
                         'payload' => $payload,
                         'note' => 'Delivered staged payload found in DB (settings_staged)'
-                    ];
+                    );
                     tmon_admin_record_provision_history($history_entry);
                     error_log("tmon-admin: recorded db_delivered history for unit={$payload['unit_id']} machine={$payload['machine_id']}");
                 }
@@ -1817,7 +1817,7 @@ add_action('rest_api_init', function() {
                 if (!empty($queued['unit_id'])) $dq_keys[] = $queued['unit_id'];
 
                 if (function_exists('tmon_admin_record_provision_history')) {
-                    $history_entry = [
+                    $history_entry = array(
                         'action' => 'queue_delivered',
                         'unit_id' => $queued['unit_id'] ?? ($unit_id ?? ''),
                         'machine_id' => $queued['machine_id'] ?? ($machine_id ?? ''),
@@ -1826,7 +1826,7 @@ add_action('rest_api_init', function() {
                         'dequeued_keys' => $dq_keys,
                         'payload' => $queued,
                         'note' => 'Delivered queued payload and cleared staged flags'
-                    ];
+                    );
                     tmon_admin_record_provision_history($history_entry);
                     error_log("tmon-admin: recorded queue_delivered history for key={$found['key']}");
                 }
