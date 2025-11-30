@@ -183,6 +183,17 @@ function tmon_admin_provisioning_page() {
         // --- UPDATE DEVICE ROW (table row form) ---
         if ($action === 'update') {
             $id = intval($_POST['id'] ?? 0);
+            // Load DB row early to provide fallback values for payloads & mirroring
+            $row_tmp = [];
+            if ($id > 0) {
+                $row_tmp = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE id = %d LIMIT 1", $id), ARRAY_A) ?: [];
+            }
+            // Now compute normalized or fallback ids for the row
+            $unit_id = sanitize_text_field($_POST['unit_id'] ?? $row_tmp['unit_id'] ?? '');
+            $machine_id = sanitize_text_field($_POST['machine_id'] ?? $row_tmp['machine_id'] ?? '');
+            $unit_norm = tmon_admin_normalize_key($unit_id);
+            $mac_norm = tmon_admin_normalize_mac($machine_id);
+
             $role = sanitize_text_field($_POST['role'] ?? 'base');
             $plan = sanitize_text_field($_POST['plan'] ?? 'standard');
             $status = sanitize_text_field($_POST['status'] ?? 'active');
@@ -707,17 +718,6 @@ function tmon_admin_provisioning_page() {
     echo '<input id="tmon_unit_id" name="unit_id" list="tmon_known_unit_ids" type="text" class="regular-text" required placeholder="e.g., 123456">';
     echo '<datalist id="tmon_known_unit_ids">';
     foreach ($known_units as $uid => $uname) {
-        echo '<option value="'.esc_attr($uid).'">'.esc_html($uname).'</option>';
-    }
-    echo '</datalist>';
-    echo '</td></tr>';
-    echo '<tr><th scope="row">Machine ID</th><td>';
-    echo '<input id="tmon_machine_id" name="machine_id" list="tmon_known_machine_ids" type="text" class="regular-text" required placeholder="e.g., 30:AE:A4:...">';
-    echo '<datalist id="tmon_known_machine_ids">';
-    foreach ($known_machines as $mid => $uidmap) {
-        echo '<option value="'.esc_attr($mid).'">'.esc_html($uidmap).'</option>';
-    }
-    echo '</datalist>';
     echo '</td></tr>';
     // Inline JS to power dynamic typeahead via admin-ajax
     $ajax_url = admin_url('admin-ajax.php');
