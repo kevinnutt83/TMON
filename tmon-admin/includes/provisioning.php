@@ -197,17 +197,12 @@ function tmon_admin_provisioning_page() {
             $mac_norm = tmon_admin_normalize_mac($machine_id);
 
             // Ensure $exists is defined for this branch (look up by keys)
-            $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM {$prov_table} WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id));
-            if ($exists) {
-                $wpdb->update($prov_table, $data, ['id' => $exists]);
-            } else {
-                $wpdb->insert($prov_table, $data);
-            }
-
-            // Always set these so later mirror updates have canonical id vars
-            $row_unit_id = $unit_id;
-            $row_machine_id = $machine_id;
-
+            // $exists is computed later and update/insert logic handled below; no direct $data upsert here.
+ 
+             // Always set these so later mirror updates have canonical id vars
+             $row_unit_id = $unit_id;
+             $row_machine_id = $machine_id;
+ 
             // Update staged flags using normalized columns
             if ($do_provision) {
                 if (!empty($mac_norm)) {
@@ -235,7 +230,7 @@ function tmon_admin_provisioning_page() {
                 $payload = [
                     'site_url' => $site_url,
                     'wordpress_api_url' => $site_url,
-                    'unit_name' => $unit_name,
+                    'unit_name' => $unit_name, // ensure posted unit_name used
                     'firmware' => $firmware,
                     'firmware_url' => $firmware_url,
                     'role' => $role,
@@ -243,11 +238,12 @@ function tmon_admin_provisioning_page() {
                     'notes' => $notes,
                     'requested_by_user' => wp_get_current_user()->user_login ?: 'system',
                     'requested_at' => current_time('mysql'),
+                    'unit_id' => $unit_id,
+                    'machine_id' => $machine_id,
+                    'unit_id_norm' => $unit_norm,
+                    'machine_id_norm' => $mac_norm,
                 ];
-                // Make sure payload contains canonical keys so enqueue mirrors correctly
-                $payload['unit_id'] = $unit_id;
-                $payload['machine_id'] = $machine_id;
-
+                // Enqueue for both machine and unit (best-effort)
                 if (!empty($machine_id)) {
                     tmon_admin_enqueue_provision($machine_id, $payload);
                     error_log("tmon-admin: inline provisioning enqueued for machine_id={$machine_id} payload_keys=".(isset($payload['machine_id'])? 'yes':'no') . ',' . (isset($payload['unit_id']) ? 'yes':'no'));
@@ -266,12 +262,12 @@ function tmon_admin_provisioning_page() {
                     if (!empty($payload['site_url']) && in_array('wordpress_api_url', $dev_cols)) $mirror['wordpress_api_url'] = $payload['site_url'];
                     if (!empty($payload['unit_name']) && in_array('unit_name', $dev_cols)) $mirror['unit_name'] = $payload['unit_name'];
                     if (in_array('provisioned_at', $dev_cols)) $mirror['provisioned_at'] = current_time('mysql');
-                    if ($unit_id) $wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]);
-                    elseif ($machine_id) $wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]);
+                    if (!empty($row_unit_id)) $wpdb->update($dev_table, $mirror, ['unit_id' => $row_unit_id]);
+                    elseif (!empty($row_machine_id)) $wpdb->update($dev_table, $mirror, ['machine_id' => $row_machine_id]);
                 }
                 // Optionally push to UC site if site_url available (best-effort)
                 if (!empty($site_url)) {
-                    tmon_admin_push_to_uc_site($unit_id, $site_url, $role, $unit_name, $company_id, null, null, $firmware, $firmware_url);
+                    tmon_admin_push_to_uc_site($row_unit_id, $site_url, $role, $row_tmp['unit_name'] ?? $row_unit_id, intval($company_id ?? 0), null, null, $firmware, $firmware_url);
                 }
             } else {
                 // If not provisioning, just redirect
@@ -279,121 +275,42 @@ function tmon_admin_provisioning_page() {
                 wp_redirect($redirect_url);
                 exit;
             }
-        } else {
-            if ($id) {
-                $fields = [
-                    'role' => $role,
-                    'plan' => $plan,
-                    'status' => $status,
-                    'company_id' => $company_id,
-                    'notes' => $notes,
-                    'site_url' => $site_url,
-                    'firmware' => $firmware,
-                    'firmware_url' => $firmware_url,
-                    'unit_id_norm' => $unit_norm, // ensure persisted
-                    'machine_id_norm' => $mac_norm, // ensure persisted
-                ];
-                $wpdb->update($prov_table, $fields, ['id' => $id]);
-                error_log("tmon-admin: updated prov_row id={$id} normalized unit_norm={$unit_norm} machine_norm={$mac_norm}");
-
-                // If inline Save & Provision was clicked, mark staged AND ensure normalized flags
-                if ($do_provision) {
-                    if (!empty($mac_norm)) {
-                        $wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['machine_id_norm' => $mac_norm]);
-                    } else {
-                        // fallback to row machine_id if no normalized set
-                        $wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['machine_id' => $row_tmp['machine_id'] ?? '']);
-                    }
-                    if (!empty($unit_norm)) {
-                        $wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['unit_id_norm' => $unit_norm]);
-                    } else {
-                        $wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['unit_id' => $row_tmp['unit_id'] ?? '']);
-                    }
-                    error_log("tmon-admin: set settings_staged=1 for prov_row id={$id} normalized unit_norm={$unit_norm} machine_norm={$mac_norm}");
-                }
-                // (1) provisioning_page -> id != 0 branch (table row update Save & Provision)
-                if ($id && $do_provision) {
-                    // Build payload similar to create paths
-                    $row_unit_id = $row_tmp['unit_id'] ?? $unit_id ?? '';
-                    $row_machine_id = $row_tmp['machine_id'] ?? $machine_id ?? '';
-
-                    $payload = [
-                        'site_url' => $site_url,
-                        'wordpress_api_url' => $site_url,
-                        'unit_name' => $row_tmp['unit_name'] ?? $unit_name ?? '',
-                        'firmware' => $firmware ?? '',
-                        'firmware_url' => $firmware_url ?? '',
-                        'role' => $role ?? '',
-                        'plan' => $plan ?? '',
-                        'notes' => $notes ?? '',
-                        'requested_by_user' => wp_get_current_user()->user_login ?: 'system',
-                        'requested_at' => current_time('mysql'),
-                        'unit_id' => $row_unit_id,
-                        'machine_id' => $row_machine_id,
-                    ];
-                    // Enqueue for both machine and unit (best-effort)
-                    if (!empty($row_machine_id)) {
-                        tmon_admin_enqueue_provision($row_machine_id, $payload);
-                        error_log("tmon-admin: enqueued provision (row update) for machine={$row_machine_id}");
-                    }
-                    if (!empty($row_unit_id) && $row_unit_id !== $row_machine_id) {
-                        tmon_admin_enqueue_provision($row_unit_id, $payload);
-                        error_log("tmon-admin: enqueued provision (row update) for unit={$row_unit_id}");
-                    }
-                    // Mirror to tmon_devices (ensure provisioned / wordpress_api_url persisted)
-                    $dev_table = $wpdb->prefix . 'tmon_devices';
-                    if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
-                        $dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
-                        $mirror = ['last_seen' => current_time('mysql')];
-                        if (in_array('provisioned', $dev_cols)) $mirror['provisioned'] = 1; else $mirror['status'] = 'provisioned';
-                        if (in_array('wordpress_api_url', $dev_cols)) $mirror['wordpress_api_url'] = $payload['wordpress_api_url'];
-                        if (in_array('site_url', $dev_cols)) $mirror['site_url'] = $payload['site_url'];
-                        if (in_array('unit_name', $dev_cols) && !empty($payload['unit_name'])) $mirror['unit_name'] = $payload['unit_name'];
-                        if (in_array('provisioned_at', $dev_cols)) $mirror['provisioned_at'] = current_time('mysql');
-                        if (!empty($row_unit_id)) $wpdb->update($dev_table, $mirror, ['unit_id' => $row_unit_id]);
-                        elseif (!empty($row_machine_id)) $wpdb->update($dev_table, $mirror, ['machine_id' => $row_machine_id]);
-                    }
-                    // Attempt push to UC site
-                    if (!empty($site_url)) {
-                        tmon_admin_push_to_uc_site($row_unit_id, $site_url, $role, $row_tmp['unit_name'] ?? $row_unit_id, intval($company_id ?? 0), null, null, $firmware, $firmware_url);
-                    }
-                }
-            }
-        } elseif ($action === 'delete') {
-            // --- NEW: Delete per-row handler (supports provisioned entries by id or unit/machine combo) ---
-            $id = intval($_POST['id'] ?? 0);
-            if ($id > 0) {
-                // Delete provisioned row by id
-                $wpdb->delete($prov_table, ['id' => $id]);
-                $redirect_url = add_query_arg('provision', 'success', $redirect_url);
-                wp_redirect($redirect_url);
-                exit;
-            }
-            // fallback: accept unit_id+machine_id to delete unprovisioned local mirror row or provisioned row if present
-            $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
-            $machine_id = sanitize_text_field($_POST['machine_id'] ?? '');
-            if ($unit_id && $machine_id) {
-                // prefer to delete from provisioned table if entry exists
-                $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM $prov_table WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id));
-                if ($exists) {
-                    $wpdb->delete($prov_table, ['id' => intval($exists)]);
-                    $redirect_url = add_query_arg('provision', 'success', $redirect_url);
-                    wp_redirect($redirect_url);
-                    exit;
-                }
-                // else delete from local devices mirror if present
-                $dev_table = $wpdb->prefix . 'tmon_devices';
-                if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
-                    $deleted = $wpdb->delete($dev_table, ['unit_id' => $unit_id, 'machine_id' => $machine_id]);
-                    $redirect_url = add_query_arg('provision', $deleted ? 'success' : 'fail', $redirect_url);
-                    wp_redirect($redirect_url);
-                    exit;
-                }
-            }
-            // If no valid deletion criteria, mark fail
-            $redirect_url = add_query_arg('provision', 'fail', $redirect_url);
-            wp_redirect($redirect_url);
-            exit;
+        }  // end if ($action === 'update')
+        elseif ($action === 'delete') {
+             // --- NEW: Delete per-row handler (supports provisioned entries by id or unit/machine combo) ---
+             $id = intval($_POST['id'] ?? 0);
+             if ($id > 0) {
+                 // Delete provisioned row by id
+                 $wpdb->delete($prov_table, ['id' => $id]);
+                 $redirect_url = add_query_arg('provision', 'success', $redirect_url);
+                 wp_redirect($redirect_url);
+                 exit;
+             }
+             // fallback: accept unit_id+machine_id to delete unprovisioned local mirror row or provisioned row if present
+             $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
+             $machine_id = sanitize_text_field($_POST['machine_id'] ?? '');
+             if ($unit_id && $machine_id) {
+                 // prefer to delete from provisioned table if entry exists
+                 $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM $prov_table WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id));
+                 if ($exists) {
+                     $wpdb->delete($prov_table, ['id' => intval($exists)]);
+                     $redirect_url = add_query_arg('provision', 'success', $redirect_url);
+                     wp_redirect($redirect_url);
+                     exit;
+                 }
+                 // else delete from local devices mirror if present
+                 $dev_table = $wpdb->prefix . 'tmon_devices';
+                 if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+                     $deleted = $wpdb->delete($dev_table, ['unit_id' => $unit_id, 'machine_id' => $machine_id]);
+                     $redirect_url = add_query_arg('provision', $deleted ? 'success' : 'fail', $redirect_url);
+                     wp_redirect($redirect_url);
+                     exit;
+                 }
+             }
+             // If no valid deletion criteria, mark fail
+             $redirect_url = add_query_arg('provision', 'fail', $redirect_url);
+             wp_redirect($redirect_url);
+             exit;
         } elseif ($action === 'push_config') {
             // Push configuration to a Unit Connector site as a settings_update command
             $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
@@ -1797,17 +1714,12 @@ if ($action === 'update') {
     $mac_norm = tmon_admin_normalize_mac($machine_id);
 
     // Ensure $exists is defined for this branch (look up by keys)
-    $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM {$prov_table} WHERE unit_id=%s AND machine_id=%s", $unit_id, $machine_id));
-    if ($exists) {
-        $wpdb->update($prov_table, $data, ['id' => $exists]);
-    } else {
-        $wpdb->insert($prov_table, $data);
-    }
-
-    // Always set these so later mirror updates have canonical id vars
-    $row_unit_id = $unit_id;
-    $row_machine_id = $machine_id;
-
+    // $exists is computed later and update/insert logic handled below; no direct $data upsert here.
+ 
+     // Always set these so later mirror updates have canonical id vars
+     $row_unit_id = $unit_id;
+     $row_machine_id = $machine_id;
+ 
     // Update staged flags using normalized columns
     if ($do_provision) {
         if (!empty($mac_norm)) {
