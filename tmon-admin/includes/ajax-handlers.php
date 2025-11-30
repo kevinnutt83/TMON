@@ -629,9 +629,45 @@ if (!function_exists('tmon_admin_dequeue_provision')) {
 		if (!empty($removed)) {
 			update_option('tmon_admin_pending_provision', $queue);
 			error_log('tmon-admin: Dequeued provision entries for key=' . $key_norm . ' removed=' . count($removed));
+			// Record provisioning history for queue dequeue events (include first removed payload for context)
+			$first = reset($removed);
+			tmon_admin_record_provision_history([
+				'action' => 'dequeued',
+				'key' => $key_norm,
+				'removed_keys' => array_keys($removed),
+				'payload' => is_array($first) ? $first : [],
+				'note' => sprintf('Dequeued %d queue entries for key=%s', count($removed), $key_norm)
+			]);
 			return array_shift($removed);
 		}
 		return null;
+	}
+}
+
+// Add a helper to append to provisioning history option with structured entries
+if (!function_exists('tmon_admin_record_provision_history')) {
+	function tmon_admin_record_provision_history(array $entry) {
+		$history = get_option('tmon_admin_provision_history', []);
+		if (!is_array($history)) $history = [];
+		$now = current_time('mysql');
+		$user = (function_exists('wp_get_current_user')) ? wp_get_current_user()->user_login : 'system';
+		$entry['ts'] = $now;
+		if (!isset($entry['user'])) $entry['user'] = $user ?: 'system';
+		// Ensure small payload for options; keep limited size by trimming very long payloads
+		if (isset($entry['payload']) && is_array($entry['payload'])) {
+			$cloned = $entry['payload'];
+			// remove deeply nested fields or huge arrays
+			if (isset($cloned['data']) && is_array($cloned['data'])) {
+				$cloned['data'] = array_slice($cloned['data'], 0, 16);
+			}
+			$entry['payload'] = $cloned;
+		}
+		$history[] = $entry;
+		// Keep history bounded to ~500 items to avoid option bloat
+		if (count($history) > 500) {
+			$history = array_slice($history, -500);
+		}
+		update_option('tmon_admin_provision_history', $history);
 	}
 }
 

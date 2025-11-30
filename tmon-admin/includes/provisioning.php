@@ -1631,7 +1631,7 @@ add_action('admin_post_tmon_admin_provision_device', function() {
         $row_id = $exists ?: $wpdb->insert_id;
         // FIXED: ensure proper parentheses in IF statement
         if ($row_id) {
-            $wpdb->update($table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['id' => intval($row_id)]);
+            $wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['id' => intval($row_id)]);
             error_log(sprintf("tmon-admin: set settings_staged=1 for prov_row id=%d unit_id=%s machine_id=%s user=%s", intval($row_id), esc_html($unit_id), esc_html($machine_id), wp_get_current_user()->user_login));
         }
         // build payload to enqueue
@@ -1853,22 +1853,15 @@ add_action('rest_api_init', function() {
 				$payload['unit_id'] = $db_row['unit_id'] ?? ($unit_id ?? '');
 				$payload['machine_id'] = $db_row['machine_id'] ?? ($machine_id ?? '');
 
-				// Prepare list of dequeued keys for history
-				$dequeued_keys = [];
-
 				// Dequeue any pending queue entries that reference this same payload (clean up)
+				$dequeued_keys = [];
 				if (!empty($payload['machine_id'])) {
-					$t = tmon_admin_dequeue_provision($payload['machine_id']);
-					if ($t) $dequeued_keys[] = $payload['machine_id'];
+					$d = tmon_admin_dequeue_provision($payload['machine_id']);
+					if ($d) $dequeued_keys[] = $payload['machine_id'];
 				}
 				if (!empty($payload['unit_id'])) {
-					$t = tmon_admin_dequeue_provision($payload['unit_id']);
-					if ($t) $dequeued_keys[] = $payload['unit_id'];
-				}
-				// Also ensure we remove the matched helper key if present
-				if (!empty($found['key']) && !in_array($found['key'], $dequeued_keys, true)) {
-					$t = tmon_admin_dequeue_provision($found['key']);
-					if ($t) $dequeued_keys[] = $found['key'];
+					$d2 = tmon_admin_dequeue_provision($payload['unit_id']);
+					if ($d2) $dequeued_keys[] = $payload['unit_id'];
 				}
 
 				// Clear DB staged flags by normalized columns if present (prefer norm)
@@ -1904,17 +1897,18 @@ add_action('rest_api_init', function() {
 					elseif (!empty($payload['machine_id'])) $wpdb->update($dev_table, $mirror, ['machine_id' => $payload['machine_id']]);
 				}
 
-				// Audit: add provisioning history entry for DB-delivered payload
-				tmon_admin_provision_history_add([
-					'action' => 'delivered_db',
-					'unit_id' => $payload['unit_id'],
-					'machine_id' => $payload['machine_id'],
-					'db_id' => intval($db_row['id'] ?? 0),
-					'matched_key' => $found['key'] ?? '',
-					'dequeued_keys' => $dequeued_keys,
-					'site' => $payload['site_url'] ?? '',
-					'notes' => 'Delivered DB-staged payload to device',
-				]);
+				// Record audit in provisioning history for DB-based delivery
+				if (function_exists('tmon_admin_record_provision_history')) {
+					tmon_admin_record_provision_history([
+						'action' => 'db_delivered',
+						'unit_id' => $payload['unit_id'] ?? '',
+						'machine_id' => $payload['machine_id'] ?? '',
+						'db_prov_id' => $db_row['id'] ?? null,
+						'dequeued_keys' => array_values(array_filter($dequeued_keys)),
+						'payload' => $payload,
+						'note' => 'Delivered staged payload found in DB (settings_staged)'
+					]);
+				}
 
 				// Deliver payload so device sees staged_exists=true
 				if (!empty($payload)) {
@@ -1927,26 +1921,22 @@ add_action('rest_api_init', function() {
 			// ...existing queue fallback code...
 
 			// If queue/fallback matched, deliver payload and clear DB staged flags
-			// Insert audit for queue delivered path
+			// add audit history entry for queue->device delivery here
 			if ($found['found'] === 'queue' && !empty($found['queued'])) {
-                $queued = $found['queued'];
-                // Dequeue any pending queue entries that reference this same payload (clean up)
-                $dequeue_report = [];
-                if (!empty($found['key'])) $dequeue_report[] = $found['key'];
-                if (!empty($queued['machine_id'])) $dequeue_report[] = $queued['machine_id'];
-                if (!empty($queued['unit_id'])) $dequeue_report[] = $queued['unit_id'];
-
-                tmon_admin_provision_history_add([
-                    'action' => 'delivered_queue',
-                    'unit_id' => $queued['unit_id'] ?? '',
-                    'machine_id' => $queued['machine_id'] ?? '',
-                    'matched_key' => $found['key'] ?? '',
-                    'dequeued_keys' => array_values(array_unique(array_filter($dequeue_report))),
-                    'site' => $queued['site_url'] ?? '',
-                    'notes' => 'Delivered queued payload to device',
-                ]);
-
-				// ...existing return rest_ensure_response ...
+				$queued = $found['queued'];
+				// record queue delivery to history along with any keys dequeued and queued-by user
+				if (function_exists('tmon_admin_record_provision_history')) {
+					tmon_admin_record_provision_history([
+						'action' => 'queue_delivered',
+						'unit_id' => $queued['unit_id'] ?? ($unit_id ?? ''),
+						'machine_id' => $queued['machine_id'] ?? ($machine_id ?? ''),
+						'queue_key' => $found['key'] ?? '',
+						'queued_by' => $queued['requested_by_user'] ?? '',
+						'dequeued_keys' => isset($queued['machine_id']) || isset($queued['unit_id']) ? array_values(array_filter([$queued['machine_id'] ?? null, $queued['unit_id'] ?? null])) : [],
+						'payload' => $queued,
+						'note' => 'Delivered queued payload and cleared staged flags'
+					]);
+				}
 			}
 
 			// Nothing found, return empty response
@@ -1954,29 +1944,3 @@ add_action('rest_api_init', function() {
 		}
 	]);
 });
-
-// Small helper to append provisioning history entries (bounded to 500 rows)
-if (!function_exists('tmon_admin_provision_history_add')) {
-	function tmon_admin_provision_history_add($entry) {
-		if (!is_array($entry)) $entry = (array)$entry;
-		$hist = get_option('tmon_admin_provision_history', []);
-		if (!is_array($hist)) $hist = [];
-		$entry['time'] = current_time('mysql');
-		// Keep only essential fields; ensure JSON-encodable
-		if (isset($entry['payload']) && is_array($entry['payload'])) {
-			// Keep the payload but don't store excessively large structures
-			$entry['payload_summary'] = [
-				'unit_id' => $entry['payload']['unit_id'] ?? ($entry['unit_id'] ?? ''),
-				'machine_id' => $entry['payload']['machine_id'] ?? ($entry['machine_id'] ?? ''),
-				'site_url' => $entry['payload']['site_url'] ?? '',
-				'firmware' => $entry['payload']['firmware'] ?? '',
-				'notes' => isset($entry['payload']['notes']) ? substr($entry['payload']['notes'], 0, 256) : '',
-			];
-			unset($entry['payload']); // keep payload under 'payload_summary' to avoid huge DB writes
-		}
-		$hist[] = $entry;
-		// Keep list limited
-		while (count($hist) > 500) array_shift($hist);
-		update_option('tmon_admin_provision_history', $hist, false);
-	}
-}
