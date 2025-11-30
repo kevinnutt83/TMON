@@ -334,7 +334,53 @@ function tmon_admin_provisioning_page() {
                         }
                         error_log("tmon-admin: set settings_staged=1 for prov_row id={$id} normalized unit_norm={$unit_norm} machine_norm={$mac_norm}");
                     }
-                    // ...existing enqueue + mirror...
+                    // (1) provisioning_page -> id != 0 branch (table row update Save & Provision)
+                    if ($id && $do_provision) {
+                        // Build payload similar to create paths
+                        $row_unit_id = $row_tmp['unit_id'] ?? $unit_id ?? '';
+                        $row_machine_id = $row_tmp['machine_id'] ?? $machine_id ?? '';
+
+                        $payload = [
+                            'site_url' => $site_url,
+                            'wordpress_api_url' => $site_url,
+                            'unit_name' => $row_tmp['unit_name'] ?? $unit_name ?? '',
+                            'firmware' => $firmware ?? '',
+                            'firmware_url' => $firmware_url ?? '',
+                            'role' => $role ?? '',
+                            'plan' => $plan ?? '',
+                            'notes' => $notes ?? '',
+                            'requested_by_user' => wp_get_current_user()->user_login ?: 'system',
+                            'requested_at' => current_time('mysql'),
+                            'unit_id' => $row_unit_id,
+                            'machine_id' => $row_machine_id,
+                        ];
+                        // Enqueue for both machine and unit (best-effort)
+                        if (!empty($row_machine_id)) {
+                            tmon_admin_enqueue_provision($row_machine_id, $payload);
+                            error_log("tmon-admin: enqueued provision (row update) for machine={$row_machine_id}");
+                        }
+                        if (!empty($row_unit_id) && $row_unit_id !== $row_machine_id) {
+                            tmon_admin_enqueue_provision($row_unit_id, $payload);
+                            error_log("tmon-admin: enqueued provision (row update) for unit={$row_unit_id}");
+                        }
+                        // Mirror to tmon_devices (ensure provisioned / wordpress_api_url persisted)
+                        $dev_table = $wpdb->prefix . 'tmon_devices';
+                        if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+                            $dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
+                            $mirror = ['last_seen' => current_time('mysql')];
+                            if (in_array('provisioned', $dev_cols)) $mirror['provisioned'] = 1; else $mirror['status'] = 'provisioned';
+                            if (in_array('wordpress_api_url', $dev_cols)) $mirror['wordpress_api_url'] = $payload['wordpress_api_url'];
+                            if (in_array('site_url', $dev_cols)) $mirror['site_url'] = $payload['site_url'];
+                            if (in_array('unit_name', $dev_cols) && !empty($payload['unit_name'])) $mirror['unit_name'] = $payload['unit_name'];
+                            if (in_array('provisioned_at', $dev_cols)) $mirror['provisioned_at'] = current_time('mysql');
+                            if (!empty($row_unit_id)) $wpdb->update($dev_table, $mirror, ['unit_id' => $row_unit_id]);
+                            elseif (!empty($row_machine_id)) $wpdb->update($dev_table, $mirror, ['machine_id' => $row_machine_id]);
+                        }
+                        // Attempt push to UC site
+                        if (!empty($site_url)) {
+                            tmon_admin_push_to_uc_site($row_unit_id, $site_url, $role, $row_tmp['unit_name'] ?? $row_unit_id, intval($company_id ?? 0), null, null, $firmware, $firmware_url);
+                        }
+                    }
                 }
             }
         } elseif ($action === 'delete') {
@@ -1647,24 +1693,49 @@ add_action('admin_post_tmon_admin_provision_device', function() {
     if ($save_provision) {
         $row_id = $exists ?: $wpdb->insert_id;
         if ($row_id) {
-            // Use $prov_table (same as $table) to avoid undefined variable errors
-            $wpdb->update($prov_table, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['id' => intval($row_id)]);
-            error_log(sprintf("tmon-admin: set settings_staged=1 for prov_row id=%d unit_id=%s machine_id=%s user=%s", intval($row_id), esc_html($unit_id), esc_html($machine_id), wp_get_current_user()->user_login));
-            // Also record this as staged_set with a short note for auditing
-            if (function_exists('tmon_admin_record_provision_history')) {
-                $history_entry = array(
-                    'action' => 'staged_set',
-                    'unit_id' => $unit_id,
-                    'machine_id' => $machine_id,
-                    'user' => wp_get_current_user()->user_login ?: 'system',
-                    'payload' => $payload,
-                    'note' => 'Inline Save & Provision: queued and staged'
-                );
-                tmon_admin_record_provision_history($history_entry);
-                error_log("tmon-admin: recorded staged_set (inline) for unit={$unit_id} machine={$machine_id}");
+            // Build payload (use $data for canonical keys)
+            $payload = [
+                'site_url' => $site_url,
+                'wordpress_api_url' => $site_url,
+                'unit_name' => $unit_name,
+                'firmware' => $firmware,
+                'firmware_url' => $firmware_url,
+                'role' => $role,
+                'plan' => $plan,
+                'notes' => $notes,
+                'requested_by_user' => wp_get_current_user()->user_login ?: 'system',
+                'requested_at' => current_time('mysql'),
+                'unit_id' => $unit_id,
+                'machine_id' => $machine_id,
+            ];
+            // Enqueue for both machine and unit (best effort)
+            if (!empty($machine_id)) {
+                tmon_admin_enqueue_provision($machine_id, $payload);
+                error_log("tmon-admin: enqueued provision (admin_post) for machine={$machine_id}");
             }
+            if (!empty($unit_id) && $unit_id !== $machine_id) {
+                tmon_admin_enqueue_provision($unit_id, $payload);
+                error_log("tmon-admin: enqueued provision (admin_post) for unit={$unit_id}");
+            }
+            // Mirror to tmon_devices (table may or may not exist)
+            $dev_table = $wpdb->prefix . 'tmon_devices';
+            if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+                $dev_cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}");
+                $mirror = ['last_seen' => current_time('mysql')];
+                if (in_array('provisioned', $dev_cols)) $mirror['provisioned'] = 1; else $mirror['status'] = 'provisioned';
+                if (in_array('wordpress_api_url', $dev_cols)) $mirror['wordpress_api_url'] = $payload['wordpress_api_url'];
+                if (in_array('site_url', $dev_cols)) $mirror['site_url'] = $payload['site_url'];
+                if (in_array('unit_name', $dev_cols) && !empty($payload['unit_name'])) $mirror['unit_name'] = $payload['unit_name'];
+                if (in_array('provisioned_at', $dev_cols)) $mirror['provisioned_at'] = current_time('mysql');
+                if (!empty($unit_id)) $wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]);
+                elseif (!empty($machine_id)) $wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]);
+            }
+            // Try best-effort to push to a paired UC
+            if (!empty($site_url)) {
+                tmon_admin_push_to_uc_site($unit_id, $site_url, $role, $unit_name, $company_id, null, null, $firmware, $firmware_url);
+            }
+            // Small audit entry handled above already; next redirect
         }
-        // ...existing enqueue + mirror...
     }
 
     // Redirect with success
@@ -1831,7 +1902,7 @@ add_action('rest_api_init', function() {
             }
 
             // FALLBACK: If helper didn't find anything, scan the pending queue for a usable payload
-            // Rest handler queue fallback: try helper then direct pending queue lookup
+            // Rest handler queue fallback: try helper then direct pending lookup
             $queued_payload = null;
             $queue_key = '';
             if (function_exists('tmon_admin_find_queued_payload_for_device')) {
