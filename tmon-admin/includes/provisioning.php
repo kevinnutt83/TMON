@@ -1727,12 +1727,12 @@ add_action('admin_post_tmon_admin_provision_device', function() {
                 if (in_array('site_url', $dev_cols)) $mirror['site_url'] = $payload['site_url'];
                 if (in_array('unit_name', $dev_cols) && !empty($payload['unit_name'])) $mirror['unit_name'] = $payload['unit_name'];
                 if (in_array('provisioned_at', $dev_cols)) $mirror['provisioned_at'] = current_time('mysql');
-                if (!empty($unit_id)) $wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]);
-                elseif (!empty($machine_id)) $wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]);
+                if (!empty($row_unit_id)) $wpdb->update($dev_table, $mirror, ['unit_id' => $row_unit_id]);
+                elseif (!empty($row_machine_id)) $wpdb->update($dev_table, $mirror, ['machine_id' => $row_machine_id]);
             }
             // Try best-effort to push to a paired UC
             if (!empty($site_url)) {
-                tmon_admin_push_to_uc_site($unit_id, $site_url, $role, $unit_name, $company_id, null, null, $firmware, $firmware_url);
+                tmon_admin_push_to_uc_site($row_unit_id, $site_url, $role, $row_tmp['unit_name'] ?? $row_unit_id, intval($company_id ?? 0), null, null, $firmware, $firmware_url);
             }
             // Small audit entry handled above already; next redirect
         }
@@ -1759,6 +1759,15 @@ add_action('rest_api_init', function() {
 
             $found = tmon_admin_find_queued_or_staged($machine_id, $unit_id);
             error_log('tmon-admin: find_queued_or_staged found=' . var_export($found['found'], true) . ' matched_key=' . var_export($found['key'], true) . ' candidates=' . json_encode([$machine_id, $unit_id]) );
+
+            // Add early handling of a 'queue' match so we don't ignore queued results returned by the helper
+            $queued_payload = null;
+            $queue_key = '';
+            if (!empty($found['found']) && $found['found'] === 'queue' && !empty($found['queued'])) {
+                $queue_key = $found['key'];
+                $queued_payload = $found['queued'];
+                error_log('tmon-admin: find_queued_or_staged returned queue match for key=' . var_export($queue_key, true));
+            }
 
             // NEW: If not found by helper, run a robust DB fallback (normalized + raw checks)
             if (empty($found['found']) || $found['found'] === false) {
@@ -1905,23 +1914,25 @@ add_action('rest_api_init', function() {
                 }
             }
 
-            // FALLBACK: If helper didn't find anything, scan the pending queue for a usable payload
-            // Rest handler queue fallback: try helper then direct pending lookup
-            $queued_payload = null;
-            $queue_key = '';
-            if (function_exists('tmon_admin_find_queued_payload_for_device')) {
-                $qp = tmon_admin_find_queued_payload_for_device($machine_id, $unit_id);
-                if (is_array($qp) && count($qp) >= 2) {
-                    $queue_key = $qp[0];
-                    $queued_payload = $qp[1];
-                    error_log('tmon-admin: queue fallback matched via helper for key=' . var_export($queue_key, true));
+            // FALLBACK: If helper didn't find anything or we have a queued result from helper, scan the queue for a usable payload
+            // We already pre-initialized $queued_payload above if the helper returned a 'queue' match.
+            if ($queued_payload === null) {
+                // Rest handler queue fallback: try helper then direct pending lookup
+                if (function_exists('tmon_admin_find_queued_payload_for_device')) {
+                    $qp = tmon_admin_find_queued_payload_for_device($machine_id, $unit_id);
+                    if (is_array($qp) && count($qp) >= 2) {
+                        $queue_key = $qp[0];
+                        $queued_payload = $qp[1];
+                        error_log('tmon-admin: queue fallback matched via helper for key=' . var_export($queue_key, true));
+                    }
                 }
             }
+
             // Fallback: older helper-style lookup: direct pending lookup by canonical key
             if ($queued_payload === null) {
                 $key_cands = [];
-                if (!empty($machine_id)) $key_cands[] = tmon_admin_normalize_key($machine_id);
-                if (!empty($unit_id)) $key_cands[] = tmon_admin_normalize_key($unit_id);
+                if (!empty($machine_id)) $key_cands[] = tmon_admin_normalize_queue_key($machine_id); // <-- use normalized queue key helper
+                if (!empty($unit_id)) $key_cands[] = tmon_admin_normalize_queue_key($unit_id);      // <-- use normalized queue key helper
                 $key_cands = array_values(array_unique(array_filter($key_cands)));
                 foreach ($key_cands as $kc) {
                     $existing = function_exists('tmon_admin_get_pending_provision') ? tmon_admin_get_pending_provision($kc) : null;
