@@ -1897,7 +1897,11 @@ add_action('rest_api_init', function() {
                 // Deliver payload so device sees staged_exists=true
                 if (!empty($payload)) {
                     error_log('tmon-admin: delivering staged payload derived from DB for machine=' . ($payload['machine_id'] ?? '') . ' unit=' . ($payload['unit_id'] ?? ''));
-                    return rest_ensure_response(['status' => 'ok', 'provisioned' => true, 'staged_exists' => true, 'provision' => $payload], 200);
+                    // Debug log HTTP payload we're returning so we can inspect what the device sees
+                    error_log('tmon-admin: delivering payload (db_delivered) ' . wp_json_encode($payload));
+                    // IMPORTANT: return provisioned=false so the device treats this as staged config to apply,
+                    // otherwise the firmware may set itself provisioned and ignore staged payload
+                    return rest_ensure_response(array('status' => 'ok', 'provisioned' => false, 'staged_exists' => true, 'provision' => $payload), 200);
                 }
             }
 
@@ -2008,7 +2012,10 @@ add_action('rest_api_init', function() {
                 // Deliver queued payload to device, guarantee both site keys present to match device expectations
                 $queued_payload['wordpress_api_url'] = !empty($queued_payload['wordpress_api_url']) ? $queued_payload['wordpress_api_url'] : (!empty($queued_payload['site_url']) ? $queued_payload['site_url'] : '');
                 if (!empty($queued_payload)) {
-                    return rest_ensure_response(array('status' => 'ok', 'provisioned' => true, 'staged_exists' => true, 'provision' => $queued_payload), 200);
+                    // Debug log the queued payload being returned
+                    error_log('tmon-admin: delivering queued payload ' . wp_json_encode($queued_payload) . ' for key=' . $queue_key);
+                    // Return provisioned=false with staged_exists=true so device will apply staged settings
+                    return rest_ensure_response(array('status' => 'ok', 'provisioned' => false, 'staged_exists' => true, 'provision' => $queued_payload), 200);
                 }
             }
 
