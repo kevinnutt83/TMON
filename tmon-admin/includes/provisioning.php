@@ -1796,7 +1796,13 @@ add_action('rest_api_init', function() {
             // add audit history entry for queue->device delivery here
             if ($found['found'] === 'queue' && !empty($found['queued'])) {
                 $queued = $found['queued'];
-                // record queue delivery to history along with any keys dequeued and queued-by user
+
+                // compute dequeued keys list in a short block (safer than inline ternary)
+                $dq_keys = [];
+                if (!empty($queued['machine_id'])) $dq_keys[] = $queued['machine_id'];
+                if (!empty($queued['unit_id'])) $dq_keys[] = $queued['unit_id'];
+
+                // record queue delivery to history with simple, safe arrays
                 if (function_exists('tmon_admin_record_provision_history')) {
                     tmon_admin_record_provision_history([
                         'action' => 'queue_delivered',
@@ -1804,7 +1810,7 @@ add_action('rest_api_init', function() {
                         'machine_id' => $queued['machine_id'] ?? ($machine_id ?? ''),
                         'queue_key' => $found['key'] ?? '',
                         'queued_by' => $queued['requested_by_user'] ?? '',
-                        'dequeued_keys' => isset($queued['machine_id']) || isset($queued['unit_id']) ? array_values(array_filter([$queued['machine_id'] ?? null, $queued['unit_id'] ?? null])) : [],
+                        'dequeued_keys' => $dq_keys,
                         'payload' => $queued,
                         'note' => 'Delivered queued payload and cleared staged flags'
                     ]);
