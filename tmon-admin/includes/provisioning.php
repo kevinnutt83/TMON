@@ -1760,16 +1760,44 @@ add_action('rest_api_init', function() {
             $found = tmon_admin_find_queued_or_staged($machine_id, $unit_id);
             error_log('tmon-admin: find_queued_or_staged found=' . var_export($found['found'], true) . ' matched_key=' . var_export($found['key'], true) . ' candidates=' . json_encode([$machine_id, $unit_id]) );
 
-            // Add early handling of a 'queue' match so we don't ignore queued results returned by the helper
+            // --- NEW: Robust normalized queue detection (for machine_iD/mac & unit_id)
             $queued_payload = null;
             $queue_key = '';
+
+            // If helper returned 'queue', use it
             if (!empty($found['found']) && $found['found'] === 'queue' && !empty($found['queued'])) {
                 $queue_key = $found['key'];
                 $queued_payload = $found['queued'];
                 error_log('tmon-admin: find_queued_or_staged returned queue match for key=' . var_export($queue_key, true));
             }
 
-            // NEW: If not found by helper, run a robust DB fallback (normalized + raw checks)
+            // If not matched yet, inspect pending queue using normalized queue key helper.
+            if ($queued_payload === null) {
+                $pending = get_option('tmon_admin_pending_provision', []);
+                if (is_array($pending) && count($pending)) {
+                    $cands = [];
+                    if (!empty($machine_id)) $cands[] = tmon_admin_normalize_queue_key($machine_id);
+                    if (!empty($machine_id)) $cands[] = tmon_admin_normalize_mac($machine_id);
+                    if (!empty($unit_id)) $cands[] = tmon_admin_normalize_queue_key($unit_id);
+                    if (!empty($unit_id)) $cands[] = tmon_admin_normalize_key($unit_id);
+                    // also include raw lowercase forms as a fallback
+                    if (!empty($machine_id)) $cands[] = strtolower(trim($machine_id));
+                    if (!empty($unit_id)) $cands[] = strtolower(trim($unit_id));
+                    $cands = array_values(array_unique(array_filter($cands)));
+                    error_log('tmon-admin: queue candidates for lookup: ' . json_encode($cands));
+                    foreach ($cands as $kc) {
+                        if ($kc === '') continue;
+                        if (isset($pending[$kc])) {
+                            $queue_key = $kc;
+                            $queued_payload = $pending[$kc];
+                            error_log("tmon-admin: matched queued payload using normalized key={$kc}");
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // --- continue DB fallback when helper didn't find anything ---
             if (empty($found['found']) || $found['found'] === false) {
                 $candidates = [];
                 if (!empty($machine_id)) $candidates[] = tmon_admin_normalize_mac($machine_id);
