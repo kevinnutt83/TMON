@@ -411,10 +411,15 @@ if (!function_exists('tmon_admin_handle_device_check_in')) {
 		global $wpdb;
 		$params     = $request->get_json_params();
 		$machine_id = isset($params['machine_id']) ? sanitize_text_field($params['machine_id']) : '';
+		$unit_id    = isset($params['unit_id']) ? sanitize_text_field($params['unit_id']) : '';
 
 		if (!$machine_id) {
 			return new WP_REST_Response(['error' => 'machine_id required'], 400);
 		}
+
+		// Normalize (optional)
+		$norm_machine = function_exists('tmon_admin_normalize_mac') ? tmon_admin_normalize_mac($machine_id) : strtolower($machine_id);
+		$norm_unit    = function_exists('tmon_admin_normalize_key') ? tmon_admin_normalize_key($unit_id) : strtolower($unit_id);
 
 		$table  = $wpdb->prefix . 'tmon_devices';
 		$device = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$table} WHERE machine_id = %s", $machine_id));
@@ -452,13 +457,41 @@ if (!function_exists('tmon_admin_handle_device_check_in')) {
 			$wpdb->update($table, ['last_seen' => current_time('mysql')], ['machine_id' => $machine_id]);
 		}
 
-		$response = [
-			'unit_id'     => $device->unit_id,
-			'provisioned' => (int) $device->provisioned === 1,
-			'suspended'   => (int) $device->suspended === 1,
+		// Existing provisioned logic (assumed):
+		$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+		$prov_row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE unit_id=%s OR machine_id=%s LIMIT 1", $unit_id, $machine_id), ARRAY_A);
+		$provisioned = !empty($prov_row);
+
+		// NEW: staged + metadata helper
+		$staged_meta = function_exists('tmon_admin_get_staged_meta_for_device')
+			? tmon_admin_get_staged_meta_for_device($machine_id, $unit_id)
+			: ['staged_exists'=>false,'site_url'=>''];
+
+		// Build site URL / wordpress_api_url
+		$wordpress_api_url = $staged_meta['site_url'] ?? '';
+		if (empty($wordpress_api_url) && !empty($prov_row['site_url'])) {
+			$wordpress_api_url = $prov_row['site_url'];
+		}
+
+		// Response extension
+		$response_extra = [
+			'staged_exists'     => (bool) $staged_meta['staged_exists'],
+			'wordpress_api_url' => $wordpress_api_url,
+			'site_url'          => $wordpress_api_url, // alias for clarity
+			'role'              => $staged_meta['role'] ?: ($prov_row['role'] ?? ''),
+			'plan'              => $staged_meta['plan'] ?: ($prov_row['plan'] ?? ''),
+			'firmware'          => $staged_meta['firmware'] ?: ($prov_row['firmware'] ?? ''),
+			'firmware_url'      => $staged_meta['firmware_url'] ?: ($prov_row['firmware_url'] ?? ''),
+			'unit_name'         => $staged_meta['unit_name'] ?: ($prov_row['unit_name'] ?? ''),
 		];
 
-		return new WP_REST_Response($response, 200);
+		// Merge with existing response
+		return new WP_REST_Response(array_merge([
+			'provisioned' => $provisioned,
+			'unit_id'     => $prov_row['unit_id'] ?? $unit_id,
+			'machine_id'  => $machine_id,
+			'suspended'   => isset($prov_row['status']) && $prov_row['status'] === 'suspended',
+		], $response_extra), 200);
 	}
 }
 

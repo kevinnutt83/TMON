@@ -1711,3 +1711,61 @@ add_action('admin_post_tmon_admin_provision_device', function() {
     }
     exit;
 });
+
+if (!function_exists('tmon_admin_get_staged_meta_for_device')) {
+    function tmon_admin_get_staged_meta_for_device($machine_id, $unit_id) {
+        global $wpdb;
+        $out = [
+            'staged_exists' => false,
+            'source' => null,
+            'payload' => null,
+            'row' => null,
+            'site_url' => '',
+            'firmware' => '',
+            'firmware_url' => '',
+            'role' => '',
+            'plan' => '',
+            'unit_name' => '',
+        ];
+        $found = tmon_admin_find_queued_or_staged($machine_id, $unit_id);
+        if (is_array($found) && $found['found']) {
+            if ($found['found'] === 'queue' && !empty($found['queued'])) {
+                $out['staged_exists'] = true;
+                $out['source'] = 'queue';
+                $out['payload'] = $found['queued'];
+                $out['site_url'] = $found['queued']['site_url'] ?? $found['queued']['wordpress_api_url'] ?? '';
+                $out['firmware'] = $found['queued']['firmware'] ?? '';
+                $out['firmware_url'] = $found['queued']['firmware_url'] ?? '';
+                $out['role'] = $found['queued']['role'] ?? '';
+                $out['plan'] = $found['queued']['plan'] ?? '';
+                $out['unit_name'] = $found['queued']['unit_name'] ?? '';
+            } elseif ($found['found'] === 'db' && !empty($found['row'])) {
+                $r = $found['row'];
+                $out['staged_exists'] = true;
+                $out['source'] = 'db';
+                $out['row'] = $r;
+                $out['site_url'] = $r['site_url'] ?? '';
+                $out['firmware'] = $r['firmware'] ?? '';
+                $out['firmware_url'] = $r['firmware_url'] ?? '';
+                $out['role'] = $r['role'] ?? '';
+                $out['plan'] = $r['plan'] ?? '';
+                $out['unit_name'] = $r['unit_name'] ?? '';
+            }
+        }
+        // Fallback site_url from devices table if still empty
+        if (empty($out['site_url'])) {
+            $dev_table = $wpdb->prefix . 'tmon_devices';
+            if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+                $cand_id = !empty($unit_id) ? $unit_id : $machine_id;
+                if ($cand_id) {
+                    $drow = $wpdb->get_row($wpdb->prepare("SELECT site_url, wordpress_api_url, unit_name FROM {$dev_table} WHERE unit_id=%s OR machine_id=%s LIMIT 1", $cand_id, $cand_id), ARRAY_A);
+                    if ($drow) {
+                        if (empty($out['site_url'])) $out['site_url'] = $drow['site_url'] ?: ($drow['wordpress_api_url'] ?? '');
+                        if (empty($out['unit_name'])) $out['unit_name'] = $drow['unit_name'] ?? '';
+                    }
+                }
+            }
+        }
+        return $out;
+    }
+}
