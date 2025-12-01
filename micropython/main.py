@@ -288,24 +288,72 @@ async def first_boot_provision():
                         pass
                     # Guard: only soft reset once
                     guard_file = getattr(settings, 'PROVISION_REBOOT_GUARD_FILE', settings.LOG_DIR + '/provision_reboot.flag')
+                    # NEW: confirm applied provisioning to Admin with optional token
                     try:
-                        import uos as _os
-                        listed = _os.listdir(settings.LOG_DIR) if hasattr(_os, 'listdir') else []
-                        if guard_file.split('/')[-1] not in listed:
-                            with open(guard_file, 'w') as gf: gf.write('1')
-                            await debug_print('first_boot_provision: provisioning applied; soft resetting', 'PROVISION')
-                            import machine
-                            machine.soft_reset()
+                        token = getattr(settings, 'TMON_ADMIN_CONFIRM_TOKEN', '')
+                        confirm_url = hub.rstrip('/') + '/wp-json/tmon-admin/v1/device/confirm-applied'
+                        payload = {
+                            'unit_id': settings.UNIT_ID,
+                            'machine_id': mid,
+                            'wordpress_api_url': site_val,
+                            'role': settings.NODE_TYPE,
+                            'unit_name': getattr(settings, 'UNIT_Name', ''),
+                            'plan': getattr(settings, 'PLAN', ''),
+                            'firmware_version': getattr(settings, 'FIRMWARE_VERSION', '')
+                        }
+                        headers = {}
+                        if token:
+                            headers['X-TMON-CONFIRM'] = token
+                        try:
+                            # timeout kwarg may not exist; guard
+                            respc = requests.post(confirm_url, json=payload, headers=headers, timeout=8)
+                        except TypeError:
+                            respc = requests.post(confirm_url, json=payload, headers=headers)
+                        # ignore response; best-effort
+                        try:
+                            respc.close()
+                        except Exception:
+                            pass
                     except Exception:
                         pass
-            except Exception:
-                pass
+                    # ...existing code...
             # If remote node, disable WiFi after provisioning
             if getattr(settings, 'NODE_TYPE', 'base') == 'remote' and getattr(settings, 'WIFI_DISABLE_AFTER_PROVISION', True):
                 disable_wifi()
     except Exception as e:
         await debug_print('Provisioning check-in failed: %s' % e, 'ERROR')
 
+
+async def ota_boot_check():
+    """One-time early OTA version check to ensure latest firmware before starting tasks."""
+    try:
+        await check_for_update()
+    except Exception:
+        pass
+
+async def periodic_uc_checkin_task():
+    """Periodic Unit Connector check-in and telemetry for provisioned devices."""
+    try:
+        from wprest import register_with_wp, send_settings_to_wp, send_data_to_wp, poll_ota_jobs
+    except Exception:
+        register_with_wp = send_settings_to_wp = send_data_to_wp = poll_ota_jobs = None
+    interval = int(getattr(settings, 'UC_CHECKIN_INTERVAL_S', 300))
+    while True:
+        try:
+            # Only run when provisioned and WORDPRESS_API_URL set; skip if suspended
+            wp = getattr(settings, 'WORDPRESS_API_URL', '')
+            if wp and not getattr(settings, 'DEVICE_SUSPENDED', False):
+                if register_with_wp:
+                    await register_with_wp()
+                if send_settings_to_wp:
+                    await send_settings_to_wp()
+                if send_data_to_wp:
+                    await send_data_to_wp()
+                if poll_ota_jobs:
+                    await poll_ota_jobs()
+        except Exception as e:
+            await debug_print(f"UC check-in error: {e}", "ERROR")
+        await asyncio.sleep(interval)
 
 async def startup():
     tm = TaskManager()
@@ -314,6 +362,12 @@ async def startup():
         await first_boot_provision()
     except Exception as e:
         await debug_print('first_boot_provision error: %s' % e, 'ERROR')
+
+    # NEW: run a one-time OTA version check early
+    try:
+        await ota_boot_check()
+    except Exception:
+        pass
 
     # Dedicated LoRa loop cadence (configurable)
     lora_interval = int(getattr(settings, 'LORA_LOOP_INTERVAL_S', 1))
@@ -396,6 +450,12 @@ async def startup():
     try:
         import uasyncio as _a4
         _a4.create_task(ota_apply_task())
+    except Exception:
+        pass
+    # Launch periodic UC check-in loop when provisioned
+    try:
+        import uasyncio as _auc
+        _auc.create_task(periodic_uc_checkin_task())
     except Exception:
         pass
     await tm.run()

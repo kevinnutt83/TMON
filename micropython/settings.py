@@ -242,6 +242,13 @@ LORA_NETWORK_NAME = 'tmon'                # Secure network name (provisioned for
 LORA_NETWORK_PASSWORD = '12345'           # Simple password handshake (strengthen later)
 REMOTE_CHECKIN_INTERVAL_S = 300           # Default remote -> base sync period
 REMOTE_CHECKIN_JITTER_S = 5               # Jitter to avoid collisions
+
+# Runtime loop cadence
+LORA_LOOP_INTERVAL_S = 1  # LoRa task cadence in seconds; keep tight to avoid connection disruption
+
+# Unit Connector (WordPress) periodic check-in interval for provisioned devices
+UC_CHECKIN_INTERVAL_S = 300  # seconds
+
 BASE_REMOTE_TABLE_FILE = '/logs/remotes.table.json'  # Base-maintained remote registry
 
 # --- Field Data HMAC (optional) ---
