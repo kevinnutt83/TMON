@@ -1694,5 +1694,20 @@ add_action('admin_post_tmon_admin_provision_device', function() {
         }
     }
 
-    // ...existing redirect code ...
+    // --- Redirect-after-POST (restored) ---
+    $redirect_url = wp_get_referer();
+    if (!$redirect_url) {
+        $redirect_url = admin_url('admin.php?page=tmon-admin-provisioning');
+    }
+    // ensure clean provision param
+    $redirect_url = remove_query_arg('provision', $redirect_url);
+
+    if ($save_provision) {
+        // If site_url provided we attempted UC push; mark queued-notified, else queued
+        $status = !empty($site_url) ? 'queued-notified' : 'queued';
+        wp_safe_redirect(add_query_arg('provision', $status, $redirect_url));
+    } else {
+        wp_safe_redirect(add_query_arg('provision', 'success', $redirect_url));
+    }
+    exit;
 });
