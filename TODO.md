@@ -237,3 +237,49 @@
 - [ ] Add email notifications for provisioning events (optional).
 - [ ] Add per-device staging preview and direct push tools in UI.
 - [ ] Add tests to verify full provisioning lifecycle.
+
+# TMON Admin — Updated TODO
+
+Completed (from this session)
+- Fixed fatal parse error by removing stray standalone `if ($action === 'update')` block at file end.
+- Restored redirect-after-POST in `admin_post_tmon_admin_provision_device` with status: fail, success, queued, queued-notified.
+- Added firmware fields and GitHub manifest fetch (AJAX: `tmon_admin_fetch_github_manifest`) to top form and per-row actions.
+- Added migrations: normalized IDs (`unit_id_norm`, `machine_id_norm`), firmware metadata, settings_staged, device mirror columns.
+- Ensured queue helpers: enqueue/dequeue/lookup based on normalized keys.
+- Added diagnostic tools: known IDs refresh, queue/DB staging check, API calls and provisioning history tables.
+- Added claims approval/denial flow and provisioning history page callback.
+
+High-priority
+- Scope audit in provisioning page inline update branch:
+  - Variables referenced but not defined in-branch: `$exists`, `$site_url`, `$firmware`, `$firmware_url`, `$role`, `$plan`, `$notes`, `$company_id`, `$row_tmp` (used in UC push).
+  - Define from POST or DB `$row_tmp` before usage to avoid notices and inconsistent payloads.
+- Ensure nonce usage aligns:
+  - Page inline forms use `tmon_admin_provision` nonce; top unified form posts to `admin-post` with `tmon_admin_provision_device`. Verify both nonces are validated in their handlers.
+- Queue consumer path:
+  - Confirm device-side or REST endpoint consumes `tmon_admin_pending_provision` queue and clears items on success.
+  - Validate normalized key matching across MAC formats and unit IDs.
+
+Medium
+- Device mirror consistency:
+  - When enqueueing with only one identifier present, ensure mirror updates select by both `unit_id` and `machine_id` if available.
+  - Backfill `tmon_devices.unit_name` from provisioning payload when set.
+- Admin notices:
+  - After inline update (not provisioning), page uses immediate redirect; ensure success/fail messages show reliably for all branches.
+- Hierarchy Sync:
+  - Add success/failure audit logs mirroring other actions.
+  - Consider mapping validation and server response parsing for better admin feedback.
+
+Lower-priority
+- UX polish:
+  - Debounced typeahead for Known IDs (AJAX `tmon_admin_known_units`) with input filters role/company on client-side.
+  - Add loading spinners for firmware fetch buttons.
+- Security:
+  - Where cross-site pushes require UC auth, verify tokens: `X-TMON-READ`, `X-TMON-HUB`, `X-TMON-ADMIN` stored and rotated securely.
+- Maintenance:
+  - Centralize purge operations in `includes/settings.php` (already referenced); document commands and safeguards.
+- Docs:
+  - Add admin guide: provisioning workflow, queue semantics, UC pairing, diagnostics usage.
+
+Notes
+- Migrations are idempotent and guarded; keep them in `admin_init` to avoid unknown column errors.
+- Unique index `unit_machine (unit_id, machine_id)` ensures deduplication; verify insert/updates use normalized columns as needed.
