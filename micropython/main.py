@@ -315,9 +315,15 @@ async def startup():
     except Exception as e:
         await debug_print('first_boot_provision error: %s' % e, 'ERROR')
 
-    tm.add_task(lora_comm_task, 'lora', 1)
+    # Dedicated LoRa loop cadence (configurable)
+    lora_interval = int(getattr(settings, 'LORA_LOOP_INTERVAL_S', 1))
+    tm.add_task(lora_comm_task, 'lora', lora_interval)
+
     tm.add_task(sample_task, 'sample', 60)
-    if getattr(settings, 'NODE_TYPE', 'base') == 'base':
+
+    # Allow WiFi nodes to post field data and poll commands directly to UC like base
+    node_role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
+    if node_role in ('base', 'wifi'):
         tm.add_task(periodic_field_data_task, 'field_data', settings.FIELD_DATA_SEND_INTERVAL)
         tm.add_task(periodic_command_poll_task, 'cmd_poll', 10)
 
@@ -342,9 +348,11 @@ async def startup():
         _a0.create_task(settings_apply_loop(int(getattr(settings, 'PROVISION_CHECK_INTERVAL_S', 60))))
     except Exception:
         pass
-    # OLED background update with optional page rotation
+    # OLED background update with optional page rotation, gated by ENABLE_OLED
     async def _oled_loop():
         page = 0
+        if not bool(getattr(settings, 'ENABLE_OLED', True)):
+            return
         try:
             upd = int(getattr(settings, 'OLED_UPDATE_INTERVAL_S', 10))
             rotate_s = int(getattr(settings, 'OLED_PAGE_ROTATE_INTERVAL_S', 30))
@@ -404,12 +412,12 @@ async def main():
     except Exception:
         pass
 
-    # Start the startup manager as a background task so main can keep running
     asyncio.create_task(startup())
 
-    # Optional: present a short startup message on OLED
+    # Optional: present a short startup message on OLED if enabled
     try:
-        await display_message("TMON Starting", 1.2)
+        if bool(getattr(settings, 'ENABLE_OLED', True)):
+            await display_message("TMON Starting", 1.2)
     except Exception:
         pass
 

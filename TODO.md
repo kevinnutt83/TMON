@@ -167,17 +167,46 @@
 
 ---
 
-## Updated Next Actions
+## Updated Next Actions (Scope-aligned)
+Firmware (Micropython):
+- [x] Restore start_background_tasks, load_persisted_wordpress_api_url.
+- [x] Dedicated LoRa loop; configurable interval (LORA_LOOP_INTERVAL_S).
+- [x] OLED guards with ENABLE_OLED.
+- [x] WiFi node mode: enable field-data and command polling tasks.
+- [ ] First-boot OTA verify vs GitHub manifest; log/apply/reboot on success.
+- [ ] Confirm applied provisioning to Admin (HMAC/token optional).
+- [ ] Ensure DEVICE_SUSPENDED halts sampling/LoRa/commands but allows check-ins.
+- [ ] Expand frost/heat watch integration with tmon.py triggers and LoRa cadence adjustment under alerts.
+- [ ] Base aggregates remote field-data into local field_data.log; UC differentiates base vs remote entries.
 
-- [ ] Debug and fix device listing on TMON Admin provisioning page.
-- [ ] Refactor and verify purge data functions clear all device records.
-- [ ] Update Unit Connector plugin to only show provisioned devices.
-- [ ] Clarify and enforce provisioning flow between Admin and Unit Connector.
-- [ ] Polish UI/UX for all device management pages.
-- [ ] Update documentation to reflect new logic and flows.
-- [ ] Continue testing and QA.
+LoRa:
+- [x] Network name/password enforcement.
+- [x] Base assigns per-remote next sync epoch; collision avoidance window.
+- [x] Remotes persist next sync across reboots.
+- [ ] Optional HMAC signing + replay protection per-device.
+- [ ] Optional payload encryption (ChaCha20).
+- [ ] Persist last_error state and robust radio recovery.
 
----
+Provisioning lifecycle:
+- [x] First-boot check-in to Admin; UNIT_ID and WORDPRESS_API_URL persistence; guarded soft reboot.
+- [ ] Staged settings apply snapshot + confirm to Admin endpoint.
+
+Unit Connector integration:
+- [ ] Periodic UC check-in after provisioning; machine_id fetch; appear in provisioned lists when assigned.
+- [ ] Batched field-data posts including role and machine_id; UC normalization.
+
+OLED/UI:
+- [ ] Status page: temp F (if sampling), WiFi/LoRa RSSI bars, time, UNIT_ID/name; relay grid when enabled.
+
+Security:
+- [ ] Admin suspend/enable honored and persisted; reflected in UC/Admin UIs.
+- [ ] Tokens/headers verified across cross-site operations.
+
+Docs/QA:
+- [ ] README/CHANGELOG updates for loops, provisioning, UC pairing, LoRa schedule, OLED pages.
+- [ ] Tests for provisioning lifecycle and LoRa sync.
+
+# ...existing code...
 
 ## Implementation Steps
 

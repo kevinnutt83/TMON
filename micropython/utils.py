@@ -619,7 +619,9 @@ async def debug_print(message, status):
         timestamp = f"{current_time[0]:04}-{current_time[1]:02}-{current_time[2]:02} {current_time[3]:02}:{current_time[4]:02}:{current_time[5]:02}"
         print(f"[{timestamp}] [{status}] {safe_msg}")
         try:
-            await display_message(safe_msg, 1.5)
+            # Gate OLED messages by ENABLE_OLED
+            if bool(getattr(settings, 'ENABLE_OLED', True)):
+                await display_message(safe_msg, 1.5)
         except Exception:
             pass
     await asyncio.sleep(0)  # Yield control
