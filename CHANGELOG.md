@@ -77,3 +77,9 @@ Known issues:
 - Firmware: Field data sender now prefers settings.WORDPRESS_API_URL if wprest variable is stale.
 - Firmware: Prevent UNIT_ID overwrite with blank unit_id in subsequent responses.
 - Docs: Updated README (root + micropython) with new provisioning flow.
+
+## v2.01.3 - 2025-12-01
+- Firmware: Restored periodic_provision_check and first_boot_provision metadata synthesis; persists UNIT_ID and WORDPRESS_API_URL and soft-resets once.
+- Firmware: Guard against blank UNIT_ID overwrites from Admin responses.
+- Firmware: lora.py now safely declares WORDPRESS_API_URL from settings/wprest/persisted file to avoid NameError.
+- Docs: Updated READMEs to reflect restored logic and reboot guard.

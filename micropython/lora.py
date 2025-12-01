@@ -278,14 +278,52 @@ except ImportError:
 from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run
 from relay import toggle_relay
 
-# NEW: refresh WORDPRESS_API_URL from settings (in case provisioning updated it)
+# Restore: define WORDPRESS_API_URL safely for this module
 try:
-    from utils import load_persisted_wordpress_api_url
-    load_persisted_wordpress_api_url()
+    WORDPRESS_API_URL = getattr(settings, 'WORDPRESS_API_URL', '')
 except Exception:
-    pass
-WORDPRESS_API_URL = getattr(settings, 'WORDPRESS_API_URL', None) or WORDPRESS_API_URL
-WORDPRESS_API_KEY = getattr(settings, 'WORDPRESS_API_KEY', None)
+    WORDPRESS_API_URL = ''
+
+if not WORDPRESS_API_URL:
+    try:
+        from config_persist import read_text
+        path = getattr(settings, 'WORDPRESS_API_URL_FILE', settings.LOG_DIR + '/wordpress_api_url.txt')
+        val = (read_text(path, '') or '').strip()
+        if val:
+            settings.WORDPRESS_API_URL = val
+            WORDPRESS_API_URL = val
+    except Exception:
+        pass
+
+if not WORDPRESS_API_URL:
+    try:
+        import wprest as _w
+        WORDPRESS_API_URL = getattr(_w, 'WORDPRESS_API_URL', '') or ''
+    except Exception:
+        pass
+
+def refresh_wp_url():
+    """Refresh local WORDPRESS_API_URL from settings/wprest/file."""
+    global WORDPRESS_API_URL
+    try:
+        url = getattr(settings, 'WORDPRESS_API_URL', '') or ''
+        if not url:
+            try:
+                import wprest as _w
+                url = getattr(_w, 'WORDPRESS_API_URL', '') or ''
+            except Exception:
+                url = ''
+        if not url:
+            try:
+                from config_persist import read_text
+                path = getattr(settings, 'WORDPRESS_API_URL_FILE', settings.LOG_DIR + '/wordpress_api_url.txt')
+                url = (read_text(path, '') or '').strip()
+            except Exception:
+                pass
+        if url:
+            WORDPRESS_API_URL = url
+    except Exception:
+        pass
 
 async def send_settings_to_wp():
     if not WORDPRESS_API_URL:

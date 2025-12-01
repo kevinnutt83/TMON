@@ -162,13 +162,12 @@ def apply_settings(settings_doc):
     # Persist mapped fields to settings module
     try:
         import settings as _s
-        if node_type: _s.NODE_TYPE = node_type
-        if unit_name: _s.UNIT_Name = unit_name
         if settings_doc.get('plan'): _s.PLAN = settings_doc.get('plan')
         if settings_doc.get('site_url') or settings_doc.get('wordpress_api_url'):
             _s.WORDPRESS_API_URL = settings_doc.get('site_url') or settings_doc.get('wordpress_api_url')
             try:
-                with open(getattr(_s, 'WORDPRESS_API_URL_FILE', _s.LOG_DIR + '/wordpress_api_url.txt'), 'w') as f:
+                path = getattr(_s, 'WORDPRESS_API_URL_FILE', _s.LOG_DIR + '/wordpress_api_url.txt')
+                with open(path, 'w') as f:
                     f.write(_s.WORDPRESS_API_URL)
             except Exception:
                 pass

@@ -128,8 +128,7 @@ For detailed configuration keys, see the forthcoming `docs/FIRMWARE-SETTINGS.md`
 
 # TMON Repository
 
-## MicroPython Provisioning Flow (v2.01.2)
-1. Initial check-in returns metadata (possibly without explicit settings object).
-2. Firmware synthesizes payload, writes unit_id.txt, wordpress_api_url.txt, provisioned.flag, provisioning.meta.json.
-3. Soft reset occurs once (provision_reboot.flag guards repeats).
-4. Reboot loads WORDPRESS_API_URL early; field data uploads start immediately to Unit Connector.
+## MicroPython Provisioning Flow (restored)
+- First boot and periodic checks call Admin check-in and synthesize settings from metadata when provisioned/staged_exists with site_url.
+- Persist unit_id.txt and wordpress_api_url.txt; write provisioned.flag.
+- Soft reset once (provision_reboot.flag guards repeats); uploader prefers settings.WORDPRESS_API_URL.
