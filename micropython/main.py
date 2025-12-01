@@ -286,9 +286,7 @@ async def first_boot_provision():
                         with open(flag, 'w') as f: f.write('ok')
                     except Exception:
                         pass
-                    # Guard: only soft reset once
-                    guard_file = getattr(settings, 'PROVISION_REBOOT_GUARD_FILE', settings.LOG_DIR + '/provision_reboot.flag')
-                    # NEW: confirm applied provisioning to Admin with optional token
+                    # NEW: confirm applied provisioning to Admin (best-effort)
                     try:
                         token = getattr(settings, 'TMON_ADMIN_CONFIRM_TOKEN', '')
                         confirm_url = hub.rstrip('/') + '/wp-json/tmon-admin/v1/device/confirm-applied'
@@ -305,17 +303,17 @@ async def first_boot_provision():
                         if token:
                             headers['X-TMON-CONFIRM'] = token
                         try:
-                            # timeout kwarg may not exist; guard
                             respc = requests.post(confirm_url, json=payload, headers=headers, timeout=8)
                         except TypeError:
                             respc = requests.post(confirm_url, json=payload, headers=headers)
-                        # ignore response; best-effort
                         try:
                             respc.close()
                         except Exception:
                             pass
                     except Exception:
                         pass
+                    # Guard: only soft reset once
+                    guard_file = getattr(settings, 'PROVISION_REBOOT_GUARD_FILE', settings.LOG_DIR + '/provision_reboot.flag')
                     # ...existing code...
             # If remote node, disable WiFi after provisioning
             if getattr(settings, 'NODE_TYPE', 'base') == 'remote' and getattr(settings, 'WIFI_DISABLE_AFTER_PROVISION', True):
@@ -332,7 +330,7 @@ async def ota_boot_check():
         pass
 
 async def periodic_uc_checkin_task():
-    """Periodic Unit Connector check-in and telemetry for provisioned devices."""
+    """Periodic Unit Connector check-in for provisioned devices."""
     try:
         from wprest import register_with_wp, send_settings_to_wp, send_data_to_wp, poll_ota_jobs
     except Exception:
@@ -340,7 +338,6 @@ async def periodic_uc_checkin_task():
     interval = int(getattr(settings, 'UC_CHECKIN_INTERVAL_S', 300))
     while True:
         try:
-            # Only run when provisioned and WORDPRESS_API_URL set; skip if suspended
             wp = getattr(settings, 'WORDPRESS_API_URL', '')
             if wp and not getattr(settings, 'DEVICE_SUSPENDED', False):
                 if register_with_wp:
@@ -368,19 +365,14 @@ async def startup():
         await ota_boot_check()
     except Exception:
         pass
-
     # Dedicated LoRa loop cadence (configurable)
     lora_interval = int(getattr(settings, 'LORA_LOOP_INTERVAL_S', 1))
     tm.add_task(lora_comm_task, 'lora', lora_interval)
-
     tm.add_task(sample_task, 'sample', 60)
-
-    # Allow WiFi nodes to post field data and poll commands directly to UC like base
     node_role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
     if node_role in ('base', 'wifi'):
         tm.add_task(periodic_field_data_task, 'field_data', settings.FIELD_DATA_SEND_INTERVAL)
         tm.add_task(periodic_command_poll_task, 'cmd_poll', 10)
-
     # Background periodic tasks (standalone loops)
     try:
         import uasyncio as _a
@@ -452,7 +444,7 @@ async def startup():
         _a4.create_task(ota_apply_task())
     except Exception:
         pass
-    # Launch periodic UC check-in loop when provisioned
+    # Launch periodic UC check-in loop
     try:
         import uasyncio as _auc
         _auc.create_task(periodic_uc_checkin_task())

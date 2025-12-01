@@ -243,8 +243,9 @@ LORA_NETWORK_PASSWORD = '12345'           # Simple password handshake (strengthe
 REMOTE_CHECKIN_INTERVAL_S = 300           # Default remote -> base sync period
 REMOTE_CHECKIN_JITTER_S = 5               # Jitter to avoid collisions
 
-# Runtime loop cadence
-LORA_LOOP_INTERVAL_S = 1  # LoRa task cadence (seconds), tight to avoid radio disruption
+# Runtime loop cadence (keeps LoRa in a dedicated tight loop)
+LORA_LOOP_INTERVAL_S = 1  # seconds
+
 # Unit Connector periodic check-in interval for provisioned devices
 UC_CHECKIN_INTERVAL_S = 300  # seconds
 
