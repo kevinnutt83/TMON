@@ -278,7 +278,13 @@ except ImportError:
 from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run
 from relay import toggle_relay
 
-WORDPRESS_API_URL = getattr(settings, 'WORDPRESS_API_URL', None)
+# NEW: refresh WORDPRESS_API_URL from settings (in case provisioning updated it)
+try:
+    from utils import load_persisted_wordpress_api_url
+    load_persisted_wordpress_api_url()
+except Exception:
+    pass
+WORDPRESS_API_URL = getattr(settings, 'WORDPRESS_API_URL', None) or WORDPRESS_API_URL
 WORDPRESS_API_KEY = getattr(settings, 'WORDPRESS_API_KEY', None)
 
 async def send_settings_to_wp():

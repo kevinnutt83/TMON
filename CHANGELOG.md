@@ -64,3 +64,16 @@ Admin Plugins:
 Known issues:
 - Lint warnings for MicroPython modules in desktop editor are expected; not applicable on-device.
 - Additional memory tuning might be needed for very large field data logs; adjust batch_size in utils.py if needed.
+
+## v2.01.1 - 2025-11-30
+- Firmware: Synthesizes staged provisioning payload from check-in metadata (role, plan, unit_name, firmware, site_url).
+- Firmware: Persists and reloads WORDPRESS_API_URL prior to each field data send; eliminates repeated missing URL errors.
+- Firmware: Added PLAN setting; apply_settings now maps fallback keys (role/unit_name/site_url/plan).
+- Admin: Staging events already logged; firmware now confirms applied provisioning via reboot cycle reliably.
+
+## v2.01.2 - 2025-12-01
+- Firmware: Added synthesis + persistence of metadata-only provisioning responses (site_url, role, unit_name, plan, firmware).
+- Firmware: Soft reboot after first successful metadata persistence (guarded by provision_reboot.flag).
+- Firmware: Field data sender now prefers settings.WORDPRESS_API_URL if wprest variable is stale.
+- Firmware: Prevent UNIT_ID overwrite with blank unit_id in subsequent responses.
+- Docs: Updated README (root + micropython) with new provisioning flow.

@@ -125,3 +125,11 @@ For detailed configuration keys, see the forthcoming `docs/FIRMWARE-SETTINGS.md`
   - New Provisioning Activity page shows pending queue, staged flags, and recent history; supports re-enqueue and delete.
 - Security:
   - Device confirms applied settings using X-TMON-CONFIRM token; Admin validates token or existing read token.
+
+# TMON Repository
+
+## MicroPython Provisioning Flow (v2.01.2)
+1. Initial check-in returns metadata (possibly without explicit settings object).
+2. Firmware synthesizes payload, writes unit_id.txt, wordpress_api_url.txt, provisioned.flag, provisioning.meta.json.
+3. Soft reset occurs once (provision_reboot.flag guards repeats).
+4. Reboot loads WORDPRESS_API_URL early; field data uploads start immediately to Unit Connector.

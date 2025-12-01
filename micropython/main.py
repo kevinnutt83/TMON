@@ -55,6 +55,14 @@ try:
     print(f"[BOOT] Loaded persisted UNIT_ID: {settings.UNIT_ID}")
 except Exception:
     pass
+
+# NEW: load persisted WORDPRESS_API_URL before starting tasks
+try:
+    from utils import load_persisted_wordpress_api_url
+    load_persisted_wordpress_api_url()
+except Exception:
+    pass
+
 def get_script_runtime():
     now = time.ticks_ms()
     return (now - script_start_time) // 1000
@@ -230,13 +238,76 @@ async def first_boot_provision():
                     f.write('ok')
             except Exception:
                 pass
-            # If UNIT_ID returned in body, persist
+            # If UNIT_ID returned and non-empty, persist (avoid overwriting with '')
             try:
                 resp_json = resp.json()
-                new_uid = resp_json.get('unit_id') if isinstance(resp_json, dict) else None
-                if new_uid and str(new_uid) != str(settings.UNIT_ID):
-                    settings.UNIT_ID = str(new_uid)
-                    persist_unit_id(settings.UNIT_ID)
+            except Exception:
+                resp_json = {}
+            try:
+                new_uid = resp_json.get('unit_id')
+                if new_uid and str(new_uid).strip():
+                    if str(new_uid) != str(settings.UNIT_ID):
+                        settings.UNIT_ID = str(new_uid).strip()
+                        persist_unit_id(settings.UNIT_ID)
+            except Exception:
+                pass
+            # NEW: persist provisioning metadata & soft reset if site URL provided
+            try:
+                site_val = (resp_json.get('site_url') or resp_json.get('wordpress_api_url') or '').strip()
+                role_val = (resp_json.get('role') or '').strip()
+                name_val = (resp_json.get('unit_name') or '').strip()
+                plan_val = (resp_json.get('plan') or '').strip()
+                fw_ver = (resp_json.get('firmware') or '').strip()
+                fw_url = (resp_json.get('firmware_url') or '').strip()
+                staged = bool(resp_json.get('staged_exists'))
+                provisioned = bool(resp_json.get('provisioned'))
+                if site_val:
+                    try:
+                        from config_persist import write_text
+                        settings.WORDPRESS_API_URL = site_val
+                        write_text(getattr(settings, 'WORDPRESS_API_URL_FILE', settings.LOG_DIR + '/wordpress_api_url.txt'), site_val)
+                        # write diagnostic meta
+                        try:
+                            import ujson
+                            write_text(settings.LOG_DIR + '/provisioning.meta.json', ujson.dumps(resp_json))
+                        except Exception:
+                            pass
+                        # sync wprest immediately
+                        try:
+                            import wprest as _w
+                            _w.WORDPRESS_API_URL = site_val
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+                if name_val:
+                    try: settings.UNIT_Name = name_val
+                    except Exception: pass
+                if role_val:
+                    try: settings.NODE_TYPE = role_val
+                    except Exception: pass
+                if plan_val:
+                    try: settings.PLAN = plan_val
+                    except Exception: pass
+                if fw_ver:
+                    try: settings.FIRMWARE_VERSION = fw_ver
+                    except Exception: pass
+                # mark provisioned flag variable
+                if provisioned or staged:
+                    try: settings.UNIT_PROVISIONED = True
+                    except Exception: pass
+                # Guard file to avoid reboot loop
+                guard_file = settings.LOG_DIR + '/provision_reboot.flag'
+                need_reboot = (site_val and (provisioned or staged))
+                if need_reboot:
+                    try:
+                        if not guard_file in (os.listdir(settings.LOG_DIR) if hasattr(os, 'listdir') else []):
+                            with open(guard_file, 'w') as gf: gf.write('1')
+                            await debug_print('first_boot_provision: provisioning metadata persisted; soft resetting', 'INFO')
+                            import machine
+                            machine.soft_reset()
+                    except Exception:
+                        pass
             except Exception:
                 pass
             # If remote node, disable WiFi after provisioning

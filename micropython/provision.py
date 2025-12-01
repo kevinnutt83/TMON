@@ -78,6 +78,18 @@ def fetch_provisioning(unit_id=None, machine_id=None, base_url=None, force=False
     for path in API_PATHS:
         body, err = _attempt_endpoint(base, path, params=params)
         if err is None and body and 'provisioned' in body:
+            site_val = body.get('site_url') or body.get('wordpress_api_url') or ''
+            if (body.get('provisioned') or body.get('staged_exists')) and site_val:
+                return {
+                    'wordpress_api_url': site_val,
+                    'site_url': site_val,
+                    'NODE_TYPE': body.get('role') or '',
+                    'UNIT_Name': body.get('unit_name') or '',
+                    'FIRMWARE': body.get('firmware') or '',
+                    'FIRMWARE_URL': body.get('firmware_url') or '',
+                    'plan': body.get('plan') or '',
+                    'WIFI_DISABLE_AFTER_PROVISION': ((body.get('role') or '') == 'remote')
+                }
             if not body.get('provisioned'):
                 return None
             return body.get('settings') or {}
@@ -85,6 +97,18 @@ def fetch_provisioning(unit_id=None, machine_id=None, base_url=None, force=False
     for path in API_PATHS:
         body, err = _attempt_endpoint(base, path, json_body=json_body)
         if err is None and body and 'provisioned' in body:
+            site_val = body.get('site_url') or body.get('wordpress_api_url') or ''
+            if (body.get('provisioned') or body.get('staged_exists')) and site_val:
+                return {
+                    'wordpress_api_url': site_val,
+                    'site_url': site_val,
+                    'NODE_TYPE': body.get('role') or '',
+                    'UNIT_Name': body.get('unit_name') or '',
+                    'FIRMWARE': body.get('firmware') or '',
+                    'FIRMWARE_URL': body.get('firmware_url') or '',
+                    'plan': body.get('plan') or '',
+                    'WIFI_DISABLE_AFTER_PROVISION': ((body.get('role') or '') == 'remote')
+                }
             if not body.get('provisioned'):
                 return None
             return body.get('settings') or {}
@@ -127,6 +151,29 @@ def apply_settings(settings_doc):
 
     if settings_doc.get('WIFI_DISABLE_AFTER_PROVISION', False):
         print("Configured to disable WiFi after provisioning (device-specific).")
+
+    # NEW: fallback mapping from alternative keys
+    if not node_type and settings_doc.get('role'):
+        node_type = settings_doc.get('role')
+        print("Setting NODE_TYPE (role fallback):", node_type)
+    if not unit_name and settings_doc.get('unit_name'):
+        unit_name = settings_doc.get('unit_name')
+        print("Setting UNIT_Name (unit_name fallback):", unit_name)
+    # Persist mapped fields to settings module
+    try:
+        import settings as _s
+        if node_type: _s.NODE_TYPE = node_type
+        if unit_name: _s.UNIT_Name = unit_name
+        if settings_doc.get('plan'): _s.PLAN = settings_doc.get('plan')
+        if settings_doc.get('site_url') or settings_doc.get('wordpress_api_url'):
+            _s.WORDPRESS_API_URL = settings_doc.get('site_url') or settings_doc.get('wordpress_api_url')
+            try:
+                with open(getattr(_s, 'WORDPRESS_API_URL_FILE', _s.LOG_DIR + '/wordpress_api_url.txt'), 'w') as f:
+                    f.write(_s.WORDPRESS_API_URL)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
     # Additional device-specific settings application here
     return True

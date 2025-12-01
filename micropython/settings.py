@@ -252,6 +252,10 @@ FIELD_DATA_HMAC_TRUNCATE = 32             # Hex chars of hash to include as sign
 
 TMON_ADMIN_CONFIRM_TOKEN = ''  # Optional small secret to confirm applied settings when device posts; set on Admin & device for security
 
+PLAN = ""  # NEW: subscription plan (standard/pro/enterprise) applied via provisioning
+
+PROVISION_REBOOT_GUARD_FILE = LOG_DIR + '/provision_reboot.flag'  # Prevent repeated soft resets after provisioning
+
 # NOTE:
 # - sdata.py should include LAST_ERROR_* when TELEMETRY_INCLUDE_LAST_ERROR is True.
 # - Sender must append delivered entries to FIELD_DATA_DELIVERED_LOG and truncate FIELD_DATA_LOG post-send.

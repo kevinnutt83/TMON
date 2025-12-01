@@ -1,4 +1,4 @@
-# TMON MicroPython Device (v2.00j)
+# TMON MicroPython Device (v2.01.1)
 
 ## Quick Start
 1. Flash the firmware and configure `settings.py`.
@@ -6,7 +6,7 @@
 3. Power on; the device auto-registers with the WordPress server.
 4. Use the admin UI to monitor, update OTA, and manage the device.
 
-## Key Features in v2.00j
+## Key Features in v2.01.1
 - Base-managed LoRa scheduling: base assigns `nextLoraSync` epochs to remotes; remotes persist next sync across reboots.
 - LED mapping: distinct colors for LoRa RX/TX, sampling categories, and errors.
 - Structured logs: confirmations/errors written to `/logs/lora.log` and `/logs/lora_errors.log`.
@@ -45,3 +45,9 @@
 - If uploads fail due to memory, ensure batching is enabled (default in v2.00i).
 - Check power and WiFi signal; confirm server URL and credentials.
  - On desktop, MicroPython modules (`uasyncio`, `machine`) will show lint warnings; they are valid on-device.
+
+## Provisioning (Enhanced v2.01.x)
+- Metadata-only responses (provisioned/staged_exists + site_url) now synthesize a staged payload.
+- Persisted: UNIT_ID, WORDPRESS_API_URL (wordpress_api_url.txt), UNIT_Name, NODE_TYPE, PLAN, FIRMWARE_VERSION.
+- Guard flag prevents reboot loop; single soft reset after first metadata persistence.
+- Field data uploader prefers settings.WORDPRESS_API_URL (falls back to wprest) eliminating "No WORDPRESS_API_URL set" errors.
