@@ -168,91 +168,54 @@
 ---
 
 ## Updated Next Actions (Scope-aligned)
-Firmware (Micropython):
-- [x] Restore start_background_tasks, load_persisted_wordpress_api_url.
+
+Firmware (Micropython)
+- [x] Restore background scheduler and persisted URL loader (utils.start_background_tasks, load_persisted_wordpress_api_url).
 - [x] Dedicated LoRa loop; configurable interval (LORA_LOOP_INTERVAL_S).
 - [x] OLED guards with ENABLE_OLED.
-- [x] WiFi node mode: enable field-data and command polling tasks.
-- [ ] First-boot OTA verify vs GitHub manifest; log/apply/reboot on success.
-- [ ] Confirm applied provisioning to Admin (HMAC/token optional).
-- [ ] Ensure DEVICE_SUSPENDED halts sampling/LoRa/commands but allows check-ins.
-- [ ] Expand frost/heat watch integration with tmon.py triggers and LoRa cadence adjustment under alerts.
-- [ ] Base aggregates remote field-data into local field_data.log; UC differentiates base vs remote entries.
+- [x] WiFi node role: enable field-data send and command polling like base.
+- [ ] First-boot OTA: verify against GitHub manifest; apply safely; reboot; audit to Admin.
+- [ ] Confirm applied provisioning to Admin (optional per-device token/HMAC).
+- [ ] Suspension: halt sampling/LoRa/commands while allowing check-ins; persist flag.
+- [ ] Frost/Heat watch: integrate with tmon.py on base; adjust LoRa sync cadence during alerts.
+- [ ] Base aggregates remote field data into local field_data.log; UC differentiates base vs remote records.
 
-LoRa:
-- [x] Network name/password enforcement.
+LoRa
+- [x] Network name/password enforcement (LORA_NETWORK_NAME/PASSWORD).
 - [x] Base assigns per-remote next sync epoch; collision avoidance window.
-- [x] Remotes persist next sync across reboots.
-- [ ] Optional HMAC signing + replay protection per-device.
-- [ ] Optional payload encryption (ChaCha20).
-- [ ] Persist last_error state and robust radio recovery.
+- [x] Remotes persist next sync across reboots (remote_next_sync.json).
+- [ ] Optional HMAC signing + replay protection per-device (LORA_HMAC_*).
+- [ ] Optional payload encryption (ChaCha20); manifest/provision keys.
+- [ ] Persist last_error state; robust radio recovery thresholds.
 
-Provisioning lifecycle:
-- [x] First-boot check-in to Admin; UNIT_ID and WORDPRESS_API_URL persistence; guarded soft reboot.
+Provisioning lifecycle
+- [x] First-boot check-in to Admin; persist UNIT_ID and WORDPRESS_API_URL; guarded soft reset.
 - [ ] Staged settings apply snapshot + confirm to Admin endpoint.
 
-Unit Connector integration:
-- [ ] Periodic UC check-in after provisioning; machine_id fetch; appear in provisioned lists when assigned.
-- [ ] Batched field-data posts including role and machine_id; UC normalization.
+Unit Connector integration
+- [ ] Periodic UC check-in after provisioning; machine_id fetch; appear only when assigned/approved.
+- [ ] Batched field-data posts include unit_id/machine_id/role; UC normalization of base vs remote.
 
-OLED/UI:
-- [ ] Status page: temp F (if sampling), WiFi/LoRa RSSI bars, time, UNIT_ID/name; relay grid when enabled.
+OLED/UI
+- [ ] Status: temp F (if sampling), WiFi/LoRa RSSI bars, clock, UNIT_ID/name; relay grid when enabled.
+- [ ] Optimize display updates; debounce messages.
 
-Security:
-- [ ] Admin suspend/enable honored and persisted; reflected in UC/Admin UIs.
-- [ ] Tokens/headers verified across cross-site operations.
+Security
+- [ ] Admin suspend/enable honored; reflected in UC/Admin UIs; tokens/headers checked.
+- [ ] Cross-site tokens: X-TMON-READ, X-TMON-HUB, X-TMON-ADMIN, X-TMON-CONFIRM.
 
-Docs/QA:
+Docs/QA
 - [ ] README/CHANGELOG updates for loops, provisioning, UC pairing, LoRa schedule, OLED pages.
 - [ ] Tests for provisioning lifecycle and LoRa sync.
 
-# ...existing code...
-
-## Implementation Steps
-
-1. **Provisioning Page Device Listing**
-   - Review DB schema and queries in `includes/provisioning.php`.
-   - Ensure device registration inserts into correct tables.
-   - Update device list query to show all registered devices (provisioned and unprovisioned).
-   - Add admin notice and refresh button.
-
-2. **Purge Data Function**
-   - Refactor purge logic to clear all device-related tables.
-   - Add confirmation modal and admin notices.
-   - Test with multiple device records.
-
-3. **Unit Connector Device Filtering**
-   - Update device list logic to exclude devices without a valid `WORDPRESS_API_URL`.
-   - Only show devices that have been provisioned and assigned to the current UC site.
-
-4. **Provisioning Flow Enforcement**
-   - Ensure devices only register with TMON Admin until provisioned.
-   - After provisioning, device downloads and applies site URL, then checks in with UC.
-   - Update UI and documentation for clarity.
-
-5. **UI/UX Polish**
-   - Add tooltips, icons, help text, and responsive layouts.
-   - Ensure all actions are clear and accessible.
-
-6. **Documentation**
-   - Update README.md and CHANGELOG.md.
-   - Add screenshots and flow diagrams.
-
----
-
 ## Testing Log
-
-- [ ] Retest device registration and provisioning flow.
+- [ ] Retest device registration/provisioning (Admin→Device→UC).
 - [ ] Retest purge functions.
-- [ ] Retest UC device filtering.
+- [ ] Retest UC filtering (assigned devices only).
 - [ ] Retest UI/UX improvements.
 
----
-
 ## Commit Log
-
-- [ ] Commit all code and UI/UX changes per feature.
-- [ ] Tag release after QA.
+- [ ] Commit per feature; tag release after QA.
 
 # TODO
 

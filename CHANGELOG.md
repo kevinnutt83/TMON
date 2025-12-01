@@ -85,7 +85,7 @@ Known issues:
 - Docs: Updated README with background scheduler and loop notes.
 
 ## v2.01.4 - 2025-12-01
-- Firmware: LoRa loop cadence configurable via LORA_LOOP_INTERVAL_S; dedicated loop maintained to avoid disruptions.
+- Firmware: Added LORA_LOOP_INTERVAL_S to configure dedicated LoRa loop cadence, preserving uninterrupted radio operation.
 - Firmware: WiFi node role now runs field-data and command polling tasks similar to base nodes.
-- Firmware: OLED loops/messages gated by ENABLE_OLED to avoid unnecessary work when disabled.
+- Firmware: OLED operations gated by ENABLE_OLED to avoid unnecessary work when disabled.
 - Docs: TODO updated to align with original project scope and prioritized next actions.
