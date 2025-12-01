@@ -1769,3 +1769,29 @@ if (!function_exists('tmon_admin_get_staged_meta_for_device')) {
         return $out;
     }
 }
+
+// Provisioning history append helper (new)
+if (!function_exists('tmon_admin_append_provision_history')) {
+    function tmon_admin_append_provision_history(array $entry) {
+        $hist = get_option('tmon_admin_provision_history', []);
+        if (!is_array($hist)) $hist = [];
+        $entry['time'] = current_time('mysql');
+        $hist[] = $entry;
+        // Cap to last 500 entries
+        if (count($hist) > 500) $hist = array_slice($hist, -500);
+        update_option('tmon_admin_provision_history', $hist, false);
+    }
+}
+
+// Convenience logger for staged events (new)
+if (!function_exists('tmon_admin_log_staged_event')) {
+    function tmon_admin_log_staged_event($unit_id, $machine_id, $action, $meta = []) {
+        tmon_admin_append_provision_history([
+            'user'       => is_user_logged_in() ? wp_get_current_user()->user_login : 'system',
+            'unit_id'    => (string)$unit_id,
+            'machine_id' => (string)$machine_id,
+            'action'     => $action,
+            'payload'    => $meta,
+        ]);
+    }
+}
