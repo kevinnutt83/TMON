@@ -133,6 +133,26 @@ def persist_wordpress_api_url(url):
     except Exception:
         pass
 
+def load_persisted_wordpress_api_url():
+    """Load WORDPRESS_API_URL from persisted file and propagate to settings/wprest."""
+    try:
+        path = getattr(settings, 'WORDPRESS_API_URL_FILE', settings.LOG_DIR + '/wordpress_api_url.txt')
+        try:
+            val = read_text(path, None)
+        except Exception:
+            val = None
+        if val:
+            val = val.strip()
+            if val:
+                settings.WORDPRESS_API_URL = val
+                try:
+                    import wprest as _w
+                    _w.WORDPRESS_API_URL = val
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
 async def send_field_data_log():
     """Send field_data.log to WordPress and rotate on confirmation."""
     # NEW: refresh persisted URL & propagate to wprest before using
@@ -940,6 +960,25 @@ async def periodic_provision_check():
                 pass
         await _a.sleep(interval)
 
+# Lightweight background scheduler to avoid ImportError in main.py
+def start_background_tasks():
+    try:
+        import uasyncio as _a
+        # Avoid duplicate scheduling: use a simple guard flag in settings
+        if not hasattr(settings, '_BG_TASKS_STARTED'):
+            settings._BG_TASKS_STARTED = True
+            try:
+                _a.create_task(periodic_provision_check())
+            except Exception:
+                pass
+            try:
+                _a.create_task(periodic_field_data_send())
+            except Exception:
+                pass
+    except Exception:
+        # Silently ignore to keep boot path resilient
+        pass
+
 # Ensure periodic_provision_check is exported for main.py import
 __all__ = [
     'debug_print',
@@ -950,5 +989,6 @@ __all__ = [
     'load_persisted_wordpress_api_url',
     'periodic_field_data_send',
     'periodic_provision_check',
-    'get_machine_id'
+    'get_machine_id',
+    'start_background_tasks'
 ]

@@ -40,7 +40,13 @@
 	- Page 0: Sensors + Wi-Fi/LoRa bars, voltage, unit name, message line
 	- Page 1: Relay grid + system runtime and memory
 
+## Runtime loops
+- LoRa loop: lora_comm_task runs at 1s cadence independently to avoid disruptions.
+- Sampling loop: sample_task runs at 60s cadence.
+- Background tasks: utils.start_background_tasks schedules provisioning and field-data send (guarded to avoid duplication).
+
 ## Troubleshooting
+- If you saw “ImportError: can't import name start_background_tasks”, upgrade to v2.01.3 where utils.start_background_tasks exists. display_message is provided by oled.
 - For LoRa error -1 or radio faults, the firmware re-initializes the radio and logs error flags.
 - If uploads fail due to memory, ensure batching is enabled (default in v2.00i).
 - Check power and WiFi signal; confirm server URL and credentials.

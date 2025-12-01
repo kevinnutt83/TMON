@@ -394,11 +394,15 @@ async def startup():
 
 # If blocking tasks are added later, start them in a separate thread here
 import uasyncio as asyncio
-from utils import start_background_tasks, display_message, update_sys_voltage
+from utils import start_background_tasks, update_sys_voltage
+from oled import display_message
 
 async def main():
     # Start background tasks (provisioning, field-data uploader, etc.)
-    start_background_tasks()
+    try:
+        start_background_tasks()
+    except Exception:
+        pass
 
     # Start the startup manager as a background task so main can keep running
     asyncio.create_task(startup())
