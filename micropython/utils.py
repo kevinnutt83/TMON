@@ -1606,437 +1606,114 @@ def provisioning_log(msg):
     except Exception:
         pass
 
-# --- Field Data Log Management ---
+# --- RESTORED: periodic provisioning poll (was removed) ---
+_provision_reboot_guard_written = False
 
-
-def rotate_field_data_log():
-    """Rotate field_data.log to data_history.log and clear field_data.log."""
-    checkLogDirectory()
-    try:
+async def periodic_provision_check():
+    """Poll Admin hub for staged provisioning metadata until provisioned.
+    Persists UNIT_ID, WORDPRESS_API_URL, role, plan, unit_name, firmware and soft-resets once after URL persistence.
+    """
+    import uasyncio as _a
+    interval = int(getattr(settings, 'PROVISION_CHECK_INTERVAL_S', 25))
+    hub = getattr(settings, 'TMON_ADMIN_API_URL', '')
+    flag_file = getattr(settings, 'PROVISIONED_FLAG_FILE', settings.LOG_DIR + '/provisioned.flag')
+    guard_file = getattr(settings, 'PROVISION_REBOOT_GUARD_FILE', settings.LOG_DIR + '/provision_reboot.flag')
+    while True:
         try:
-            os.stat(settings.FIELD_DATA_LOG)
-            # Append to history log
-            with open(settings.FIELD_DATA_LOG, 'r') as src, open(settings.DATA_HISTORY_LOG, 'a') as dst:
-                for line in src:
-                    dst.write(line)
-            # Clear field_data.log
-            with open(settings.FIELD_DATA_LOG, 'w') as f:
-                f.write('')
-        except OSError:
-            pass
-    except Exception as e:
-        print(f"Error rotating field data log: {e}")
-
-def delete_field_data_log():
-    checkLogDirectory()
-    try:
-        try:
-            os.stat(settings.FIELD_DATA_LOG)
-            os.remove(settings.FIELD_DATA_LOG)
-        except OSError:
-            pass
-    except Exception as e:
-        print(f"Error deleting field data log: {e}")
-
-def delete_data_history_log():
-    checkLogDirectory()
-    try:
-        try:
-            os.stat(settings.DATA_HISTORY_LOG)
-            os.remove(settings.DATA_HISTORY_LOG)
-        except OSError:
-            pass
-    except Exception as e:
-        print(f"Error deleting data history log: {e}")
-
-_send_field_data_lock = asyncio.Lock()
-
-def persist_wordpress_api_url(url):
-    """Persist WORDPRESS_API_URL to file and sync wprest."""
-    try:
-        if not url:
-            return
-        path = getattr(settings, 'WORDPRESS_API_URL_FILE', settings.LOG_DIR + '/wordpress_api_url.txt')
-        write_text(path, url.strip())
-        settings.WORDPRESS_API_URL = url.strip()
-        try:
-            import wprest as _w
-            _w.WORDPRESS_API_URL = settings.WORDPRESS_API_URL
-        except Exception:
-            pass
-    except Exception:
-        pass
-
-async def send_field_data_log():
-    """Send field_data.log to WordPress and rotate on confirmation."""
-    # NEW: refresh persisted URL & propagate to wprest before using
-    try:
-        load_persisted_wordpress_api_url()
-        import wprest as _w
-        if getattr(settings, 'WORDPRESS_API_URL', '') and not getattr(_w, 'WORDPRESS_API_URL', ''):
-            _w.WORDPRESS_API_URL = settings.WORDPRESS_API_URL
-    except Exception:
-        pass
-    if getattr(settings, 'NODE_TYPE', 'base') != 'base':
-        return
-    # NEW: prefer settings.WORDPRESS_API_URL if wprest variable unset or empty
-    from wprest import WORDPRESS_API_URL as _wp_mod, get_jwt_token
-    local_url = getattr(settings, 'WORDPRESS_API_URL', '') or _wp_mod
-    if not local_url:
-        await debug_print('send_field_data_log: No WORDPRESS_API_URL set', 'ERROR')
-        return
-    WORDPRESS_API_URL = local_url  # override for remainder
-    checkLogDirectory()
-    # Ensure field_data.log exists before reading
-    try:
-        try:
-            os.stat(settings.FIELD_DATA_LOG)
-        except OSError:
-            with open(settings.FIELD_DATA_LOG, 'w') as f:
-                f.write('')
-            await debug_print('send_field_data_log: FIELD_DATA_LOG did not exist, created empty file', 'DEBUG')
-    except Exception as e:
-        await debug_print(f'send_field_data_log: Exception checking/creating FIELD_DATA_LOG: {e}', 'ERROR')
-        return
-    max_retries = 5
-    try:
-        if _send_field_data_lock.locked():
-            await debug_print('send_field_data_log: another send in progress, skipping this cycle', 'DEBUG')
-            return
-        async with _send_field_data_lock:
-            await debug_print('send_field_data_log: Reading field_data.log', 'DEBUG')
-            payloads = []
-            total_lines = 0
-            batch = []
-            batch_size = 10
-            with open(settings.FIELD_DATA_LOG, 'rb') as f:
-                for raw_line in f:
-                    if not raw_line:
-                        continue
-                    try:
-                        line = raw_line.decode('utf-8', 'ignore')
-                    except Exception:
-                        try:
-                            line = raw_line.decode()
-                        except Exception:
-                            line = ''
-                    if line and line.strip():
-                        try:
-                            batch.append(ujson.loads(line))
-                            total_lines += 1
-                            if len(batch) >= batch_size:
-                                payloads.append({'unit_id': settings.UNIT_ID, 'data': batch})
-                                batch = []
-                        except Exception as pe:
-                            await debug_print(f'send_field_data_log: JSON parse error on a line: {pe}', 'ERROR')
-            if batch:
-                payloads.append({'unit_id': settings.UNIT_ID, 'data': batch})
-            await debug_print(f'send_field_data_log: Read {total_lines} lines and built {len(payloads)} batched payloads', 'DEBUG')
-            backlog = read_backlog()
-            await debug_print(f'send_field_data_log: Read {len(backlog)} backlog payloads', 'DEBUG')
-            payloads = backlog + payloads
-            backlog_count = len(backlog)
-            if not payloads:
-                await debug_print('send_field_data_log: No payloads to send', 'DEBUG')
-                return
-            import urequests as requests
-            def _sanitize_json(obj, depth=0):
-                if depth > 6:
-                    return str(obj)
-                t = type(obj)
-                if obj is None or t in (int, float, bool):
-                    return obj
-                if t is str:
-                    try:
-                        _ = obj.encode('utf-8', 'ignore')
-                        return _.decode('utf-8', 'ignore')
-                    except Exception:
-                        try:
-                            return ''.join(ch if 32 <= ord(ch) < 127 else ' ' for ch in obj)
-                        except Exception:
-                            return '<str>'
-                if t is bytes:
-                    try:
-                        return obj.decode('utf-8', 'ignore')
-                    except Exception:
-                        try:
-                            import ubinascii as _ub
-                        except Exception:
-                            import binascii as _ub
-                        try:
-                            return _ub.hexlify(obj).decode('ascii')
-                        except Exception:
-                            return '<bytes>'
-                if t is dict:
-                    out = {}
-                    for k, v in obj.items():
-                        try:
-                            key = k if isinstance(k, str) else str(k)
-                            out[key] = _sanitize_json(v, depth + 1)
-                        except Exception:
-                            pass
-                    return out
-                if t in (list, tuple):
-                    return [_sanitize_json(x, depth + 1) for x in obj]
+            # Break early if explicitly provisioned flag exists
+            try:
+                if hub and flag_file and (flag_file in (os.listdir(settings.LOG_DIR) if hasattr(os, 'listdir') else [])):
+                    await debug_print('periodic_provision_check: already provisioned (flag found)', 'PROVISION')
+                    return
+            except Exception:
+                pass
+            if not hub:
+                await debug_print('periodic_provision_check: TMON_ADMIN_API_URL not set', 'PROVISION')
+            else:
                 try:
-                    return obj if t in (int, float, bool) else str(obj)
+                    import urequests as _r
                 except Exception:
-                    return '<obj>'
-            sent_indices = []
-            for idx, payload in enumerate(payloads):
-                delay = 2
-                try:
-                    payload['machine_id'] = get_machine_id()
-                except Exception:
-                    pass
-                # Enrich envelope with firmware and node role for auditing/normalization
-                try:
-                    payload['firmware_version'] = getattr(settings, 'FIRMWARE_VERSION', '')
-                except Exception:
-                    pass
-                try:
-                    payload['node_type'] = getattr(settings, 'NODE_TYPE', '')
-                except Exception:
-                    pass
-                delivered = False
-                await debug_print(f'send_field_data_log: Sending payload {idx+1}/{len(payloads)}', 'DEBUG')
-                for attempt in range(1, max_retries + 1):
+                    _r = None
+                if _r:
+                    mid = get_machine_id()
+                    uid = getattr(settings, 'UNIT_ID', None)
+                    body = {'machine_id': mid}
+                    if uid:
+                        body['unit_id'] = uid
                     try:
-                        import gc as _gc
-                        _gc.collect()
-                    except Exception:
-                        pass
-                    try:
-                        token = get_jwt_token()
-                        headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json; charset=utf-8'}
-                        # Optional field data HMAC signing
+                        resp = _r.post(hub.rstrip('/') + '/wp-json/tmon-admin/v1/device/check-in', json=body, timeout=10)
+                    except TypeError:
+                        resp = _r.post(hub.rstrip('/') + '/wp-json/tmon-admin/v1/device/check-in', json=body)
+                    status = getattr(resp, 'status_code', 0)
+                    if status == 200:
                         try:
-                            if getattr(settings, 'FIELD_DATA_HMAC_ENABLED', False):
-                                import uhashlib as _uh, ubinascii as _ub
-                                secret = getattr(settings, 'FIELD_DATA_HMAC_SECRET', '')
-                                if secret:
-                                    # Build canonical minimal string
-                                    core = []
-                                    for k in getattr(settings, 'FIELD_DATA_HMAC_INCLUDE_KEYS', ['unit_id']):
-                                        core.append(str(payload.get(k, '')))
-                                    # Also include count and first/last timestamps if present for stability
-                                    try:
-                                        arr = payload.get('data', [])
-                                        if isinstance(arr, list) and arr:
-                                            first_ts = arr[0].get('timestamp') if isinstance(arr[0], dict) else ''
-                                            last_ts = arr[-1].get('timestamp') if isinstance(arr[-1], dict) else ''
-                                        else:
-                                            first_ts = last_ts = ''
-                                    except Exception:
-                                        first_ts = last_ts = ''
-                                    canon = '|'.join(core + [str(len(payload.get('data', []) or [])), str(first_ts), str(last_ts)])
-                                    h = _uh.sha256(secret.encode() + canon.encode())
-                                    sig = _ub.hexlify(h.digest()).decode()[:int(getattr(settings,'FIELD_DATA_HMAC_TRUNCATE',32))]
-                                    payload['sig'] = sig
-                                    payload['sig_v'] = 1
+                            resp_json = resp.json()
                         except Exception:
-                            pass
-                        await debug_print(f'send_field_data_log: Attempt {attempt} POST to {WORDPRESS_API_URL}/wp-json/tmon/v1/device/field-data', 'DEBUG')
-                        safe_payload = _sanitize_json(payload)
-                        try:
-                            encoded = ujson.dumps(safe_payload)
-                        except Exception:
-                            minimal = {'unit_id': settings.UNIT_ID, 'data': []}
-                            if isinstance(payload, dict) and 'data' in payload:
-                                minimal['data'] = _sanitize_json(payload['data'])
-                            encoded = ujson.dumps(minimal)
-                        try:
-                            log_snippet = encoded[:200]
-                            log_snippet = ''.join(ch if 32 <= ord(ch) <= 126 else ' ' for ch in log_snippet)
-                        except Exception:
-                            log_snippet = '<payload>'
-                        await debug_print(f'send_field_data_log: Payload: {log_snippet}', 'DEBUG')
-                        resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/field-data', headers=headers, data=encoded, timeout=10)
-                        try:
-                            await debug_print(f'send_field_data_log: Response status: {resp.status_code}', 'DEBUG')
-                            resp_bytes = b''
-                            try:
-                                resp_bytes = resp.content if hasattr(resp, 'content') else b''
-                            except Exception:
-                                resp_bytes = b''
                             resp_json = {}
-                            if resp_bytes:
-                                try:
-                                    resp_text_local = resp_bytes.decode('utf-8', 'ignore')
-                                    try:
-                                        resp_json = ujson.loads(resp_text_local)
-                                    except Exception as e:
-                                        await debug_print(f'send_field_data_log: Failed to parse response JSON: {e}', 'ERROR')
-                                    safe_text = ''.join(ch if 32 <= ord(ch) <= 126 else ' ' for ch in resp_text_local)
-                                    await debug_print(f'send_field_data_log: Response text: {safe_text[:200]}', 'DEBUG')
-                                except Exception:
-                                    pass
-                            ok_resp = (resp.status_code == 200) and ((resp_json.get('status') == 'ok') or (resp_bytes == b'OK'))
-                            if ok_resp:
-                                # Persist UNIT_ID mapping if provided
-                                try:
-                                    new_uid = resp_json.get('unit_id') if isinstance(resp_json, dict) else None
-                                    if new_uid and str(new_uid) != str(settings.UNIT_ID):
-                                        settings.UNIT_ID = str(new_uid)
-                                        try:
-                                            persist_unit_id(settings.UNIT_ID)
-                                        except Exception:
-                                            pass
-                                except Exception:
-                                    pass
-                                delivered = True
-                                await debug_print(f'send_field_data_log: Payload {idx+1} delivered successfully', 'DEBUG')
-                                break
-                            else:
-                                err_txt = ''
-                                try:
-                                    err_txt = resp_bytes.decode('utf-8','ignore')[:120]
-                                    err_txt = ''.join(ch if 32 <= ord(ch) <= 126 else ' ' for ch in err_txt)
-                                except Exception:
-                                    pass
-                                await log_error(f'Field data log delivery failed (attempt {attempt}): {resp.status_code} {err_txt}', 'field_data')
-                        finally:
+                        staged = bool(resp_json.get('staged_exists'))
+                        provisioned = bool(resp_json.get('provisioned'))
+                        await debug_print(f'periodic_provision_check: check (staged_exists={staged}, provisioned={provisioned})', 'PROVISION')
+                        # Persist UNIT_ID if provided and non-empty
+                        new_uid = resp_json.get('unit_id')
+                        if new_uid and str(new_uid).strip():
+                            if str(new_uid).strip() != str(getattr(settings, 'UNIT_ID', '')):
+                                settings.UNIT_ID = str(new_uid).strip()
+                                try: persist_unit_id(settings.UNIT_ID)
+                                except Exception: pass
+                        # Persist metadata -> WORDPRESS_API_URL etc.
+                        site_val = (resp_json.get('site_url') or resp_json.get('wordpress_api_url') or '').strip()
+                        if site_val:
+                            persist_wordpress_api_url(site_val)
+                        unit_name = (resp_json.get('unit_name') or '').strip()
+                        role_val = (resp_json.get('role') or '').strip()
+                        plan_val = (resp_json.get('plan') or '').strip()
+                        fw_ver = (resp_json.get('firmware') or '').strip()
+                        if unit_name:
+                            try: settings.UNIT_Name = unit_name
+                            except Exception: pass
+                        if role_val:
+                            try: settings.NODE_TYPE = role_val
+                            except Exception: pass
+                        if plan_val:
+                            try: settings.PLAN = plan_val
+                            except Exception: pass
+                        if fw_ver:
+                            try: settings.FIRMWARE_VERSION = fw_ver
+                            except Exception: pass
+                        # Mark provisioned flag file
+                        if (provisioned or staged) and site_val:
                             try:
-                                resp.close()
+                                with open(flag_file, 'w') as f: f.write('ok')
                             except Exception:
                                 pass
-                    except Exception as e:
-                        try:
-                            emsg = f"{type(e).__name__}: {str(e)}"
-                            emsg = ''.join(ch if ord(ch) >= 32 else ' ' for ch in emsg)
-                        except Exception:
-                            emsg = f"{type(e).__name__}"
-                        await debug_print(f'send_field_data_log: Exception during delivery attempt {attempt}: {emsg}', 'ERROR')
-                        await log_error(f'Field data log delivery exception (attempt {attempt}): {emsg}', 'field_data')
-                    await asyncio.sleep(delay)
-                    delay = min(delay * 2, 60)
-                if delivered:
-                    sent_indices.append(idx)
-                else:
-                    await debug_print(f'send_field_data_log: Payload {idx+1} failed after {max_retries} attempts', 'ERROR')
-                    await log_error('Field data log delivery failed after max retries, will try again later.', 'field_data')
-            if total_lines:
-                current_indices = range(backlog_count, len(payloads))
-                delivered_current_all = all(i in sent_indices for i in current_indices) if len(payloads) > backlog_count else False
-                if delivered_current_all:
-                    await debug_print('send_field_data_log: Rotating field_data.log after successful delivery of current payloads', 'DEBUG')
-                    rotate_field_data_log()
-            unsent = [payloads[i] for i in range(len(payloads)) if i not in sent_indices]
-            if unsent:
-                await debug_print(f'send_field_data_log: Writing {len(unsent)} unsent payloads back to backlog', 'DEBUG')
-                clear_backlog()
-                for p in unsent:
-                    append_to_backlog(p)
-            else:
-                await debug_print('send_field_data_log: All payloads delivered, clearing backlog', 'DEBUG')
-                clear_backlog()
-    except Exception as e:
-        try:
-            import sys
+                            # One-time soft reset after initial full metadata persistence
+                            if not _provision_reboot_guard_written:
+                                reboot_needed = True
+                                # Guard file prevents multiple resets
+                                try:
+                                    if guard_file in (os.listdir(settings.LOG_DIR) if hasattr(os, 'listdir') else []):
+                                        reboot_needed = False
+                                except Exception:
+                                    pass
+                                if reboot_needed:
+                                    try:
+                                        with open(guard_file, 'w') as gf: gf.write('1')
+                                    except Exception:
+                                        pass
+                                    await debug_print('periodic_provision_check: provisioning applied; soft resetting', 'PROVISION')
+                                    _provision_reboot_guard_written = True
+                                    try:
+                                        import machine
+                                        machine.soft_reset()
+                                    except Exception:
+                                        pass
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
+        except Exception as e:
             try:
-                import uio as io
+                await debug_print(f'periodic_provision_check: error {e}', 'ERROR')
             except Exception:
-                import io
-            buf = io.StringIO()
-            try:
-                sys.print_exception(e, buf)
-                tb_str = buf.getvalue()
-            except Exception:
-                tb_str = ''
-        except Exception:
-            tb_str = ''
-        etype = type(e).__name__
-        try:
-            emsg = f"{etype}: {str(e)}"
-            emsg = ''.join(ch if 32 <= ord(ch) <= 126 else ' ' for ch in emsg)
-        except Exception:
-            emsg = etype
-        try:
-            tb_str = ''.join(ch if 32 <= ord(ch) <= 126 or ch in '\n\r\t' else ' ' for ch in tb_str)
-        except Exception:
-            pass
-        await debug_print(f'send_field_data_log: Exception in send_field_data_log: {emsg}\n{tb_str}', 'ERROR')
-        await log_error(f'Failed to send field data log: {emsg}\n{tb_str}', 'field_data')
-    finally:
-        # nothing to do; lock released by context manager
-        pass
-
-async def periodic_field_data_send():
-    while True:
-        await send_field_data_log()
-        await asyncio.sleep(settings.FIELD_DATA_SEND_INTERVAL)
-# Record all sdata and settings variables to field_data.log with timestamp
-def get_unix_time():
-    try:
-        # MicroPython often uses epoch 2000-01-01. Detect and offset to Unix epoch if needed.
-        epoch_year = time.gmtime(0)[0] if hasattr(time, 'gmtime') else 1970
-        t = int(time.time())
-        if epoch_year >= 2000:
-            return t + 946684800  # seconds from 1970->2000
-        return t
-    except Exception:
-        return int(time.time())
-
-def record_field_data():
-    """Append a minimal telemetry record for the base node.
-    Prior approach dumped all settings/sdata which was too heavy for flash and bandwidth.
-    """
-    import sdata, settings, ujson, os, utime as time
-    entry = {'timestamp': int(get_unix_time())}
-    try:
-        ts = time.localtime()
-        entry['ts_iso'] = f"{ts[0]:04}-{ts[1]:02}-{ts[2]:02} {ts[3]:02}:{ts[4]:02}:{ts[5]:02}"
-    except Exception:
-        pass
-    # Curated sdata fields
-    def _copy(dst, src, key, alias=None):
-        try:
-            val = getattr(src, key)
-            dst[alias or key] = val
-        except Exception:
-            pass
-    _copy(entry, sdata, 'cur_temp_f')
-    _copy(entry, sdata, 'cur_temp_c')
-    _copy(entry, sdata, 'cur_humid')
-    _copy(entry, sdata, 'cur_bar_pres')
-    _copy(entry, sdata, 'sys_voltage')
-    _copy(entry, sdata, 'wifi_rssi')
-    _copy(entry, sdata, 'lora_SigStr')
-    _copy(entry, sdata, 'free_mem')
-    _copy(entry, sdata, 'script_runtime')
-    _copy(entry, sdata, 'loop_runtime')
-    _copy(entry, sdata, 'cpu_temp')
-    _copy(entry, sdata, 'error_count')
-    _copy(entry, sdata, 'last_error')
-    # Relay runtime counters (only include if non-zero to reduce payload size)
-    for i in range(1,9):
-        try:
-            val = getattr(sdata, f'relay{i}_runtime_s')
-            if val:
-                entry[f'relay{i}_runtime_s'] = val
-            on_state = getattr(sdata, f'relay{i}_on')
-            if on_state:
-                entry[f'relay{i}_on'] = 1
-        except Exception:
-            pass
-    # GPS mirrors if present
-    _copy(entry, sdata, 'gps_lat')
-    _copy(entry, sdata, 'gps_lng')
-    _copy(entry, sdata, 'gps_alt_m')
-    _copy(entry, sdata, 'gps_accuracy_m')
-    _copy(entry, sdata, 'gps_last_fix_ts')
-    # Minimal identity
-    entry['unit_id'] = getattr(settings, 'UNIT_ID', '')
-    entry['firmware_version'] = getattr(settings, 'FIRMWARE_VERSION', '')
-    entry['NODE_TYPE'] = getattr(settings, 'NODE_TYPE', '')
-    # Only persist on base node to avoid filling flash on remotes
-    if getattr(settings, 'NODE_TYPE', 'base') != 'base':
-        return
-    checkLogDirectory()
-    try:
-        with open(settings.FIELD_DATA_LOG, 'a') as f:
-            f.write(ujson.dumps(entry) + '\n')
-        import gc
-        gc.collect()
-    except Exception as e:
-        print(f"Error recording field data: {e}")
+                pass
+        await _a.sleep(interval)
