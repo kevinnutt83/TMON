@@ -269,21 +269,30 @@ async def first_boot_provision():
                     except Exception:
                         pass
                 if role_val:
-                    try: settings.NODE_TYPE = role_val
-                    except Exception: pass
+                    try:
+                        settings.NODE_TYPE = role_val
+                    except Exception:
+                        pass
                 if unit_name:
-                    try: settings.UNIT_Name = unit_name
-                    except Exception: pass
+                    try:
+                        settings.UNIT_Name = unit_name
+                    except Exception:
+                        pass
                 if plan_val:
-                    try: settings.PLAN = plan_val
-                    except Exception: pass
+                    try:
+                        settings.PLAN = plan_val
+                    except Exception:
+                        pass
                 if fw_ver:
-                    try: settings.FIRMWARE_VERSION = fw_ver
-                    except Exception: pass
+                    try:
+                        settings.FIRMWARE_VERSION = fw_ver
+                    except Exception:
+                        pass
                 # mark provisioned flag
                 if (provisioned or staged) and site_val:
                     try:
-                        with open(flag, 'w') as f: f.write('ok')
+                        with open(flag, 'w') as f:
+                            f.write('ok')
                     except Exception:
                         pass
                     # NEW: confirm applied provisioning to Admin (best-effort)
@@ -316,7 +325,6 @@ async def first_boot_provision():
                     guard_file = getattr(settings, 'PROVISION_REBOOT_GUARD_FILE', settings.LOG_DIR + '/provision_reboot.flag')
                     try:
                         import uos as _os
-                        # Determine if guard flag exists to prevent repeated resets
                         listed = _os.listdir(settings.LOG_DIR) if hasattr(_os, 'listdir') else []
                         guard_name = guard_file.split('/')[-1]
                         already_guarded = (guard_name in listed)
@@ -334,9 +342,16 @@ async def first_boot_provision():
                                 pass
                     except Exception:
                         pass
+            except Exception:
+                # Ensure inner provisioning metadata block doesn't break boot flow
+                pass
+
             # If remote node, disable WiFi after provisioning
-            if getattr(settings, 'NODE_TYPE', 'base') == 'remote' and getattr(settings, 'WIFI_DISABLE_AFTER_PROVISION', True):
-                disable_wifi()
+            try:
+                if getattr(settings, 'NODE_TYPE', 'base') == 'remote' and getattr(settings, 'WIFI_DISABLE_AFTER_PROVISION', True):
+                    disable_wifi()
+            except Exception:
+                pass
     except Exception as e:
         await debug_print('Provisioning check-in failed: %s' % e, 'ERROR')
 
