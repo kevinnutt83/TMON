@@ -312,9 +312,28 @@ async def first_boot_provision():
                             pass
                     except Exception:
                         pass
-                    # Guard: only soft reset once
+                    # Guard: only soft reset once (complete missing logic)
                     guard_file = getattr(settings, 'PROVISION_REBOOT_GUARD_FILE', settings.LOG_DIR + '/provision_reboot.flag')
-                    # ...existing code...
+                    try:
+                        import uos as _os
+                        # Determine if guard flag exists to prevent repeated resets
+                        listed = _os.listdir(settings.LOG_DIR) if hasattr(_os, 'listdir') else []
+                        guard_name = guard_file.split('/')[-1]
+                        already_guarded = (guard_name in listed)
+                        if not already_guarded:
+                            try:
+                                with open(guard_file, 'w') as gf:
+                                    gf.write('1')
+                            except Exception:
+                                pass
+                            await debug_print('first_boot_provision: provisioning applied; soft resetting', 'PROVISION')
+                            try:
+                                import machine as _m
+                                _m.soft_reset()
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
             # If remote node, disable WiFi after provisioning
             if getattr(settings, 'NODE_TYPE', 'base') == 'remote' and getattr(settings, 'WIFI_DISABLE_AFTER_PROVISION', True):
                 disable_wifi()
@@ -360,19 +379,23 @@ async def startup():
     except Exception as e:
         await debug_print('first_boot_provision error: %s' % e, 'ERROR')
 
-    # NEW: run a one-time OTA version check early
+    # One-time OTA version check early
     try:
         await ota_boot_check()
     except Exception:
         pass
-    # Dedicated LoRa loop cadence (configurable)
+
+    # Dedicated LoRa loop cadence (configurable) and sampling loop
     lora_interval = int(getattr(settings, 'LORA_LOOP_INTERVAL_S', 1))
     tm.add_task(lora_comm_task, 'lora', lora_interval)
     tm.add_task(sample_task, 'sample', 60)
+
+    # Base and WiFi nodes run field-data send and command polling
     node_role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
     if node_role in ('base', 'wifi'):
         tm.add_task(periodic_field_data_task, 'field_data', settings.FIELD_DATA_SEND_INTERVAL)
         tm.add_task(periodic_command_poll_task, 'cmd_poll', 10)
+
     # Background periodic tasks (standalone loops)
     try:
         import uasyncio as _a
@@ -394,6 +417,7 @@ async def startup():
         _a0.create_task(settings_apply_loop(int(getattr(settings, 'PROVISION_CHECK_INTERVAL_S', 60))))
     except Exception:
         pass
+
     # OLED background update with optional page rotation, gated by ENABLE_OLED
     async def _oled_loop():
         page = 0
@@ -420,6 +444,8 @@ async def startup():
         _a3.create_task(_oled_loop())
     except Exception:
         pass
+
+    # Periodic OTA version/apply tasks
     async def ota_version_task():
         while True:
             try:
@@ -432,6 +458,7 @@ async def startup():
         _a2.create_task(ota_version_task())
     except Exception:
         pass
+
     async def ota_apply_task():
         while True:
             try:
@@ -444,12 +471,14 @@ async def startup():
         _a4.create_task(ota_apply_task())
     except Exception:
         pass
-    # Launch periodic UC check-in loop
+
+    # Unit Connector periodic check-in loop
     try:
         import uasyncio as _auc
         _auc.create_task(periodic_uc_checkin_task())
     except Exception:
         pass
+
     await tm.run()
 
 # If blocking tasks are added later, start them in a separate thread here
