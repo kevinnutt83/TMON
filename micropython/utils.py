@@ -857,6 +857,8 @@ async def periodic_provision_check():
     """Poll Admin hub for staged provisioning metadata until provisioned.
     Persists UNIT_ID, WORDPRESS_API_URL, role, plan, unit_name, firmware and soft-resets once after URL persistence.
     """
+    # Fix: ensure module flag is referenced, not shadowed as local
+    global _provision_reboot_guard_written
     import uasyncio as _a
     interval = int(getattr(settings, 'PROVISION_CHECK_INTERVAL_S', 25))
     hub = getattr(settings, 'TMON_ADMIN_API_URL', '')
