@@ -864,13 +864,20 @@ async def periodic_provision_check():
     guard_file = getattr(settings, 'PROVISION_REBOOT_GUARD_FILE', settings.LOG_DIR + '/provision_reboot.flag')
     while True:
         try:
-            # Break early if explicitly provisioned flag exists
+            # Robust flag check: use os.stat; avoid path vs filename mismatch
             try:
-                if hub and flag_file and (flag_file in (os.listdir(settings.LOG_DIR) if hasattr(os, 'listdir') else [])):
+                _provisioned = False
+                try:
+                    os.stat(flag_file)
+                    _provisioned = True
+                except OSError:
+                    _provisioned = False
+                if hub and flag_file and _provisioned:
                     await debug_print('periodic_provision_check: already provisioned (flag found)', 'PROVISION')
                     return
             except Exception:
                 pass
+
             if not hub:
                 await debug_print('periodic_provision_check: TMON_ADMIN_API_URL not set', 'PROVISION')
             else:
@@ -878,6 +885,7 @@ async def periodic_provision_check():
                     import urequests as _r
                 except Exception:
                     _r = None
+                resp = None  # guard for close
                 if _r:
                     mid = get_machine_id()
                     uid = getattr(settings, 'UNIT_ID', None)
@@ -902,8 +910,10 @@ async def periodic_provision_check():
                         if new_uid and str(new_uid).strip():
                             if str(new_uid).strip() != str(getattr(settings, 'UNIT_ID', '')):
                                 settings.UNIT_ID = str(new_uid).strip()
-                                try: persist_unit_id(settings.UNIT_ID)
-                                except Exception: pass
+                                try:
+                                    persist_unit_id(settings.UNIT_ID)
+                                except Exception:
+                                    pass
                         # Persist metadata -> WORDPRESS_API_URL etc.
                         site_val = (resp_json.get('site_url') or resp_json.get('wordpress_api_url') or '').strip()
                         if site_val:
@@ -913,21 +923,30 @@ async def periodic_provision_check():
                         plan_val = (resp_json.get('plan') or '').strip()
                         fw_ver = (resp_json.get('firmware') or '').strip()
                         if unit_name:
-                            try: settings.UNIT_Name = unit_name
-                            except Exception: pass
+                            try:
+                                settings.UNIT_Name = unit_name
+                            except Exception:
+                                pass
                         if role_val:
-                            try: settings.NODE_TYPE = role_val
-                            except Exception: pass
+                            try:
+                                settings.NODE_TYPE = role_val
+                            except Exception:
+                                pass
                         if plan_val:
-                            try: settings.PLAN = plan_val
-                            except Exception: pass
+                            try:
+                                settings.PLAN = plan_val
+                            except Exception:
+                                pass
                         if fw_ver:
-                            try: settings.FIRMWARE_VERSION = fw_ver
-                            except Exception: pass
+                            try:
+                                settings.FIRMWARE_VERSION = fw_ver
+                            except Exception:
+                                pass
                         # Mark provisioned flag file
                         if (provisioned or staged) and site_val:
                             try:
-                                with open(flag_file, 'w') as f: f.write('ok')
+                                with open(flag_file, 'w') as f:
+                                    f.write('ok')
                             except Exception:
                                 pass
                             # One-time soft reset after initial full metadata persistence
@@ -935,13 +954,14 @@ async def periodic_provision_check():
                                 reboot_needed = True
                                 # Guard file prevents multiple resets
                                 try:
-                                    if guard_file in (os.listdir(settings.LOG_DIR) if hasattr(os, 'listdir') else []):
-                                        reboot_needed = False
-                                except Exception:
-                                    pass
+                                    os.stat(guard_file)
+                                    reboot_needed = False
+                                except OSError:
+                                    reboot_needed = True
                                 if reboot_needed:
                                     try:
-                                        with open(guard_file, 'w') as gf: gf.write('1')
+                                        with open(guard_file, 'w') as gf:
+                                            gf.write('1')
                                     except Exception:
                                         pass
                                     await debug_print('periodic_provision_check: provisioning applied; soft resetting', 'PROVISION')
@@ -951,8 +971,10 @@ async def periodic_provision_check():
                                         machine.soft_reset()
                                     except Exception:
                                         pass
+                    # Safely close response
                     try:
-                        resp.close()
+                        if resp:
+                            resp.close()
                     except Exception:
                         pass
         except Exception as e:

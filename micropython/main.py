@@ -345,7 +345,6 @@ async def first_boot_provision():
             except Exception:
                 # Ensure inner provisioning metadata block doesn't break boot flow
                 pass
-
             # If remote node, disable WiFi after provisioning
             try:
                 if getattr(settings, 'NODE_TYPE', 'base') == 'remote' and getattr(settings, 'WIFI_DISABLE_AFTER_PROVISION', True):
@@ -400,15 +399,17 @@ async def startup():
     except Exception:
         pass
 
-    # Dedicated LoRa loop cadence (configurable) and sampling loop
+    # Dedicated LoRa and sampling loops
     lora_interval = int(getattr(settings, 'LORA_LOOP_INTERVAL_S', 1))
     tm.add_task(lora_comm_task, 'lora', lora_interval)
     tm.add_task(sample_task, 'sample', 60)
 
-    # Base and WiFi nodes run field-data send and command polling
+    # Base and WiFi nodes run field-data send and command polling only when URL available
     node_role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
+    wp_url = str(getattr(settings, 'WORDPRESS_API_URL', '')).strip()
     if node_role in ('base', 'wifi'):
-        tm.add_task(periodic_field_data_task, 'field_data', settings.FIELD_DATA_SEND_INTERVAL)
+        if wp_url:
+            tm.add_task(periodic_field_data_task, 'field_data', settings.FIELD_DATA_SEND_INTERVAL)
         tm.add_task(periodic_command_poll_task, 'cmd_poll', 10)
 
     # Background periodic tasks (standalone loops)
