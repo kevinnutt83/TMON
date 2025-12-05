@@ -268,12 +268,17 @@ add_filter('tmon_admin_provisioning_banner', function ($text) {
 // Ensure schema is present before any UI/REST interaction
 add_action('admin_init', function () {
 	if (function_exists('tmon_admin_install_schema')) {
+		ob_start();
 		tmon_admin_install_schema();
+		// Drop any unexpected echoes such as “tmon_admin_ensure_columns executed (idempotent).”
+		@ob_end_clean();
 	}
 });
 add_action('rest_api_init', function () {
 	if (function_exists('tmon_admin_install_schema')) {
+		ob_start();
 		tmon_admin_install_schema();
+		@ob_end_clean();
 	}
 });
 
@@ -618,9 +623,8 @@ add_filter('pre_option_tmon_uc_shared_key', function ($pre) {
 	} elseif (!empty($_GET['uc_url'])) {
 		$uc_raw = wp_unslash($_GET['uc_url']);
 	}
-	if (!$uc_raw) { return $pre; }
+	if (!$uc_raw || !function_exists('tmon_admin_uc_normalize_url')) { return $pre; }
 	$key_id = tmon_admin_uc_normalize_url($uc_raw);
-	if (!$key_id) { return $pre; }
 	$pair = tmon_admin_uc_pairings_get();
 	if (!empty($pair[$key_id]['active']) && !empty($pair[$key_id]['key'])) {
 		return $pair[$key_id]['key'];
@@ -736,11 +740,8 @@ add_action('rest_api_init', function () {
 			$uc_url_raw = $request->get_param('uc_url');
 			$uc_url = esc_url_raw($uc_url_raw);
 			$key_id = function_exists('tmon_admin_uc_normalize_url') ? tmon_admin_uc_normalize_url($uc_url ?: $uc_url_raw) : ($uc_url ?: $uc_url_raw);
-			if (!$key_id) {
-				return new WP_Error('bad_request', 'uc_url required', array('status' => 400));
-			}
-			// Validate pairing
-			$pair = function_exists('tmon_admin_uc_pairings_get') ? tmon_admin_uc_pairings_get() : array();
+			if (!$key_id) { return new WP_Error('bad_request', 'uc_url required', array('status' => 400)); }
+			$pair = tmon_admin_uc_pairings_get();
 			if (empty($pair[$key_id]['active'])) {
 				return new WP_Error('not_paired', 'UC not paired', array('status' => 403));
 			}
