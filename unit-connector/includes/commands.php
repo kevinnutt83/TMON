@@ -87,13 +87,13 @@ if (!function_exists('tmon_uc_device_data_insert')) {
 }
 
 // Ensure commands queue table exists
-add_action('admin_init', function () {
+add_action('init', function () {
 	global $wpdb;
 	$table = $wpdb->prefix . 'tmon_device_commands';
 	$charset = $wpdb->get_charset_collate();
 	$sql = "CREATE TABLE IF NOT EXISTS {$table} (
 		id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-		device_id VARCHAR(32) NOT NULL,
+		device_id VARCHAR(64) NOT NULL,
 		command VARCHAR(64) NOT NULL,
 		params LONGTEXT NULL,
 		status VARCHAR(32) DEFAULT 'queued',
@@ -107,15 +107,15 @@ add_action('admin_init', function () {
 	dbDelta($sql);
 });
 
-// REST: receive command from Admin and enqueue for device
+// Enqueue command (from Admin forwarder or local UI)
 add_action('rest_api_init', function () {
 	register_rest_route('tmon-uc/v1', '/device/command', array(
 		'methods'  => 'POST',
 		'callback' => function ($req) {
-			// Authenticate via shared key header
+			// Optional: authenticate Admin via X-TMON-HUB
 			$shared = isset($_SERVER['HTTP_X_TMON_HUB']) ? sanitize_text_field($_SERVER['HTTP_X_TMON_HUB']) : '';
 			$key_opt = get_option('tmon_uc_shared_key');
-			if (!$key_opt || !hash_equals($key_opt, $shared)) {
+			if ($shared && (!$key_opt || !hash_equals($key_opt, $shared))) {
 				return new WP_Error('forbidden', 'Unauthorized hub', array('status' => 403));
 			}
 			$device_id = sanitize_text_field($req->get_param('unit_id') ?: $req->get_param('device_id'));
@@ -140,7 +140,7 @@ add_action('rest_api_init', function () {
 	));
 });
 
-// REST: devices poll for queued commands
+// Devices poll for commands (returns queued or claimed for retry)
 add_action('rest_api_init', function () {
 	register_rest_route('tmon-uc/v1', '/device/commands', array(
 		'methods'  => 'POST',
@@ -151,14 +151,40 @@ add_action('rest_api_init', function () {
 			}
 			global $wpdb;
 			$table = $wpdb->prefix . 'tmon_device_commands';
-			$rows = $wpdb->get_results($wpdb->prepare("SELECT id, command, params FROM {$table} WHERE device_id=%s AND status='queued' ORDER BY id ASC LIMIT 20", $device_id), ARRAY_A);
+			$rows = $wpdb->get_results($wpdb->prepare(
+				"SELECT id, command, params FROM {$table} 
+				 WHERE device_id=%s AND (status='queued' OR status='claimed') 
+				 ORDER BY id ASC LIMIT 10", $device_id
+			), ARRAY_A);
 			return rest_ensure_response(array('status' => 'ok', 'commands' => $rows ?: array()));
 		},
 		'permission_callback' => '__return_true',
 	));
 });
 
-// REST: devices acknowledge command result (processed)
+// Device claims a command (prevents concurrent execution)
+add_action('rest_api_init', function () {
+	register_rest_route('tmon-uc/v1', '/device/command-claim', array(
+		'methods'  => 'POST',
+		'callback' => function ($req) {
+			$id = intval($req->get_param('id'));
+			$device_id = sanitize_text_field($req->get_param('unit_id') ?: $req->get_param('device_id'));
+			if ($id <= 0 || !$device_id) {
+				return new WP_Error('bad_request', 'id and unit_id required', array('status' => 400));
+			}
+			global $wpdb;
+			$table = $wpdb->prefix . 'tmon_device_commands';
+			$updated = $wpdb->update($table, array(
+				'status'     => 'claimed',
+				'updated_at' => current_time('mysql'),
+			), array('id' => $id, 'device_id' => $device_id, 'status' => 'queued'));
+			return rest_ensure_response(array('status' => $updated ? 'ok' : 'stale'));
+		},
+		'permission_callback' => '__return_true',
+	));
+});
+
+// Device posts execution result (done/failed)
 add_action('rest_api_init', function () {
 	register_rest_route('tmon-uc/v1', '/device/command-result', array(
 		'methods'  => 'POST',
@@ -172,9 +198,9 @@ add_action('rest_api_init', function () {
 			global $wpdb;
 			$table = $wpdb->prefix . 'tmon_device_commands';
 			$wpdb->update($table, array(
-				'status'    => $status,
-				'updated_at'=> current_time('mysql'),
-				'params'    => wp_json_encode(array('result' => $result)),
+				'status'     => in_array($status, array('done','failed','expired'), true) ? $status : 'done',
+				'updated_at' => current_time('mysql'),
+				'params'     => wp_json_encode(array('result' => $result)),
 			), array('id' => $id));
 			return rest_ensure_response(array('status' => 'ok'));
 		},
@@ -262,28 +288,50 @@ if (!has_action('admin_menu', 'tmon_uc_register_commands_menu')) {
 	}
 }
 
-// Shortcode relay buttons should post to /tmon-uc/v1/device/command with type=relay_ctrl and payload {relay, state, duration_s}
+// Optional: minimal executor for relay commands if device runs UC-side helper
+// This allows local execution hooks (e.g., GPIO service) to act immediately when claimed.
+add_action('tmon_uc_execute_command', function ($device_id, $cmd, $params, $row_id) {
+	// ...existing code or integration to your device service...
+	// Example stub for relay_ctrl:
+	if ($cmd === 'relay_ctrl') {
+		// Expected params: { relay: number, state: 'on'|'off', duration_s?: int }
+		// Integrate with local relay service or keep for device-side execution.
+		do_action('tmon_uc_relay_control', $device_id, intval($params['relay'] ?? 1), sanitize_text_field($params['state'] ?? 'off'), intval($params['duration_s'] ?? 0), $row_id);
+	}
+}, 10, 4);
+
+// Safety scheduler: mark old 'claimed' commands back to 'queued' if stuck > 5 minutes
+if (!wp_next_scheduled('tmon_uc_command_requeue_cron')) {
+	wp_schedule_event(time() + 60, 'hourly', 'tmon_uc_command_requeue_cron');
+}
+add_action('tmon_uc_command_requeue_cron', function () {
+	global $wpdb;
+	$table = $wpdb->prefix . 'tmon_device_commands';
+	$wpdb->query("UPDATE {$table} SET status='queued' WHERE status='claimed' AND updated_at < (NOW() - INTERVAL 5 MINUTE)");
+});
+
+// Ensure shortcode or UI button uses the forwarder with consistent payload
 if (!function_exists('tmon_uc_send_command')) {
 	function tmon_uc_send_command($unit_id, $machine_id, $type, $payload) {
-		$hub = get_option('tmon_admin_hub_url');
-		$key = get_option('tmon_uc_shared_key');
-		if (!$hub || !$key) { return new WP_Error('no_hub', 'Hub not configured'); }
-		$url = trailingslashit($hub) . 'wp-json/tmon-admin/v1/uc/command';
+		$admin = get_option('tmon_admin_hub_url'); // UC setting: Admin hub URL
+		$key   = get_option('tmon_uc_shared_key');
+		if (!$admin || !$key) { return new WP_Error('no_hub', 'Hub not configured'); }
+		$url = trailingslashit($admin) . 'wp-json/tmon-admin/v1/uc/forward-command';
 		$args = array(
-			'headers' => array('X-TMON-HUB' => $key, 'Content-Type' => 'application/json'),
-			'body' => wp_json_encode(array(
+			'headers' => array('Content-Type' => 'application/json', 'X-TMON-HUB' => $key),
+			'body'    => wp_json_encode(array(
+				'uc_url'  => site_url(),
 				'unit_id' => $unit_id,
-				'machine_id' => $machine_id,
-				'type' => $type,
-				'data' => $payload,
+				'type'    => $type,
+				'data'    => $payload, // e.g., {relay, state, duration_s}
 			)),
-			'timeout' => 20,
-			'method' => 'POST',
+			'timeout' => 15,
+			'method'  => 'POST',
 		);
 		$resp = wp_remote_post($url, $args);
 		if (is_wp_error($resp)) { return $resp; }
 		if (wp_remote_retrieve_response_code($resp) !== 200) {
-			return new WP_Error('cmd_fail', 'Command dispatch failed');
+			return new WP_Error('cmd_fail', 'Command forward failed');
 		}
 		return true;
 	}
