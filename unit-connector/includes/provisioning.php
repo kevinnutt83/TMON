@@ -88,6 +88,15 @@ function tmon_uc_provisioning_page() {
 	}
 	$devices = uc_devices_get_assigned();
 	$unassigned = uc_devices_get_unassigned();
+
+	// If nothing in local mirror, try to refresh from Admin hub automatically
+	if ((empty($devices) && empty($unassigned))) {
+		$refreshed = uc_devices_refresh_from_admin();
+		// Re-query after refresh
+		$devices = uc_devices_get_assigned();
+		$unassigned = uc_devices_get_unassigned();
+	}
+
 	echo '<div class="wrap"><h1>' . esc_html__('Provisioned Devices', 'tmon') . '</h1>';
 	settings_errors('tmon_uc');
 	echo '<form method="post">';
