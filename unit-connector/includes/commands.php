@@ -1,6 +1,43 @@
 <?php
 if (!defined('ABSPATH')) { exit; }
 
+// Ensure device data table exists (used by REST: tmon_uc_api_device_data)
+if (!function_exists('tmon_uc_ensure_device_data_table')) {
+	function tmon_uc_ensure_device_data_table() {
+		global $wpdb;
+		$table = $wpdb->prefix . 'tmon_device_data'; // matches mp_tmon_device_data when prefix=mp_
+		$charset = $wpdb->get_charset_collate();
+		$sql = "CREATE TABLE IF NOT EXISTS {$table} (
+			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+			unit_id VARCHAR(16) NOT NULL,
+			machine_id VARCHAR(64) NOT NULL,
+			role VARCHAR(32) NULL,
+			ts DATETIME NOT NULL,
+			timestamp INT UNSIGNED NULL,
+			temp_c FLOAT NULL,
+			temp_f FLOAT NULL,
+			humid FLOAT NULL,
+			bar_pres FLOAT NULL,
+			sys_voltage FLOAT NULL,
+			wifi_rssi INT NULL,
+			lora_rssi INT NULL,
+			free_mem INT NULL,
+			error_count INT NULL,
+			last_error VARCHAR(255) NULL,
+			payload LONGTEXT NULL,
+			PRIMARY KEY (id),
+			KEY idx_unit (unit_id),
+			KEY idx_machine (machine_id),
+			KEY idx_ts (ts)
+		) {$charset};";
+		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+		dbDelta($sql);
+	}
+}
+// Call on admin_init and rest_api_init to avoid “SHOW FULL COLUMNS” errors before handlers run
+add_action('admin_init', 'tmon_uc_ensure_device_data_table');
+add_action('rest_api_init', 'tmon_uc_ensure_device_data_table');
+
 // Guard: sender helper
 if (!function_exists('tmon_uc_send_command')) {
 	function tmon_uc_send_command($unit_id, $machine_id, $type, $payload) {
