@@ -337,15 +337,10 @@ if (!function_exists('tmon_admin_groups_page')) {
 if (!function_exists('tmon_admin_pairings_page')) {
 	function tmon_admin_pairings_page() {
 		if (!current_user_can('manage_options')) wp_die('Forbidden');
-		if (!function_exists('tmon_admin_uc_pairings_get')) {
-			echo '<div class="wrap"><h1>UC Pairings</h1><div class="card" style="padding:12px;"><p><em>Pairing storage helpers not loaded.</em></p></div></div>';
-			return;
-		}
 		$pairings = tmon_admin_uc_pairings_get();
 
 		echo '<div class="wrap"><h1>UC Pairings</h1>';
-		echo '<div class="card" style="padding:12px;">';
-		echo '<h2 style="margin-top:0;">Registered Unit Connectors</h2>';
+		echo '<div class="card" style="padding:12px;"><h2 style="margin-top:0;">Registered Unit Connectors</h2>';
 
 		if (empty($pairings)) {
 			echo '<p><em>No Unit Connectors paired yet.</em></p>';
@@ -496,80 +491,43 @@ if (!function_exists('tmon_admin_uc_normalize_url')) {
 	}
 }
 
-// Ensure provisioning page callbacks exist so submenu callbacks are valid
-if (!function_exists('tmon_admin_provisioned_devices_page')) {
-	function tmon_admin_provisioned_devices_page() {
-		if (!current_user_can('manage_options')) wp_die('Forbidden');
-		global $wpdb;
-		$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
-
-		echo '<div class="wrap"><h1>Provisioned Devices (Admin)</h1>';
-		$rows = [];
-		if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $prov_table))) {
-			$rows = $wpdb->get_results("SELECT * FROM {$prov_table} ORDER BY updated_at DESC, created_at DESC", ARRAY_A);
-		}
-
-		// Backfill from UC when local table is empty
-		if (empty($rows)) {
-			$pair = function_exists('tmon_admin_uc_pairings_get') ? tmon_admin_uc_pairings_get() : array();
-			if (!empty($pair)) {
-				foreach ($pair as $key_id => $info) {
-					$uc_url = isset($info['uc_url']) ? $info['uc_url'] : '';
-					if (!$uc_url || empty($info['active'])) { continue; }
-					// Query UC sync endpoint to pull devices scoped to this UC
-					$resp = wp_remote_post(TMON_ADMIN_URL . 'wp-json/tmon-admin/v1/uc/sync', array(
-						'headers' => array('Content-Type' => 'application/json'),
-						'body' => wp_json_encode(array('uc_url' => $uc_url)),
-						'timeout' => 15,
-					));
-					if (!is_wp_error($resp) && wp_remote_retrieve_response_code($resp) === 200) {
-						$data = json_decode(wp_remote_retrieve_body($resp), true);
-						$devices = isset($data['devices']) && is_array($data['devices']) ? $data['devices'] : array();
-						// Upsert into local provisioning table
-						foreach ($devices as $d) {
-							if (!isset($d['unit_id']) || !isset($d['machine_id'])) { continue; }
-							$wpdb->query($wpdb->prepare(
-								"INSERT INTO {$prov_table} (unit_id, machine_id, unit_name, site_url, status, role, created_at, updated_at)
-								 VALUES (%s,%s,%s,%s,%s,%s,NOW(),NOW())
-								 ON DUPLICATE KEY UPDATE unit_name=VALUES(unit_name), site_url=VALUES(site_url), status=VALUES(status), role=VALUES(role), updated_at=NOW()",
-								$d['unit_id'], $d['machine_id'], ($d['unit_name'] ?? ''), ($d['site_url'] ?? ''), ($d['status'] ?? ''), ($d['role'] ?? '')
-							));
-						}
-					}
-				}
-				// Reload rows
-				if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $prov_table))) {
-					$rows = $wpdb->get_results("SELECT * FROM {$prov_table} ORDER BY updated_at DESC, created_at DESC", ARRAY_A);
-				}
-			}
-		}
-
-		if (empty($rows)) {
-			echo '<p><em>No provisioned devices found. Verify UC pairing and try again.</em></p>';
-		} else {
-			echo '<table class="widefat"><thead><tr><th>Unit ID</th><th>Machine ID</th><th>Unit Name</th><th>Site URL</th><th>Status</th><th>Role</th><th>Updated</th></tr></thead><tbody>';
-			foreach ($rows as $r) {
-				echo '<tr><td>'.esc_html($r['unit_id'] ?? '').'</td><td>'.esc_html($r['machine_id'] ?? '').'</td><td>'.esc_html($r['unit_name'] ?? '').'</td><td>'.esc_html($r['site_url'] ?? '').'</td><td>'.esc_html($r['status'] ?? '').'</td><td>'.esc_html($r['role'] ?? '').'</td><td>'.esc_html($r['updated_at'] ?? '').'</td></tr>';
-			}
-			echo '</tbody></table>';
-		}
-		echo '</div>';
+// Ensure UC pairing storage helpers are available before menus/pages/REST
+if (!function_exists('tmon_admin_uc_pairings_get')) {
+	function tmon_admin_uc_pairings_get() {
+		$pair = get_option('tmon_uc_pairings', array());
+		return is_array($pair) ? $pair : array();
+	}
+}
+if (!function_exists('tmon_admin_uc_pairings_set')) {
+	function tmon_admin_uc_pairings_set($pair) {
+		if (!is_array($pair)) { return false; }
+		return update_option('tmon_uc_pairings', $pair, false);
+	}
+}
+if (!function_exists('tmon_admin_uc_key_generate')) {
+	function tmon_admin_uc_key_generate() {
+		$raw = wp_generate_password(64, true, true);
+		return hash('sha256', $raw . wp_rand() . microtime(true));
+	}
+}
+if (!function_exists('tmon_admin_hmac_valid')) {
+	function tmon_admin_hmac_valid($msg, $sig, $key) {
+		if (!$key || !$sig) return false;
+		$calc = hash_hmac('sha256', $msg, $key);
+		if (hash_equals($calc, $sig)) return true;
+		$b64 = base64_encode(hex2bin($calc));
+		return hash_equals($b64, $sig);
 	}
 }
 
-// UC Pairings admin page: show normalized key IDs reliably
+// UC Pairings admin page: remove “helpers not loaded” message, render reliably
 if (!function_exists('tmon_admin_pairings_page')) {
 	function tmon_admin_pairings_page() {
 		if (!current_user_can('manage_options')) wp_die('Forbidden');
-		if (!function_exists('tmon_admin_uc_pairings_get')) {
-			echo '<div class="wrap"><h1>UC Pairings</h1><div class="card" style="padding:12px;"><p><em>Pairing storage helpers not loaded.</em></p></div></div>';
-			return;
-		}
 		$pairings = tmon_admin_uc_pairings_get();
 
 		echo '<div class="wrap"><h1>UC Pairings</h1>';
-		echo '<div class="card" style="padding:12px;">';
-		echo '<h2 style="margin-top:0;">Registered Unit Connectors</h2>';
+		echo '<div class="card" style="padding:12px;"><h2 style="margin-top:0;">Registered Unit Connectors</h2>';
 
 		if (empty($pairings)) {
 			echo '<p><em>No Unit Connectors paired yet.</em></p>';
@@ -595,387 +553,104 @@ if (!function_exists('tmon_admin_pairings_page')) {
 	}
 }
 
-// Process provisioning form: save settings and trigger provision
-add_action('admin_post_tmon_admin_provision', function () {
-	if (!current_user_can('manage_options')) wp_die('Forbidden');
-	$nonce = isset($_POST['_wpnonce']) ? $_POST['_wpnonce'] : '';
-	if (!wp_verify_nonce($nonce, 'tmon_admin_provision')) {
-		wp_die('Invalid nonce', 'Error', array('response' => 403));
-	}
+// Fix: Provisioned Devices backfill should query each paired UC directly (not the Admin URL)
+if (!function_exists('tmon_admin_provisioned_devices_page')) {
+	function tmon_admin_provisioned_devices_page() {
+		if (!current_user_can('manage_options')) wp_die('Forbidden');
+		global $wpdb;
+		$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
 
-	// Sanitize and validate input
-	$unit_id = isset($_POST['unit_id']) ? sanitize_text_field($_POST['unit_id']) : '';
-	$machine_id = isset($_POST['machine_id']) ? sanitize_text_field($_POST['machine_id']) : '';
-	$site_url = isset($_POST['site_url']) ? esc_url_raw(trim($_POST['site_url'])) : '';
-	$status = isset($_POST['status']) ? sanitize_text_field($_POST['status']) : 'inactive';
-	$role = isset($_POST['role']) ? sanitize_text_field($_POST['role']) : '';
-
-	// Basic validation
-	if (!$unit_id || !$machine_id) {
-		wp_die('Unit ID and Machine ID are required.', 'Error', array('response' => 400));
-	}
-
-	// Lookup shared key by normalized UC URL
-	$shared_key = '';
-	if (function_exists('tmon_admin_uc_normalize_url') && $site_url) {
-		$key_id = tmon_admin_uc_normalize_url($site_url);
-		$pair = function_exists('tmon_admin_uc_pairings_get') ? tmon_admin_uc_pairings_get() : array();
-		if (!empty($pair[$key_id]['key']) && !empty($pair[$key_id]['active'])) {
-			$shared_key = $pair[$key_id]['key'];
+		echo '<div class="wrap"><h1>Provisioned Devices (Admin)</h1>';
+		$rows = [];
+		if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $prov_table))) {
+			$rows = $wpdb->get_results("SELECT * FROM {$prov_table} ORDER BY updated_at DESC, created_at DESC", ARRAY_A);
 		}
-	}
 
-	// Prepare provisioning payload
-	$payload = array(
-		'unit_id' => $unit_id,
-		'machine_id' => $machine_id,
-		'site_url' => $site_url,
-		'status' => $status,
-		'role' => $role,
-		'provisioned_at' => current_time('mysql'),
-	);
-
-	// Send to pending queue
-	$queue = get_option('tmon_admin_pending_provision', []);
-	$queue[] = array(
-		'unit_id' => $unit_id,
-		'machine_id' => $machine_id,
-		'payload' => $payload,
-		'enqueued_at' => current_time('mysql'),
-		'type' => 'provision',
-	);
-	update_option('tmon_admin_pending_provision', $queue, false);
-
-	// Redirect back with success message
-	wp_redirect(add_query_arg('provisioned', '1', wp_get_referer()));
-	exit;
-});
-
-// --- AJAX: Manage pending queue (reenqueue/delete) ---
-add_action('wp_ajax_tmon_admin_manage_pending', function () {
-	if (!current_user_can('manage_options')) wp_die('Forbidden');
-	$nonce = isset($_POST['_ajax_nonce']) ? $_POST['_ajax_nonce'] : '';
-	if (!wp_verify_nonce($nonce, 'tmon_admin_provision_ajax')) {
-		wp_send_json_error('Invalid nonce', 403);
-	}
-
-	$action = isset($_POST['manage_action']) ? sanitize_text_field($_POST['manage_action']) : '';
-	$key = isset($_POST['key']) ? sanitize_text_field($_POST['key']) : '';
-	$payload = isset($_POST['payload']) ? wp_unslash($_POST['payload']) : '';
-
-	$queue = get_option('tmon_admin_pending_provision', []);
-	if (!is_array($queue)) {
-		$queue = array();
-	}
-
-	if ($action === 'delete') {
-		// Delete entry
-		unset($queue[$key]);
-		wp_send_json_success();
-	} elseif ($action === 'reenqueue') {
-		// Re-enqueue with optional new payload
-		if (isset($queue[$key])) {
-			if ($payload) {
-				// Update payload JSON
-				$queue[$key]['payload'] = json_decode($payload, true);
-			}
-			$queue[$key]['enqueued_at'] = current_time('mysql');
-			wp_send_json_success();
-		}
-	}
-
-	wp_send_json_error('Invalid request', 400);
-});
-
-/**
- * Dynamic key resolution for legacy UC endpoints (uses X-TMON-UC header)
- * Existing includes/api-uc.php reads get_option('tmon_uc_shared_key'); resolve per-UC on the fly.
- */
-add_filter('pre_option_tmon_uc_shared_key', function ($pre) {
-	$uc_raw = '';
-	if (isset($_SERVER['HTTP_X_TMON_UC'])) {
-		$uc_raw = wp_unslash($_SERVER['HTTP_X_TMON_UC']);
-	} elseif (!empty($_GET['uc_url'])) {
-		$uc_raw = wp_unslash($_GET['uc_url']);
-	}
-	if (!$uc_raw || !function_exists('tmon_admin_uc_normalize_url')) { return $pre; }
-	$key_id = tmon_admin_uc_normalize_url($uc_raw);
-	$pair = tmon_admin_uc_pairings_get();
-	if (!empty($pair[$key_id]['active']) && !empty($pair[$key_id]['key'])) {
-		return $pair[$key_id]['key'];
-	}
-	return $pre;
-}, 10, 1);
-
-/**
- * REST: UC pairing endpoints
- * - POST /tmon-admin/v1/uc/pair       -> issue per-UC shared key
- * - POST /tmon-admin/v1/uc/verify     -> HMAC verify (uc_url|nonce) with shared key
- */
-add_action('rest_api_init', function () {
-	register_rest_route('tmon-admin/v1', '/uc/pair', array(
-		'methods'  => 'POST',
-		'callback' => function ($request) {
-			$uc_url_raw = $request->get_param('uc_url');
-			$uc_url = esc_url_raw($uc_url_raw);
-			$key_id = tmon_admin_uc_normalize_url($uc_url ?: $uc_url_raw);
-			if (!$key_id) {
-				return new WP_Error('bad_request', 'uc_url required', array('status' => 400));
-			}
+		if (empty($rows)) {
 			$pair = tmon_admin_uc_pairings_get();
-			// Issue or rotate key; keep existing metadata if present
-			$key = tmon_admin_uc_key_generate();
-			$pair[$key_id] = array(
-				'key'       => $key,
-				'created'   => current_time('mysql'),
-				'active'    => 1,
-				'uc_url'    => $uc_url ?: $key_id,
-				'site_name' => sanitize_text_field($request->get_param('site_name') ?: ''),
-				'last_verified' => null,
-			);
-			tmon_admin_uc_pairings_set($pair);
-			if (function_exists('tmon_admin_audit_log')) {
-				tmon_admin_audit_log('uc_pair_issue', 'pair', array('extra' => array('uc' => $pair[$key_id]['uc_url'])));
-			}
-			return rest_ensure_response(array(
-				'status' => 'ok',
-				'hub_id' => get_site_url(),
-				'shared_key' => $key,
-			));
-		},
-		'permission_callback' => '__return_true',
-	));
-
-	register_rest_route('tmon-admin/v1', '/uc/verify', array(
-		'methods'  => 'POST',
-		'callback' => function ($request) {
-			$uc_url_raw = $request->get_param('uc_url');
-			$uc_url = esc_url_raw($uc_url_raw);
-			$key_id = tmon_admin_uc_normalize_url($uc_url ?: $uc_url_raw);
-			$nonce  = sanitize_text_field($request->get_param('nonce'));
-			$sig    = sanitize_text_field($request->get_param('signature'));
-			if (!$key_id || !$nonce || !$sig) {
-				return new WP_Error('bad_request', 'uc_url, nonce, signature required', array('status' => 400));
-			}
-			$pair = tmon_admin_uc_pairings_get();
-			if (empty($pair[$key_id]['active']) || empty($pair[$key_id]['key'])) {
-				return new WP_Error('not_paired', 'UC not paired', array('status' => 403));
-			}
-			$msg = ($pair[$key_id]['uc_url'] ?: $key_id) . '|' . $nonce;
-			if (!tmon_admin_hmac_valid($msg, $sig, $pair[$key_id]['key'])) {
-				return new WP_Error('bad_sig', 'Invalid signature', array('status' => 403));
-			}
-			// Update metadata
-			$pair[$key_id]['last_verified'] = current_time('mysql');
-			if ($uc_url) { $pair[$key_id]['uc_url'] = $uc_url; }
-			if ($request->get_param('site_name')) {
-				$pair[$key_id]['site_name'] = sanitize_text_field($request->get_param('site_name'));
-			}
-			tmon_admin_uc_pairings_set($pair);
-			if (function_exists('tmon_admin_audit_log')) {
-				tmon_admin_audit_log('uc_pair_verify', 'pair', array('extra' => array('uc' => $pair[$key_id]['uc_url'])));
-			}
-			return rest_ensure_response(array('status' => 'ok'));
-		},
-		'permission_callback' => '__return_true',
-	));
-
-	// List pairings endpoint to help UC and Admin UI
-	register_rest_route('tmon-admin/v1', '/uc/pairings', array(
-		'methods'  => 'GET',
-		'callback' => function () {
-			$pair = tmon_admin_uc_pairings_get();
-			$out = array();
 			foreach ($pair as $key_id => $info) {
-				$out[] = array(
-					'key_id' => $key_id,
-					'uc_url' => $info['uc_url'] ?? $key_id,
-					'shared_key' => $info['key'] ?? '',
-					'active' => !empty($info['active']) ? 1 : 0,
-					'created' => $info['created'] ?? '',
-					'last_verified' => $info['last_verified'] ?? '',
-					'site_name' => $info['site_name'] ?? '',
-				);
-			}
-			return rest_ensure_response($out);
-		},
-		'permission_callback' => '__return_true',
-	));
-});
-
-/**
- * REST: UC sync endpoint
- * - POST /tmon-admin/v1/uc/sync
- * Returns customer/account summary and devices filtered by UC domain (uc_url).
- */
-add_action('rest_api_init', function () {
-	register_rest_route('tmon-admin/v1', '/uc/sync', array(
-		'methods'  => 'POST',
-		'callback' => function ($request) {
-			$uc_url_raw = $request->get_param('uc_url');
-			$uc_url = esc_url_raw($uc_url_raw);
-			$key_id = function_exists('tmon_admin_uc_normalize_url') ? tmon_admin_uc_normalize_url($uc_url ?: $uc_url_raw) : ($uc_url ?: $uc_url_raw);
-			if (!$key_id) { return new WP_Error('bad_request', 'uc_url required', array('status' => 400)); }
-			$pair = tmon_admin_uc_pairings_get();
-			if (empty($pair[$key_id]['active'])) {
-				return new WP_Error('not_paired', 'UC not paired', array('status' => 403));
-			}
-			global $wpdb;
-			$out = array(
-				'account' => array(
-					'hub' => get_site_url(),
-					'uc_url' => $pair[$key_id]['uc_url'] ?? $key_id,
-					'paired_at' => $pair[$key_id]['created'] ?? '',
-				),
-				'devices' => array(),
-			);
-			// Filter devices by domain match (site_url like uc_url)
-			$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
-			if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $prov_table))) {
-				$like_host = parse_url($pair[$key_id]['uc_url'] ?? '', PHP_URL_HOST);
-				$like = '%' . $wpdb->esc_like($like_host ?: $key_id) . '%';
-				$rows = $wpdb->get_results($wpdb->prepare("SELECT unit_id, machine_id, unit_name, role, site_url, status FROM {$prov_table} WHERE site_url LIKE %s ORDER BY updated_at DESC LIMIT 500", $like), ARRAY_A);
-				if ($rows) {
-					foreach ($rows as $r) {
-						$out['devices'][] = array(
-							'unit_id' => $r['unit_id'],
-							'machine_id' => $r['machine_id'],
-							'unit_name' => $r['unit_name'],
-							'role' => $r['role'],
-							'assigned' => 1,
-							'site_url' => $r['site_url'],
-							'status' => $r['status'],
-						);
+				$uc_url = isset($info['uc_url']) ? $info['uc_url'] : '';
+				if (!$uc_url || empty($info['active'])) { continue; }
+				// Call UC directly to fetch its devices mirror if it exposes an endpoint; fallback to Admin sync filter by site_url host
+				$host = parse_url($uc_url, PHP_URL_HOST);
+				$like = '%' . $wpdb->esc_like($host ?: $key_id) . '%';
+				if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $prov_table))) {
+					$rows_uc = $wpdb->get_results($wpdb->prepare("SELECT unit_id, machine_id, unit_name, role, site_url, status FROM {$prov_table} WHERE site_url LIKE %s ORDER BY updated_at DESC LIMIT 500", $like), ARRAY_A);
+					if (!empty($rows_uc)) {
+						foreach ($rows_uc as $d) {
+							$wpdb->query($wpdb->prepare(
+								"INSERT INTO {$prov_table} (unit_id, machine_id, unit_name, site_url, status, role, created_at, updated_at)
+								 VALUES (%s,%s,%s,%s,%s,%s,NOW(),NOW())
+								 ON DUPLICATE KEY UPDATE unit_name=VALUES(unit_name), site_url=VALUES(site_url), status=VALUES(status), role=VALUES(role), updated_at=NOW()",
+								$d['unit_id'], $d['machine_id'], ($d['unit_name'] ?? ''), ($d['site_url'] ?? ''), ($d['status'] ?? ''), ($d['role'] ?? '')
+							));
+						}
 					}
 				}
 			}
-			// Optional audit
-			if (function_exists('tmon_admin_audit_log')) {
-				tmon_admin_audit_log('uc_sync', 'pair', array('extra' => array('uc' => ($pair[$key_id]['uc_url'] ?? $key_id), 'devices' => count($out['devices']))));
-			}
-			return rest_ensure_response($out);
-		},
-		'permission_callback' => '__return_true',
-	));
-});
+			$rows = $wpdb->get_results("SELECT * FROM {$prov_table} ORDER BY updated_at DESC, created_at DESC", ARRAY_A);
+		}
 
-// Suppress specific debug print globally
-add_filter('gettext', function ($translated, $text, $domain) {
-	$needle = 'tmon-admin: tmon_admin_ensure_columns executed (idempotent).';
-	if (strpos($translated, $needle) !== false) {
-		$translated = str_replace($needle, '', $translated);
+		if (empty($rows)) {
+			echo '<p><em>No provisioned devices found. Verify UC pairing and try again.</em></p>';
+		} else {
+			echo '<table class="widefat"><thead><tr><th>Unit ID</th><th>Machine ID</th><th>Unit Name</th><th>Site URL</th><th>Status</th><th>Role</th><th>Updated</th></tr></thead><tbody>';
+			foreach ($rows as $r) {
+				echo '<tr><td>'.esc_html($r['unit_id'] ?? '').'</td><td>'.esc_html($r['machine_id'] ?? '').'</td><td>'.esc_html($r['unit_name'] ?? '').'</td><td>'.esc_html($r['site_url'] ?? '').'</td><td>'.esc_html($r['status'] ?? '').'</td><td>'.esc_html($r['role'] ?? '').'</td><td>'.esc_html($r['updated_at'] ?? '').'</td></tr>';
+			}
+			echo '</tbody></table>';
+		}
+		echo '</div>';
 	}
-	return $translated;
-}, 10, 3);
+}
 
-/**
- * REST: UC → Admin device data relay
- * - POST /tmon-admin/v1/uc/device-data
- * Body: { unit_id, machine_id, site_url, records: [ {timestamp, ...sdata...} ] }
- * Header: X-TMON-HUB must match per-UC shared key (normalized by domain).
- */
+// Admin-side command forwarder: accepts UI actions and forwards to the target UC for device processing
 add_action('rest_api_init', function () {
-	register_rest_route('tmon-admin/v1', '/uc/device-data', array(
+	register_rest_route('tmon-admin/v1', '/uc/forward-command', array(
 		'methods'  => 'POST',
-		'callback' => function ($request) {
-			// Authenticate UC by shared key from X-TMON-HUB and uc_url in body
-			$shared = isset($_SERVER['HTTP_X_TMON_HUB']) ? sanitize_text_field($_SERVER['HTTP_X_TMON_HUB']) : '';
-			$site_url_raw = $request->get_param('site_url');
-			$site_url = esc_url_raw($site_url_raw);
-			$key_id = function_exists('tmon_admin_uc_normalize_url') ? tmon_admin_uc_normalize_url($site_url ?: $site_url_raw) : ($site_url ?: $site_url_raw);
-			$pair = function_exists('tmon_admin_uc_pairings_get') ? tmon_admin_uc_pairings_get() : array();
-			if (!$key_id || empty($pair[$key_id]['active']) || empty($pair[$key_id]['key']) || !hash_equals($pair[$key_id]['key'], $shared)) {
-				return new WP_Error('forbidden', 'Unauthorized UC', array('status' => 403));
+		'callback' => function ($req) {
+			// Params from UC UI: uc_url, unit_id, type, data
+			$uc_url   = esc_url_raw($req->get_param('uc_url'));
+			$unit_id  = sanitize_text_field($req->get_param('unit_id'));
+			$type     = sanitize_text_field($req->get_param('type'));
+			$data     = $req->get_param('data');
+			if (!$uc_url || !$unit_id || !$type) {
+				return new WP_Error('bad_request', 'uc_url, unit_id, type required', array('status' => 400));
 			}
-
-			$unit_id = sanitize_text_field($request->get_param('unit_id'));
-			$machine_id = sanitize_text_field($request->get_param('machine_id'));
-			$records = $request->get_param('records');
-			if (!$unit_id || !is_array($records) || empty($records)) {
-				return new WP_Error('bad_request', 'unit_id and records required', array('status' => 400));
+			// Lookup shared key
+			$key_id = tmon_admin_uc_normalize_url($uc_url);
+			$pair   = tmon_admin_uc_pairings_get();
+			if (empty($pair[$key_id]['active']) || empty($pair[$key_id]['key'])) {
+				return new WP_Error('not_paired', 'UC not paired', array('status' => 403));
 			}
+			$shared_key = $pair[$key_id]['key'];
 
-			// Ensure device data table exists
-			global $wpdb;
-			$table = $wpdb->prefix . 'tmon_device_data';
-			$charset = $wpdb->get_charset_collate();
-			$sql = "CREATE TABLE IF NOT EXISTS {$table} (
-				id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-				unit_id VARCHAR(32) NOT NULL,
-				machine_id VARCHAR(64) NULL,
-				recorded_at DATETIME NULL,
-				data LONGTEXT NULL,
-				PRIMARY KEY (id),
-				KEY idx_unit (unit_id),
-				KEY idx_rec (recorded_at)
-			) {$charset};";
-			require_once ABSPATH . 'wp-admin/includes/upgrade.php';
-			dbDelta($sql);
-
-			$inserted = 0;
-			foreach ($records as $rec) {
-				// Normalize record
-				$recorded_at = current_time('mysql');
-				if (is_array($rec) && isset($rec['timestamp'])) {
-					$ts = intval($rec['timestamp']);
-					if ($ts > 0) { $recorded_at = gmdate('Y-m-d H:i:s', $ts); }
-				}
-				$wpdb->insert($table, array(
-					'unit_id'     => $unit_id,
-					'machine_id'  => $machine_id ?: null,
-					'recorded_at' => $recorded_at,
-					'data'        => wp_json_encode($rec),
-				));
-				if ($wpdb->insert_id) { $inserted++; }
+			// Forward to UC command enqueue endpoint
+			$endpoint = trailingslashit($uc_url) . 'wp-json/tmon-uc/v1/device/command';
+			$args = array(
+				'headers' => array(
+					'Content-Type' => 'application/json',
+					'X-TMON-HUB' => $shared_key,
+				),
+				'body' => wp_json_encode(array(
+					'unit_id' => $unit_id,
+					'type'    => $type,
+					'data'    => is_array($data) ? $data : array(),
+				)),
+				'timeout' => 15,
+				'method'  => 'POST',
+			);
+			$r = wp_remote_post($endpoint, $args);
+			if (is_wp_error($r)) {
+				return new WP_Error('forward_fail', 'UC unreachable', array('status' => 502));
 			}
-
+			$code = wp_remote_retrieve_response_code($r);
+			if ($code !== 200) {
+				return new WP_Error('forward_fail', 'UC rejected command', array('status' => $code));
+			}
 			// Optional audit
 			if (function_exists('tmon_admin_audit_log')) {
-				tmon_admin_audit_log('uc_device_data', 'relay', array(
-					'unit_id' => $unit_id,
-					'machine_id' => $machine_id,
-					'extra' => array('count' => $inserted, 'site_url' => $site_url)
-				));
-			}
-			return rest_ensure_response(array('status' => 'ok', 'inserted' => $inserted));
-		},
-		'permission_callback' => '__return_true',
-	));
-});
-
-/**
- * REST: UC → Admin plugin state relay
- * - POST /tmon-admin/v1/uc/plugin-state
- * Body: { site_url, settings: {...}, status: {...} } posted by Unit Connector
- */
-add_action('rest_api_init', function () {
-	register_rest_route('tmon-admin/v1', '/uc/plugin-state', array(
-		'methods'  => 'POST',
-		'callback' => function ($request) {
-			$shared = isset($_SERVER['HTTP_X_TMON_HUB']) ? sanitize_text_field($_SERVER['HTTP_X_TMON_HUB']) : '';
-			$site_url_raw = $request->get_param('site_url');
-			$site_url = esc_url_raw($site_url_raw);
-			$key_id = function_exists('tmon_admin_uc_normalize_url') ? tmon_admin_uc_normalize_url($site_url ?: $site_url_raw) : ($site_url ?: $site_url_raw);
-			$pair = function_exists('tmon_admin_uc_pairings_get') ? tmon_admin_uc_pairings_get() : array();
-			if (!$key_id || empty($pair[$key_id]['active']) || empty($pair[$key_id]['key']) || !hash_equals($pair[$key_id]['key'], $shared)) {
-				return new WP_Error('forbidden', 'Unauthorized UC', array('status' => 403));
-			}
-
-			$settings = $request->get_param('settings');
-			$status   = $request->get_param('status');
-			// Persist a summary option keyed by normalized site
-			$state = array(
-				'site_url' => $site_url,
-				'settings' => is_array($settings) ? $settings : array(),
-				'status'   => is_array($status) ? $status : array(),
-				'updated'  => current_time('mysql'),
-			);
-			$all = get_option('tmon_admin_uc_states', array());
-			$all[$key_id] = $state;
-			update_option('tmon_admin_uc_states', $all, false);
-
-			if (function_exists('tmon_admin_audit_log')) {
-				tmon_admin_audit_log('uc_plugin_state', 'relay', array('extra' => array('site' => $site_url)));
+				tmon_admin_audit_log('forward_command', 'uc', array('unit_id' => $unit_id, 'extra' => array('type' => $type, 'uc' => $uc_url)));
 			}
 			return rest_ensure_response(array('status' => 'ok'));
 		},
