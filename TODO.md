@@ -55,37 +55,35 @@
 ## Updated Next Actions (Scope-aligned)
 
 Firmware (Micropython)
-- [x] Dedicated LoRa loop; disabled for wifi role.
-- [x] Gate field-data send until URL present; command poll continues post-provision.
-- [x] Persist NODE_TYPE and gate tasks until fully provisioned.
-- [ ] Base <-> Remote LoRa command/data envelope: HMAC + replay protection; payload encryption optional.
-- [ ] Implement custom function runner and variable setter dispatcher on device (mapped from wprest.poll_device_commands payloads).
+- [x] LoRa loop dedicated; disabled for wifi role.
+- [x] Persist NODE_TYPE; gate tasks until fully provisioned (flag + URL + UNIT_ID).
+- [x] Command polling applies set_var/run_func/firmware_update/relay_ctrl.
+- [ ] Add persistence helpers for custom vars changed via set_var.
+- [ ] Base <-> Remote LoRa envelopes with HMAC + replay protection; optional encryption.
 
-Admin (TMON Admin plugin)
-- [x] Restore Audit page & logger.
-- [x] Add UC endpoints: /uc/devices, /uc/reprovision, /uc/command.
-- [ ] Wire audit logs into all key flows (provision save, queue enqueue, UC pushes, firmware jobs).
-- [ ] Ensure assigned_to_uc flag updates when UC claims devices (mirror back via endpoint or scheduled sync).
+Admin
+- [x] Audit page restored and tables ensured.
+- [x] UC endpoints: devices, reprovision, command.
+- [ ] Add audit hooks across provisioning save/queue paths.
 
 Unit Connector
-- [x] Mirror table ensure + refresh both assigned/unassigned devices.
+- [x] Mirror table ensure; refresh assigned/unassigned.
 - [x] Reprovision staging & push to Admin hub.
-- [x] Commands page: set_var, run_func, firmware_update.
-- [ ] Widgets/graphs for device data; relay controls; dashboards polishing.
-- [ ] Shortcodes for per-device and grouped displays with settings management.
+- [x] Commands page for variables/functions/firmware/relay.
+- [ ] Widgets/graphs for device data; relay controls; shortcodes polish.
 
 Docs/QA
-- [x] README overview updated.
-- [ ] Screenshots and data flow graphics.
-- [ ] End-to-end tests: first-boot, reprovision, command dispatch, LoRa relay.
+- [x] README updated with data flow.
+- [ ] Add data flow graphics/screenshots.
+- [ ] End-to-end tests for reprovision and command relay via base.
 
 ## Testing Log
-- [ ] Verify UC refresh populates devices after Admin provisioning handoff.
-- [ ] Send set_var (e.g., ENABLE_OLED) and confirm device applies.
-- [ ] Send run_func (e.g., tmon.py frost/heat handler) to base and confirm remote relays.
+- [ ] Verify UC refresh populates devices after Admin handoff.
+- [ ] Dispatch set_var and run_func; confirm device applied and logs reflect.
+- [ ] Verify wifi role disables LoRa and base manages remotes via LoRa.
 
 ## Commit Log
-- [ ] Commit Admin UC endpoints, UC provisioning/commands pages.
+- [ ] Commit Admin UC API and UC commands/provisioning updates.
 - [ ] Tag minor release after QA.
 
 # TODO

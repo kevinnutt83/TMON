@@ -1,19 +1,18 @@
 <?php
 if (!defined('ABSPATH')) { exit; }
 
-// Validate UC shared key header
 function tmon_admin_validate_uc_key($request) {
 	$key = isset($_SERVER['HTTP_X_TMON_HUB']) ? sanitize_text_field($_SERVER['HTTP_X_TMON_HUB']) : '';
 	if (!$key) { return new WP_Error('no_key', 'Missing UC key'); }
-	$valid = get_option('tmon_uc_shared_key'); // global/shared; adjust if per-customer keys
+	$valid = get_option('tmon_uc_shared_key');
 	if (!$valid || !hash_equals($valid, $key)) {
 		return new WP_Error('bad_key', 'Invalid UC key');
 	}
 	return true;
 }
 
-// Get devices for Unit Connector (assigned + unassigned)
 add_action('rest_api_init', function () {
+	// UC pulls devices (assigned + unassigned)
 	register_rest_route('tmon-admin/v1', '/uc/devices', array(
 		'methods' => 'GET',
 		'callback' => function ($request) {
@@ -21,7 +20,6 @@ add_action('rest_api_init', function () {
 			if (is_wp_error($auth)) { return $auth; }
 			global $wpdb;
 			$tbl = $wpdb->prefix . 'tmon_devices';
-			// unify output: minimal fields
 			$rows = $wpdb->get_results("SELECT unit_id, machine_id, unit_name, role, assigned_to_uc FROM $tbl ORDER BY id DESC LIMIT 500", ARRAY_A);
 			$out = array();
 			foreach ($rows as $r) {
@@ -37,7 +35,8 @@ add_action('rest_api_init', function () {
 		},
 		'permission_callback' => '__return_true',
 	));
-	// Reprovision endpoint: UC stages settings & Admin queues to device
+
+	// UC stages reprovision
 	register_rest_route('tmon-admin/v1', '/uc/reprovision', array(
 		'methods' => 'POST',
 		'callback' => function ($request) {
@@ -51,12 +50,10 @@ add_action('rest_api_init', function () {
 			}
 			global $wpdb;
 			$tbl = $wpdb->prefix . 'tmon_devices';
-			// Mirror staged settings
 			$wpdb->update($tbl, array(
 				'settings_staged' => wp_json_encode($settings),
 				'staged_at' => current_time('mysql'),
 			), array('unit_id' => $unit_id, 'machine_id' => $machine_id));
-			// Enqueue provisioning job
 			$queue_tbl = $wpdb->prefix . 'tmon_admin_pending_provision';
 			$wpdb->insert($queue_tbl, array(
 				'unit_id' => $unit_id,
@@ -76,7 +73,8 @@ add_action('rest_api_init', function () {
 		},
 		'permission_callback' => '__return_true',
 	));
-	// Command endpoint: push commands/variables/functions to devices via Admin queue
+
+	// UC pushes command/variables/functions/firmware update
 	register_rest_route('tmon-admin/v1', '/uc/command', array(
 		'methods' => 'POST',
 		'callback' => function ($request) {
@@ -84,8 +82,8 @@ add_action('rest_api_init', function () {
 			if (is_wp_error($auth)) { return $auth; }
 			$unit_id = sanitize_text_field($request->get_param('unit_id'));
 			$machine_id = sanitize_text_field($request->get_param('machine_id'));
-			$type = sanitize_text_field($request->get_param('type')); // e.g., "set_var", "run_func", "firmware_update"
-			$data = $request->get_param('data'); // arbitrary payload (JSON object)
+			$type = sanitize_text_field($request->get_param('type')); // set_var|run_func|firmware_update|relay_ctrl...
+			$data = $request->get_param('data'); // arbitrary JSON payload
 			if (!$unit_id || !$machine_id || !$type) {
 				return new WP_Error('bad_req', 'Missing required params');
 			}

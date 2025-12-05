@@ -243,19 +243,87 @@ async def poll_ota_jobs():
         await debug_print(f'Failed to poll OTA jobs: {e}', 'ERROR')
 
 async def poll_device_commands():
+    """Poll Unit Connector for device commands and apply."""
     if not WORDPRESS_API_URL:
         return
     try:
-        token = get_jwt_token()
-        headers = {'Authorization': f'Bearer {token}'}
-        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/commands/{settings.UNIT_ID}', headers=headers)
-        if resp.status_code == 200:
-            payload = resp.json()
-            jobs = payload.get('jobs', []) if isinstance(payload, dict) else []
-            for job in jobs:
-                await handle_device_command(job)
-    except Exception as e:
-        await debug_print(f'Failed to poll commands: {e}', 'ERROR')
+        import urequests as requests
+    except Exception:
+        return
+    url = WORDPRESS_API_URL.rstrip('/') + '/wp-json/tmon/v1/device/commands'
+    payload = {
+        'unit_id': settings.UNIT_ID,
+        'machine_id': getattr(settings, 'MACHINE_ID', '')
+    }
+    try:
+        resp = requests.post(url, json=payload, timeout=10)
+    except TypeError:
+        resp = requests.post(url, json=payload)
+    ok = (resp is not None and getattr(resp, 'status_code', 0) == 200)
+    if not ok:
+        try:
+            resp.close()
+        except Exception:
+            pass
+        return
+    cmds = []
+    try:
+        cmds = resp.json() or []
+    except Exception:
+        cmds = []
+    try:
+        resp.close()
+    except Exception:
+        pass
+    # Apply commands
+    for c in cmds:
+        try:
+            ctype = c.get('type')
+            data = c.get('payload') or {}
+            if ctype == 'set_var':
+                k = str(data.get('key') or '')
+                v = data.get('value')
+                if k:
+                    try:
+                        setattr(settings, k, v)
+                        await debug_print('set_var applied: %s=%s' % (k, v), 'CMD')
+                    except Exception:
+                        pass
+            elif ctype == 'run_func':
+                name = str(data.get('name') or '')
+                args = data.get('args')
+                if name:
+                    try:
+                        import tmon as _t
+                        fn = getattr(_t, name, None)
+                        if fn:
+                            # If function is async-like
+                            res = fn(args) if args is not None else fn()
+                            await debug_print('run_func executed: %s' % name, 'CMD')
+                        else:
+                            await debug_print('run_func not found: %s' % name, 'CMD')
+                    except Exception as e:
+                        await debug_print('run_func error: %s' % e, 'ERROR')
+            elif ctype == 'firmware_update':
+                try:
+                    from ota import check_for_update, apply_pending_update
+                    await check_for_update()
+                    await apply_pending_update()
+                except Exception:
+                    pass
+            elif ctype == 'relay_ctrl':
+                try:
+                    ridx = int(data.get('relay') or 0)
+                    state = str(data.get('state') or '')
+                    import sdata
+                    if 1 <= ridx <= 8:
+                        setattr(sdata, f'relay{ridx}_on', 1 if state == 'on' else 0)
+                        await debug_print('relay_ctrl applied: #%d %s' % (ridx, state), 'CMD')
+                except Exception:
+                    pass
+        except Exception as e:
+            await debug_print('command apply error: %s' % e, 'ERROR')
+    await asyncio.sleep(0)
 
 async def handle_ota_job(job):
     job_type = job.get('job_type')

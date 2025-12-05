@@ -56,6 +56,9 @@ function tmon_uc_commands_page() {
 			case 'firmware_update':
 				$payload = array('version' => sanitize_text_field($_POST['fw_version']));
 				break;
+			case 'relay_ctrl':
+				$payload = array('relay' => intval($_POST['relay_num']), 'state' => sanitize_text_field($_POST['relay_state']));
+				break;
 		}
 		$res = tmon_uc_send_command($unit, $machine, $type, $payload);
 		if (is_wp_error($res)) {
@@ -80,6 +83,7 @@ function tmon_uc_commands_page() {
 	echo '<option value="set_var">Set Variable</option>';
 	echo '<option value="run_func">Run Function</option>';
 	echo '<option value="firmware_update">Firmware Update</option>';
+	echo '<option value="relay_ctrl">Relay Control</option>';
 	echo '</select></label></p>';
 	echo '<div id="cmd-fields">';
 	echo '<p><label>Variable Key <input type="text" name="var_key" /></label> ';
@@ -87,6 +91,8 @@ function tmon_uc_commands_page() {
 	echo '<p><label>Function Name <input type="text" name="func_name" /></label> ';
 	echo '<label>Function Args (JSON) <input type="text" name="func_args" /></label></p>';
 	echo '<p><label>Firmware Version <input type="text" name="fw_version" /></label></p>';
+	echo '<p><label>Relay # <input type="number" min="1" max="8" name="relay_num" /></label> ';
+	echo '<label>State <select name="relay_state"><option value="on">On</option><option value="off">Off</option></select></label></p>';
 	echo '</div>';
 	submit_button(__('Send Command', 'tmon'), 'primary', 'tmon_uc_send_cmd', false);
 	echo '</form></div>';

@@ -115,40 +115,35 @@ For detailed configuration keys, see the forthcoming `docs/FIRMWARE-SETTINGS.md`
 
 # TMON System Overview
 
-- Devices: wifi, base, remote. Wifi connects directly; base connects and manages LoRa; remote uses LoRa via base.
-- Firmware loops:
-  - LoRa dedicated loop (disabled for wifi role).
-  - Sampling loop (temperature/humidity/pressure).
-  - Field data send loop (batched, URL-gated).
-  - Command poll loop (WP REST via Unit Connector).
-- Provisioning lifecycle:
-  - First boot Admin check-in: MACHINE_ID, optional UNIT_ID, staged settings.
-  - Admin and UC can reprovision: staged settings queued; device applies and soft-resets once.
-  - WORDPRESS_API_URL and NODE_TYPE persisted.
-- Commands:
-  - UC/ Admin send commands: set_var, run_func, firmware_update.
-  - Base nodes relay commands to remote via LoRa; confirmations and data are relayed back.
-- OTA:
-  - Early boot check; periodic version/apply loops.
+Roles:
+- Wifi node: connects directly; LoRa disabled.
+- Base node: connects directly; manages LoRa hub for remotes; relays data/commands.
+- Remote node: LoRa-only via base; all data/commands flow through base.
 
-See tmon-admin/includes/api-uc.php for UC endpoints and unit-connector/includes/* for UC pages.
+Firmware:
+- Dedicated LoRa loop (priority, disabled for wifi).
+- Sampling loop for temp/humid/pressure.
+- Field data send (URL-gated).
+- Command poll (Unit Connector → Admin queue → device).
+- Provisioning: first-boot Admin check-in, UNIT_ID/MACHINE_ID association, WORDPRESS_API_URL/NODE_TYPE persistence, soft reset.
+- OTA: early boot check and periodic apply.
+- OLED gated by ENABLE_OLED.
 
-## Provisioning Improvements (v0.1.4)
-- Admin Save & Provision now:
-  - Marks the provisioned_devices.settings_staged flag = 1.
-  - Mirrors provisioning info to the device mirror tmon_devices (wordpress_api_url, unit_name) and sets provisioned = 1 and provisioned_at timestamp.
-  - Enqueues pending payloads for both machine_id and unit_id waring keys.
-- Device check-in:
-  - Will receive queued payloads in tmon_admin_pending_provision or a DB-staged payload derived from provisioned_devices row when settings_staged=1.
-  - Device writes a staged file, applies settings and posts a confirm to Admin with header X-TMON-CONFIRM or X-TMON-READ.
-- Admin UI:
-  - New Provisioning Activity page shows pending queue, staged flags, and recent history; supports re-enqueue and delete.
-- Security:
-  - Device confirms applied settings using X-TMON-CONFIRM token; Admin validates token or existing read token.
+Admin (tmon-admin):
+- Audit page and logging.
+- UC endpoints: /uc/devices, /uc/reprovision, /uc/command.
 
-# TMON Repository
+Unit Connector (unit-connector):
+- Provisioning page mirrors devices (assigned/unassigned); claim devices.
+- Reprovision staging and push to Admin hub.
+- Commands page to dispatch set_var, run_func, firmware_update, relay_ctrl.
 
-## MicroPython Provisioning Flow (restored)
-- First boot and periodic checks call Admin check-in and synthesize settings from metadata when provisioned/staged_exists with site_url.
-- Persist unit_id.txt and wordpress_api_url.txt; write provisioned.flag.
-- Soft reset once (provision_reboot.flag guards repeats); uploader prefers settings.WORDPRESS_API_URL.
+Device commands:
+- set_var: update settings var and persist if needed.
+- run_func: execute tmon.py named function.
+- firmware_update: trigger OTA.
+- relay_ctrl: toggle relays.
+
+Next:
+- LoRa packet HMAC/replay protection and payload encryption.
+- Widgets/graphs for UC dashboards and per-device management.
