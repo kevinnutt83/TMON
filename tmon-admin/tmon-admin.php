@@ -707,3 +707,36 @@ add_action('admin_notices', function () {
 		echo '<div class="notice notice-warning"><p>Provisioning table not found. Ensure UC is paired and data sync is enabled, then revisit Provisioned Devices.</p></div>';
 	}
 });
+
+// Guard: ensure Provisioning Activity page callback exists (fixes missing function fatal)
+if (!function_exists('tmon_admin_provisioning_activity_page')) {
+	function tmon_admin_provisioning_activity_page() {
+		if (!current_user_can('manage_options')) wp_die('Forbidden');
+		echo '<div class="wrap"><h1>Provisioning Activity</h1>';
+		$queue = get_option('tmon_admin_pending_provision', []);
+		$history = get_option('tmon_admin_provision_history', []);
+		echo '<div class="card" style="padding:12px;"><h2 style="margin-top:0;">Pending Queue</h2>';
+		if (!empty($queue) && is_array($queue)) {
+			echo '<ul>';
+			foreach ($queue as $k => $p) {
+				echo '<li>' . esc_html($k) . ' — ' . esc_html(json_encode($p)) . '</li>';
+			}
+			echo '</ul>';
+		} else {
+			echo '<p><em>No pending queue entries.</em></p>';
+		}
+		echo '</div>';
+
+		echo '<div class="card" style="padding:12px;"><h2 style="margin-top:0;">History</h2>';
+		if (is_array($history) && !empty($history)) {
+			echo '<ul>';
+			foreach (array_reverse($history) as $h) {
+				echo '<li>' . esc_html(($h['ts'] ?? '') . ' — ' . ($h['action'] ?? 'saved')) . '</li>';
+			}
+			echo '</ul>';
+		} else {
+			echo '<p><em>No history recorded.</em></p>';
+		}
+		echo '</div></div>';
+	}
+}
