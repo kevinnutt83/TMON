@@ -72,20 +72,24 @@ function tmon_uc_queue_custom_code_for_devices($code, $devices = null) {
 if (!function_exists('tmon_uc_custom_code_page')) {
 	function tmon_uc_custom_code_page() {
 		if (!current_user_can('manage_options')) wp_die('Forbidden');
+
+		// Page header and instructions
 		echo '<div class="wrap"><h1>TMON UC Custom Code</h1>';
 		echo '<div class="card" style="padding:12px;">';
 		echo '<h2 style="margin-top:0;">Instructions</h2>';
-		echo '<p>Use this page to stage device-specific custom variables and function calls.</p>';
-		echo '<ul>';
-		echo '<li><strong>Custom Variables</strong>: Send a key and value via Commands → Set Variable. Devices persist supported keys to their settings files.</li>';
-		echo '<li><strong>Custom Functions</strong>: Use Commands → Run Function, provide function name defined in device firmware (tmon.py) and optional JSON args.</li>';
-		echo '<li><strong>Firmware Updates</strong>: Use Commands → Firmware Update with a version tag; devices run OTA check and apply.</li>';
+		echo '<ul style="list-style:disc;margin-left:18px;">';
+		echo '<li><strong>Custom Variables</strong>: use Commands → Set Variable to push a key/value. Devices persist supported keys to their settings files.</li>';
+		echo '<li><strong>Custom Functions</strong>: use Commands → Run Function with the function name from device firmware (tmon.py) and optional JSON args.</li>';
+		echo '<li><strong>Firmware Updates</strong>: use Commands → Firmware Update with a version tag; devices will run OTA check and apply.</li>';
+		echo '<li><strong>Custom Code Snippets</strong>: create posts under “TMON Custom Code” (below) and send to selected devices using the action button.</li>';
 		echo '</ul>';
-		echo '<p>All changes are audited in TMON Admin. Ensure your Unit Connector is paired with the Admin hub and the shared key is valid.</p>';
+		echo '<p>Ensure your Unit Connector is paired with TMON Admin and the shared key is valid. Actions are audited by TMON Admin.</p>';
 		echo '</div>';
 
-		echo '<p><a class="button" href="post-new.php?post_type=tmon_custom_code">Add New Custom Code</a></p>';
-		// List custom code posts
+		// New custom code button
+		echo '<p><a class="button button-primary" href="post-new.php?post_type=tmon_custom_code">Add New Custom Code</a></p>';
+
+		// List custom code posts (unchanged)
 		$args = [
 			'post_type' => 'tmon_custom_code',
 			'posts_per_page' => 20,
@@ -108,14 +112,25 @@ if (!function_exists('tmon_uc_custom_code_page')) {
 		} else {
 			echo '<p>No custom code found.</p>';
 		}
-		// Handle send to devices
+		// Replace raw POST handling with nonce + sanitize
 		if (isset($_POST['tmon_run_code_id'])) {
+			check_admin_referer('tmon_uc_run_code');
 			$post_id = intval($_POST['tmon_run_code_id']);
-			$code = get_post_field('post_content', $post_id);
-			$devices = get_post_meta($post_id, 'tmon_devices', true);
-			tmon_uc_queue_custom_code_for_devices($code, $devices);
-			echo '<div class="updated"><p>Custom code sent to devices.</p></div>';
+			if ($post_id > 0) {
+				$code = get_post_field('post_content', $post_id);
+				$devices = get_post_meta($post_id, 'tmon_devices', true);
+				tmon_uc_queue_custom_code_for_devices($code, $devices);
+				echo '<div class="updated"><p>Custom code sent to devices.</p></div>';
+			}
 		}
+
+		// Close wrapper
 		echo '</div>';
 	}
-}
+} // <-- close function_exists guard
+
+// Enhance action form with nonce (used above)
+add_action('admin_footer', function () {
+	// Inject nonce field into the Send to Devices forms
+	echo '<script>(function(){var forms=document.querySelectorAll("form input[name=tmon_run_code_id]");forms.forEach(function(i){var f=i.closest("form");if(f){var n=document.createElement("input");n.type="hidden";n.name="_wpnonce";n.value="' . esc_js(wp_create_nonce('tmon_uc_run_code')) . '";f.appendChild(n);}});})();</script>';
+});
