@@ -141,6 +141,94 @@ if (!has_action('admin_menu', 'tmon_admin_menu')) {
 	}
 }
 
+// Process pending provisioning payloads: send to saved site URL (WORDPRESS_API_URL)
+add_action('admin_init', function () {
+	// Simple lock with transient to avoid concurrent dispatch
+	if (get_transient('tmon_admin_provision_dispatch_lock')) { return; }
+	set_transient('tmon_admin_provision_dispatch_lock', 1, 30);
+
+	$queue = get_option('tmon_admin_pending_provision', []);
+	if (!is_array($queue) || empty($queue)) {
+		delete_transient('tmon_admin_provision_dispatch_lock');
+		return;
+	}
+	// Optional: provisioning devices table for site_url lookup
+	global $wpdb;
+	$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+
+	$updated_queue = $queue;
+	foreach ($queue as $key => $item) {
+		// Expect shape: ['unit_id'=>..., 'machine_id'=>..., 'payload'=>json, 'enqueued_at'=>..., 'type'=>'reprovision']
+		$unit = isset($item['unit_id']) ? sanitize_text_field($item['unit_id']) : '';
+		$mach = isset($item['machine_id']) ? sanitize_text_field($item['machine_id']) : '';
+		$payload_json = isset($item['payload']) ? $item['payload'] : '{}';
+
+		// Resolve target Site URL
+		$site_url = '';
+		if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $prov_table))) {
+			$row = $wpdb->get_row($wpdb->prepare("SELECT site_url FROM {$prov_table} WHERE unit_id=%s OR machine_id=%s ORDER BY updated_at DESC LIMIT 1", $unit, $mach), ARRAY_A);
+			if ($row && !empty($row['site_url'])) {
+				$site_url = esc_url_raw($row['site_url']);
+			}
+		}
+		// Fallback: try per-device meta option
+		if (!$site_url) {
+			$map = get_option('tmon_admin_device_sites', []);
+			if (is_array($map) && !empty($map[$unit])) {
+				$site_url = esc_url_raw($map[$unit]);
+			}
+		}
+		if (!$site_url) {
+			// keep in queue; cannot resolve destination
+			continue;
+		}
+
+		// Dispatch to Unit Connector endpoint
+		$endpoint = trailingslashit($site_url) . 'wp-json/tmon/v1/admin/provision-apply';
+		$args = array(
+			'headers' => array(
+				'Content-Type' => 'application/json',
+			),
+			'body' => $payload_json,
+			'timeout' => 20,
+			'method' => 'POST',
+		);
+		$resp = wp_remote_post($endpoint, $args);
+		$ok = (!is_wp_error($resp) && wp_remote_retrieve_response_code($resp) === 200);
+
+		if ($ok) {
+			// Remove from queue on success
+			unset($updated_queue[$key]);
+			// Audit success
+			if (function_exists('tmon_admin_audit_log')) {
+				tmon_admin_audit_log('provision_dispatch', 'uc_push', array(
+					'unit_id' => $unit,
+					'machine_id' => $mach,
+					'extra' => array('endpoint' => $endpoint)
+				));
+			}
+		} else {
+			// Leave in queue; record failure in audit
+			if (function_exists('tmon_admin_audit_log')) {
+				tmon_admin_audit_log('provision_dispatch_fail', 'uc_push', array(
+					'unit_id' => $unit,
+					'machine_id' => $mach,
+					'extra' => array('endpoint' => $endpoint, 'code' => wp_remote_retrieve_response_code($resp))
+				));
+			}
+		}
+	}
+	// Persist updated queue
+	update_option('tmon_admin_pending_provision', $updated_queue, false);
+	delete_transient('tmon_admin_provision_dispatch_lock');
+});
+
+// Remove banner text from Provisioning page
+add_filter('tmon_admin_provisioning_banner', function ($text) {
+	// Return empty to suppress the “Data maintenance...” banner
+	return '';
+}, 10, 1);
+
 // Ensure schema is present before any UI/REST interaction
 add_action('admin_init', function () {
 	if (function_exists('tmon_admin_install_schema')) {
