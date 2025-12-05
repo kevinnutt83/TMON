@@ -8,7 +8,7 @@ if (!function_exists('tmon_uc_ensure_device_data_table')) {
 		$table = $wpdb->prefix . 'tmon_device_data'; // matches mp_tmon_device_data when prefix=mp_
 		$charset = $wpdb->get_charset_collate();
 
-		// Create/upgrade table: include legacy columns expected by REST handler (data, recorded_at)
+		// Create/upgrade base schema
 		$sql = "CREATE TABLE IF NOT EXISTS {$table} (
 			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
 			unit_id VARCHAR(16) NOT NULL,
@@ -38,14 +38,32 @@ if (!function_exists('tmon_uc_ensure_device_data_table')) {
 		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 		dbDelta($sql);
 
-		// Defensive: ensure columns exist if table predates schema
-		$cols = $wpdb->get_results("SHOW FULL COLUMNS FROM {$table}", ARRAY_A);
-		$names = array_map(function($c){ return $c['Field']; }, is_array($cols) ? $cols : array());
-		if (!in_array('data', $names, true)) {
+		// Defensive: ensure columns/indexes exist; avoid duplicate key errors
+		$cols = $wpdb->get_results("SHOW FULL COLUMNS FROM {$table}", ARRAY_A) ?: array();
+		$col_names = array_map(function($c){ return $c['Field']; }, $cols);
+
+		$indexes = $wpdb->get_results("SHOW INDEX FROM {$table}", ARRAY_A) ?: array();
+		$idx_names = array();
+		foreach ($indexes as $idx) {
+			if (!empty($idx['Key_name'])) {
+				$idx_names[] = $idx['Key_name'];
+			}
+		}
+
+		// Add 'data' column if missing
+		if (!in_array('data', $col_names, true)) {
 			$wpdb->query("ALTER TABLE {$table} ADD COLUMN data LONGTEXT NULL");
 		}
-		if (!in_array('recorded_at', $names, true)) {
-			$wpdb->query("ALTER TABLE {$table} ADD COLUMN recorded_at DATETIME NULL, ADD KEY idx_ts (recorded_at)");
+		// Add 'recorded_at' column if missing
+		if (!in_array('recorded_at', $col_names, true)) {
+			$wpdb->query("ALTER TABLE {$table} ADD COLUMN recorded_at DATETIME NULL");
+			// Refresh column list
+			$cols = $wpdb->get_results("SHOW FULL COLUMNS FROM {$table}", ARRAY_A) ?: array();
+			$col_names = array_map(function($c){ return $c['Field']; }, $cols);
+		}
+		// Add idx_ts on recorded_at if missing (avoid duplicate key error)
+		if (!in_array('idx_ts', $idx_names, true) && in_array('recorded_at', $col_names, true)) {
+			$wpdb->query("ALTER TABLE {$table} ADD KEY idx_ts (recorded_at)");
 		}
 	}
 }
