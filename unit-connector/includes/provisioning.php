@@ -29,6 +29,24 @@ function uc_devices_ensure_table() {
 	dbDelta($sql);
 }
 
+function uc_devices_upsert_row($row) {
+	global $wpdb;
+	uc_devices_ensure_table();
+	$table = $wpdb->prefix . 'tmon_uc_devices';
+	$unit_id   = isset($row['unit_id']) ? sanitize_text_field($row['unit_id']) : '';
+	$machine_id= isset($row['machine_id']) ? sanitize_text_field($row['machine_id']) : '';
+	if (!$unit_id || !$machine_id) { return false; }
+	$wpdb->replace($table, array(
+		'unit_id' => $unit_id,
+		'machine_id' => $machine_id,
+		'unit_name' => isset($row['unit_name']) ? sanitize_text_field($row['unit_name']) : '',
+		'role'      => isset($row['role']) ? sanitize_text_field($row['role']) : '',
+		'assigned'  => !empty($row['assigned']) ? 1 : 0,
+		'wordpress_api_url' => home_url(),
+	));
+	return true;
+}
+
 /**
  * Get assigned devices from the local database.
  *
@@ -79,19 +97,28 @@ function uc_devices_refresh_from_admin() {
 	global $wpdb;
 	$table = $wpdb->prefix . 'tmon_uc_devices';
 	foreach ($data as $d) {
-		$unit_id = isset($d['unit_id']) ? sanitize_text_field($d['unit_id']) : '';
-		$machine_id = isset($d['machine_id']) ? sanitize_text_field($d['machine_id']) : '';
-		if (!$unit_id || !$machine_id) { continue; }
-		$wpdb->replace($table, array(
-			'unit_id' => $unit_id,
-			'machine_id' => $machine_id,
-			'unit_name' => isset($d['unit_name']) ? sanitize_text_field($d['unit_name']) : '',
-			'role' => isset($d['role']) ? sanitize_text_field($d['role']) : '',
-			'assigned' => !empty($d['assigned']) ? 1 : 0,
-			'wordpress_api_url' => home_url()
-		));
+		uc_devices_upsert_row($d);
 	}
 	return $data;
+}
+
+/**
+ * Populate local mirror from last device check-ins (fallback).
+ * Reads tmon_devices mirror table if present (created by Admin handoff) and upserts.
+ */
+function uc_devices_refresh_from_local_mirror() {
+	global $wpdb;
+	uc_devices_ensure_table();
+	$source = $wpdb->prefix . 'tmon_devices';
+	if (!$wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $source))) {
+		return 0;
+	}
+	$rows = $wpdb->get_results("SELECT unit_id, machine_id, unit_name, role, assigned_to_uc AS assigned FROM {$source} ORDER BY id DESC LIMIT 500", ARRAY_A);
+	$count = 0;
+	foreach ($rows as $r) {
+		if (uc_devices_upsert_row($r)) { $count++; }
+	}
+	return $count;
 }
 
 /**
@@ -154,6 +181,16 @@ function tmon_uc_provisioning_page() {
 
 	$devices = uc_devices_get_assigned();
 	$unassigned = uc_devices_get_unassigned();
+	if (empty($devices) && empty($unassigned)) {
+		// Try Admin hub refresh first
+		$ref = uc_devices_refresh_from_admin();
+		if (empty($ref)) {
+			// Fallback: local mirror table (if present)
+			uc_devices_refresh_from_local_mirror();
+		}
+		$devices = uc_devices_get_assigned();
+		$unassigned = uc_devices_get_unassigned();
+	}
 
 	echo '<div class="wrap"><h1>' . esc_html__('Provisioned Devices', 'tmon') . '</h1>';
 	settings_errors('tmon_uc');
@@ -221,4 +258,47 @@ add_action('admin_init', function () {
 	$wpdb->update($table, array('assigned' => 1), array('unit_id' => $unit));
 	wp_safe_redirect(remove_query_arg('tmon_uc_claim'));
 	exit;
+});
+
+/**
+ * Shortcode: [tmon_uc_devices assigned="1|0|all" limit="50"]
+ * Displays devices from local mirror, ensuring refresh when list is empty.
+ */
+add_shortcode('tmon_uc_devices', function ($atts) {
+	$atts = shortcode_atts(array(
+		'assigned' => 'all',
+		'limit' => 50,
+	), $atts);
+	$assigned = strtolower($atts['assigned']);
+	$limit = max(1, intval($atts['limit']));
+	uc_devices_ensure_table();
+
+	// Auto refresh when table empty
+	global $wpdb;
+	$table = $wpdb->prefix . 'tmon_uc_devices';
+	$total = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$table}");
+	if ($total === 0) {
+		$ref = uc_devices_refresh_from_admin();
+		if (empty($ref)) {
+			uc_devices_refresh_from_local_mirror();
+		}
+	}
+
+	$where = '1=1';
+	if ($assigned === '1') { $where .= ' AND assigned = 1'; }
+	elseif ($assigned === '0') { $where .= ' AND assigned = 0'; }
+	$rows = $wpdb->get_results($wpdb->prepare("SELECT unit_id,machine_id,unit_name,role,assigned FROM {$table} WHERE {$where} ORDER BY id DESC LIMIT %d", $limit), ARRAY_A);
+
+	if (empty($rows)) {
+		return '<div class="tmon-uc-devices-empty">' . esc_html__('No devices found.', 'tmon') . '</div>';
+	}
+	$out  = '<div class="tmon-uc-devices"><table class="widefat striped"><thead><tr>';
+	$out .= '<th>' . esc_html__('UNIT_ID','tmon') . '</th><th>' . esc_html__('MACHINE_ID','tmon') . '</th><th>' . esc_html__('Name','tmon') . '</th><th>' . esc_html__('Role','tmon') . '</th><th>' . esc_html__('Status','tmon') . '</th>';
+	$out .= '</tr></thead><tbody>';
+	foreach ($rows as $r) {
+		$st = !empty($r['assigned']) ? esc_html__('Assigned','tmon') : esc_html__('Unassigned','tmon');
+		$out .= '<tr><td>' . esc_html($r['unit_id']) . '</td><td>' . esc_html($r['machine_id']) . '</td><td>' . esc_html($r['unit_name']) . '</td><td>' . esc_html($r['role']) . '</td><td>' . $st . '</td></tr>';
+	}
+	$out .= '</tbody></table></div>';
+	return $out;
 });
