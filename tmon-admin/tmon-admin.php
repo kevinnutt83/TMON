@@ -489,9 +489,197 @@ if (!function_exists('tmon_admin_provisioning_activity_page')) {
 	}
 }
 
-// These admin page callbacks remain in this file (non-AJAX):
-// - tmon_admin_menu / admin pages
-// - tmon_admin_provisioning_activity_page
-// - tmon_admin_provisioned_devices_page
-// etc.
-// (unchanged)
+// --- UC Connector: shared-key storage, handshake, and request validation ---
+
+// Helpers to manage UC keys: option 'tmon_uc_keys' => [ uc_url => ['key'=>..., 'created_at'=>...] ]
+if (!function_exists('tmon_admin_uc_get_keys')) {
+	function tmon_admin_uc_get_keys() {
+		$map = get_option('tmon_uc_keys', []);
+		return is_array($map) ? $map : [];
+	}
+}
+if (!function_exists('tmon_admin_uc_set_keys')) {
+	function tmon_admin_uc_set_keys($map) {
+		if (is_array($map)) update_option('tmon_uc_keys', $map, false);
+	}
+}
+if (!function_exists('tmon_admin_uc_key_for')) {
+	function tmon_admin_uc_key_for($uc_url) {
+		$map = tmon_admin_uc_get_keys();
+		$u = untrailingslashit(strtolower($uc_url));
+		return isset($map[$u]) ? $map[$u]['key'] : '';
+	}
+}
+if (!function_exists('tmon_admin_uc_generate_key')) {
+	function tmon_admin_uc_generate_key() {
+		if (function_exists('random_bytes')) {
+			return bin2hex(random_bytes(32));
+		}
+		return wp_generate_password(64, true, true);
+	}
+}
+if (!function_exists('tmon_admin_uc_validate_hmac')) {
+	function tmon_admin_uc_validate_hmac($key, $body, $sig_hex) {
+		if (!$key || !$sig_hex) return false;
+		$calc = hash_hmac('sha256', $body, $key);
+		// timing-safe compare
+		if (function_exists('hash_equals')) return hash_equals($calc, strtolower($sig_hex));
+		return strtolower($calc) === strtolower($sig_hex);
+	}
+}
+
+// Ensure an enroll token exists (admin can share it to UC for initial registration)
+add_action('admin_init', function () {
+	if (!get_option('tmon_uc_enroll_token')) {
+		update_option('tmon_uc_enroll_token', tmon_admin_uc_generate_key(), false);
+	}
+});
+
+// REST: register and refresh UC key + protect UC APIs
+add_action('rest_api_init', function () {
+	// POST tmon-admin/v1/uc/register {uc_url, enroll_token}
+	register_rest_route('tmon-admin/v1', '/uc/register', array(
+		'methods' => 'POST',
+		'callback' => function ($req) {
+			$uc_url = untrailingslashit(strtolower(sanitize_text_field($req->get_param('uc_url'))));
+			$token  = sanitize_text_field($req->get_param('enroll_token'));
+			if (!$uc_url || !$token) {
+				return new WP_Error('bad_req', 'uc_url and enroll_token required', array('status'=>400));
+			}
+			$expected = get_option('tmon_uc_enroll_token', '');
+			if (!$expected || !hash_equals($expected, $token)) {
+				return new WP_Error('unauth', 'Invalid enroll token', array('status'=>403));
+			}
+			$map = tmon_admin_uc_get_keys();
+			$key = tmon_admin_uc_generate_key();
+			$map[$uc_url] = array('key' => $key, 'created_at' => current_time('mysql'));
+			tmon_admin_uc_set_keys($map);
+			if (function_exists('tmon_admin_audit_log')) {
+				tmon_admin_audit_log('uc_register', 'uc', array('extra' => array('uc_url' => $uc_url)));
+			}
+			return rest_ensure_response(array('status'=>'ok','key'=>$key));
+		},
+		'permission_callback' => '__return_true',
+	));
+	// POST tmon-admin/v1/uc/refresh-key {uc_url} headers: X-TMON-HUB(key), X-TMON-SIG(HMAC(body))
+	register_rest_route('tmon-admin/v1', '/uc/refresh-key', array(
+		'methods' => 'POST',
+		'callback' => function ($req) {
+			$uc_url = untrailingslashit(strtolower(sanitize_text_field($req->get_param('uc_url'))));
+			if (!$uc_url) return new WP_Error('bad_req','uc_url required', array('status'=>400));
+			// Validate current key + HMAC
+			$key = tmon_admin_uc_key_for($uc_url);
+			if (!$key) return new WP_Error('unauth','Unknown UC', array('status'=>403));
+			$provided = isset($_SERVER['HTTP_X_TMON_HUB']) ? sanitize_text_field($_SERVER['HTTP_X_TMON_HUB']) : '';
+			$sig = isset($_SERVER['HTTP_X_TMON_SIG']) ? sanitize_text_field($_SERVER['HTTP_X_TMON_SIG']) : '';
+			if (!hash_equals($key, $provided) || !tmon_admin_uc_validate_hmac($key, $req->get_body(), $sig)) {
+				return new WP_Error('unauth','Invalid signature', array('status'=>403));
+			}
+			// Rotate
+			$map = tmon_admin_uc_get_keys();
+			$new = tmon_admin_uc_generate_key();
+			$map[$uc_url] = array('key'=>$new, 'created_at'=>current_time('mysql'));
+			tmon_admin_uc_set_keys($map);
+			if (function_exists('tmon_admin_audit_log')) {
+				tmon_admin_audit_log('uc_refresh_key', 'uc', array('extra' => array('uc_url'=>$uc_url)));
+			}
+			return rest_ensure_response(array('status'=>'ok','key'=>$new));
+		},
+		'permission_callback' => '__return_true',
+	));
+
+	// Wrapper validator for UC-protected routes (devices, reprovision, command)
+	$validate_uc = function ($req) {
+		$uc_url = untrailingslashit(strtolower(sanitize_text_field($req->get_param('uc_url'))));
+		$key = tmon_admin_uc_key_for($uc_url);
+		if (!$key) return new WP_Error('unauth','Unknown UC', array('status'=>403));
+		$provided = isset($_SERVER['HTTP_X_TMON_HUB']) ? sanitize_text_field($_SERVER['HTTP_X_TMON_HUB']) : '';
+		$sig = isset($_SERVER['HTTP_X_TMON_SIG']) ? sanitize_text_field($_SERVER['HTTP_X_TMON_SIG']) : '';
+		if (!hash_equals($key, $provided) || !tmon_admin_uc_validate_hmac($key, $req->get_body(), $sig)) {
+			return new WP_Error('unauth','Invalid signature', array('status'=>403));
+		}
+		return true;
+	};
+
+	// If api-uc.php already registered these, we avoid re-registering by using unique routes with -v2.
+	register_rest_route('tmon-admin/v1', '/uc/devices-v2', array(
+		'methods' => 'GET',
+		'callback' => function ($req) use ($validate_uc) {
+			$auth = $validate_uc($req);
+			if (is_wp_error($auth)) return $auth;
+			global $wpdb;
+			$tbl = $wpdb->prefix . 'tmon_devices';
+			$rows = $wpdb->get_results("SELECT unit_id, machine_id, unit_name, role, assigned_to_uc FROM {$tbl} ORDER BY id DESC LIMIT 500", ARRAY_A);
+			$rows = is_array($rows) ? $rows : array();
+			return rest_ensure_response($rows);
+		},
+		'permission_callback' => '__return_true',
+	));
+	register_rest_route('tmon-admin/v1', '/uc/reprovision-v2', array(
+		'methods' => 'POST',
+		'callback' => function ($req) use ($validate_uc) {
+			$auth = $validate_uc($req);
+			if (is_wp_error($auth)) return $auth;
+			$unit_id = sanitize_text_field($req->get_param('unit_id'));
+			$machine_id = sanitize_text_field($req->get_param('machine_id'));
+			$settings = $req->get_param('settings');
+			if (!$unit_id || !$machine_id || !$settings) {
+				return new WP_Error('bad_req','Missing params', array('status'=>400));
+			}
+			$queue = get_option('tmon_admin_pending_provision', []);
+			if (!is_array($queue)) $queue = [];
+			$key = 'reprov_' . $unit_id . '_' . current_time('timestamp');
+			$queue[$key] = array(
+				'unit_id' => $unit_id,
+				'machine_id' => $machine_id,
+				'payload' => wp_json_encode($settings),
+				'type' => 'reprovision',
+				'enqueued_at' => current_time('mysql')
+			);
+			update_option('tmon_admin_pending_provision', $queue, false);
+			if (function_exists('tmon_admin_audit_log')) {
+				tmon_admin_audit_log('uc_reprovision', 'uc', array('unit_id'=>$unit_id,'machine_id'=>$machine_id));
+			}
+			return rest_ensure_response(array('status'=>'ok'));
+		},
+		'permission_callback' => '__return_true',
+	));
+	register_rest_route('tmon-admin/v1', '/uc/command-v2', array(
+		'methods' => 'POST',
+		'callback' => function ($req) use ($validate_uc) {
+			$auth = $validate_uc($req);
+			if (is_wp_error($auth)) return $auth;
+			$unit_id = sanitize_text_field($req->get_param('unit_id'));
+			$machine_id = sanitize_text_field($req->get_param('machine_id'));
+			$type = sanitize_text_field($req->get_param('type'));
+			$data = $req->get_param('data');
+			if (!$unit_id || !$machine_id || !$type) {
+				return new WP_Error('bad_req','Missing params', array('status'=>400));
+			}
+			global $wpdb;
+			$queue_tbl = $wpdb->prefix . 'tmon_admin_pending_commands';
+			// If table does not exist, fall back to option queue
+			if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $queue_tbl))) {
+				$wpdb->insert($queue_tbl, array(
+					'unit_id'=>$unit_id,'machine_id'=>$machine_id,'type'=>$type,
+					'payload'=>wp_json_encode($data),'enqueued_at'=>current_time('mysql')
+				));
+			} else {
+				$opt = get_option('tmon_admin_pending_commands', []);
+				if (!is_array($opt)) $opt = [];
+				$opt[] = array(
+					'unit_id'=>$unit_id,'machine_id'=>$machine_id,'type'=>$type,
+					'payload'=>wp_json_encode($data),'enqueued_at'=>current_time('mysql')
+				);
+				update_option('tmon_admin_pending_commands', $opt, false);
+			}
+			if (function_exists('tmon_admin_audit_log')) {
+				tmon_admin_audit_log('uc_command', $type, array('unit_id'=>$unit_id,'machine_id'=>$machine_id));
+			}
+			return rest_ensure_response(array('status'=>'ok'));
+		},
+		'permission_callback' => '__return_true',
+	));
+});
+
+// ...existing code...
