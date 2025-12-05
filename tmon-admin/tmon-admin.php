@@ -562,31 +562,97 @@ if (!function_exists('tmon_admin_pairings_page')) {
 	}
 }
 
-// Ensure provisioning table exists before use (idempotent)
-if (!function_exists('tmon_admin_ensure_provision_table')) {
-	function tmon_admin_ensure_provision_table() {
-		global $wpdb;
-		$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
-		$charset = $wpdb->get_charset_collate();
-		$sql = "CREATE TABLE IF NOT EXISTS {$prov_table} (
-			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-			unit_id VARCHAR(64) NOT NULL,
-			machine_id VARCHAR(64) NOT NULL,
-			unit_name VARCHAR(191) NULL,
-			site_url VARCHAR(191) NULL,
-			status VARCHAR(64) NULL,
-			role VARCHAR(64) NULL,
-			created_at DATETIME NULL,
-			updated_at DATETIME NULL,
-			PRIMARY KEY (id),
-			UNIQUE KEY uniq_unit_machine (unit_id, machine_id),
-			KEY idx_site (site_url),
-			KEY idx_updated (updated_at)
-		) {$charset};";
-		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
-		dbDelta($sql);
+// Ensure schema is present before any UI/REST interaction
+add_action('admin_init', function () {
+	if (function_exists('tmon_admin_install_schema')) {
+		ob_start();
+		tmon_admin_install_schema();
+		// Drop any unexpected echoes such as “tmon_admin_ensure_columns executed (idempotent).”
+		@ob_end_clean();
 	}
-}
+});
+add_action('rest_api_init', function () {
+	if (function_exists('tmon_admin_install_schema')) {
+		ob_start();
+		tmon_admin_install_schema();
+		@ob_end_clean();
+	}
+});
+
+// REST: UC connection verify — UC posts uc_url, unit_id (optional) and headers X-TMON-HUB (+ optional X-TMON-HMAC)
+add_action('rest_api_init', function () {
+	register_rest_route('tmon-admin/v1', '/uc/verify-connection', array(
+		'methods'  => 'POST',
+		'callback' => function ($req) {
+			$uc_url_raw = $req->get_param('uc_url');
+			$uc_url = esc_url_raw($uc_url_raw);
+			$key_id = function_exists('tmon_admin_uc_normalize_url') ? tmon_admin_uc_normalize_url($uc_url ?: $uc_url_raw) : ($uc_url ?: $uc_url_raw);
+			if (!$key_id) { return new WP_Error('bad_request', 'uc_url required', array('status' => 400)); }
+
+			$pair = function_exists('tmon_admin_uc_pairings_get') ? tmon_admin_uc_pairings_get() : array();
+			$shared = isset($_SERVER['HTTP_X_TMON_HUB']) ? sanitize_text_field($_SERVER['HTTP_X_TMON_HUB']) : '';
+			$hmac   = isset($_SERVER['HTTP_X_TMON_HMAC']) ? sanitize_text_field($_SERVER['HTTP_X_TMON_HMAC']) : '';
+			$unit_id = sanitize_text_field($req->get_param('unit_id'));
+
+			if (empty($pair[$key_id]['key'])) { return new WP_Error('not_paired', 'UC not paired', array('status' => 403)); }
+			if (!hash_equals($pair[$key_id]['key'], $shared)) { return new WP_Error('forbidden', 'Shared key mismatch', array('status' => 403)); }
+
+			// Optional HMAC message: uc_url|unit_id|timestamp
+			$ok_hmac = true;
+			$want_hmac = intval(get_option('tmon_admin_forward_hmac', 0)) === 1;
+			if ($want_hmac) {
+				$msg = ($pair[$key_id]['uc_url'] ?? $key_id) . '|' . ($unit_id ?: '') . '|' . (string)($req->get_param('ts') ?: '');
+				$calc = hash_hmac('sha256', $msg, $pair[$key_id]['key']);
+				$ok_hmac = $hmac ? hash_equals($calc, $hmac) : false;
+				if (!$ok_hmac) { return new WP_Error('bad_sig', 'Invalid HMAC', array('status' => 403)); }
+			}
+
+			// Update metadata
+			$pair[$key_id]['active'] = 1;
+			$pair[$key_id]['last_verified'] = current_time('mysql');
+			if ($uc_url) { $pair[$key_id]['uc_url'] = $uc_url; }
+			if (function_exists('tmon_admin_uc_pairings_set')) { tmon_admin_uc_pairings_set($pair); }
+
+			if (function_exists('tmon_admin_audit_log')) {
+				tmon_admin_audit_log('uc_verify_connection', 'pair', array('extra' => array('uc' => ($pair[$key_id]['uc_url'] ?? $key_id), 'unit_id' => $unit_id)));
+			}
+			if (function_exists('tmon_admin_debug')) {
+				tmon_admin_debug('pairing', 'UC verified', array('key_id' => $key_id, 'uc' => ($pair[$key_id]['uc_url'] ?? $key_id), 'unit' => $unit_id));
+			}
+			return rest_ensure_response(array('status' => 'ok', 'hub' => get_site_url()));
+		},
+		'permission_callback' => '__return_true',
+	));
+});
+
+// REST: Device check-in helper — returns a normalized relay_ctrl example for MicroPython clients to test command handling
+add_action('rest_api_init', function () {
+	register_rest_route('tmon-admin/v1', '/device/checkin-spec', array(
+		'methods'  => 'GET',
+		'callback' => function ($req) {
+			$unit_id = sanitize_text_field($req->get_param('unit_id'));
+			$out = array(
+				'status' => 'ok',
+				'unit_id' => $unit_id,
+				'poll_example' => array(
+					'endpoint' => 'wp-json/tmon-uc/v1/device/commands',
+					'request'  => array('unit_id' => $unit_id),
+					'response_shape' => array('status' => 'ok', 'commands' => array(array('id' => 123, 'command' => 'relay_ctrl', 'params' => '{"relay":1,"state":"on","duration_s":0}'))),
+				),
+				'execute_flow' => array(
+					'claim'   => array('endpoint' => 'wp-json/tmon-uc/v1/device/command-claim', 'request' => array('id' => 123, 'unit_id' => $unit_id)),
+					'result'  => array('endpoint' => 'wp-json/tmon-uc/v1/device/command-result', 'request' => array('id' => 123, 'status' => 'done', 'result' => array('ok' => true))),
+				),
+				'relay_ctrl_example' => array('relay' => 1, 'state' => 'on', 'duration_s' => 0),
+			);
+			if (function_exists('tmon_admin_debug')) {
+				tmon_admin_debug('rest', 'device checkin-spec', array('unit' => $unit_id));
+			}
+			return rest_ensure_response($out);
+		},
+		'permission_callback' => '__return_true',
+	));
+});
 
 // Provisioned Devices page: ensure table, then populate
 if (!function_exists('tmon_admin_provisioned_devices_page')) {
@@ -634,18 +700,42 @@ if (!function_exists('tmon_admin_provisioned_devices_page')) {
 	}
 }
 
-// Admin-side command forwarder: resolve uc_url if missing and include both headers
+// REST: UC/Device command spec (helps MicroPython clients verify payload shape)
 add_action('rest_api_init', function () {
+	register_rest_route('tmon-admin/v1', '/uc/command-spec', array(
+		'methods'  => 'GET',
+		'callback' => function () {
+			return rest_ensure_response(array(
+				'relay_ctrl' => array(
+					'fields' => array(
+						'relay'      => 'number (1..2)',
+						'state'      => "string ('on'|'off')",
+						'duration_s' => 'number (seconds, 0 for infinite)',
+					),
+					'example' => array('relay' => 1, 'state' => 'on', 'duration_s' => 0),
+				),
+			));
+		},
+		'permission_callback' => '__return_true',
+	));
+});
+
+// Harden forward-command with optional HMAC, add debug, and ensure relay payload normalization
+add_action('rest_api_init', function () {
+	// Re-registering callback only wraps existing logic with debug/HMAC; skip if already registered elsewhere.
 	register_rest_route('tmon-admin/v1', '/uc/forward-command', array(
 		'methods'  => 'POST',
 		'callback' => function ($req) {
 			$uc_url   = esc_url_raw($req->get_param('uc_url'));
 			$unit_id  = sanitize_text_field($req->get_param('unit_id'));
 			$type     = sanitize_text_field($req->get_param('type'));
-			$data     = $req->get_param('data');
-			if (!$unit_id || !$type) return new WP_Error('bad_request', 'unit_id, type required', array('status' => 400));
+			$data     = $req->get_param('data') ?: array();
 
-			// Resolve uc_url if not provided: from provisioned table or device_sites map
+			if (!$unit_id || !$type) {
+				return new WP_Error('bad_request', 'unit_id, type required', array('status' => 400));
+			}
+
+			// Resolve UC URL if not provided
 			if (!$uc_url) {
 				global $wpdb;
 				$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
@@ -656,12 +746,24 @@ add_action('rest_api_init', function () {
 				}
 				$uc_url = $site_url ?: $uc_url;
 			}
-			if (!$uc_url) return new WP_Error('bad_request', 'uc_url unresolved', array('status' => 400));
+			if (!$uc_url) {
+				return new WP_Error('bad_request', 'uc_url unresolved', array('status' => 400));
+			}
 
-			$key_id = tmon_admin_uc_normalize_url($uc_url);
-			$pair   = tmon_admin_uc_pairings_get();
-			if (empty($pair[$key_id]['active']) || empty($pair[$key_id]['key'])) return new WP_Error('not_paired', 'UC not paired', array('status' => 403));
+			$key_id = function_exists('tmon_admin_uc_normalize_url') ? tmon_admin_uc_normalize_url($uc_url) : $uc_url;
+			$pair   = function_exists('tmon_admin_uc_pairings_get') ? tmon_admin_uc_pairings_get() : array();
+			if (empty($pair[$key_id]['active']) || empty($pair[$key_id]['key'])) {
+				return new WP_Error('not_paired', 'UC not paired', array('status' => 403));
+			}
 			$shared_key = $pair[$key_id]['key'];
+
+			// Optional HMAC signature for added integrity: HMAC(unit_id|type|json(data), shared_key)
+			$want_hmac = intval(get_option('tmon_admin_forward_hmac', 0)) === 1;
+			$sig = '';
+			if ($want_hmac) {
+				$msg = $unit_id . '|' . $type . '|' . (is_array($data) ? wp_json_encode($data) : strval($data));
+				$sig = hash_hmac('sha256', $msg, $shared_key);
+			}
 
 			// Normalize relay payload
 			if ($type === 'relay_ctrl' && is_array($data)) {
@@ -676,18 +778,36 @@ add_action('rest_api_init', function () {
 			$args = array(
 				'headers' => array(
 					'Content-Type' => 'application/json',
-					'X-TMON-HUB' => $shared_key,            // hub authentication
-					'X-TMON-UC'  => esc_url_raw($uc_url),   // identify UC for legacy filters
+					'X-TMON-HUB' => $shared_key,
+					'X-TMON-UC'  => esc_url_raw($uc_url),
+					'X-TMON-HMAC'=> $sig,
 				),
 				'body'    => wp_json_encode(array('unit_id' => $unit_id, 'type' => $type, 'data' => is_array($data) ? $data : array())),
 				'timeout' => 15,
 				'method'  => 'POST',
 			);
+
+			// Debug outgoing
+			if (function_exists('tmon_admin_debug')) {
+				tmon_admin_debug('rest', 'forward-command dispatch', array('endpoint' => $endpoint, 'unit' => $unit_id, 'type' => $type, 'data' => $data));
+			}
+
 			$r = wp_remote_post($endpoint, $args);
-			if (is_wp_error($r)) return new WP_Error('forward_fail', 'UC unreachable', array('status' => 502));
+			if (is_wp_error($r)) {
+				if (function_exists('tmon_admin_debug')) {
+					tmon_admin_debug('rest', 'forward-command error', array('message' => $r->get_error_message()));
+				}
+				return new WP_Error('forward_fail', 'UC unreachable', array('status' => 502));
+			}
+
 			$code = wp_remote_retrieve_response_code($r);
 			$body = wp_remote_retrieve_body($r);
-			if ($code !== 200) return new WP_Error('forward_fail', 'UC rejected command', array('status' => $code, 'body' => $body));
+			if ($code !== 200) {
+				if (function_exists('tmon_admin_debug')) {
+					tmon_admin_debug('rest', 'forward-command rejected', array('status' => $code, 'body' => $body));
+				}
+				return new WP_Error('forward_fail', 'UC rejected command', array('status' => $code, 'body' => $body));
+			}
 
 			if (function_exists('tmon_admin_audit_log')) {
 				tmon_admin_audit_log('forward_command', 'uc', array('unit_id' => $unit_id, 'extra' => array('type' => $type, 'uc' => $uc_url)));
