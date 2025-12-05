@@ -7,12 +7,15 @@ if (!function_exists('tmon_uc_ensure_device_data_table')) {
 		global $wpdb;
 		$table = $wpdb->prefix . 'tmon_device_data'; // matches mp_tmon_device_data when prefix=mp_
 		$charset = $wpdb->get_charset_collate();
+
+		// Create/upgrade table: include legacy columns expected by REST handler (data, recorded_at)
 		$sql = "CREATE TABLE IF NOT EXISTS {$table} (
 			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
 			unit_id VARCHAR(16) NOT NULL,
-			machine_id VARCHAR(64) NOT NULL,
+			machine_id VARCHAR(64) NULL,
 			role VARCHAR(32) NULL,
-			ts DATETIME NOT NULL,
+			ts DATETIME NULL,
+			recorded_at DATETIME NULL,
 			timestamp INT UNSIGNED NULL,
 			temp_c FLOAT NULL,
 			temp_f FLOAT NULL,
@@ -24,19 +27,46 @@ if (!function_exists('tmon_uc_ensure_device_data_table')) {
 			free_mem INT NULL,
 			error_count INT NULL,
 			last_error VARCHAR(255) NULL,
+			data LONGTEXT NULL,
 			payload LONGTEXT NULL,
 			PRIMARY KEY (id),
 			KEY idx_unit (unit_id),
 			KEY idx_machine (machine_id),
-			KEY idx_ts (ts)
+			KEY idx_ts (recorded_at),
+			KEY idx_ts_alt (ts)
 		) {$charset};";
 		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 		dbDelta($sql);
+
+		// Defensive: ensure columns exist if table predates schema
+		$cols = $wpdb->get_results("SHOW FULL COLUMNS FROM {$table}", ARRAY_A);
+		$names = array_map(function($c){ return $c['Field']; }, is_array($cols) ? $cols : array());
+		if (!in_array('data', $names, true)) {
+			$wpdb->query("ALTER TABLE {$table} ADD COLUMN data LONGTEXT NULL");
+		}
+		if (!in_array('recorded_at', $names, true)) {
+			$wpdb->query("ALTER TABLE {$table} ADD COLUMN recorded_at DATETIME NULL, ADD KEY idx_ts (recorded_at)");
+		}
 	}
 }
-// Call on admin_init and rest_api_init to avoid “SHOW FULL COLUMNS” errors before handlers run
 add_action('admin_init', 'tmon_uc_ensure_device_data_table');
 add_action('rest_api_init', 'tmon_uc_ensure_device_data_table');
+
+// Back-compat inserter used by REST handler tmon_uc_api_device_data
+if (!function_exists('tmon_uc_device_data_insert')) {
+	function tmon_uc_device_data_insert($unit_id, $machine_id, $data_json, $recorded_at = null) {
+		global $wpdb;
+		$table = $wpdb->prefix . 'tmon_device_data';
+		tmon_uc_ensure_device_data_table();
+		$recorded_at = $recorded_at ? $recorded_at : current_time('mysql');
+		return $wpdb->insert($table, array(
+			'unit_id'     => sanitize_text_field($unit_id),
+			'machine_id'  => $machine_id ? sanitize_text_field($machine_id) : null,
+			'data'        => wp_unslash($data_json),
+			'recorded_at' => $recorded_at,
+		), array('%s','%s','%s','%s'));
+	}
+}
 
 // Guard: sender helper
 if (!function_exists('tmon_uc_send_command')) {
