@@ -712,40 +712,113 @@ add_action('admin_notices', function () {
 if (!function_exists('tmon_admin_provisioning_activity_page')) {
 	function tmon_admin_provisioning_activity_page() {
 		if (!current_user_can('manage_options')) wp_die('Forbidden');
-		echo '<div class="wrap"><h1>Provisioning Activity</h1>';
 		$queue = get_option('tmon_admin_pending_provision', []);
 		$history = get_option('tmon_admin_provision_history', []);
-		echo '<div class="card" style="padding:12px;"><h2 style="margin-top:0;">Pending Queue</h2>';
-		if (!empty($queue) && is_array($queue)) {
-			echo '<ul>';
-			foreach ($queue as $k => $p) {
-				echo '<li>' . esc_html($k) . ' — ' . esc_html(json_encode($p)) . '</li>';
-			}
-			echo '</ul>';
-		} else {
-			echo '<p><em>No pending queue entries.</em></p>';
-		}
-		echo '</div>';
+		$nonce = wp_create_nonce('tmon_admin_provision_ajax');
+		$ajaxurl = admin_url('admin-ajax.php');
 
-		echo '<div class="card" style="padding:12px;"><h2 style="margin-top:0;">History</h2>';
-		if (is_array($history) && !empty($history)) {
-			echo '<ul>';
-			foreach (array_reverse($history) as $h) {
-				echo '<li>' . esc_html(($h['ts'] ?? '') . ' — ' . ($h['action'] ?? 'saved')) . '</li>';
+		echo '<div class="wrap"><h1>Provisioning Activity</h1>';
+		echo '<h2>Pending Queue</h2>';
+		echo '<table class="widefat striped"><thead><tr><th>Key</th><th>Unit ID</th><th>Machine ID</th><th>Requested At</th><th>Payload</th><th>Actions</th></tr></thead><tbody>';
+
+		if (!empty($queue) && is_array($queue)) {
+			foreach ($queue as $k=>$p) {
+				$payload = is_array($p) ? wp_json_encode($p, JSON_UNESCAPED_SLASHES) : (string)$p;
+				echo '<tr>';
+				echo '<td>'.esc_html($k).'</td>';
+				echo '<td>'.esc_html($p['unit_id'] ?? '').'</td>';
+				echo '<td>'.esc_html($p['machine_id'] ?? '').'</td>';
+				echo '<td>'.esc_html($p['requested_at'] ?? $p['enqueued_at'] ?? '').'</td>';
+				echo '<td><pre style="max-height:140px;overflow:auto;white-space:pre-wrap;">'.esc_html($payload).'</pre></td>';
+				echo '<td><button class="button tmon-pq-reenqueue" data-key="'.esc_attr($k).'">Re-enqueue</button> ';
+				echo '<button class="button button-link-delete tmon-pq-delete" data-key="'.esc_attr($k).'">Delete</button></td>';
+				echo '</tr>';
 			}
-			echo '</ul>';
 		} else {
-			echo '<p><em>No history recorded.</em></p>';
+			echo '<tr><td colspan="6"><em>No pending queue entries.</em></td></tr>';
 		}
-		echo '</div></div>';
+		echo '</tbody></table>';
+
+		echo '<h2>History</h2>';
+		echo '<table class="widefat striped"><thead><tr><th>Time</th><th>User</th><th>Unit</th><th>Machine</th><th>Action</th><th>Meta</th></tr></thead><tbody>';
+		if (is_array($history) && !empty($history)) {
+			foreach (array_reverse($history) as $h) {
+				echo '<tr>';
+				echo '<td>'.esc_html($h['ts'] ?? '').'</td>';
+				echo '<td>'.esc_html($h['user'] ?? '').'</td>';
+				echo '<td>'.esc_html($h['unit_id'] ?? '').'</td>';
+				echo '<td>'.esc_html($h['machine_id'] ?? '').'</td>';
+				echo '<td>'.esc_html($h['action'] ?? '').'</td>';
+				echo '<td><pre style="max-height:120px;overflow:auto;white-space:pre-wrap;">'.esc_html(wp_json_encode($h['meta'] ?? [], JSON_UNESCAPED_SLASHES)).'</pre></td>';
+				echo '</tr>';
+			}
+		} else {
+			echo '<tr><td colspan="6"><em>No history recorded.</em></td></tr>';
+		}
+		echo '</tbody></table>';
+
+		echo "<script>
+			(function($){
+				$('.tmon-pq-delete').on('click', function(){
+					const k=$(this).data('key');
+					if(!confirm('Delete '+k+'?'))return;
+					$.post('{$ajaxurl}', {action:'tmon_admin_manage_pending', manage_action:'delete', key:k, _ajax_nonce:'{$nonce}'}, function(r){
+						if(r.success){ location.reload(); } else { alert('Failed to delete'); }
+					});
+				});
+				$('.tmon-pq-reenqueue').on('click', function(){
+					const k=$(this).data('key');
+					const p=prompt('Payload JSON or empty to keep existing:');
+					$.post('{$ajaxurl}', {action:'tmon_admin_manage_pending', manage_action:'reenqueue', key:k, payload:p, _ajax_nonce:'{$nonce}'}, function(r){
+						if(r.success){ location.reload(); } else { alert('Failed to re-enqueue'); }
+					});
+				});
+			})(jQuery);
+		</script>";
+
+		echo '</div>';
 	}
 }
 
-// REST: Health check for Unit Connectors
+// Debugging helpers: gate prints by categories via options
+if (!function_exists('tmon_admin_debug')) {
+	function tmon_admin_debug($cat, $msg, $ctx = array()) {
+		$enabled = get_option('tmon_admin_debug_enabled', 0);
+		$cats    = get_option('tmon_admin_debug_categories', array()); // e.g., ['pairing'=>1,'provision'=>1,'rest'=>1,'db'=>0]
+		if (!$enabled) return;
+		if (is_array($cats) && empty($cats[$cat])) return;
+		error_log(sprintf('[TMON Admin][%s] %s %s', $cat, is_string($msg) ? $msg : wp_json_encode($msg), $ctx ? wp_json_encode($ctx) : ''));
+	}
+}
+
+// Populate provisioning history best-effort when queue changes or dispatch runs
+if (!function_exists('tmon_admin_history_add')) {
+	function tmon_admin_history_add($action, $meta = array(), $unit_id = '', $machine_id = '') {
+		$history = get_option('tmon_admin_provision_history', array());
+		$history[] = array(
+			'ts' => current_time('mysql'),
+			'user' => wp_get_current_user()->user_login ?? '',
+			'unit_id' => $unit_id,
+			'machine_id' => $machine_id,
+			'action' => $action,
+			'meta' => $meta,
+		);
+		update_option('tmon_admin_provision_history', $history, false);
+	}
+}
+
+// Hook into queue management to record history and debug
+add_action('update_option_tmon_admin_pending_provision', function ($old, $new) {
+	tmon_admin_debug('provision', 'pending queue updated', array('old_count' => is_array($old)?count($old):0, 'new_count' => is_array($new)?count($new):0));
+	tmon_admin_history_add('queue_update', array('new_count' => is_array($new)?count($new):0));
+}, 10, 2);
+
+// Ensure Status endpoint logs when called
 add_action('rest_api_init', function () {
 	register_rest_route('tmon-admin/v1', '/status', array(
 		'methods'  => 'GET',
 		'callback' => function () {
+			tmon_admin_debug('rest', 'status ping', array('ip' => $_SERVER['REMOTE_ADDR'] ?? ''));
 			return rest_ensure_response(array(
 				'status' => 'ok',
 				'hub'    => get_site_url(),
@@ -756,24 +829,88 @@ add_action('rest_api_init', function () {
 	));
 });
 
-// CORS: allow UC origins, handle preflight, set JSON content-type
-add_action('rest_api_init', function () {
-	$origins = get_option('tmon_uc_allowed_origins', array(
-		'https://tmonsystems.com',
-	));
-	add_filter('rest_pre_serve_request', function ($served, $result, $request, $server) use ($origins) {
-		$origin = isset($_SERVER['HTTP_ORIGIN']) ? trim($_SERVER['HTTP_ORIGIN']) : '';
-		$allow  = in_array($origin, $origins, true) ? $origin : '*';
-		header('Access-Control-Allow-Origin: ' . $allow);
-		header('Access-Control-Allow-Credentials: true');
-		header('Access-Control-Allow-Headers: Content-Type, X-TMON-HUB, X-TMON-UC, Authorization');
-		header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
-		header('Content-Type: application/json; charset=utf-8');
-		// Preflight
-		if ('OPTIONS' === $_SERVER['REQUEST_METHOD']) {
-			echo wp_json_encode(array('status' => 'ok'));
-			return true;
+// Fix Provisioning Activity page: render table with actions
+if (!function_exists('tmon_admin_provisioning_activity_page')) {
+	function tmon_admin_provisioning_activity_page() {
+		if (!current_user_can('manage_options')) wp_die('Forbidden');
+		$queue = get_option('tmon_admin_pending_provision', []);
+		$history = get_option('tmon_admin_provision_history', []);
+		$nonce = wp_create_nonce('tmon_admin_provision_ajax');
+		$ajaxurl = admin_url('admin-ajax.php');
+
+		echo '<div class="wrap"><h1>Provisioning Activity</h1>';
+		echo '<h2>Pending Queue</h2>';
+		echo '<table class="widefat striped"><thead><tr><th>Key</th><th>Unit ID</th><th>Machine ID</th><th>Requested At</th><th>Payload</th><th>Actions</th></tr></thead><tbody>';
+
+		if (!empty($queue) && is_array($queue)) {
+			foreach ($queue as $k=>$p) {
+				$payload = is_array($p) ? wp_json_encode($p, JSON_UNESCAPED_SLASHES) : (string)$p;
+				echo '<tr>';
+				echo '<td>'.esc_html($k).'</td>';
+				echo '<td>'.esc_html($p['unit_id'] ?? '').'</td>';
+				echo '<td>'.esc_html($p['machine_id'] ?? '').'</td>';
+				echo '<td>'.esc_html($p['requested_at'] ?? $p['enqueued_at'] ?? '').'</td>';
+				echo '<td><pre style="max-height:140px;overflow:auto;white-space:pre-wrap;">'.esc_html($payload).'</pre></td>';
+				echo '<td><button class="button tmon-pq-reenqueue" data-key="'.esc_attr($k).'">Re-enqueue</button> ';
+				echo '<button class="button button-link-delete tmon-pq-delete" data-key="'.esc_attr($k).'">Delete</button></td>';
+				echo '</tr>';
+			}
+		} else {
+			echo '<tr><td colspan="6"><em>No pending queue entries.</em></td></tr>';
 		}
-		return $served;
-	}, 10, 4);
+		echo '</tbody></table>';
+
+		echo '<h2>History</h2>';
+		echo '<table class="widefat striped"><thead><tr><th>Time</th><th>User</th><th>Unit</th><th>Machine</th><th>Action</th><th>Meta</th></tr></thead><tbody>';
+		if (is_array($history) && !empty($history)) {
+			foreach (array_reverse($history) as $h) {
+				echo '<tr>';
+				echo '<td>'.esc_html($h['ts'] ?? '').'</td>';
+				echo '<td>'.esc_html($h['user'] ?? '').'</td>';
+				echo '<td>'.esc_html($h['unit_id'] ?? '').'</td>';
+				echo '<td>'.esc_html($h['machine_id'] ?? '').'</td>';
+				echo '<td>'.esc_html($h['action'] ?? '').'</td>';
+				echo '<td><pre style="max-height:120px;overflow:auto;white-space:pre-wrap;">'.esc_html(wp_json_encode($h['meta'] ?? [], JSON_UNESCAPED_SLASHES)).'</pre></td>';
+				echo '</tr>';
+			}
+		} else {
+			echo '<tr><td colspan="6"><em>No history recorded.</em></td></tr>';
+		}
+		echo '</tbody></table>';
+
+		echo "<script>
+			(function($){
+				$('.tmon-pq-delete').on('click', function(){
+					const k=$(this).data('key');
+					if(!confirm('Delete '+k+'?'))return;
+					$.post('{$ajaxurl}', {action:'tmon_admin_manage_pending', manage_action:'delete', key:k, _ajax_nonce:'{$nonce}'}, function(r){
+						if(r.success){ location.reload(); } else { alert('Failed to delete'); }
+					});
+				});
+				$('.tmon-pq-reenqueue').on('click', function(){
+					const k=$(this).data('key');
+					const p=prompt('Payload JSON or empty to keep existing:');
+					$.post('{$ajaxurl}', {action:'tmon_admin_manage_pending', manage_action:'reenqueue', key:k, payload:p, _ajax_nonce:'{$nonce}'}, function(r){
+						if(r.success){ location.reload(); } else { alert('Failed to re-enqueue'); }
+					});
+				});
+			})(jQuery);
+		</script>";
+
+		echo '</div>';
+	}
+}
+
+// Wire debug into pairing and forwarding flows
+add_action('rest_api_init', function () {
+	// Pair route hook (already registered elsewhere); add debug via filters
+	add_filter('pre_update_option_tmon_uc_pairings', function ($new, $old) {
+		tmon_admin_debug('pairing', 'pairings updated', array('count' => is_array($new)?count($new):0));
+		return $new;
+	}, 10, 2);
 });
+
+// Debug around provisioning dispatch
+add_action('admin_init', function () {
+	tmon_admin_debug('provision', 'dispatch tick', array('queue_count' => is_array(get_option('tmon_admin_pending_provision', [])) ? count(get_option('tmon_admin_pending_provision', [])) : 0));
+}, 9);
