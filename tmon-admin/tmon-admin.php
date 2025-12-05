@@ -599,3 +599,68 @@ add_action('rest_api_init', function () {
 		'permission_callback' => '__return_true',
 	));
 });
+
+/**
+ * REST: UC sync endpoint
+ * - POST /tmon-admin/v1/uc/sync
+ * Returns customer/account summary and devices filtered by UC domain (uc_url).
+ */
+add_action('rest_api_init', function () {
+	register_rest_route('tmon-admin/v1', '/uc/sync', array(
+		'methods'  => 'POST',
+		'callback' => function ($request) {
+			$uc_url = esc_url_raw($request->get_param('uc_url'));
+			if (!$uc_url) {
+				return new WP_Error('bad_request', 'uc_url required', array('status' => 400));
+			}
+			// Validate pairing
+			$pair = tmon_admin_uc_pairings_get();
+			if (empty($pair[$uc_url]['active'])) {
+				return new WP_Error('not_paired', 'UC not paired', array('status' => 403));
+			}
+			global $wpdb;
+			$out = array(
+				'account' => array(
+					'hub' => get_site_url(),
+					'uc_url' => $uc_url,
+					'paired_at' => $pair[$uc_url]['created'] ?? '',
+				),
+				'devices' => array(),
+			);
+			// Filter devices by domain match (site_url like uc_url)
+			$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+			if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $prov_table))) {
+				$like = '%' . $wpdb->esc_like(parse_url($uc_url, PHP_URL_HOST)) . '%';
+				$rows = $wpdb->get_results($wpdb->prepare("SELECT unit_id, machine_id, unit_name, role, site_url, status FROM {$prov_table} WHERE site_url LIKE %s ORDER BY updated_at DESC LIMIT 500", $like), ARRAY_A);
+				if ($rows) {
+					foreach ($rows as $r) {
+						$out['devices'][] = array(
+							'unit_id' => $r['unit_id'],
+							'machine_id' => $r['machine_id'],
+							'unit_name' => $r['unit_name'],
+							'role' => $r['role'],
+							'assigned' => 1,
+							'site_url' => $r['site_url'],
+							'status' => $r['status'],
+						);
+					}
+				}
+			}
+			// Optional audit
+			if (function_exists('tmon_admin_audit_log')) {
+				tmon_admin_audit_log('uc_sync', 'pair', array('extra' => array('uc' => $uc_url, 'devices' => count($out['devices']))));
+			}
+			return rest_ensure_response($out);
+		},
+		'permission_callback' => '__return_true',
+	));
+});
+
+// Suppress specific debug print globally
+add_filter('gettext', function ($translated, $text, $domain) {
+	$needle = 'tmon-admin: tmon_admin_ensure_columns executed (idempotent).';
+	if (strpos($translated, $needle) !== false) {
+		$translated = str_replace($needle, '', $translated);
+	}
+	return $translated;
+}, 10, 3);
