@@ -880,7 +880,6 @@ async def periodic_provision_check():
     """Poll Admin hub for staged provisioning metadata until provisioned.
     Persists UNIT_ID, WORDPRESS_API_URL, role, plan, unit_name, firmware and soft-resets once after URL persistence.
     """
-    # Fix: ensure module flag is referenced, not shadowed as local
     global _provision_reboot_guard_written
     import uasyncio as _a
     interval = int(getattr(settings, 'PROVISION_CHECK_INTERVAL_S', 25))
@@ -889,16 +888,18 @@ async def periodic_provision_check():
     guard_file = getattr(settings, 'PROVISION_REBOOT_GUARD_FILE', settings.LOG_DIR + '/provision_reboot.flag')
     while True:
         try:
-            # Robust flag check: use os.stat; avoid path vs filename mismatch
+            # Robust flag check, but only consider "fully provisioned" if URL and UNIT_ID are set
             try:
-                _provisioned = False
+                flag_exists = False
                 try:
                     os.stat(flag_file)
-                    _provisioned = True
+                    flag_exists = True
                 except OSError:
-                    _provisioned = False
-                if hub and flag_file and _provisioned:
-                    await debug_print('periodic_provision_check: already provisioned (flag found)', 'PROVISION')
+                    flag_exists = False
+                wp_url_set = bool(str(getattr(settings, 'WORDPRESS_API_URL', '')).strip())
+                uid_set = bool(str(getattr(settings, 'UNIT_ID', '')).strip())
+                if hub and flag_file and flag_exists and wp_url_set and uid_set:
+                    await debug_print('periodic_provision_check: fully provisioned (flag + URL + UNIT_ID)', 'PROVISION')
                     return
             except Exception:
                 pass
@@ -971,7 +972,7 @@ async def periodic_provision_check():
                                 settings.FIRMWARE_VERSION = fw_ver
                             except Exception:
                                 pass
-                        # Mark provisioned flag file
+                        # Mark provisioned flag file (do not exit loop yet; allow URL/UID checks next tick)
                         if (provisioned or staged) and site_val:
                             try:
                                 with open(flag_file, 'w') as f:
@@ -981,7 +982,6 @@ async def periodic_provision_check():
                             # One-time soft reset after initial full metadata persistence
                             if not _provision_reboot_guard_written:
                                 reboot_needed = True
-                                # Guard file prevents multiple resets
                                 try:
                                     os.stat(guard_file)
                                     reboot_needed = False
@@ -1025,7 +1025,11 @@ def start_background_tasks():
             except Exception:
                 pass
             try:
-                _a.create_task(periodic_field_data_send())
+                # Guard field-data send scheduler: only start when URL exists and role supports it
+                wp_url = str(getattr(settings, 'WORDPRESS_API_URL', '')).strip()
+                role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
+                if wp_url and role in ('base', 'wifi'):
+                    _a.create_task(periodic_field_data_send())
             except Exception:
                 pass
     except Exception:

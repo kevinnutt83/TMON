@@ -27,6 +27,21 @@ function uc_devices_get_assigned($args = array()) {
 }
 
 /**
+ * Get unassigned devices from the local database.
+ *
+ * @param array $args Optional. Arguments for limiting and offsetting results.
+ * @return array List of unassigned devices.
+ */
+function uc_devices_get_unassigned($args = array()) {
+	global $wpdb;
+	$defaults = array('limit' => 200, 'offset' => 0);
+	$args = wp_parse_args($args, $defaults);
+	$table = $wpdb->prefix . 'tmon_uc_devices';
+	$sql = $wpdb->prepare("SELECT * FROM $table WHERE assigned = 0 ORDER BY id DESC LIMIT %d OFFSET %d", $args['limit'], $args['offset']);
+	return $wpdb->get_results($sql, ARRAY_A);
+}
+
+/**
  * Refresh the list of assigned devices from the Admin hub.
  *
  * Pulls the latest assigned devices from the Admin hub using the shared key,
@@ -72,6 +87,7 @@ function tmon_uc_provisioning_page() {
 		add_settings_error('tmon_uc', 'refreshed', __('Refreshed assigned devices from Admin hub.', 'tmon'), 'updated');
 	}
 	$devices = uc_devices_get_assigned();
+	$unassigned = uc_devices_get_unassigned();
 	echo '<div class="wrap"><h1>' . esc_html__('Provisioned Devices', 'tmon') . '</h1>';
 	settings_errors('tmon_uc');
 	echo '<form method="post">';
@@ -79,21 +95,36 @@ function tmon_uc_provisioning_page() {
 	submit_button(__('Refresh From Admin Hub', 'tmon'), 'secondary', 'uc_refresh_devices', false);
 	echo '</form>';
 	echo '<table class="widefat striped"><thead><tr>';
-	echo '<th>UNIT_ID</th><th>MACHINE_ID</th><th>Name</th><th>Role</th><th>Actions</th>';
+	echo '<th>UNIT_ID</th><th>MACHINE_ID</th><th>Name</th><th>Role</th><th>Status</th><th>Actions</th>';
 	echo '</tr></thead><tbody>';
+	$rows_rendered = false;
 	if ($devices) {
 		foreach ($devices as $d) {
+			$rows_rendered = true;
+			$unit = esc_html($d['unit_id']);
+			$machine = esc_html($d['machine_id']);
+			$name = esc_html($d['unit_name']);
+			$role = esc_html(isset($d['role']) ? $d['role'] : '');
+			echo "<tr><td>$unit</td><td>$machine</td><td>$name</td><td>$role</td><td>" . esc_html__('Assigned', 'tmon') . "</td><td>";
+			echo "<span class='button disabled'>" . esc_html__('Claimed', 'tmon') . "</span>";
+			echo "</td></tr>";
+		}
+	}
+	if ($unassigned) {
+		foreach ($unassigned as $d) {
+			$rows_rendered = true;
 			$unit = esc_html($d['unit_id']);
 			$machine = esc_html($d['machine_id']);
 			$name = esc_html($d['unit_name']);
 			$role = esc_html(isset($d['role']) ? $d['role'] : '');
 			$claim_url = esc_url(add_query_arg(array('tmon_uc_claim' => $unit)));
-			echo "<tr><td>$unit</td><td>$machine</td><td>$name</td><td>$role</td><td>";
-			echo "<a class='button' href='$claim_url'>" . esc_html__('Claim', 'tmon') . "</a>";
+			echo "<tr><td>$unit</td><td>$machine</td><td>$name</td><td>$role</td><td>" . esc_html__('Unassigned', 'tmon') . "</td><td>";
+			echo "<a class='button button-primary' href='$claim_url'>" . esc_html__('Claim', 'tmon') . "</a>";
 			echo "</td></tr>";
 		}
-	} else {
-		echo '<tr><td colspan="5">' . esc_html__('No devices found. Click refresh to sync.', 'tmon') . '</td></tr>';
+	}
+	if (!$rows_rendered) {
+		echo '<tr><td colspan="6">' . esc_html__('No devices found. Click refresh to sync.', 'tmon') . '</td></tr>';
 	}
 	echo '</tbody></table></div>';
 }
