@@ -791,3 +791,118 @@ add_filter('gettext', function ($translated, $text, $domain) {
 	}
 	return $translated;
 }, 10, 3);
+
+/**
+ * REST: UC → Admin device data relay
+ * - POST /tmon-admin/v1/uc/device-data
+ * Body: { unit_id, machine_id, site_url, records: [ {timestamp, ...sdata...} ] }
+ * Header: X-TMON-HUB must match per-UC shared key (normalized by domain).
+ */
+add_action('rest_api_init', function () {
+	register_rest_route('tmon-admin/v1', '/uc/device-data', array(
+		'methods'  => 'POST',
+		'callback' => function ($request) {
+			// Authenticate UC by shared key from X-TMON-HUB and uc_url in body
+			$shared = isset($_SERVER['HTTP_X_TMON_HUB']) ? sanitize_text_field($_SERVER['HTTP_X_TMON_HUB']) : '';
+			$site_url_raw = $request->get_param('site_url');
+			$site_url = esc_url_raw($site_url_raw);
+			$key_id = function_exists('tmon_admin_uc_normalize_url') ? tmon_admin_uc_normalize_url($site_url ?: $site_url_raw) : ($site_url ?: $site_url_raw);
+			$pair = function_exists('tmon_admin_uc_pairings_get') ? tmon_admin_uc_pairings_get() : array();
+			if (!$key_id || empty($pair[$key_id]['active']) || empty($pair[$key_id]['key']) || !hash_equals($pair[$key_id]['key'], $shared)) {
+				return new WP_Error('forbidden', 'Unauthorized UC', array('status' => 403));
+			}
+
+			$unit_id = sanitize_text_field($request->get_param('unit_id'));
+			$machine_id = sanitize_text_field($request->get_param('machine_id'));
+			$records = $request->get_param('records');
+			if (!$unit_id || !is_array($records) || empty($records)) {
+				return new WP_Error('bad_request', 'unit_id and records required', array('status' => 400));
+			}
+
+			// Ensure device data table exists
+			global $wpdb;
+			$table = $wpdb->prefix . 'tmon_device_data';
+			$charset = $wpdb->get_charset_collate();
+			$sql = "CREATE TABLE IF NOT EXISTS {$table} (
+				id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+				unit_id VARCHAR(32) NOT NULL,
+				machine_id VARCHAR(64) NULL,
+				recorded_at DATETIME NULL,
+				data LONGTEXT NULL,
+				PRIMARY KEY (id),
+				KEY idx_unit (unit_id),
+				KEY idx_rec (recorded_at)
+			) {$charset};";
+			require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+			dbDelta($sql);
+
+			$inserted = 0;
+			foreach ($records as $rec) {
+				// Normalize record
+				$recorded_at = current_time('mysql');
+				if (is_array($rec) && isset($rec['timestamp'])) {
+					$ts = intval($rec['timestamp']);
+					if ($ts > 0) { $recorded_at = gmdate('Y-m-d H:i:s', $ts); }
+				}
+				$wpdb->insert($table, array(
+					'unit_id'     => $unit_id,
+					'machine_id'  => $machine_id ?: null,
+					'recorded_at' => $recorded_at,
+					'data'        => wp_json_encode($rec),
+				));
+				if ($wpdb->insert_id) { $inserted++; }
+			}
+
+			// Optional audit
+			if (function_exists('tmon_admin_audit_log')) {
+				tmon_admin_audit_log('uc_device_data', 'relay', array(
+					'unit_id' => $unit_id,
+					'machine_id' => $machine_id,
+					'extra' => array('count' => $inserted, 'site_url' => $site_url)
+				));
+			}
+			return rest_ensure_response(array('status' => 'ok', 'inserted' => $inserted));
+		},
+		'permission_callback' => '__return_true',
+	));
+});
+
+/**
+ * REST: UC → Admin plugin state relay
+ * - POST /tmon-admin/v1/uc/plugin-state
+ * Body: { site_url, settings: {...}, status: {...} } posted by Unit Connector
+ */
+add_action('rest_api_init', function () {
+	register_rest_route('tmon-admin/v1', '/uc/plugin-state', array(
+		'methods'  => 'POST',
+		'callback' => function ($request) {
+			$shared = isset($_SERVER['HTTP_X_TMON_HUB']) ? sanitize_text_field($_SERVER['HTTP_X_TMON_HUB']) : '';
+			$site_url_raw = $request->get_param('site_url');
+			$site_url = esc_url_raw($site_url_raw);
+			$key_id = function_exists('tmon_admin_uc_normalize_url') ? tmon_admin_uc_normalize_url($site_url ?: $site_url_raw) : ($site_url ?: $site_url_raw);
+			$pair = function_exists('tmon_admin_uc_pairings_get') ? tmon_admin_uc_pairings_get() : array();
+			if (!$key_id || empty($pair[$key_id]['active']) || empty($pair[$key_id]['key']) || !hash_equals($pair[$key_id]['key'], $shared)) {
+				return new WP_Error('forbidden', 'Unauthorized UC', array('status' => 403));
+			}
+
+			$settings = $request->get_param('settings');
+			$status   = $request->get_param('status');
+			// Persist a summary option keyed by normalized site
+			$state = array(
+				'site_url' => $site_url,
+				'settings' => is_array($settings) ? $settings : array(),
+				'status'   => is_array($status) ? $status : array(),
+				'updated'  => current_time('mysql'),
+			);
+			$all = get_option('tmon_admin_uc_states', array());
+			$all[$key_id] = $state;
+			update_option('tmon_admin_uc_states', $all, false);
+
+			if (function_exists('tmon_admin_audit_log')) {
+				tmon_admin_audit_log('uc_plugin_state', 'relay', array('extra' => array('site' => $site_url)));
+			}
+			return rest_ensure_response(array('status' => 'ok'));
+		},
+		'permission_callback' => '__return_true',
+	));
+});
