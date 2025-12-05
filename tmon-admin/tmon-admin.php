@@ -296,8 +296,37 @@ if (!function_exists('tmon_admin_groups_page')) {
 if (!function_exists('tmon_admin_pairings_page')) {
 	function tmon_admin_pairings_page() {
 		if (!current_user_can('manage_options')) wp_die('Forbidden');
+		// Load pairings from option
+		if (!function_exists('tmon_admin_uc_pairings_get')) {
+			echo '<div class="wrap"><h1>UC Pairings</h1><div class="card" style="padding:12px;"><p><em>Pairing storage helpers not loaded.</em></p></div></div>';
+			return;
+		}
+		$pairings = tmon_admin_uc_pairings_get();
+
 		echo '<div class="wrap"><h1>UC Pairings</h1>';
-		echo '<div class="card" style="padding:12px;"><p><em>Page loaded. Verify pairing settings and connectivity.</em></p></div>';
+		echo '<div class="card" style="padding:12px;">';
+		echo '<h2 style="margin-top:0;">Registered Unit Connectors</h2>';
+
+		if (empty($pairings)) {
+			echo '<p><em>No Unit Connectors paired yet. Use the UC pairing flow to generate a shared key.</em></p>';
+		} else {
+			echo '<table class="widefat striped"><thead><tr>';
+			echo '<th>UC URL</th><th>Shared Key</th><th>Created</th><th>Status</th>';
+			echo '</tr></thead><tbody>';
+			foreach ($pairings as $uc_url => $info) {
+				$key = isset($info['key']) ? $info['key'] : '';
+				$created = isset($info['created']) ? $info['created'] : '';
+				$status = !empty($info['active']) ? 'Active' : 'Inactive';
+				echo '<tr>';
+				echo '<td>' . esc_html($uc_url) . '</td>';
+				echo '<td><code>' . esc_html($key) . '</code></td>';
+				echo '<td>' . esc_html($created) . '</td>';
+				echo '<td>' . esc_html($status) . '</td>';
+				echo '</tr>';
+			}
+			echo '</tbody></table>';
+		}
+		echo '</div>';
 		echo '</div>';
 	}
 }
