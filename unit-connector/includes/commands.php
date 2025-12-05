@@ -86,32 +86,101 @@ if (!function_exists('tmon_uc_device_data_insert')) {
 	}
 }
 
-// Guard: sender helper
-if (!function_exists('tmon_uc_send_command')) {
-	function tmon_uc_send_command($unit_id, $machine_id, $type, $payload) {
-		$hub = get_option('tmon_admin_hub_url');
-		$key = get_option('tmon_uc_shared_key');
-		if (!$hub || !$key) { return new WP_Error('no_hub', 'Hub not configured'); }
-		$url = trailingslashit($hub) . 'wp-json/tmon-admin/v1/uc/command';
-		$args = array(
-			'headers' => array('X-TMON-HUB' => $key, 'Content-Type' => 'application/json'),
-			'body' => wp_json_encode(array(
-				'unit_id' => $unit_id,
-				'machine_id' => $machine_id,
-				'type' => $type,
-				'data' => $payload,
-			)),
-			'timeout' => 20,
-			'method' => 'POST',
-		);
-		$resp = wp_remote_post($url, $args);
-		if (is_wp_error($resp)) { return $resp; }
-		if (wp_remote_retrieve_response_code($resp) !== 200) {
-			return new WP_Error('cmd_fail', 'Command dispatch failed');
-		}
-		return true;
-	}
-}
+// Ensure commands queue table exists
+add_action('admin_init', function () {
+	global $wpdb;
+	$table = $wpdb->prefix . 'tmon_device_commands';
+	$charset = $wpdb->get_charset_collate();
+	$sql = "CREATE TABLE IF NOT EXISTS {$table} (
+		id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+		device_id VARCHAR(32) NOT NULL,
+		command VARCHAR(64) NOT NULL,
+		params LONGTEXT NULL,
+		status VARCHAR(32) DEFAULT 'queued',
+		created_at DATETIME NOT NULL,
+		updated_at DATETIME NULL,
+		PRIMARY KEY (id),
+		KEY idx_dev (device_id),
+		KEY idx_status (status)
+	) {$charset};";
+	require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+	dbDelta($sql);
+});
+
+// REST: receive command from Admin and enqueue for device
+add_action('rest_api_init', function () {
+	register_rest_route('tmon-uc/v1', '/device/command', array(
+		'methods'  => 'POST',
+		'callback' => function ($req) {
+			// Authenticate via shared key header
+			$shared = isset($_SERVER['HTTP_X_TMON_HUB']) ? sanitize_text_field($_SERVER['HTTP_X_TMON_HUB']) : '';
+			$key_opt = get_option('tmon_uc_shared_key');
+			if (!$key_opt || !hash_equals($key_opt, $shared)) {
+				return new WP_Error('forbidden', 'Unauthorized hub', array('status' => 403));
+			}
+			$device_id = sanitize_text_field($req->get_param('unit_id') ?: $req->get_param('device_id'));
+			$cmd = sanitize_text_field($req->get_param('type') ?: $req->get_param('command'));
+			$params = $req->get_param('data') ?: $req->get_param('params') ?: array();
+			if (!$device_id || !$cmd) {
+				return new WP_Error('bad_request', 'unit_id and command required', array('status' => 400));
+			}
+			global $wpdb;
+			$table = $wpdb->prefix . 'tmon_device_commands';
+			$wpdb->insert($table, array(
+				'device_id' => $device_id,
+				'command'   => $cmd,
+				'params'    => wp_json_encode($params),
+				'status'    => 'queued',
+				'created_at'=> current_time('mysql'),
+				'updated_at'=> current_time('mysql'),
+			));
+			return rest_ensure_response(array('status' => 'ok', 'id' => (int)$wpdb->insert_id));
+		},
+		'permission_callback' => '__return_true',
+	));
+});
+
+// REST: devices poll for queued commands
+add_action('rest_api_init', function () {
+	register_rest_route('tmon-uc/v1', '/device/commands', array(
+		'methods'  => 'POST',
+		'callback' => function ($req) {
+			$device_id = sanitize_text_field($req->get_param('unit_id') ?: $req->get_param('device_id'));
+			if (!$device_id) {
+				return new WP_Error('bad_request', 'unit_id required', array('status' => 400));
+			}
+			global $wpdb;
+			$table = $wpdb->prefix . 'tmon_device_commands';
+			$rows = $wpdb->get_results($wpdb->prepare("SELECT id, command, params FROM {$table} WHERE device_id=%s AND status='queued' ORDER BY id ASC LIMIT 20", $device_id), ARRAY_A);
+			return rest_ensure_response(array('status' => 'ok', 'commands' => $rows ?: array()));
+		},
+		'permission_callback' => '__return_true',
+	));
+});
+
+// REST: devices acknowledge command result (processed)
+add_action('rest_api_init', function () {
+	register_rest_route('tmon-uc/v1', '/device/command-result', array(
+		'methods'  => 'POST',
+		'callback' => function ($req) {
+			$id = intval($req->get_param('id'));
+			$status = sanitize_text_field($req->get_param('status') ?: 'done');
+			$result = $req->get_param('result') ?: array();
+			if ($id <= 0) {
+				return new WP_Error('bad_request', 'id required', array('status' => 400));
+			}
+			global $wpdb;
+			$table = $wpdb->prefix . 'tmon_device_commands';
+			$wpdb->update($table, array(
+				'status'    => $status,
+				'updated_at'=> current_time('mysql'),
+				'params'    => wp_json_encode(array('result' => $result)),
+			), array('id' => $id));
+			return rest_ensure_response(array('status' => 'ok'));
+		},
+		'permission_callback' => '__return_true',
+	));
+});
 
 // Guard: page callback
 if (!function_exists('tmon_uc_commands_page')) {
@@ -190,5 +259,32 @@ if (!has_action('admin_menu', 'tmon_uc_register_commands_menu')) {
 			'tmon-uc-commands',
 			'tmon_uc_commands_page'
 		);
+	}
+}
+
+// Shortcode relay buttons should post to /tmon-uc/v1/device/command with type=relay_ctrl and payload {relay, state, duration_s}
+if (!function_exists('tmon_uc_send_command')) {
+	function tmon_uc_send_command($unit_id, $machine_id, $type, $payload) {
+		$hub = get_option('tmon_admin_hub_url');
+		$key = get_option('tmon_uc_shared_key');
+		if (!$hub || !$key) { return new WP_Error('no_hub', 'Hub not configured'); }
+		$url = trailingslashit($hub) . 'wp-json/tmon-admin/v1/uc/command';
+		$args = array(
+			'headers' => array('X-TMON-HUB' => $key, 'Content-Type' => 'application/json'),
+			'body' => wp_json_encode(array(
+				'unit_id' => $unit_id,
+				'machine_id' => $machine_id,
+				'type' => $type,
+				'data' => $payload,
+			)),
+			'timeout' => 20,
+			'method' => 'POST',
+		);
+		$resp = wp_remote_post($url, $args);
+		if (is_wp_error($resp)) { return $resp; }
+		if (wp_remote_retrieve_response_code($resp) !== 200) {
+			return new WP_Error('cmd_fail', 'Command dispatch failed');
+		}
+		return true;
 	}
 }
