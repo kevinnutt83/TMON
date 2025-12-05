@@ -129,8 +129,7 @@ if (!function_exists('tmon_uc_custom_code_page')) {
 	}
 } // <-- close function_exists guard
 
-// Enhance action form with nonce (used above)
+// Enhance action form with nonce (used in tmon_uc_custom_code_page)
 add_action('admin_footer', function () {
-	// Inject nonce field into the Send to Devices forms
 	echo '<script>(function(){var forms=document.querySelectorAll("form input[name=tmon_run_code_id]");forms.forEach(function(i){var f=i.closest("form");if(f){var n=document.createElement("input");n.type="hidden";n.name="_wpnonce";n.value="' . esc_js(wp_create_nonce('tmon_uc_run_code')) . '";f.appendChild(n);}});})();</script>';
 });
