@@ -153,6 +153,184 @@ add_action('rest_api_init', function () {
 	}
 });
 
+// Wire a minimal audit helper and call it in safe places (best-effort)
+if (!function_exists('tmon_admin_audit_log')) {
+	function tmon_admin_audit_log($action, $context = null, $args = array()) {
+		global $wpdb;
+		$table = $wpdb->prefix . 'tmon_admin_audit';
+		// Ensure table exists
+		if (!function_exists('tmon_admin_audit_ensure_tables')) return;
+		tmon_admin_audit_ensure_tables();
+		$row = array(
+			'ts' => current_time('mysql'),
+			'user_id' => get_current_user_id() ?: null,
+			'action' => sanitize_text_field($action),
+			'context' => $context ? sanitize_text_field($context) : null,
+			'unit_id' => isset($args['unit_id']) ? sanitize_text_field($args['unit_id']) : null,
+			'machine_id' => isset($args['machine_id']) ? sanitize_text_field($args['machine_id']) : null,
+			'extra' => isset($args['extra']) ? wp_json_encode($args['extra']) : null,
+		);
+		$wpdb->insert($table, $row);
+	}
+}
+
+// Safe wrappers for pages to avoid fatal errors when dependencies aren’t loaded
+function tmon_admin_safe_card_open($title) {
+	echo '<div class="card" style="padding:12px;margin-top:12px;"><h2 style="margin-top:0;">' . esc_html($title) . '</h2>';
+}
+function tmon_admin_safe_card_close() { echo '</div>'; }
+
+// Firmware page: functional replacement using GitHub API (clickable version list and docs)
+if (!function_exists('tmon_admin_firmware_page')) {
+	function tmon_admin_firmware_page() {
+		if (!current_user_can('manage_options')) wp_die('Forbidden');
+		// Repo config
+		$repo = get_option('tmon_admin_repo', 'kevinnutt83/TMON');
+		$branch = get_option('tmon_admin_repo_branch', 'main');
+		$base_url = 'https://raw.githubusercontent.com/' . $repo . '/' . $branch . '/';
+		$api_base = 'https://api.github.com/repos/' . $repo;
+
+		echo '<div class="wrap"><h1>TMON Firmware</h1>';
+		tmon_admin_safe_card_open('Repository Info');
+
+		$info = wp_remote_get($api_base, array('timeout' => 15, 'headers' => array('User-Agent' => 'TMON Admin')));
+		$ok = !is_wp_error($info) && wp_remote_retrieve_response_code($info) === 200;
+		if ($ok) {
+			$meta = json_decode(wp_remote_retrieve_body($info), true);
+			echo '<p><strong>Name:</strong> ' . esc_html($meta['full_name']) . '</p>';
+			echo '<p><strong>Default branch:</strong> ' . esc_html($meta['default_branch']) . '</p>';
+			echo '<p><a class="button button-primary" target="_blank" href="https://github.com/' . esc_attr($repo) . '">Open Repository</a></p>';
+		} else {
+			echo '<p><em>Unable to load repository metadata.</em></p>';
+		}
+		tmon_admin_safe_card_close();
+
+		tmon_admin_safe_card_open('Latest Versions');
+		$releases = wp_remote_get($api_base . '/releases', array('timeout' => 20, 'headers' => array('User-Agent' => 'TMON Admin')));
+		$r_ok = !is_wp_error($releases) && wp_remote_retrieve_response_code($releases) === 200;
+		if ($r_ok) {
+			$list = json_decode(wp_remote_retrieve_body($releases), true);
+			if (is_array($list) && !empty($list)) {
+				echo '<table class="widefat striped"><thead><tr><th>Tag</th><th>Name</th><th>Published</th><th>Assets</th></tr></thead><tbody>';
+				foreach ($list as $rel) {
+					$assets = array();
+					if (!empty($rel['assets'])) {
+						foreach ($rel['assets'] as $a) {
+							$assets[] = '<a target="_blank" href="' . esc_url($a['browser_download_url']) . '">' . esc_html($a['name']) . '</a>';
+						}
+					}
+					echo '<tr>';
+					echo '<td>' . esc_html($rel['tag_name']) . '</td>';
+					echo '<td>' . esc_html($rel['name']) . '</td>';
+					echo '<td>' . esc_html(isset($rel['published_at']) ? $rel['published_at'] : '') . '</td>';
+					echo '<td>' . implode(' | ', $assets) . '</td>';
+					echo '</tr>';
+				}
+				echo '</tbody></table>';
+			} else {
+				echo '<p><em>No releases found.</em></p>';
+			}
+		} else {
+			echo '<p><em>Unable to fetch releases.</em></p>';
+		}
+		tmon_admin_safe_card_close();
+
+		tmon_admin_safe_card_open('Documentation');
+		$readme_url = $base_url . 'README.md';
+		$readme = wp_remote_get($readme_url, array('timeout' => 15, 'headers' => array('User-Agent' => 'TMON Admin')));
+		if (!is_wp_error($readme) && wp_remote_retrieve_response_code($readme) === 200) {
+			$md = wp_remote_retrieve_body($readme);
+			echo '<p><a class="button" target="_blank" href="' . esc_url($readme_url) . '">Open README</a></p>';
+			echo '<pre style="max-height:300px;overflow:auto;white-space:pre-wrap;">' . esc_html($md) . '</pre>';
+		} else {
+			echo '<p><em>README not available.</em></p>';
+		}
+		$changes_url = $base_url . 'CHANGELOG.md';
+		echo '<p><a class="button" target="_blank" href="' . esc_url($changes_url) . '">Open CHANGELOG</a></p>';
+		tmon_admin_safe_card_close();
+
+		echo '</div>';
+	}
+}
+
+// Harden existing pages against missing dependencies
+if (!function_exists('tmon_admin_notifications_page')) {
+	function tmon_admin_notifications_page() {
+		if (!current_user_can('manage_options')) wp_die('Forbidden');
+		echo '<div class="wrap"><h1>Notifications</h1>';
+		tmon_admin_safe_card_open('Status');
+		echo '<p><em>If you see this, the page is loading. Further features require includes/notifications.php.</em></p>';
+		tmon_admin_safe_card_close();
+		echo '</div>';
+	}
+}
+if (!function_exists('tmon_admin_ota_page')) {
+	function tmon_admin_ota_page() {
+		if (!current_user_can('manage_options')) wp_die('Forbidden');
+		echo '<div class="wrap"><h1>OTA Jobs</h1>';
+		tmon_admin_safe_card_open('Status');
+		echo '<p><em>Page loaded. Ensure includes/ota.php supplies job listings.</em></p>';
+		tmon_admin_safe_card_close();
+		echo '</div>';
+	}
+}
+if (!function_exists('tmon_admin_files_page')) {
+	function tmon_admin_files_page() {
+		if (!current_user_can('manage_options')) wp_die('Forbidden');
+		echo '<div class="wrap"><h1>Files</h1>';
+		tmon_admin_safe_card_open('Status');
+		echo '<p><em>Page loaded. Ensure includes/files.php provides handlers.</em></p>';
+		tmon_admin_safe_card_close();
+		echo '</div>';
+	}
+}
+if (!function_exists('tmon_admin_groups_page')) {
+	function tmon_admin_groups_page() {
+		if (!current_user_can('manage_options')) wp_die('Forbidden');
+		echo '<div class="wrap"><h1>Groups</h1>';
+		tmon_admin_safe_card_open('Status');
+		echo '<p><em>Page loaded. Ensure includes/groups.php provides content.</em></p>';
+		tmon_admin_safe_card_close();
+		echo '</div>';
+	}
+}
+if (!function_exists('tmon_admin_pairings_page')) {
+	function tmon_admin_pairings_page() {
+		if (!current_user_can('manage_options')) wp_die('Forbidden');
+		echo '<div class="wrap"><h1>UC Pairings</h1>';
+		tmon_admin_safe_card_open('Status');
+		echo '<p><em>Page loaded. Ensure pairings data is configured.</em></p>';
+		tmon_admin_safe_card_close();
+		echo '</div>';
+	}
+}
+
+// Wrap provisioning history pages to avoid fatal on missing data
+if (!function_exists('tmon_admin_provisioning_history_page')) {
+	function tmon_admin_provisioning_history_page() {
+		if (!current_user_can('manage_options')) wp_die('Forbidden');
+		echo '<div class="wrap"><h1>Provisioning History</h1>';
+		tmon_admin_safe_card_open('Recent Activity');
+		$history = get_option('tmon_admin_provision_history', []);
+		if (is_array($history) && !empty($history)) {
+			echo '<table class="widefat striped"><thead><tr><th>Time</th><th>User</th><th>Unit</th><th>Machine</th><th>Action</th></tr></thead><tbody>';
+			foreach (array_reverse($history) as $h) {
+				echo '<tr><td>' . esc_html($h['ts'] ?? '') . '</td><td>' . esc_html($h['user'] ?? '') . '</td><td>' . esc_html($h['unit_id'] ?? '') . '</td><td>' . esc_html($h['machine_id'] ?? '') . '</td><td>' . esc_html($h['action'] ?? '') . '</td></tr>';
+			}
+			echo '</tbody></table>';
+		} else {
+			echo '<p><em>No history recorded.</em></p>';
+		}
+		tmon_admin_safe_card_close();
+		echo '</div>';
+	}
+}
+
+// Audit hook examples (lightweight)
+add_action('update_option_tmon_admin_repo', function ($old, $new) {
+	tmon_admin_audit_log('repo_update', 'firmware', array('extra' => array('old' => $old, 'new' => $new)));
+}, 10, 2);
+
 // NOTE: All centralized AJAX handlers are available in includes/ajax-handlers.php.
 // Avoid duplicating add_action closures for AJAX handlers; they are defined centrally.
 // If duplicates still appear in this file, they are skipped by the guard below.

@@ -181,11 +181,10 @@ function tmon_uc_provisioning_page() {
 
 	$devices = uc_devices_get_assigned();
 	$unassigned = uc_devices_get_unassigned();
+
 	if (empty($devices) && empty($unassigned)) {
-		// Try Admin hub refresh first
-		$ref = uc_devices_refresh_from_admin();
-		if (empty($ref)) {
-			// Fallback: local mirror table (if present)
+		$hub_result = uc_devices_refresh_from_admin();
+		if (empty($hub_result)) {
 			uc_devices_refresh_from_local_mirror();
 		}
 		$devices = uc_devices_get_assigned();
@@ -193,6 +192,12 @@ function tmon_uc_provisioning_page() {
 	}
 
 	echo '<div class="wrap"><h1>' . esc_html__('Provisioned Devices', 'tmon') . '</h1>';
+	// If still empty, render helpful context rather than 404/critical
+	if (empty($devices) && empty($unassigned)) {
+		echo '<div class="card" style="padding:12px;"><p><em>Provisioning table not found locally, and Hub fetch returned no results. Ensure TMON Admin is reachable and paired.</em></p>';
+		echo '<p>Check Unit Connector Settings for <strong>TMON Admin Hub URL</strong> and <strong>Shared Key</strong>, then click Refresh.</p></div>';
+	}
+
 	settings_errors('tmon_uc');
 
 	echo '<form method="post" style="margin-bottom:12px;">';

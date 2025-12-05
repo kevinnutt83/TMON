@@ -69,3 +69,51 @@ function tmon_uc_queue_custom_code_for_devices($code, $devices = null) {
         ]);
     }
 }
+if (!function_exists('tmon_uc_custom_code_page')) {
+	function tmon_uc_custom_code_page() {
+		if (!current_user_can('manage_options')) wp_die('Forbidden');
+		echo '<div class="wrap"><h1>TMON UC Custom Code</h1>';
+		echo '<div class="card" style="padding:12px;">';
+		echo '<h2 style="margin-top:0;">Instructions</h2>';
+		echo '<p>Use this page to stage device-specific custom variables and function calls.</p>';
+		echo '<ul>';
+		echo '<li><strong>Custom Variables</strong>: Send a key and value via Commands → Set Variable. Devices persist supported keys to their settings files.</li>';
+		echo '<li><strong>Custom Functions</strong>: Use Commands → Run Function, provide function name defined in device firmware (tmon.py) and optional JSON args.</li>';
+		echo '<li><strong>Firmware Updates</strong>: Use Commands → Firmware Update with a version tag; devices run OTA check and apply.</li>';
+		echo '</ul>';
+		echo '<p>All changes are audited in TMON Admin. Ensure your Unit Connector is paired with the Admin hub and the shared key is valid.</p>';
+		echo '</div>';
+    echo '<p><a class="button" href="post-new.php?post_type=tmon_custom_code">Add New Custom Code</a></p>';
+    // List custom code posts
+    $args = [
+        'post_type' => 'tmon_custom_code',
+        'posts_per_page' => 20,
+        'post_status' => 'publish',
+    ];
+    $posts = get_posts($args);
+    if ($posts) {
+        echo '<table class="widefat"><thead><tr><th>Title</th><th>Devices</th><th>Schedule</th><th>Action</th></tr></thead><tbody>';
+        foreach ($posts as $post) {
+            $devices = get_post_meta($post->ID, 'tmon_devices', true) ?: 'All';
+            $schedule = get_post_meta($post->ID, 'tmon_schedule', true) ?: 'On Demand';
+            echo '<tr>';
+            echo '<td>' . esc_html($post->post_title) . '</td>';
+            echo '<td>' . esc_html(is_array($devices) ? implode(", ", $devices) : $devices) . '</td>';
+            echo '<td>' . esc_html($schedule) . '</td>';
+            echo '<td><form method="post"><input type="hidden" name="tmon_run_code_id" value="' . esc_attr($post->ID) . '"><button class="button">Send to Devices</button></form></td>';
+            echo '</tr>';
+        }
+        echo '</tbody></table>';
+    } else {
+        echo '<p>No custom code found.</p>';
+    }
+    // Handle send to devices
+    if (isset($_POST['tmon_run_code_id'])) {
+        $post_id = intval($_POST['tmon_run_code_id']);
+        $code = get_post_field('post_content', $post_id);
+        $devices = get_post_meta($post_id, 'tmon_devices', true);
+        tmon_uc_queue_custom_code_for_devices($code, $devices);
+        echo '<div class="updated"><p>Custom code sent to devices.</p></div>';
+    }
+    echo '</div>';
+}
