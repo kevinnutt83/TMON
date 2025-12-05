@@ -55,56 +55,38 @@
 ## Updated Next Actions (Scope-aligned)
 
 Firmware (Micropython)
-- [x] Restore background scheduler and persisted URL loader (utils.start_background_tasks, load_persisted_wordpress_api_url).
-- [x] Dedicated LoRa loop; configurable interval (LORA_LOOP_INTERVAL_S).
-- [x] OLED guards with ENABLE_OLED.
-- [x] WiFi node role: enable field-data send and command polling like base.
-- [ ] First-boot OTA: verify against GitHub manifest; apply safely; reboot; audit to Admin.
-- [ ] Confirm applied provisioning to Admin (optional per-device token/HMAC).
-- [ ] Suspension: halt sampling/LoRa/commands while allowing check-ins; persist flag.
-- [ ] Frost/Heat watch: integrate tmon.py triggers on base; increase LoRa cadence during alerts.
-- [ ] Base aggregates remote field data into local field_data.log; UC differentiates base vs remote records.
+- [x] Dedicated LoRa loop; disabled for wifi role.
+- [x] Gate field-data send until URL present; command poll continues post-provision.
+- [x] Persist NODE_TYPE and gate tasks until fully provisioned.
+- [ ] Base <-> Remote LoRa command/data envelope: HMAC + replay protection; payload encryption optional.
+- [ ] Implement custom function runner and variable setter dispatcher on device (mapped from wprest.poll_device_commands payloads).
 
-LoRa
-- [x] Enforce LORA_NETWORK_NAME/PASSWORD for secure network.
-- [x] Base assigns per-remote next sync epoch; collision avoidance window (LORA_SYNC_WINDOW).
-- [x] Remotes persist next sync across reboots (remote_next_sync.json).
-- [ ] Optional HMAC signing + replay protection per-device (LORA_HMAC_*).
-- [ ] Optional payload encryption (ChaCha20); provision secrets.
-- [ ] Persist last_error and recovery thresholds; re-init strategy.
+Admin (TMON Admin plugin)
+- [x] Restore Audit page & logger.
+- [x] Add UC endpoints: /uc/devices, /uc/reprovision, /uc/command.
+- [ ] Wire audit logs into all key flows (provision save, queue enqueue, UC pushes, firmware jobs).
+- [ ] Ensure assigned_to_uc flag updates when UC claims devices (mirror back via endpoint or scheduled sync).
 
-Provisioning lifecycle
-- [x] First-boot Admin check-in; persist UNIT_ID & WORDPRESS_API_URL; guarded soft reset.
-- [ ] Staged settings apply snapshot (prev/applied) and device confirm to Admin endpoint.
-
-Unit Connector integration
-- [ ] Periodic UC check-in after provisioning; machine_id fetch; appear only when assigned/approved.
-- [ ] Batched field-data posts include unit_id/machine_id/role; UC normalization of base vs remote.
-
-OLED/UI
-- [ ] Status page: temp F (if sampling), WiFi/LoRa RSSI bars, clock, UNIT_ID/name; relay grid when enabled.
-- [ ] Optimize display updates; debounce messages.
-
-Security
-- [ ] Admin suspend/enable honored; persist flag; reflected in UC/Admin UIs.
-- [ ] Cross-site tokens verified: X-TMON-READ, X-TMON-HUB, X-TMON-ADMIN, X-TMON-CONFIRM.
+Unit Connector
+- [x] Mirror table ensure + refresh both assigned/unassigned devices.
+- [x] Reprovision staging & push to Admin hub.
+- [x] Commands page: set_var, run_func, firmware_update.
+- [ ] Widgets/graphs for device data; relay controls; dashboards polishing.
+- [ ] Shortcodes for per-device and grouped displays with settings management.
 
 Docs/QA
-- [ ] README/CHANGELOG updates for loops, provisioning, UC pairing, LoRa schedule, OLED pages.
-- [ ] Tests for provisioning lifecycle and LoRa sync.
-
----
+- [x] README overview updated.
+- [ ] Screenshots and data flow graphics.
+- [ ] End-to-end tests: first-boot, reprovision, command dispatch, LoRa relay.
 
 ## Testing Log
-- [ ] Retest device registration/provisioning (Admin→Device→UC).
-- [ ] Retest purge functions.
-- [ ] Retest UC filtering (assigned devices only).
-- [ ] Retest UI/UX improvements.
-
----
+- [ ] Verify UC refresh populates devices after Admin provisioning handoff.
+- [ ] Send set_var (e.g., ENABLE_OLED) and confirm device applies.
+- [ ] Send run_func (e.g., tmon.py frost/heat handler) to base and confirm remote relays.
 
 ## Commit Log
-- [ ] Commit per feature; tag release after QA.
+- [ ] Commit Admin UC endpoints, UC provisioning/commands pages.
+- [ ] Tag minor release after QA.
 
 # TODO
 

@@ -113,6 +113,26 @@ MIT License – see `LICENSE` for full text.
 ---
 For detailed configuration keys, see the forthcoming `docs/FIRMWARE-SETTINGS.md`.
 
+# TMON System Overview
+
+- Devices: wifi, base, remote. Wifi connects directly; base connects and manages LoRa; remote uses LoRa via base.
+- Firmware loops:
+  - LoRa dedicated loop (disabled for wifi role).
+  - Sampling loop (temperature/humidity/pressure).
+  - Field data send loop (batched, URL-gated).
+  - Command poll loop (WP REST via Unit Connector).
+- Provisioning lifecycle:
+  - First boot Admin check-in: MACHINE_ID, optional UNIT_ID, staged settings.
+  - Admin and UC can reprovision: staged settings queued; device applies and soft-resets once.
+  - WORDPRESS_API_URL and NODE_TYPE persisted.
+- Commands:
+  - UC/ Admin send commands: set_var, run_func, firmware_update.
+  - Base nodes relay commands to remote via LoRa; confirmations and data are relayed back.
+- OTA:
+  - Early boot check; periodic version/apply loops.
+
+See tmon-admin/includes/api-uc.php for UC endpoints and unit-connector/includes/* for UC pages.
+
 ## Provisioning Improvements (v0.1.4)
 - Admin Save & Provision now:
   - Marks the provisioned_devices.settings_staged flag = 1.

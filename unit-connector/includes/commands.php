@@ -1,0 +1,94 @@
+<?php
+if (!defined('ABSPATH')) { exit; }
+
+// Register menu
+add_action('admin_menu', function () {
+	add_submenu_page(
+		'tmon-uc',
+		__('TMON UC Commands', 'tmon'),
+		__('Commands', 'tmon'),
+		'manage_options',
+		'tmon-uc-commands',
+		'tmon_uc_commands_page'
+	);
+});
+
+function tmon_uc_send_command($unit_id, $machine_id, $type, $payload) {
+	$hub = get_option('tmon_admin_hub_url');
+	$key = get_option('tmon_uc_shared_key');
+	if (!$hub || !$key) { return new WP_Error('no_hub', 'Hub not configured'); }
+	$url = trailingslashit($hub) . 'wp-json/tmon-admin/v1/uc/command';
+	$args = array(
+		'headers' => array('X-TMON-HUB' => $key, 'Content-Type' => 'application/json'),
+		'body' => wp_json_encode(array(
+			'unit_id' => $unit_id,
+			'machine_id' => $machine_id,
+			'type' => $type,
+			'data' => $payload,
+		)),
+		'timeout' => 20,
+		'method' => 'POST',
+	);
+	$resp = wp_remote_post($url, $args);
+	if (is_wp_error($resp)) { return $resp; }
+	if (wp_remote_retrieve_response_code($resp) !== 200) {
+		return new WP_Error('cmd_fail', 'Command dispatch failed');
+	}
+	return true;
+}
+
+function tmon_uc_commands_page() {
+	if (!current_user_can('manage_options')) { wp_die(__('Insufficient permissions', 'tmon')); }
+	$msgs = array();
+
+	if (isset($_POST['tmon_uc_send_cmd']) && check_admin_referer('tmon_uc_cmd')) {
+		$unit = sanitize_text_field($_POST['unit_id']);
+		$machine = sanitize_text_field($_POST['machine_id']);
+		$type = sanitize_text_field($_POST['cmd_type']);
+		$payload = array();
+		switch ($type) {
+			case 'set_var':
+				$payload = array('key' => sanitize_text_field($_POST['var_key']), 'value' => wp_unslash($_POST['var_value']));
+				break;
+			case 'run_func':
+				$payload = array('name' => sanitize_text_field($_POST['func_name']), 'args' => wp_unslash($_POST['func_args']));
+				break;
+			case 'firmware_update':
+				$payload = array('version' => sanitize_text_field($_POST['fw_version']));
+				break;
+		}
+		$res = tmon_uc_send_command($unit, $machine, $type, $payload);
+		if (is_wp_error($res)) {
+			$msgs[] = array('type' => 'error', 'text' => esc_html($res->get_error_message()));
+		} else {
+			$msgs[] = array('type' => 'updated', 'text' => __('Command dispatched to Admin hub.', 'tmon'));
+		}
+	}
+
+	echo '<div class="wrap"><h1>' . esc_html__('TMON UC Commands', 'tmon') . '</h1>';
+	foreach ($msgs as $m) {
+		echo '<div class="' . esc_attr($m['type']) . ' notice is-dismissible"><p>' . esc_html($m['text']) . '</p></div>';
+	}
+	echo '<div class="card" style="padding:12px;">';
+	echo '<h2>' . esc_html__('Send Command to Device', 'tmon') . '</h2>';
+	echo '<form method="post">';
+	wp_nonce_field('tmon_uc_cmd');
+	echo '<p><label>UNIT_ID <input type="text" name="unit_id" required /></label> ';
+	echo '<label>MACHINE_ID <input type="text" name="machine_id" required /></label></p>';
+	echo '<p><label>Type ';
+	echo '<select name="cmd_type">';
+	echo '<option value="set_var">Set Variable</option>';
+	echo '<option value="run_func">Run Function</option>';
+	echo '<option value="firmware_update">Firmware Update</option>';
+	echo '</select></label></p>';
+	echo '<div id="cmd-fields">';
+	echo '<p><label>Variable Key <input type="text" name="var_key" /></label> ';
+	echo '<label>Variable Value <input type="text" name="var_value" /></label></p>';
+	echo '<p><label>Function Name <input type="text" name="func_name" /></label> ';
+	echo '<label>Function Args (JSON) <input type="text" name="func_args" /></label></p>';
+	echo '<p><label>Firmware Version <input type="text" name="fw_version" /></label></p>';
+	echo '</div>';
+	submit_button(__('Send Command', 'tmon'), 'primary', 'tmon_uc_send_cmd', false);
+	echo '</form></div>';
+	echo '</div>';
+}

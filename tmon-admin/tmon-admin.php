@@ -49,6 +49,7 @@ if (!function_exists('tmon_admin_include_files')) {
 		require_once TMON_ADMIN_PATH . 'includes/provisioning.php';
 		require_once TMON_ADMIN_PATH . 'includes/ai.php';
 		require_once TMON_ADMIN_PATH . 'includes/audit.php';
+		require_once TMON_ADMIN_PATH . 'includes/api-uc.php'; // NEW: UC handoff & command endpoints
 		require_once TMON_ADMIN_PATH . 'includes/notifications.php';
 		require_once TMON_ADMIN_PATH . 'includes/ota.php';
 		require_once TMON_ADMIN_PATH . 'includes/files.php';
