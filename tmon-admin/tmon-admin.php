@@ -308,19 +308,25 @@ if (!function_exists('tmon_admin_pairings_page')) {
 		echo '<h2 style="margin-top:0;">Registered Unit Connectors</h2>';
 
 		if (empty($pairings)) {
-			echo '<p><em>No Unit Connectors paired yet. Use the UC pairing flow to generate a shared key.</em></p>';
+			echo '<p><em>No Unit Connectors paired yet.</em></p>';
 		} else {
 			echo '<table class="widefat striped"><thead><tr>';
-			echo '<th>UC URL</th><th>Shared Key</th><th>Created</th><th>Status</th>';
+			echo '<th>Key ID</th><th>UC URL</th><th>Site Name</th><th>Shared Key</th><th>Created</th><th>Last Verified</th><th>Status</th>';
 			echo '</tr></thead><tbody>';
-			foreach ($pairings as $uc_url => $info) {
+			foreach ($pairings as $key_id => $info) {
 				$key = isset($info['key']) ? $info['key'] : '';
 				$created = isset($info['created']) ? $info['created'] : '';
 				$status = !empty($info['active']) ? 'Active' : 'Inactive';
+				$uc_url = isset($info['uc_url']) ? $info['uc_url'] : $key_id;
+				$lastv  = isset($info['last_verified']) ? $info['last_verified'] : '';
+				$site_name = isset($info['site_name']) ? $info['site_name'] : '';
 				echo '<tr>';
+				echo '<td>' . esc_html($key_id) . '</td>';
 				echo '<td>' . esc_html($uc_url) . '</td>';
+				echo '<td>' . esc_html($site_name) . '</td>';
 				echo '<td><code>' . esc_html($key) . '</code></td>';
 				echo '<td>' . esc_html($created) . '</td>';
+				echo '<td>' . esc_html($lastv) . '</td>';
 				echo '<td>' . esc_html($status) . '</td>';
 				echo '</tr>';
 			}
@@ -439,6 +445,23 @@ if (!function_exists('tmon_admin_normalize_key')) {
 	}
 }
 
+// Normalize UC URL to a canonical key (host[:port]) to avoid duplicates from http/https/trailing slash variants.
+if (!function_exists('tmon_admin_uc_normalize_url')) {
+	function tmon_admin_uc_normalize_url($uc_url) {
+		$u = trim($uc_url);
+		if (!$u) return '';
+		// Ensure scheme for parse_url
+		if (!preg_match('#^https?://#i', $u)) {
+			$u = 'https://' . $u;
+		}
+		$parts = parse_url($u);
+		if (!$parts || empty($parts['host'])) return '';
+		$host = strtolower($parts['host']);
+		$port = isset($parts['port']) ? intval($parts['port']) : null;
+		return $port ? ($host . ':' . $port) : $host;
+	}
+}
+
 // Ensure provisioning page callbacks exist so submenu callbacks are valid
 if (!function_exists('tmon_admin_provisioned_devices_page')) {
 	function tmon_admin_provisioned_devices_page() {
@@ -553,16 +576,18 @@ if (!function_exists('tmon_admin_hmac_valid')) {
  * Existing includes/api-uc.php reads get_option('tmon_uc_shared_key'); resolve per-UC on the fly.
  */
 add_filter('pre_option_tmon_uc_shared_key', function ($pre) {
-	$uc = '';
+	$uc_raw = '';
 	if (isset($_SERVER['HTTP_X_TMON_UC'])) {
-		$uc = esc_url_raw($_SERVER['HTTP_X_TMON_UC']);
+		$uc_raw = wp_unslash($_SERVER['HTTP_X_TMON_UC']);
 	} elseif (!empty($_GET['uc_url'])) {
-		$uc = esc_url_raw(wp_unslash($_GET['uc_url']));
+		$uc_raw = wp_unslash($_GET['uc_url']);
 	}
-	if (!$uc) { return $pre; }
+	if (!$uc_raw) { return $pre; }
+	$key_id = tmon_admin_uc_normalize_url($uc_raw);
+	if (!$key_id) { return $pre; }
 	$pair = tmon_admin_uc_pairings_get();
-	if (!empty($pair[$uc]['active']) && !empty($pair[$uc]['key'])) {
-		return $pair[$uc]['key'];
+	if (!empty($pair[$key_id]['active']) && !empty($pair[$key_id]['key'])) {
+		return $pair[$key_id]['key'];
 	}
 	return $pre;
 }, 10, 1);
@@ -576,22 +601,26 @@ add_action('rest_api_init', function () {
 	register_rest_route('tmon-admin/v1', '/uc/pair', array(
 		'methods'  => 'POST',
 		'callback' => function ($request) {
-			$uc_url = esc_url_raw($request->get_param('uc_url'));
-			if (!$uc_url) {
+			$uc_url_raw = $request->get_param('uc_url');
+			$uc_url = esc_url_raw($uc_url_raw);
+			$key_id = tmon_admin_uc_normalize_url($uc_url ?: $uc_url_raw);
+			if (!$key_id) {
 				return new WP_Error('bad_request', 'uc_url required', array('status' => 400));
 			}
 			$pair = tmon_admin_uc_pairings_get();
-			// Issue or rotate key
+			// Issue or rotate key; keep existing metadata if present
 			$key = tmon_admin_uc_key_generate();
-			$pair[$uc_url] = array(
-				'key'     => $key,
-				'created' => current_time('mysql'),
-				'active'  => 1,
+			$pair[$key_id] = array(
+				'key'       => $key,
+				'created'   => current_time('mysql'),
+				'active'    => 1,
+				'uc_url'    => $uc_url ?: $key_id,
+				'site_name' => sanitize_text_field($request->get_param('site_name') ?: ''),
+				'last_verified' => null,
 			);
 			tmon_admin_uc_pairings_set($pair);
-			// Optional audit
 			if (function_exists('tmon_admin_audit_log')) {
-				tmon_admin_audit_log('uc_pair_issue', 'pair', array('extra' => array('uc' => $uc_url)));
+				tmon_admin_audit_log('uc_pair_issue', 'pair', array('extra' => array('uc' => $pair[$key_id]['uc_url'])));
 			}
 			return rest_ensure_response(array(
 				'status' => 'ok',
@@ -605,25 +634,55 @@ add_action('rest_api_init', function () {
 	register_rest_route('tmon-admin/v1', '/uc/verify', array(
 		'methods'  => 'POST',
 		'callback' => function ($request) {
-			$uc_url = esc_url_raw($request->get_param('uc_url'));
+			$uc_url_raw = $request->get_param('uc_url');
+			$uc_url = esc_url_raw($uc_url_raw);
+			$key_id = tmon_admin_uc_normalize_url($uc_url ?: $uc_url_raw);
 			$nonce  = sanitize_text_field($request->get_param('nonce'));
 			$sig    = sanitize_text_field($request->get_param('signature'));
-			if (!$uc_url || !$nonce || !$sig) {
+			if (!$key_id || !$nonce || !$sig) {
 				return new WP_Error('bad_request', 'uc_url, nonce, signature required', array('status' => 400));
 			}
 			$pair = tmon_admin_uc_pairings_get();
-			if (empty($pair[$uc_url]['active']) || empty($pair[$uc_url]['key'])) {
+			if (empty($pair[$key_id]['active']) || empty($pair[$key_id]['key'])) {
 				return new WP_Error('not_paired', 'UC not paired', array('status' => 403));
 			}
-			$msg = $uc_url . '|' . $nonce;
-			if (!tmon_admin_hmac_valid($msg, $sig, $pair[$uc_url]['key'])) {
+			$msg = ($pair[$key_id]['uc_url'] ?: $key_id) . '|' . $nonce;
+			if (!tmon_admin_hmac_valid($msg, $sig, $pair[$key_id]['key'])) {
 				return new WP_Error('bad_sig', 'Invalid signature', array('status' => 403));
 			}
-			// Optional audit
+			// Update metadata
+			$pair[$key_id]['last_verified'] = current_time('mysql');
+			if ($uc_url) { $pair[$key_id]['uc_url'] = $uc_url; }
+			if ($request->get_param('site_name')) {
+				$pair[$key_id]['site_name'] = sanitize_text_field($request->get_param('site_name'));
+			}
+			tmon_admin_uc_pairings_set($pair);
 			if (function_exists('tmon_admin_audit_log')) {
-				tmon_admin_audit_log('uc_pair_verify', 'pair', array('extra' => array('uc' => $uc_url)));
+				tmon_admin_audit_log('uc_pair_verify', 'pair', array('extra' => array('uc' => $pair[$key_id]['uc_url'])));
 			}
 			return rest_ensure_response(array('status' => 'ok'));
+		},
+		'permission_callback' => '__return_true',
+	));
+
+	// List pairings endpoint to help UC and Admin UI
+	register_rest_route('tmon-admin/v1', '/uc/pairings', array(
+		'methods'  => 'GET',
+		'callback' => function () {
+			$pair = tmon_admin_uc_pairings_get();
+			$out = array();
+			foreach ($pair as $key_id => $info) {
+				$out[] = array(
+					'key_id' => $key_id,
+					'uc_url' => $info['uc_url'] ?? $key_id,
+					'shared_key' => $info['key'] ?? '',
+					'active' => !empty($info['active']) ? 1 : 0,
+					'created' => $info['created'] ?? '',
+					'last_verified' => $info['last_verified'] ?? '',
+					'site_name' => $info['site_name'] ?? '',
+				);
+			}
+			return rest_ensure_response($out);
 		},
 		'permission_callback' => '__return_true',
 	));
