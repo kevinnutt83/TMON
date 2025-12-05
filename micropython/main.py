@@ -440,11 +440,9 @@ async def startup():
     # Dedicated LoRa and sampling loops
     lora_interval = int(getattr(settings, 'LORA_LOOP_INTERVAL_S', 1))
     node_role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
-
-    # WiFi nodes: do not run LoRa; Base/Remote: run LoRa
-    if node_role in ('base', 'remote'):
+    # Wifi nodes: do not run LoRa task (per scope)
+    if node_role != 'wifi':
         tm.add_task(lora_comm_task, 'lora', lora_interval)
-
     tm.add_task(sample_task, 'sample', 60)
 
     # Base and WiFi nodes run field-data send and command polling only when URL available
