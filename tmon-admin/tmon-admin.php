@@ -141,6 +141,18 @@ if (!has_action('admin_menu', 'tmon_admin_menu')) {
 	}
 }
 
+// Ensure schema is present before any UI/REST interaction
+add_action('admin_init', function () {
+	if (function_exists('tmon_admin_install_schema')) {
+		tmon_admin_install_schema();
+	}
+});
+add_action('rest_api_init', function () {
+	if (function_exists('tmon_admin_install_schema')) {
+		tmon_admin_install_schema();
+	}
+});
+
 // NOTE: All centralized AJAX handlers are available in includes/ajax-handlers.php.
 // Avoid duplicating add_action closures for AJAX handlers; they are defined centrally.
 // If duplicates still appear in this file, they are skipped by the guard below.
