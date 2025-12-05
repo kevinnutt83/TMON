@@ -850,6 +850,29 @@ def provisioning_log(msg):
     except Exception:
         pass
 
+# Persistent NODE_TYPE (role) file
+NODE_TYPE_FILE = getattr(settings, 'NODE_TYPE_FILE', settings.LOG_DIR + '/node_type.txt')
+
+def persist_node_type(role: str):
+    try:
+        if not role:
+            return
+        checkLogDirectory()
+        write_text(NODE_TYPE_FILE, str(role).strip())
+    except Exception:
+        pass
+
+def load_persisted_node_type():
+    try:
+        checkLogDirectory()
+        val = read_text(NODE_TYPE_FILE, None)
+        if not val:
+            return None
+        val = val.strip()
+        return val if val else None
+    except Exception:
+        return None
+
 # --- RESTORED: periodic provisioning poll (was removed) ---
 _provision_reboot_guard_written = False
 
@@ -934,6 +957,10 @@ async def periodic_provision_check():
                                 settings.NODE_TYPE = role_val
                             except Exception:
                                 pass
+                            try:
+                                persist_node_type(role_val)
+                            except Exception:
+                                pass
                         if plan_val:
                             try:
                                 settings.PLAN = plan_val
@@ -1016,5 +1043,7 @@ __all__ = [
     'periodic_field_data_send',
     'periodic_provision_check',
     'get_machine_id',
-    'start_background_tasks'
+    'start_background_tasks',
+    'persist_node_type',
+    'load_persisted_node_type'
 ]

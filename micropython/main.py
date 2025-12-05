@@ -63,6 +63,27 @@ try:
 except Exception:
     pass
 
+# NEW: simple provisioned check (flag existence)
+def is_provisioned():
+    try:
+        flag = getattr(settings, 'PROVISIONED_FLAG_FILE', '/logs/provisioned.flag')
+        try:
+            os.stat(flag)
+            return True
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+# Load persisted NODE_TYPE if available before starting tasks
+try:
+    from utils import load_persisted_node_type
+    _nt = load_persisted_node_type()
+    if _nt:
+        settings.NODE_TYPE = _nt
+except Exception:
+    pass
+
 def get_script_runtime():
     now = time.ticks_ms()
     return (now - script_start_time) // 1000
@@ -100,6 +121,10 @@ async def lora_comm_task():
     global sdata
     from utils import led_status_flash
     while True:
+        # Block LoRa loop until provisioned to avoid premature radio churn
+        if not is_provisioned():
+            await asyncio.sleep(1)
+            continue
         loop_start_time = time.ticks_ms()
         led_status_flash('INFO')
         result = None
@@ -141,6 +166,10 @@ import gc
 import machine
 
 async def sample_task():
+    # Skip entirely until provisioned (prevents flash churn and uploads)
+    if not is_provisioned():
+        await asyncio.sleep(1)
+        return
     loop_start_time = time.ticks_ms()
     from utils import led_status_flash
     led_status_flash('INFO')  # Always flash LED for info
@@ -172,6 +201,9 @@ async def sample_task():
 async def periodic_field_data_task():
     from utils import send_field_data_log
     while True:
+        if not is_provisioned():
+            await asyncio.sleep(2)
+            continue
         # Run send sequentially to avoid overlapping uploads (reduces memory pressure)
         try:
             if getattr(settings, 'DEVICE_SUSPENDED', False):
@@ -188,6 +220,9 @@ async def periodic_command_poll_task():
     except Exception:
         poll_device_commands = None
     while True:
+        if not is_provisioned():
+            await asyncio.sleep(2)
+            continue
         if poll_device_commands and not getattr(settings, 'DEVICE_SUSPENDED', False):
             try:
                 await poll_device_commands()
@@ -371,6 +406,9 @@ async def periodic_uc_checkin_task():
     interval = int(getattr(settings, 'UC_CHECKIN_INTERVAL_S', 300))
     while True:
         try:
+            if not is_provisioned():
+                await asyncio.sleep(2)
+                continue
             wp = getattr(settings, 'WORDPRESS_API_URL', '')
             if wp and not getattr(settings, 'DEVICE_SUSPENDED', False):
                 if register_with_wp:
