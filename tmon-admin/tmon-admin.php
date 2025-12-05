@@ -740,3 +740,40 @@ if (!function_exists('tmon_admin_provisioning_activity_page')) {
 		echo '</div></div>';
 	}
 }
+
+// REST: Health check for Unit Connectors
+add_action('rest_api_init', function () {
+	register_rest_route('tmon-admin/v1', '/status', array(
+		'methods'  => 'GET',
+		'callback' => function () {
+			return rest_ensure_response(array(
+				'status' => 'ok',
+				'hub'    => get_site_url(),
+				'version'=> get_option('tmon_admin_version', 'unknown'),
+			));
+		},
+		'permission_callback' => '__return_true',
+	));
+});
+
+// CORS: allow UC origins, handle preflight, set JSON content-type
+add_action('rest_api_init', function () {
+	$origins = get_option('tmon_uc_allowed_origins', array(
+		'https://tmonsystems.com',
+	));
+	add_filter('rest_pre_serve_request', function ($served, $result, $request, $server) use ($origins) {
+		$origin = isset($_SERVER['HTTP_ORIGIN']) ? trim($_SERVER['HTTP_ORIGIN']) : '';
+		$allow  = in_array($origin, $origins, true) ? $origin : '*';
+		header('Access-Control-Allow-Origin: ' . $allow);
+		header('Access-Control-Allow-Credentials: true');
+		header('Access-Control-Allow-Headers: Content-Type, X-TMON-HUB, X-TMON-UC, Authorization');
+		header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+		header('Content-Type: application/json; charset=utf-8');
+		// Preflight
+		if ('OPTIONS' === $_SERVER['REQUEST_METHOD']) {
+			echo wp_json_encode(array('status' => 'ok'));
+			return true;
+		}
+		return $served;
+	}, 10, 4);
+});
