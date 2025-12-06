@@ -668,152 +668,101 @@ add_action('rest_api_init', function () {
 	));
 });
 
-// REST: Device poll hint — MicroPython can call this before/after posting telemetry to confirm it should poll UC for commands now.
+// Device check-in hint: MicroPython should poll UC and execute relay.py on relay_ctrl
 add_action('rest_api_init', function () {
-	register_rest_route('tmon-admin/v1', '/device/should-poll', array(
+	register_rest_route('tmon-admin/v1', '/device/poll-hint', array(
 		'methods'  => 'GET',
 		'callback' => function ($req) {
 			$unit_id = sanitize_text_field($req->get_param('unit_id'));
-			// Always recommend polling; optionally gate by last command timestamp in future.
-			if (function_exists('tmon_admin_debug')) tmon_admin_debug('device', 'should-poll', array('unit'=>$unit_id));
-			return rest_ensure_response(array('status'=>'ok','poll'=>true,'unit_id'=>$unit_id));
+			$hint = array(
+				'unit_id' => $unit_id,
+				'poll' => 'POST wp-json/tmon-uc/v1/device/commands { unit_id } → returns { commands: [ { id, command: "relay_ctrl", params } ] }',
+				'claim' => 'POST wp-json/tmon-uc/v1/device/command-claim { id, unit_id }',
+				'execute' => 'call relay.py toggle(relay, state, duration_s)',
+				'result' => 'POST wp-json/tmon-uc/v1/device/command-result { id, status: "done"|"error", result }',
+				'relay_ctrl.params' => array('relay'=>1, 'state'=>'on', 'duration_s'=>0),
+			);
+			if (function_exists('tmon_admin_debug')) { tmon_admin_debug('device', 'poll-hint', $hint); }
+			return rest_ensure_response(array('status' => 'ok', 'hint' => $hint));
 		},
 		'permission_callback' => '__return_true',
 	));
 });
 
-// REST: UC relay command test — forwards a normalized relay_ctrl to UC and returns UC’s response for debugging.
+// Relay test: simulate button click to send a normalized relay_ctrl command through UC
 add_action('rest_api_init', function () {
-	register_rest_route('tmon-admin/v1', '/uc/test-relay', array(
+	register_rest_route('tmon-admin/v1', '/uc/relay-test', array(
 		'methods'  => 'POST',
 		'callback' => function ($req) {
 			$uc_url  = esc_url_raw($req->get_param('uc_url'));
 			$unit_id = sanitize_text_field($req->get_param('unit_id'));
-			$relay   = intval($req->get_param('relay')) ?: 1;
-			$state   = strtolower(trim($req->get_param('state') ?: 'off'));
-			$dur     = intval($req->get_param('duration_s')) ?: 0;
-			if (!$uc_url || !$unit_id || !in_array($state, array('on','off'), true)) {
-				return new WP_Error('bad_request', 'uc_url, unit_id, state(on|off) required', array('status'=>400));
-			}
-			$key_id = function_exists('tmon_admin_uc_normalize_url') ? tmon_admin_uc_normalize_url($uc_url) : $uc_url;
-			$pair   = function_exists('tmon_admin_uc_pairings_get') ? tmon_admin_uc_pairings_get() : array();
-			if (empty($pair[$key_id]['active']) || empty($pair[$key_id]['key'])) { return new WP_Error('not_paired', 'UC not paired', array('status'=>403)); }
-			$shared_key = $pair[$key_id]['key'];
+			$relay   = intval($req->get_param('relay') ?: 1);
+			$state   = strtolower(trim((string)$req->get_param('state') ?: 'on'));
+			$dur     = intval($req->get_param('duration_s') ?: 0);
+			if (!$unit_id) return new WP_Error('bad_request', 'unit_id required', array('status'=>400));
+			if (!in_array($state, array('on','off'), true)) $state = 'off';
 
-			$payload = array(
-				'unit_id' => $unit_id,
-				'type'    => 'relay_ctrl',
-				'command' => 'relay_ctrl', // legacy
-				'data'    => array('relay'=>$relay,'state'=>$state,'duration_s'=>max(0,$dur)),
-				'params'  => array('relay'=>$relay,'state'=>$state,'duration_s'=>max(0,$dur)), // legacy
-			);
-			$endpoint = trailingslashit($uc_url) . 'wp-json/tmon-uc/v1/device/command';
-			$args = array(
-				'headers'=>array('Content-Type'=>'application/json','X-TMON-HUB'=>$shared_key,'X-TMON-UC'=>esc_url_raw($uc_url)),
-				'body'=>wp_json_encode($payload),
-				'timeout'=>15,'method'=>'POST',
-			);
-			if (function_exists('tmon_admin_debug')) tmon_admin_debug('rest', 'test-relay dispatch', array('endpoint'=>$endpoint,'payload'=>$payload));
-
-			$r = wp_remote_post($endpoint, $args);
-			if (is_wp_error($r)) return new WP_Error('uc_unreachable','UC unreachable',array('status'=>502,'error'=>$r->get_error_message()));
-			$code = wp_remote_retrieve_response_code($r);
-			$body = wp_remote_retrieve_body($r);
-			if ($code !== 200) return new WP_Error('uc_error','UC error',array('status'=>$code,'body'=>$body));
-
-			if (function_exists('tmon_admin_audit_log')) tmon_admin_audit_log('test_relay','uc',array('unit_id'=>$unit_id,'extra'=>array('uc'=>$uc_url,'relay'=>$relay,'state'=>$state)));
-
-			return rest_ensure_response(array('status'=>'ok','uc_response'=>json_decode($body,true)));
-		},
-		'permission_callback' => function () { return current_user_can('manage_options'); },
-	));
-});
-
-// Forward-command: accept JSON strings, normalize legacy keys, and audit malformed payloads
-add_action('rest_api_init', function () {
-	register_rest_route('tmon-admin/v1', '/uc/forward-command', array(
-		'methods'  => 'POST',
-		'callback' => function ($req) {
-			$uc_url   = esc_url_raw($req->get_param('uc_url'));
-			$unit_id  = sanitize_text_field($req->get_param('unit_id'));
-			$type     = sanitize_text_field($req->get_param('type'));
-			$data     = $req->get_param('data');
-			if (!$unit_id || !$type) return new WP_Error('bad_request','unit_id, type required',array('status'=>400));
-
-			// Resolve UC URL
+			// Resolve UC URL (same logic as forward-command)
 			if (!$uc_url) {
 				global $wpdb;
 				$tbl = $wpdb->prefix.'tmon_provisioned_devices';
-				$site_url = $wpdb->get_var($wpdb->prepare("SELECT site_url FROM {$tbl} WHERE unit_id=%s ORDER BY updated_at DESC LIMIT 1",$unit_id));
+				$site_url = $wpdb->get_var($wpdb->prepare("SELECT site_url FROM {$tbl} WHERE unit_id=%s ORDER BY updated_at DESC LIMIT 1", $unit_id));
 				if (!$site_url) {
 					$map = get_option('tmon_admin_device_sites', []);
 					if (is_array($map) && !empty($map[$unit_id])) $site_url = esc_url_raw($map[$unit_id]);
 				}
 				$uc_url = $site_url ?: $uc_url;
 			}
-			if (!$uc_url) return new WP_Error('bad_request','uc_url unresolved',array('status'=>400));
+			if (!$uc_url) return new WP_Error('bad_request', 'uc_url unresolved', array('status'=>400));
 
-			// Pairing
 			$key_id = function_exists('tmon_admin_uc_normalize_url') ? tmon_admin_uc_normalize_url($uc_url) : $uc_url;
 			$pair   = function_exists('tmon_admin_uc_pairings_get') ? tmon_admin_uc_pairings_get() : array();
-			if (empty($pair[$key_id]['active']) || empty($pair[$key_id]['key'])) return new WP_Error('not_paired','UC not paired',array('status'=>403));
+			if (empty($pair[$key_id]['active']) || empty($pair[$key_id]['key'])) return new WP_Error('not_paired', 'UC not paired', array('status'=>403));
 			$shared_key = $pair[$key_id]['key'];
 
-			// Parse payload if JSON string and also support legacy 'params'
-			if (!is_array($data)) {
-				$raw = $req->get_param('data');
-				$parsed = json_decode(is_string($raw)?$raw:'', true);
-				if (json_last_error()===JSON_ERROR_NONE && is_array($parsed)) { $data=$parsed; }
-				else {
-					// Try legacy 'params'
-					$legacy = $req->get_param('params');
-					$parsed2 = json_decode(is_string($legacy)?$legacy:'', true);
-					if (json_last_error()===JSON_ERROR_NONE && is_array($parsed2)) { $data=$parsed2; }
-					else {
-						$data = array();
-						if (function_exists('tmon_admin_debug')) tmon_admin_debug('rest','payload parse failed',array('data'=>$raw,'params'=>$legacy));
-						if (function_exists('tmon_admin_audit_log')) tmon_admin_audit_log('forward_payload_parse_fail','uc',array('unit_id'=>$unit_id,'extra'=>array('type'=>$type)));
-					}
-				}
-			}
-			// Normalize relay payload
-			if ($type==='relay_ctrl') {
-				$relay = isset($data['relay']) ? intval($data['relay']) : 1;
-				$state = isset($data['state']) ? strtolower(trim($data['state'])) : 'off';
-				if (!in_array($state,array('on','off'),true)) $state='off';
-				$duration_s = isset($data['duration_s']) ? intval($data['duration_s']) : 0;
-				$data = array('relay'=>max(1,$relay),'state'=>$state,'duration_s'=>max(0,$duration_s));
-			}
-			// Build legacy-compatible payload
-			$payload  = array('unit_id'=>$unit_id,'type'=>$type,'command'=>$type,'data'=>$data,'params'=>$data);
+			// Build normalized payload with legacy compatibility
+			$data = array('relay' => max(1, $relay), 'state' => $state, 'duration_s' => max(0, $dur));
+			$payload = array(
+				'unit_id' => $unit_id,
+				'type'    => 'relay_ctrl',
+				'command' => 'relay_ctrl', // legacy
+				'data'    => $data,
+				'params'  => $data,        // legacy
+			);
+
+			// Optional HMAC
+			$want_hmac = intval(get_option('tmon_admin_forward_hmac', 0))===1;
+			$sig = $want_hmac ? hash_hmac('sha256', ($unit_id.'|relay_ctrl|'.wp_json_encode($data)), $shared_key) : '';
+
+			$endpoint = trailingslashit($uc_url).'wp-json/tmon-uc/v1/device/command';
 			$args = array(
-				'headers'=>array('Content-Type'=>'application/json','X-TMON-HUB'=>$shared_key,'X-TMON-UC'=>esc_url_raw($uc_url)),
+				'headers'=>array('Content-Type'=>'application/json','X-TMON-HUB'=>$shared_key,'X-TMON-UC'=>esc_url_raw($uc_url),'X-TMON-HMAC'=>$sig),
 				'body'=>wp_json_encode($payload),
 				'timeout'=>15,'method'=>'POST',
 			);
 
-			if (function_exists('tmon_admin_debug')) tmon_admin_debug('rest','forward-command dispatch',array('endpoint'=>$endpoint,'payload'=>$payload));
+			if (function_exists('tmon_admin_debug')) { tmon_admin_debug('rest', 'relay-test dispatch', array('endpoint'=>$endpoint, 'payload'=>$payload)); }
 			$r = wp_remote_post($endpoint, $args);
 			if (is_wp_error($r)) {
-				if (function_exists('tmon_admin_debug')) tmon_admin_debug('rest','forward-command http error',array('error'=>$r->get_error_message()));
+				if (function_exists('tmon_admin_debug')) { tmon_admin_debug('rest', 'relay-test http error', array('error'=>$r->get_error_message())); }
 				return new WP_Error('forward_fail','UC unreachable',array('status'=>502));
 			}
 			$code = wp_remote_retrieve_response_code($r);
 			$body = wp_remote_retrieve_body($r);
-			if ($code!==200) {
-				if (function_exists('tmon_admin_debug')) tmon_admin_debug('rest','forward-command rejected',array('status'=>$code,'body'=>$body));
-				return new WP_Error('forward_fail','UC rejected command',array('status'=>$code,'body'=>$body));
+			if ($code !== 200) {
+				if (function_exists('tmon_admin_debug')) { tmon_admin_debug('rest', 'relay-test rejected', array('status'=>$code, 'body'=>$body)); }
+				return new WP_Error('forward_fail', 'UC rejected command', array('status'=>$code, 'body'=>$body));
 			}
 
-			if (function_exists('tmon_admin_audit_log')) tmon_admin_audit_log('forward_command','uc',array('unit_id'=>$unit_id,'extra'=>array('type'=>$type,'uc'=>$uc_url)));
+			// Audit outcome; UC should enqueue and device should later claim/execute/confirm
+			if (function_exists('tmon_admin_audit_log')) {
+				tmon_admin_audit_log('relay_test', 'uc', array('unit_id'=>$unit_id, 'extra'=>array('uc'=>$uc_url, 'data'=>$data)));
+			}
 			return rest_ensure_response(array('status'=>'ok','uc_response'=>json_decode($body,true)));
 		},
-		'permission_callback' => '__return_true',
+		'permission_callback' => function () { return current_user_can('manage_options'); },
 	));
 });
-
-// Central debug tick: log routes are registered
-add_action('rest_api_init', function () { if (function_exists('tmon_admin_debug')) tmon_admin_debug('rest','routes registered',array('time'=>time())); }, 99);
 
 // Provisioned Devices page: ensure table, then populate
 if (!function_exists('tmon_admin_provisioned_devices_page')) {
