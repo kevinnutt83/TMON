@@ -1343,3 +1343,84 @@ add_action('rest_api_init', function () {
 add_action('admin_init', function () {
 	tmon_admin_debug('provision', 'dispatch tick', array('queue_count' => is_array(get_option('tmon_admin_pending_provision', [])) ? count(get_option('tmon_admin_pending_provision', [])) : 0));
 }, 9);
+
+// REST: Compact relay forward endpoint (button-friendly). Sends normalized legacy-compatible payload to UC.
+add_action('rest_api_init', function () {
+	register_rest_route('tmon-admin/v1', '/uc/forward-relay', array(
+		'methods'  => 'POST',
+		'callback' => function ($req) {
+			$unit_id = sanitize_text_field($req->get_param('unit_id'));
+			$uc_url  = esc_url_raw($req->get_param('uc_url')); // optional
+			$relay   = max(1, intval($req->get_param('relay') ?? 1));
+			$state   = strtolower(trim((string)($req->get_param('state') ?? 'off')));
+			$dur     = max(0, intval($req->get_param('duration_s') ?? 0));
+
+			if (!$unit_id) return new WP_Error('bad_request', 'unit_id required', array('status'=>400));
+			if (!in_array($state, array('on','off'), true)) $state = 'off';
+
+			// Resolve UC URL if not provided
+			if (!$uc_url) {
+				global $wpdb;
+				$tbl = $wpdb->prefix . 'tmon_provisioned_devices';
+				$site_url = $wpdb->get_var($wpdb->prepare("SELECT site_url FROM {$tbl} WHERE unit_id=%s ORDER BY updated_at DESC LIMIT 1", $unit_id));
+				if (!$site_url) {
+					$map = get_option('tmon_admin_device_sites', []);
+					if (is_array($map) && !empty($map[$unit_id])) $site_url = esc_url_raw($map[$unit_id]);
+				}
+				$uc_url = $site_url ?: '';
+			}
+			if (!$uc_url) return new WP_Error('bad_request', 'uc_url unresolved', array('status'=>400));
+
+			// Pairing lookup
+			$key_id = function_exists('tmon_admin_uc_normalize_url') ? tmon_admin_uc_normalize_url($uc_url) : $uc_url;
+			$pair   = function_exists('tmon_admin_uc_pairings_get') ? tmon_admin_uc_pairings_get() : array();
+			if (empty($pair[$key_id]['active']) || empty($pair[$key_id]['key'])) return new WP_Error('not_paired', 'UC not paired', array('status'=>403));
+			$shared_key = $pair[$key_id]['key'];
+
+			// Normalized payload with legacy keys (ensures older UC handlers enqueue properly)
+			$data = array('relay' => $relay, 'state' => $state, 'duration_s' => $dur);
+			$payload = array(
+				'unit_id' => $unit_id,
+				'type'    => 'relay_ctrl',
+				'command' => 'relay_ctrl', // legacy
+				'data'    => $data,
+				'params'  => $data,        // legacy
+			);
+
+			// Optional HMAC
+			$want_hmac = intval(get_option('tmon_admin_forward_hmac', 0)) === 1;
+			$sig = $want_hmac ? hash_hmac('sha256', ($unit_id.'|relay_ctrl|'.wp_json_encode($data)), $shared_key) : '';
+
+			$endpoint = trailingslashit($uc_url) . 'wp-json/tmon-uc/v1/device/command';
+			$args = array(
+				'headers' => array(
+					'Content-Type' => 'application/json',
+					'X-TMON-HUB'   => $shared_key,
+					'X-TMON-UC'    => esc_url_raw($uc_url),
+					'X-TMON-HMAC'  => $sig,
+				),
+				'body'    => wp_json_encode($payload),
+				'timeout' => 15,
+				'method'  => 'POST',
+			);
+
+			// Debug + audit
+			if (function_exists('tmon_admin_debug')) tmon_admin_debug('uc', 'forward-relay dispatch', array('endpoint'=>$endpoint, 'payload'=>$payload));
+			$r = wp_remote_post($endpoint, $args);
+			if (is_wp_error($r)) {
+				if (function_exists('tmon_admin_debug')) tmon_admin_debug('uc', 'forward-relay http error', array('error'=>$r->get_error_message()));
+				return new WP_Error('forward_fail', 'UC unreachable', array('status'=>502));
+			}
+			$code = wp_remote_retrieve_response_code($r);
+			$body = wp_remote_retrieve_body($r);
+			if ($code !== 200) {
+				if (function_exists('tmon_admin_debug')) tmon_admin_debug('uc', 'forward-relay rejected', array('status'=>$code, 'body'=>$body));
+				return new WP_Error('forward_fail', 'UC rejected command', array('status'=>$code, 'body'=>$body));
+			}
+			if (function_exists('tmon_admin_audit_log')) tmon_admin_audit_log('relay_forward', 'uc', array('unit_id'=>$unit_id, 'extra'=>array('uc'=>$uc_url, 'data'=>$data)));
+
+			return rest_ensure_response(array('status'=>'ok', 'uc_response'=>json_decode($body, true)));
+		},
+		'permission_callback' => '__return_true',
+	));
+});
