@@ -736,16 +736,15 @@ add_action('rest_api_init', function () {
 	));
 });
 
-// Harden forward-command with optional HMAC, add debug, and ensure relay payload normalization
+// Harden forward-command: accept JSON string payloads, validate, and send both 'type' and legacy 'command'
 add_action('rest_api_init', function () {
-	// Re-registering callback only wraps existing logic with debug/HMAC; skip if already registered elsewhere.
 	register_rest_route('tmon-admin/v1', '/uc/forward-command', array(
 		'methods'  => 'POST',
 		'callback' => function ($req) {
 			$uc_url   = esc_url_raw($req->get_param('uc_url'));
 			$unit_id  = sanitize_text_field($req->get_param('unit_id'));
 			$type     = sanitize_text_field($req->get_param('type'));
-			$data     = $req->get_param('data') ?: array();
+			$data     = $req->get_param('data');
 
 			if (!$unit_id || !$type) {
 				return new WP_Error('bad_request', 'unit_id, type required', array('status' => 400));
@@ -766,6 +765,7 @@ add_action('rest_api_init', function () {
 				return new WP_Error('bad_request', 'uc_url unresolved', array('status' => 400));
 			}
 
+			// Lookup pairing
 			$key_id = function_exists('tmon_admin_uc_normalize_url') ? tmon_admin_uc_normalize_url($uc_url) : $uc_url;
 			$pair   = function_exists('tmon_admin_uc_pairings_get') ? tmon_admin_uc_pairings_get() : array();
 			if (empty($pair[$key_id]['active']) || empty($pair[$key_id]['key'])) {
@@ -773,45 +773,71 @@ add_action('rest_api_init', function () {
 			}
 			$shared_key = $pair[$key_id]['key'];
 
-			// Optional HMAC signature for added integrity: HMAC(unit_id|type|json(data), shared_key)
-			$want_hmac = intval(get_option('tmon_admin_forward_hmac', 0)) === 1;
-			$sig = '';
-			if ($want_hmac) {
-				$msg = $unit_id . '|' . $type . '|' . (is_array($data) ? wp_json_encode($data) : strval($data));
-				$sig = hash_hmac('sha256', $msg, $shared_key);
+			// Parse data: accept array or JSON string
+			if (!is_array($data)) {
+				$parsed = json_decode(is_string($data) ? $data : '', true);
+				if (json_last_error() === JSON_ERROR_NONE && is_array($parsed)) {
+					$data = $parsed;
+				} else {
+					$data = array();
+					if (function_exists('tmon_admin_debug')) {
+						tmon_admin_debug('rest', 'relay data parse failed; defaulting', array('raw' => $req->get_param('data')));
+					}
+				}
 			}
 
-			// Normalize relay payload
-			if ($type === 'relay_ctrl' && is_array($data)) {
+			// Normalize relay payload for 'relay_ctrl'
+			if ($type === 'relay_ctrl') {
+				$relay      = isset($data['relay']) ? intval($data['relay']) : 1;
+				$state_in   = isset($data['state']) ? strtolower(trim($data['state'])) : 'off';
+				$state      = in_array($state_in, array('on','off'), true) ? $state_in : 'off';
+				$duration_s = isset($data['duration_s']) ? intval($data['duration_s']) : 0;
+
 				$data = array(
-					'relay'      => intval($data['relay'] ?? 1),
-					'state'      => in_array(($data['state'] ?? 'off'), array('on','off'), true) ? $data['state'] : 'off',
-					'duration_s' => isset($data['duration_s']) ? intval($data['duration_s']) : 0,
+					'relay'      => max(1, $relay),
+					'state'      => $state,
+					'duration_s' => max(0, $duration_s),
 				);
 			}
 
+			// Optional HMAC signature for added integrity
+			$want_hmac = intval(get_option('tmon_admin_forward_hmac', 0)) === 1;
+			$sig = '';
+			if ($want_hmac) {
+				$msg = $unit_id . '|' . $type . '|' . wp_json_encode($data);
+				$sig = hash_hmac('sha256', $msg, $shared_key);
+			}
+
+			// Build request compatible with both new and legacy UC handlers
 			$endpoint = trailingslashit($uc_url) . 'wp-json/tmon-uc/v1/device/command';
+			$payload  = array(
+				'unit_id' => $unit_id,
+				'type'    => $type,
+				'command' => $type, // legacy key
+				'data'    => $data,
+				'params'  => $data, // legacy key
+			);
 			$args = array(
 				'headers' => array(
 					'Content-Type' => 'application/json',
-					'X-TMON-HUB' => $shared_key,
-					'X-TMON-UC'  => esc_url_raw($uc_url),
-					'X-TMON-HMAC'=> $sig,
+					'X-TMON-HUB'   => $shared_key,
+					'X-TMON-UC'    => esc_url_raw($uc_url),
+					'X-TMON-HMAC'  => $sig,
 				),
-				'body'    => wp_json_encode(array('unit_id' => $unit_id, 'type' => $type, 'data' => is_array($data) ? $data : array())),
+				'body'    => wp_json_encode($payload),
 				'timeout' => 15,
 				'method'  => 'POST',
 			);
 
 			// Debug outgoing
 			if (function_exists('tmon_admin_debug')) {
-				tmon_admin_debug('rest', 'forward-command dispatch', array('endpoint' => $endpoint, 'unit' => $unit_id, 'type' => $type, 'data' => $data));
+				tmon_admin_debug('rest', 'forward-command dispatch', array('endpoint' => $endpoint, 'payload' => $payload));
 			}
 
 			$r = wp_remote_post($endpoint, $args);
 			if (is_wp_error($r)) {
 				if (function_exists('tmon_admin_debug')) {
-					tmon_admin_debug('rest', 'forward-command error', array('message' => $r->get_error_message()));
+					tmon_admin_debug('rest', 'forward-command http error', array('error' => $r->get_error_message()));
 				}
 				return new WP_Error('forward_fail', 'UC unreachable', array('status' => 502));
 			}
@@ -920,7 +946,7 @@ if (!function_exists('tmon_admin_provisioning_activity_page')) {
 if (!function_exists('tmon_admin_debug')) {
 	function tmon_admin_debug($cat, $msg, $ctx = array()) {
 		$enabled = get_option('tmon_admin_debug_enabled', 0);
-		$cats    = get_option('tmon_admin_debug_categories', array()); // e.g., ['pairing'=>1,'provision'=>1,'rest'=>1,'db'=>0]
+		$cats    = get_option('tmon_admin_debug_categories', array()); // e.g., ['pairing'=>1,'provision'=>1,'rest'=>1,'db'=>0,'uc'=>0,'device'=>0]
 		if (!$enabled) return;
 		if (is_array($cats) && empty($cats[$cat])) return;
 		error_log(sprintf('[TMON Admin][%s] %s %s', $cat, is_string($msg) ? $msg : wp_json_encode($msg), $ctx ? wp_json_encode($ctx) : ''));
