@@ -76,15 +76,16 @@ function tmon_uc_provisioned_page() {
         echo '<td>'.esc_html($r['notes']).'</td>';
         echo '<td>'.esc_html($r['created_at']).'</td>';
         echo '<td>'.esc_html($r['updated_at']).'</td>';
-        echo '</tr><td>';
+        echo '</tr>';
     // Claim via local admin-post proxy; avoids cross-site auth issues
+    echo '<tr><td colspan="8">';
     echo '<form method="post" action="'.esc_url(admin_url('admin-post.php')).'" onsubmit="return confirm(\'Submit claim for this device?\');">';
     echo '<input type="hidden" name="action" value="tmon_uc_submit_claim" />';
     echo '<input type="hidden" name="unit_id" value="'.esc_attr($r['unit_id']).'" />';
     echo '<input type="hidden" name="machine_id" value="'.esc_attr($r['machine_id']).'" />';
     echo '<button type="submit" class="button">Claim</button>';
     echo '</form>';
-        echo '</td>';
+    echo '</td></tr>';
     }
     echo '</tbody></table></div>';
 }

@@ -16,9 +16,14 @@
     <?php if (isset($_GET['purge'])): ?>
         <div class="notice notice-warning is-dismissible"><p><?php echo $_GET['purge']==='all' ? 'All Unit Connector data purged.' : 'Unit data purged.'; ?></p></div>
     <?php endif; ?>
+    <?php if (isset($_GET['tmon_refresh'])): ?>
+        <div class="notice notice-success is-dismissible"><p>Devices refreshed from Admin hub.</p></div>
+    <?php endif; ?>
     <?php if (isset($_GET['tmon_cfg'])): ?>
         <?php if ($_GET['tmon_cfg'] === 'staged'): ?>
             <div class="notice notice-success is-dismissible"><p>Settings staged for Unit ID: <?php echo esc_html($_GET['unit_id'] ?? ''); ?></p></div>
+        <?php elseif ($_GET['tmon_cfg'] === 'pushed'): ?>
+            <div class="notice notice-success is-dismissible"><p>Staged settings pushed to Admin hub.</p></div>
         <?php else: ?>
             <div class="notice notice-error is-dismissible"><p>Settings staging failed<?php echo isset($_GET['msg']) ? ': ' . esc_html($_GET['msg']) : '.'; ?></p></div>
         <?php endif; ?>
@@ -56,9 +61,36 @@
         </table>
         <?php submit_button(); ?>
     </form>
+
+    <p>
+        <?php
+        $refresh_url = wp_nonce_url(admin_url('admin-post.php?action=tmon_uc_refresh_devices'), 'tmon_uc_refresh_devices');
+        ?>
+        <a class="button button-secondary" href="<?php echo esc_url($refresh_url); ?>">Refresh Devices from Admin Hub</a>
+    </p>
+
     <hr>
-    <h2>Data Maintenance</h2>
-    <?php do_settings_sections('tmon_uc_purge_page'); ?>
+    <h2>Pairing Diagnostics</h2>
+    <table class="widefat striped">
+        <thead><tr><th>Hub URL</th><th>Normalized</th><th>Paired At</th><th>Read Token</th></tr></thead>
+        <tbody>
+        <?php
+        $paired = get_option('tmon_uc_paired_sites', []);
+        if (is_array($paired) && !empty($paired)) {
+            foreach ($paired as $norm => $info) {
+                echo '<tr>';
+                echo '<td>'.esc_html($info['site'] ?? '').'</td>';
+                echo '<td><code>'.esc_html($norm).'</code></td>';
+                echo '<td>'.esc_html($info['paired_at'] ?? '').'</td>';
+                echo '<td><code>'.esc_html($info['read_token'] ?? '').'</code></td>';
+                echo '</tr>';
+            }
+        } else {
+            echo '<tr><td colspan="4"><em>No paired hubs recorded yet.</em></td></tr>';
+        }
+        ?>
+        </tbody>
+    </table>
 
     <h2>Device Configuration (Staged Settings)</h2>
     <p class="description">Stage configuration values that devices will fetch and apply on next sync.</p>
@@ -97,4 +129,28 @@
         </table>
         <?php submit_button('Stage Settings'); ?>
     </form>
+
+    <p>
+        <?php
+        $push_url = wp_nonce_url(admin_url('admin-post.php?action=tmon_uc_push_staged_to_admin'), 'tmon_uc_push_staged_to_admin');
+        ?>
+        <form method="post" action="<?php echo esc_url($push_url); ?>" style="display:inline-block;margin-top:8px;">
+            <input type="hidden" name="unit_id" value="" id="tmon_push_unit_id" />
+            <button type="submit" class="button">Push Staged Settings to Admin</button>
+        </form>
+        <script>
+        (function(){
+            // Simple helper: copy Unit ID from staging form into push form when user types
+            var unitInput = document.querySelector('input[name="unit_id"]');
+            var pushUnit = document.getElementById('tmon_push_unit_id');
+            if (unitInput && pushUnit) {
+                unitInput.addEventListener('input', function(){ pushUnit.value = unitInput.value; });
+            }
+        })();
+        </script>
+    </p>
+
+    <hr>
+    <h2>Data Maintenance</h2>
+    <?php do_settings_sections('tmon_uc_purge_page'); ?>
 </div>

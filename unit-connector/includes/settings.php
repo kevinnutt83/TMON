@@ -411,6 +411,26 @@ add_action('rest_api_init', function(){
     ]);
 });
 
+// Schedule periodic refresh from Admin hub (best-effort backfill)
+add_action('init', function() {
+    if (!wp_next_scheduled('tmon_uc_refresh_from_admin_event')) {
+        wp_schedule_event(time() + 60, 'hourly', 'tmon_uc_refresh_from_admin_event');
+    }
+});
+add_action('tmon_uc_refresh_from_admin_event', function() {
+    // Backfill UC mirror from Admin hub
+    uc_devices_refresh_from_admin();
+});
+
+// Manual refresh trigger from settings page
+add_action('admin_post_tmon_uc_refresh_devices', function(){
+    if (!current_user_can('manage_options')) wp_die('Insufficient permissions');
+    check_admin_referer('tmon_uc_refresh_devices');
+    uc_devices_refresh_from_admin();
+    wp_safe_redirect(add_query_arg(['tmon_refresh'=>'1'], admin_url('admin.php?page=tmon-settings')));
+    exit;
+});
+
 // Helper: normalize URL to canonical host[:port]
 function tmon_uc_normalize_url($url) {
     $u = trim((string)$url);
@@ -423,271 +443,41 @@ function tmon_uc_normalize_url($url) {
     return $port ? ($host . ':' . $port) : $host;
 }
 
-// Pair with TMON Admin hub: exchange shared key and save hub key locally (hardened)
-add_action('admin_post_tmon_uc_pair_with_hub', function(){
+// Admin-post: Push staged settings to Admin hub (optional integration)
+add_action('admin_post_tmon_uc_push_staged_to_admin', function(){
     if (!current_user_can('manage_options')) wp_die('Insufficient permissions');
-    check_admin_referer('tmon_uc_pair_with_hub');
-    $hub = trim(get_option('tmon_uc_hub_url', 'https://tmonsystems.com'));
-    if (stripos($hub, 'http') !== 0) { $hub = 'https://' . ltrim($hub, '/'); }
-    if (!$hub) {
-        wp_safe_redirect(admin_url('admin.php?page=tmon-settings&paired=0&msg=nohub'));
-        exit;
-    }
-    $local_key = get_option('tmon_uc_admin_key', '');
-    if (!$local_key) {
-        try { $local_key = bin2hex(random_bytes(24)); } catch (Exception $e) { $local_key = wp_generate_password(48, false, false); }
-        update_option('tmon_uc_admin_key', $local_key);
-    }
-    $endpoint = rtrim($hub, '/') . '/wp-json/tmon-admin/v1/uc/pair';
-    $resp = wp_remote_post($endpoint, [
-        'timeout' => 15,
-        'headers' => ['Content-Type' => 'application/json', 'Accept'=>'application/json', 'User-Agent'=>'TMON-UC/1.0'],
-        'body' => wp_json_encode([
-            'site_url' => home_url(),
-            'uc_key' => $local_key,
-        ]),
-    ]);
-    if (is_wp_error($resp)) {
-        wp_safe_redirect(admin_url('admin.php?page=tmon-settings&paired=0&msg=' . urlencode($resp->get_error_message())));
-        exit;
-    }
-    $code = wp_remote_retrieve_response_code($resp);
-    $body = json_decode(wp_remote_retrieve_body($resp), true);
-    if ($code === 200 && is_array($body) && !empty($body['hub_key'])) {
-        update_option('tmon_uc_hub_shared_key', sanitize_text_field($body['hub_key']));
-        if (!empty($body['read_token'])) {
-            update_option('tmon_uc_hub_read_token', sanitize_text_field($body['read_token']));
-        }
-        // Track normalized pairing for diagnostics
-        $paired = get_option('tmon_uc_paired_sites', []);
-        if (!is_array($paired)) $paired = [];
-        $paired[tmon_uc_normalize_url($hub)] = [
-            'site' => $hub,
-            'paired_at' => current_time('mysql'),
-            'read_token' => isset($body['read_token']) ? sanitize_text_field($body['read_token']) : '',
-        ];
-        update_option('tmon_uc_paired_sites', $paired, false);
-        wp_safe_redirect(admin_url('admin.php?page=tmon-settings&paired=1'));
-    } else {
-        wp_safe_redirect(admin_url('admin.php?page=tmon-settings&paired=0&msg=bad_response'));
-    }
-    exit;
-});
-
-// Admin-post: forward a claim to hub via proxy endpoint, authenticated by hub shared key
-add_action('admin_post_tmon_uc_submit_claim', function(){
-    if (!current_user_can('manage_options')) wp_die('Forbidden');
+    check_admin_referer('tmon_uc_push_staged_to_admin');
     $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
-    $machine_id = sanitize_text_field($_POST['machine_id'] ?? '');
-    if (!$unit_id || !$machine_id) wp_die('Missing unit_id or machine_id');
-    $hub = trim(get_option('tmon_uc_hub_url', ''));
-    if (!$hub) wp_die('Hub URL not configured');
-    $endpoint = rtrim($hub, '/') . '/wp-json/tmon-admin/v1/proxy/claim';
-    $headers = ['Content-Type' => 'application/json'];
-    $hub_key = get_option('tmon_uc_hub_shared_key', '');
-    if ($hub_key) $headers['X-TMON-HUB'] = $hub_key;
-    $body = [
-        'unit_id' => $unit_id,
-        'machine_id' => $machine_id,
-        'site_url' => home_url(),
-        'user_hint' => wp_get_current_user()->user_login,
-    ];
-    $resp = wp_remote_post($endpoint, [
-        'timeout' => 15,
-        'headers' => $headers,
-        'body' => wp_json_encode($body),
-    ]);
-    if (is_wp_error($resp)) {
-        wp_die('Error forwarding claim: ' . esc_html($resp->get_error_message()));
-    }
-    $code = wp_remote_retrieve_response_code($resp);
-    if ($code !== 200) {
-        wp_die('Hub responded with error: ' . esc_html(wp_remote_retrieve_body($resp)));
-    }
-    // Extract claim id if present
-    $claim_id = 0;
-    $b = json_decode(wp_remote_retrieve_body($resp), true);
-    if (is_array($b) && isset($b['id'])) { $claim_id = intval($b['id']); }
-    // Redirect back with notice (and claim_id if available)
-    $redirect = wp_get_referer() ?: admin_url('admin.php?page=tmon_uc_provisioned');
-    $redirect = add_query_arg('tmon_claim', 'submitted', $redirect);
-    if ($claim_id) { $redirect = add_query_arg('claim_id', $claim_id, $redirect); }
-    wp_safe_redirect($redirect);
-    exit;
-});
-
-// Firmware settings schema mapper (minimal scaffold; extend types/help as needed)
-function tmon_uc_settings_schema() {
-    return [
-        // Network
-        'WORDPRESS_API_URL' => ['type'=>'url','label'=>'Admin API URL','desc'=>'Hub endpoint for provisioning.'],
-        'WIFI_SSID' => ['type'=>'string','label'=>'WiFi SSID','desc'=>'Network SSID'],
-        'WIFI_PASSWORD' => ['type'=>'string','label'=>'WiFi Password','desc'=>'Network password'],
-        // Node role and behavior
-        'NODE_TYPE' => ['type'=>'enum','label'=>'Node Type','enum'=>['base','remote','wifi'],'desc'=>'Device role'],
-        'ENABLE_OLED' => ['type'=>'bool','label'=>'Enable OLED','desc'=>'Toggle OLED updates'],
-        // OTA
-        'OTA_CHECK_INTERVAL_S' => ['type'=>'number','label'=>'OTA Check Interval (s)','desc'=>'Periodic OTA check interval'],
-        // Debug
-        'DEBUG' => ['type'=>'bool','label'=>'Global Debug','desc'=>'Enable verbose logs'],
-    ];
-}
-
-// Admin-post: Stage settings for a device (stores JSON into tmon_uc_devices.staged_settings)
-add_action('admin_post_tmon_uc_stage_settings', function(){
-    if (!current_user_can('manage_options')) wp_die('Insufficient permissions');
-    check_admin_referer('tmon_uc_stage_settings');
-    $unit_id = isset($_POST['unit_id']) ? sanitize_text_field($_POST['unit_id']) : '';
     if (!$unit_id) {
         wp_safe_redirect(add_query_arg(['tmon_cfg'=>'fail','msg'=>'missing_unit'], wp_get_referer() ?: admin_url('admin.php?page=tmon-settings')));
         exit;
     }
-    // Build staged JSON from posted fields based on schema
-    $schema = tmon_uc_settings_schema();
-    $settings = [];
-    foreach ($schema as $key => $meta) {
-        $val = isset($_POST[$key]) ? wp_unslash($_POST[$key]) : null;
-        if ($val === null) continue;
-        switch ($meta['type']) {
-            case 'bool':
-                $settings[$key] = !!$val;
-                break;
-            case 'number':
-                $settings[$key] = is_numeric($val) ? 0 + $val : 0;
-                break;
-            default:
-                $settings[$key] = sanitize_text_field($val);
-                break;
-        }
-    }
+    // Lookup staged settings in UC mirror
     global $wpdb;
     uc_devices_ensure_table();
     $table = $wpdb->prefix . 'tmon_uc_devices';
-    $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$table} WHERE unit_id=%s LIMIT 1", $unit_id), ARRAY_A);
-    if ($row) {
-        $wpdb->update($table, [
-            'staged_settings' => wp_json_encode($settings),
-            'staged_at' => current_time('mysql'),
-        ], ['unit_id' => $unit_id]);
-    } else {
-        $wpdb->insert($table, [
-            'unit_id' => $unit_id,
-            'machine_id' => '',
-            'staged_settings' => wp_json_encode($settings),
-            'staged_at' => current_time('mysql'),
-        ]);
+    $row = $wpdb->get_row($wpdb->prepare("SELECT machine_id, staged_settings FROM {$table} WHERE unit_id=%s LIMIT 1", $unit_id), ARRAY_A);
+    $settings_json = [];
+    if ($row && !empty($row['staged_settings'])) {
+        $settings_json = json_decode($row['staged_settings'], true);
+        if (!is_array($settings_json)) $settings_json = [];
     }
-    wp_safe_redirect(add_query_arg(['tmon_cfg'=>'staged','unit_id'=>$unit_id], wp_get_referer() ?: admin_url('admin.php?page=tmon-settings')));
+    // Post to Admin hub reprovision endpoint if hub URL and key exist
+    $hub = trim(get_option('tmon_uc_hub_url', ''));
+    $hub_key = get_option('tmon_uc_hub_shared_key', '');
+    if ($hub && $hub_key && !empty($settings_json)) {
+        $endpoint = rtrim($hub, '/') . '/wp-json/tmon-admin/v1/uc/reprovision';
+        $headers = ['Content-Type'=>'application/json', 'X-TMON-HUB' => $hub_key];
+        $body = [
+            'unit_id' => $unit_id,
+            'machine_id' => $row['machine_id'] ?? '',
+            'settings' => wp_json_encode($settings_json),
+        ];
+        $resp = wp_remote_post($endpoint, ['timeout'=>20, 'headers'=>$headers, 'body'=>wp_json_encode($body)]);
+        $ok = !is_wp_error($resp) && wp_remote_retrieve_response_code($resp) === 200;
+        wp_safe_redirect(add_query_arg(['tmon_cfg'=>$ok?'pushed':'fail'], wp_get_referer() ?: admin_url('admin.php?page=tmon-settings')));
+    } else {
+        wp_safe_redirect(add_query_arg(['tmon_cfg'=>'fail','msg'=>'no_hub_or_key'], wp_get_referer() ?: admin_url('admin.php?page=tmon-settings')));
+    }
     exit;
-});
-
-// REST endpoints: staged settings (GET) and applied confirmation (POST)
-add_action('rest_api_init', function(){
-    register_rest_route('tmon/v1', '/admin/device/settings-staged', [
-        'methods' => 'GET',
-        'callback' => function($request){
-            // Auth: allow hub/admin/read tokens or logged-in admin
-            $ok = is_user_logged_in() && current_user_can('manage_options');
-            $admin_key = (string) ($request->get_header('X-TMON-ADMIN') ?? '');
-            $hub_key = (string) ($request->get_header('X-TMON-HUB') ?? '');
-            $read_tok = (string) ($request->get_header('X-TMON-READ') ?? '');
-            if (!$ok) {
-                $exp_admin = get_option('tmon_uc_admin_key');
-                $exp_hub   = get_option('tmon_uc_hub_shared_key');
-                $exp_read  = get_option('tmon_uc_hub_read_token');
-                if ($exp_admin && hash_equals($exp_admin, $admin_key)) $ok = true;
-                if (!$ok && $exp_hub && hash_equals($exp_hub, $hub_key)) $ok = true;
-                if (!$ok && $exp_read && hash_equals($exp_read, $read_tok)) $ok = true;
-            }
-            if (!$ok) return new WP_REST_Response(['status'=>'forbidden'], 403);
-
-            $unit_id = sanitize_text_field($request->get_param('unit_id'));
-            $machine_id = sanitize_text_field($request->get_param('machine_id'));
-            global $wpdb;
-            uc_devices_ensure_table();
-            $table = $wpdb->prefix . 'tmon_uc_devices';
-            $row = null;
-            if ($unit_id) {
-                $row = $wpdb->get_row($wpdb->prepare("SELECT staged_settings, staged_at FROM {$table} WHERE unit_id=%s LIMIT 1", $unit_id), ARRAY_A);
-            } elseif ($machine_id) {
-                $row = $wpdb->get_row($wpdb->prepare("SELECT staged_settings, staged_at FROM {$table} WHERE machine_id=%s LIMIT 1", $machine_id), ARRAY_A);
-            }
-            if (!$row || empty($row['staged_settings'])) {
-                return rest_ensure_response(['status'=>'ok','staged'=>false,'settings'=>[]]);
-            }
-            $json = json_decode($row['staged_settings'], true);
-            if (!is_array($json)) $json = [];
-            return rest_ensure_response(['status'=>'ok','staged'=>true,'staged_at'=>$row['staged_at'],'settings'=>$json]);
-        },
-        'permission_callback' => '__return_true',
-    ]);
-
-    register_rest_route('tmon/v1', '/admin/device/settings-applied', [
-        'methods' => 'POST',
-        'callback' => function($request){
-            // same auth as above
-            $ok = is_user_logged_in() && current_user_can('manage_options');
-            $admin_key = (string) ($request->get_header('X-TMON-ADMIN') ?? '');
-            $hub_key = (string) ($request->get_header('X-TMON-HUB') ?? '');
-            $read_tok = (string) ($request->get_header('X-TMON-READ') ?? '');
-            if (!$ok) {
-                $exp_admin = get_option('tmon_uc_admin_key');
-                $exp_hub   = get_option('tmon_uc_hub_shared_key');
-                $exp_read  = get_option('tmon_uc_hub_read_token');
-                if ($exp_admin && hash_equals($exp_admin, $admin_key)) $ok = true;
-                if (!$ok && $exp_hub && hash_equals($exp_hub, $hub_key)) $ok = true;
-                if (!$ok && $exp_read && hash_equals($exp_read, $read_tok)) $ok = true;
-            }
-            if (!$ok) return new WP_REST_Response(['status'=>'forbidden'], 403);
-
-            $unit_id = sanitize_text_field($request->get_param('unit_id'));
-            $machine_id = sanitize_text_field($request->get_param('machine_id'));
-            $firmware = sanitize_text_field($request->get_param('firmware_version'));
-            $role = sanitize_text_field($request->get_param('role'));
-            global $wpdb;
-            uc_devices_ensure_table();
-            $table = $wpdb->prefix . 'tmon_uc_devices';
-            if ($unit_id) {
-                $wpdb->update($table, ['staged_settings'=>null], ['unit_id'=>$unit_id]);
-            } elseif ($machine_id) {
-                $wpdb->update($table, ['staged_settings'=>null], ['machine_id'=>$machine_id]);
-            }
-            // Optional: audit/log
-            do_action('tmon_uc_settings_applied', ['unit_id'=>$unit_id,'machine_id'=>$machine_id,'firmware'=>$firmware,'role'=>$role]);
-            return rest_ensure_response(['status'=>'ok']);
-        },
-        'permission_callback' => '__return_true',
-    ]);
-
-    // Devices list: assigned/unassigned, basic filters
-    register_rest_route('tmon/v1', '/admin/devices', [
-        'methods' => 'GET',
-        'callback' => function($request){
-            // auth: allow read token/hub/admin or logged-in admin
-            $ok = is_user_logged_in() && current_user_can('manage_options');
-            $admin_key = (string) ($request->get_header('X-TMON-ADMIN') ?? '');
-            $hub_key = (string) ($request->get_header('X-TMON-HUB') ?? '');
-            $read_tok = (string) ($request->get_header('X-TMON-READ') ?? '');
-            if (!$ok) {
-                $exp_admin = get_option('tmon_uc_admin_key');
-                $exp_hub   = get_option('tmon_uc_hub_shared_key');
-                $exp_read  = get_option('tmon_uc_hub_read_token');
-                if ($exp_admin && hash_equals($exp_admin, $admin_key)) $ok = true;
-                if (!$ok && $exp_hub && hash_equals($exp_hub, $hub_key)) $ok = true;
-                if (!$ok && $exp_read && hash_equals($exp_read, $read_tok)) $ok = true;
-            }
-            if (!$ok) return new WP_REST_Response(['status'=>'forbidden'], 403);
-
-            $assigned = strtolower(sanitize_text_field($request->get_param('assigned') ?? 'all'));
-            $limit = max(1, min(500, intval($request->get_param('limit') ?? 100)));
-            $offset = max(0, intval($request->get_param('offset') ?? 0));
-            $rows = $assigned === '1'
-                ? uc_devices_get_assigned(['limit'=>$limit,'offset'=>$offset,'assigned_only'=>true])
-                : ($assigned === '0'
-                    ? uc_devices_get_unassigned(['limit'=>$limit,'offset'=>$offset])
-                    : uc_devices_get_assigned(['limit'=>$limit,'offset'=>$offset,'assigned_only'=>false]));
-            return rest_ensure_response(['status'=>'ok','devices'=>$rows]);
-        },
-        'permission_callback' => '__return_true',
-    ]);
 });
