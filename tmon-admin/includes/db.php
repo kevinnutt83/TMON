@@ -129,7 +129,9 @@ if (!function_exists('tmon_admin_ensure_columns')) {
 
 // Ensure device commands table for Admin logs (mirror minimal schema)
 function tmon_admin_ensure_commands_table() {
+	// Ensure $wpdb is available
 	global $wpdb;
+	if (!$wpdb || empty($wpdb->prefix)) { return; }
 	$table = $wpdb->prefix . 'tmon_device_commands';
 	$collate = $wpdb->get_charset_collate();
 	$wpdb->query("CREATE TABLE IF NOT EXISTS {$table} (
@@ -145,11 +147,37 @@ function tmon_admin_ensure_commands_table() {
 		KEY status_idx (status)
 	) {$collate}");
 }
-add_action('admin_init', 'tmon_admin_ensure_commands_table');
 
-// Ensure canBill on tmon_devices
-tmon_admin_ensure_columns($wpdb->prefix . 'tmon_devices', [
-	'canBill' => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN canBill TINYINT(1) NOT NULL DEFAULT 0",
-]);
+function tmon_admin_ensure_columns($table, $columns) {
+	// Fix warnings: declare and guard $wpdb
+	global $wpdb;
+	if (!$wpdb || empty($wpdb->prefix)) { return false; }
+	$cols = $wpdb->get_results("SHOW COLUMNS FROM $table", ARRAY_A);
+	$have = [];
+	foreach (($cols ?: []) as $c) { $have[strtolower($c['Field'])] = true; }
+
+	foreach ($columns as $col => $sql) {
+		if (empty($have[$col])) {
+			$wpdb->query($sql);
+			// Ensure updated_at uses ON UPDATE where created
+			if ($col === 'updated_at') {
+				$wpdb->query("ALTER TABLE $table MODIFY COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
+			}
+		}
+	}
+	return true;
+}
+
+// Call ensure helpers during admin_init safely
+add_action('admin_init', function(){
+	global $wpdb;
+	if ($wpdb && !empty($wpdb->prefix)) {
+		tmon_admin_ensure_commands_table();
+		// Ensure canBill column exists on tmon_devices
+		tmon_admin_ensure_columns($wpdb->prefix . 'tmon_devices', [
+			'canBill' => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN canBill TINYINT(1) NOT NULL DEFAULT 0",
+		]);
+	}
+});
 
 // ...existing code...
