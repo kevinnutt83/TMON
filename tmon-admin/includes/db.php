@@ -192,6 +192,27 @@ if (!function_exists('tmon_admin_ensure_commands_table')) {
 	}
 }
 
+if (!function_exists('tmon_admin_ensure_history_table')) {
+	function tmon_admin_ensure_history_table() {
+		global $wpdb;
+		if (!$wpdb || empty($wpdb->prefix)) return;
+		$table = $wpdb->prefix . 'tmon_provision_history';
+		$collate = $wpdb->get_charset_collate();
+		$wpdb->query("CREATE TABLE IF NOT EXISTS {$table} (
+			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+			unit_id VARCHAR(64) NOT NULL,
+			machine_id VARCHAR(64) NOT NULL,
+			action VARCHAR(64) NOT NULL,
+			user VARCHAR(191) NULL,
+			meta LONGTEXT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			KEY unit_machine (unit_id, machine_id),
+			KEY action_idx (action)
+		) {$collate}");
+	}
+}
+
 add_action('admin_init', function(){
 	global $wpdb;
 	if (!$wpdb || empty($wpdb->prefix)) return;
@@ -201,6 +222,7 @@ add_action('admin_init', function(){
 	]);
 	// Ensure commands table exists
 	tmon_admin_ensure_commands_table();
+	tmon_admin_ensure_history_table();
 });
 
 // ...existing code...

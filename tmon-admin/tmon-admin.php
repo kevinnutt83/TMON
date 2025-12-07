@@ -521,16 +521,12 @@ if (!function_exists('tmon_admin_uc_normalize_url')) {
 
 // UC Pairing endpoint: register UC site and return shared hub key + read token
 add_action('rest_api_init', function () {
-	// UC pairing endpoint (idempotent)
 	register_rest_route('tmon-admin/v1', '/uc/pair', [
 		'methods' => 'POST',
 		'callback' => function($request){
 			$site_url = esc_url_raw($request->get_param('site_url'));
 			$uc_key   = sanitize_text_field($request->get_param('uc_key'));
-			if (!$site_url || !$uc_key) {
-				return new WP_REST_Response(['status'=>'error','message'=>'site_url and uc_key required'], 400);
-			}
-			// Normalize URL
+			if (!$site_url || !$uc_key) return new WP_REST_Response(['status'=>'error','message'=>'site_url and uc_key required'], 400);
 			$parts = parse_url($site_url);
 			$key_id = !empty($parts['host']) ? strtolower($parts['host']) : '';
 			if (isset($parts['port'])) $key_id .= ':' . intval($parts['port']);
@@ -551,12 +547,7 @@ add_action('rest_api_init', function () {
 				'active'       => 1,
 			];
 			update_option('tmon_uc_pairings', $pairings, false);
-
-			return rest_ensure_response([
-				'status'     => 'ok',
-				'hub_key'    => $hub_key,
-				'read_token' => $read_token,
-			]);
+			return rest_ensure_response(['status'=>'ok','hub_key'=>$hub_key,'read_token'=>$read_token]);
 		},
 		'permission_callback' => '__return_true',
 	]);

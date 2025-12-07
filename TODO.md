@@ -291,3 +291,25 @@ Verification
 - [ ] UC pairing creates records and devices backfill visible on UC provisioned page.
 - [ ] Device first check-in claims via Admin confirm and updates UC mirror.
 - [ ] Commands staged, polled, executed, confirmed; status visible.
+
+TMON Admin — Provisioning Save & History
+- [x] Persist Save & Provision into tmon_provisioned_devices and mirror into tmon_devices.
+- [x] Append provisioning history on save and device confirm; render History page.
+- [x] Enforce redirect-after-POST to avoid blank page; show queued/failed notice.
+
+Unit Connector — Pairing & Backfill
+- [x] Persist hub_key/read_token; normalized pairing record.
+- [x] Backfill provisioned devices from Admin after pairing.
+
+Firmware/OTA
+- [x] v2.02.1 settings and OTA mirrors; headers for fetch stability.
+
+Verification
+- [ ] Save & Provision updates DB and history; queued notice visible.
+- [ ] UC pairing creates records on both sides; UC provisioned page shows devices.
+- [ ] First device check-in triggers Admin confirm and UC claim; mirrors updated.
+- [ ] Commands staged/polled/executed/confirmed; status reflects in UC/Admin.
+
+Open items
+- [ ] Add Admin UI notices for firmware manifest/version and last fetch timestamp.
+- [ ] Add Admin/UC command logs viewer with status timeline and filters.
