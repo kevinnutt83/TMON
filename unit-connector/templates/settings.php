@@ -119,7 +119,9 @@
                         echo '</select>';
                     } else {
                         $inputType = $type === 'number' ? 'number' : ($type === 'url' ? 'url' : 'text');
-                        echo '<input type="'.$inputType.'" name="'.esc_attr($key).'" class="regular-text">';
+                        $val = '';
+                        if ($key === 'WORDPRESS_API_URL') $val = home_url(); // default to current domain
+                        echo '<input type="'.$inputType.'" name="'.esc_attr($key).'" class="regular-text" value="'.esc_attr($val).'">';
                     }
                     if ($desc) echo '<p class="description">'.esc_html($desc).'</p>';
                     echo '</td></tr>';

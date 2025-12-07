@@ -467,3 +467,55 @@ if (!function_exists('tmon_admin_uc_normalize_url')) {
 		return $port ? ($host . ':' . $port) : $host;
 	}
 }
+
+// UC Pairing endpoint: register UC site and return shared hub key + read token
+add_action('rest_api_init', function () {
+	register_rest_route('tmon-admin/v1', '/uc/pair', [
+		'methods' => 'POST',
+		'callback' => function($request){
+			$site_url = esc_url_raw($request->get_param('site_url'));
+			$uc_key   = sanitize_text_field($request->get_param('uc_key'));
+			if (!$site_url || !$uc_key) {
+				return new WP_REST_Response(['status'=>'error','message'=>'site_url and uc_key required'], 400);
+			}
+			// Normalize URL to host[:port] for key
+			if (!function_exists('tmon_admin_uc_normalize_url')) {
+				$norm = parse_url($site_url);
+				$key_id = isset($norm['host']) ? strtolower($norm['host']) : '';
+				if (isset($norm['port'])) $key_id .= ':' . intval($norm['port']);
+			} else {
+				$key_id = tmon_admin_uc_normalize_url($site_url);
+			}
+			if (!$key_id) {
+				return new WP_REST_Response(['status'=>'error','message'=>'invalid site_url'], 400);
+			}
+			$pairings = get_option('tmon_uc_pairings', []);
+			if (!is_array($pairings)) $pairings = [];
+
+			// Generate hub shared key and read token (stable per site)
+			$hub_key = isset($pairings[$key_id]['key']) && $pairings[$key_id]['key'] ? $pairings[$key_id]['key'] : wp_generate_password(48, false, false);
+			$read_token = isset($pairings[$key_id]['read_token']) && $pairings[$key_id]['read_token'] ? $pairings[$key_id]['read_token'] : wp_generate_password(32, false, false);
+
+			$pairings[$key_id] = [
+				'uc_url'       => $site_url,
+				'site_name'    => get_option('blogname'),
+				'key'          => $hub_key,
+				'read_token'   => $read_token,
+				'uc_key'       => $uc_key,
+				'created'      => current_time('mysql'),
+				'last_verified'=> current_time('mysql'),
+				'active'       => 1,
+			];
+			update_option('tmon_uc_pairings', $pairings, false);
+			// Hint for Pairings page
+			update_option('tmon_admin_last_uc_url', $site_url, false);
+
+			return rest_ensure_response([
+				'status'     => 'ok',
+				'hub_key'    => $hub_key,
+				'read_token' => $read_token,
+			]);
+		},
+		'permission_callback' => '__return_true',
+	]);
+});

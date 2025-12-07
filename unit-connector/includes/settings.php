@@ -16,9 +16,11 @@ add_action('admin_init', function() {
         echo '<p class="description">This key must match on the TMON Admin hub for secure cross-site actions. Share via a secure channel if pairing manually.</p>';
     }, 'tmon_uc_settings', 'tmon_uc_main');
     add_settings_field('tmon_uc_hub_url', 'TMON Admin Hub URL', function() {
-        $val = get_option('tmon_uc_hub_url', '');
-        echo '<input type="url" name="tmon_uc_hub_url" class="regular-text" placeholder="https://admin.example.com" value="' . esc_attr($val) . '" />';
-        echo '<p class="description">Unit Connector will forward unknown devices here for provisioning.</p>';
+        // Default to this site’s domain if empty
+        $current = home_url();
+        $val = get_option('tmon_uc_hub_url', $current);
+        echo '<input type="url" name="tmon_uc_hub_url" class="regular-text" placeholder="'.esc_attr($current).'" value="' . esc_attr($val) . '" />';
+        echo '<p class="description">Defaults to this site URL; set your Admin hub if different.</p>';
         $pair_url = wp_nonce_url(admin_url('admin-post.php?action=tmon_uc_pair_with_hub'), 'tmon_uc_pair_with_hub');
         echo '<p><a class="button button-secondary" href="' . esc_url($pair_url) . '">Pair with Hub</a></p>';
     }, 'tmon_uc_settings', 'tmon_uc_main');
@@ -146,7 +148,7 @@ add_action('rest_api_init', function(){
 add_action('admin_post_tmon_uc_pair_with_hub', function(){
     if (!current_user_can('manage_options')) wp_die('Insufficient permissions');
     check_admin_referer('tmon_uc_pair_with_hub');
-    $hub = trim(get_option('tmon_uc_hub_url', 'https://tmonsystems.com'));
+    $hub = trim(get_option('tmon_uc_hub_url', home_url()));
     if (stripos($hub, 'http') !== 0) { $hub = 'https://' . ltrim($hub, '/'); }
     if (!$hub) {
         wp_safe_redirect(admin_url('admin.php?page=tmon-settings&paired=0&msg=nohub'));
@@ -163,7 +165,8 @@ add_action('admin_post_tmon_uc_pair_with_hub', function(){
         'headers' => ['Content-Type' => 'application/json', 'Accept'=>'application/json', 'User-Agent'=>'TMON-UC/1.0'],
         'body' => wp_json_encode([
             'site_url' => home_url(),
-            'uc_key' => $local_key,
+            'site_name'=> get_option('blogname'),
+            'uc_key'   => $local_key,
         ]),
     ]);
     if (is_wp_error($resp)) {
@@ -174,16 +177,14 @@ add_action('admin_post_tmon_uc_pair_with_hub', function(){
     $body = json_decode(wp_remote_retrieve_body($resp), true);
     if ($code === 200 && is_array($body) && !empty($body['hub_key'])) {
         update_option('tmon_uc_hub_shared_key', sanitize_text_field($body['hub_key']));
-        if (!empty($body['read_token'])) {
-            update_option('tmon_uc_hub_read_token', sanitize_text_field($body['read_token']));
-        }
+        if (!empty($body['read_token'])) update_option('tmon_uc_hub_read_token', sanitize_text_field($body['read_token']));
         // Track normalized pairing for diagnostics
         $paired = get_option('tmon_uc_paired_sites', []);
         if (!is_array($paired)) $paired = [];
         $paired[tmon_uc_normalize_url($hub)] = [
-            'site' => $hub,
+            'site'      => $hub,
             'paired_at' => current_time('mysql'),
-            'read_token' => isset($body['read_token']) ? sanitize_text_field($body['read_token']) : '',
+            'read_token'=> isset($body['read_token']) ? sanitize_text_field($body['read_token']) : '',
         ];
         update_option('tmon_uc_paired_sites', $paired, false);
         wp_safe_redirect(admin_url('admin.php?page=tmon-settings&paired=1'));
