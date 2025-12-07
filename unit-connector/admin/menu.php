@@ -32,60 +32,38 @@ function tmon_uc_provisioned_page() {
     if (!current_user_can('manage_options')) wp_die('Forbidden');
     global $wpdb;
     echo '<div class="wrap"><h2>Provisioned Devices (Admin)</h2>';
-    // Notice after claim submission
-    if (isset($_GET['tmon_claim']) && $_GET['tmon_claim'] === 'submitted') {
-        $cid = isset($_GET['claim_id']) ? intval($_GET['claim_id']) : 0;
-        $msg = $cid ? 'Claim submitted. ID: ' . $cid : 'Claim submitted.';
-        echo '<div class="notice notice-success is-dismissible"><p>' . esc_html($msg) . '</p></div>';
-    }
-    $table = $wpdb->prefix . 'tmon_provisioned_devices';
-    $exists = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table));
-    $rows = [];
-    if ($exists) {
-        $rows = $wpdb->get_results("SELECT * FROM $table ORDER BY created_at DESC", ARRAY_A);
-    } else {
-        // Fall back to Hub: fetch provisioned devices list using hub shared key
-        $hub = trim(get_option('tmon_uc_hub_url', ''));
-        $hub_key = get_option('tmon_uc_hub_shared_key', '');
-        if ($hub && $hub_key) {
-            $endpoint = rtrim($hub, '/') . '/wp-json/tmon-admin/v1/provisioned-devices';
-            $resp = wp_remote_get($endpoint, [
-                'timeout' => 15,
-                'headers' => ['X-TMON-HUB' => $hub_key]
-            ]);
-            if (!is_wp_error($resp) && wp_remote_retrieve_response_code($resp) === 200) {
-                $data = json_decode(wp_remote_retrieve_body($resp), true);
-                if (is_array($data) && isset($data['devices']) && is_array($data['devices'])) {
-                    $rows = $data['devices'];
-                }
-            }
-        }
-        if (empty($rows)) {
-            echo '<p><em>Provisioning table not found locally, and Hub fetch returned no results. Ensure TMON Admin is reachable and paired.</em></p></div>';
+
+    // Try local cache first; if empty, backfill from Admin hub
+    $table = $wpdb->prefix . 'tmon_uc_devices';
+    uc_devices_ensure_table();
+    $rows = $wpdb->get_results("SELECT unit_id,machine_id,unit_name,role,assigned,updated_at FROM {$table} ORDER BY updated_at DESC LIMIT 500", ARRAY_A);
+    if (!$rows || empty($rows)) {
+        $count = function_exists('tmon_uc_backfill_provisioned_from_admin') ? tmon_uc_backfill_provisioned_from_admin() : 0;
+        $rows = $wpdb->get_results("SELECT unit_id,machine_id,unit_name,role,assigned,updated_at FROM {$table} ORDER BY updated_at DESC LIMIT 500", ARRAY_A);
+        if (!$rows || empty($rows)) {
+            echo '<div class="card" style="padding:12px;"><p><em>No provisioned devices found. Pair UC with Admin and refresh.</em></p></div></div>';
             return;
         }
     }
-    echo '<table class="widefat"><thead><tr><th>Unit ID</th><th>Machine ID</th><th>Company ID</th><th>Plan</th><th>Status</th><th>Notes</th><th>Created</th><th>Updated</th></tr></thead><tbody>';
+
+    echo '<table class="widefat"><thead><tr><th>Unit ID</th><th>Machine ID</th><th>Name</th><th>Role</th><th>Assigned</th><th>Updated</th><th>Actions</th></tr></thead><tbody>';
     foreach ($rows as $r) {
         echo '<tr>';
         echo '<td>'.esc_html($r['unit_id']).'</td>';
         echo '<td>'.esc_html($r['machine_id']).'</td>';
-        echo '<td>'.esc_html($r['company_id']).'</td>';
-        echo '<td>'.esc_html($r['plan']).'</td>';
-        echo '<td>'.esc_html($r['status']).'</td>';
-        echo '<td>'.esc_html($r['notes']).'</td>';
-        echo '<td>'.esc_html($r['created_at']).'</td>';
+        echo '<td>'.esc_html($r['unit_name']).'</td>';
+        echo '<td>'.esc_html($r['role']).'</td>';
+        echo '<td>'.(intval($r['assigned']) ? 'Yes' : 'No').'</td>';
         echo '<td>'.esc_html($r['updated_at']).'</td>';
+        echo '<td>';
+        echo '<form method="post" action="'.esc_url(admin_url('admin-post.php')).'" onsubmit="return confirm(\'Submit claim for this device?\');" style="display:inline-block">';
+        echo '<input type="hidden" name="action" value="tmon_uc_submit_claim" />';
+        echo '<input type="hidden" name="unit_id" value="'.esc_attr($r['unit_id']).'" />';
+        echo '<input type="hidden" name="machine_id" value="'.esc_attr($r['machine_id']).'" />';
+        echo '<button type="submit" class="button">Claim</button>';
+        echo '</form>';
+        echo '</td>';
         echo '</tr>';
-    // Claim via local admin-post proxy; avoids cross-site auth issues
-    echo '<tr><td colspan="8">';
-    echo '<form method="post" action="'.esc_url(admin_url('admin-post.php')).'" onsubmit="return confirm(\'Submit claim for this device?\');">';
-    echo '<input type="hidden" name="action" value="tmon_uc_submit_claim" />';
-    echo '<input type="hidden" name="unit_id" value="'.esc_attr($r['unit_id']).'" />';
-    echo '<input type="hidden" name="machine_id" value="'.esc_attr($r['machine_id']).'" />';
-    echo '<button type="submit" class="button">Claim</button>';
-    echo '</form>';
-    echo '</td></tr>';
     }
     echo '</tbody></table></div>';
 }

@@ -93,7 +93,7 @@
     </table>
 
     <h2>Device Configuration (Staged Settings)</h2>
-    <p class="description">Stage configuration values that devices will fetch and apply on next sync.</p>
+    <p class="description">Stage configuration values that devices will fetch and apply on next sync. Typed inputs cover common variables; use the JSON editor for additional settings from firmware.</p>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
         <?php wp_nonce_field('tmon_uc_stage_settings', 'tmon_uc_stage_settings_nonce'); ?>
         <input type="hidden" name="action" value="tmon_uc_stage_settings" />
@@ -128,6 +128,13 @@
                 }
             }
             ?>
+            <tr>
+                <th scope="row">RAW Settings (JSON)</th>
+                <td>
+                    <textarea name="RAW_SETTINGS_JSON" rows="8" class="large-text" placeholder='{"ENABLE_RELAY1":true,"ENABLE_RELAY2":true,"SYS_VOLTAGE_PIN":3,"OLED_UPDATE_INTERVAL_S":10}'></textarea>
+                    <p class="description">Optional JSON to set additional firmware settings. Keys provided here supplement typed inputs.</p>
+                </td>
+            </tr>
         </table>
         <button type="submit" class="button button-primary">Stage Settings</button>
     </form>

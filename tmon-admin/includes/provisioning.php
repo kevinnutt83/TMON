@@ -1700,6 +1700,15 @@ add_action('rest_api_init', function(){
 				]);
 			}
 
+			// Optional: notify UC site to refresh device cache on confirm-applied
+			function tmon_admin_notify_uc_refresh($site_url) {
+				if (!$site_url) return;
+				$endpoint = rtrim($site_url, '/') . '/wp-json/tmon/v1/admin/devices'; // UC list endpoint exists
+				// Best-effort ping via heartbeat (does not require auth if UC allows)
+				@wp_remote_post(rtrim($site_url, '/') . '/wp-json/tmon/v1/admin/heartbeat', ['timeout'=>5]);
+			}
+			tmon_admin_notify_uc_refresh($site_url);
+
 			return rest_ensure_response(['status'=>'ok']);
 		},
 		'permission_callback' => '__return_true',
