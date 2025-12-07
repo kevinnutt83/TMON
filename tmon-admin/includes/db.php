@@ -127,4 +127,29 @@ if (!function_exists('tmon_admin_ensure_columns')) {
 	}
 }
 
+// Ensure device commands table for Admin logs (mirror minimal schema)
+function tmon_admin_ensure_commands_table() {
+	global $wpdb;
+	$table = $wpdb->prefix . 'tmon_device_commands';
+	$collate = $wpdb->get_charset_collate();
+	$wpdb->query("CREATE TABLE IF NOT EXISTS {$table} (
+		id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+		device_id VARCHAR(64) NOT NULL,
+		command VARCHAR(64) NOT NULL,
+		params LONGTEXT NULL,
+		status VARCHAR(32) NOT NULL DEFAULT 'queued',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+		PRIMARY KEY (id),
+		KEY device_idx (device_id),
+		KEY status_idx (status)
+	) {$collate}");
+}
+add_action('admin_init', 'tmon_admin_ensure_commands_table');
+
+// Ensure canBill on tmon_devices
+tmon_admin_ensure_columns($wpdb->prefix . 'tmon_devices', [
+	'canBill' => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN canBill TINYINT(1) NOT NULL DEFAULT 0",
+]);
+
 // ...existing code...

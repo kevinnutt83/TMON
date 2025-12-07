@@ -218,3 +218,25 @@ Testing
 - Devices will detect v2.02.0 via version.txt and manifest.json; ensure both are published before rollout.
 - Admin/UC plugins should be upgraded together to 0.2.0 to keep pairing/staged settings features compatible.
 - After upgrade, re-pair UC with Admin to populate hub_key/read_token and normalized pairing store.
+
+Admin — Provisioning History
+- [x] Add renderer to display latest actions; verify table exists.
+
+Unit Connector — Post-provisioning
+- [x] Normalize URL helper defined early to avoid fatal.
+- [x] Ensure command table includes status; fix requeue cron UPDATE.
+- [x] First check-in REST: call Admin to confirm and upsert UC cache; mark claimed.
+- [x] Shortcode: claim device by UNIT_ID + MACHINE_ID using first-checkin flow.
+- [x] Backfill provisioned devices after pairing and on page load if empty.
+
+Commands
+- [x] Stage commands in UC, devices poll, confirm applied; add cron requeue for stale claimed.
+- [ ] Add Admin-side mirror/log viewer for commands (status timeline).
+
+White screen on Save & Provision
+- [x] Force redirect-after-POST in handler to avoid blank page; add safe fallback redirect.
+
+Verification
+- [ ] UC pairing populates hub_key/read_token; Provisioned Devices page shows devices post-backfill.
+- [ ] Admin offline notice cleared via UC/device check-ins (last_seen updated).
+- [ ] Relay commands toggle: staged, device executes, confirmation recorded.

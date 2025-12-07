@@ -468,3 +468,134 @@ add_action('admin_post_tmon_uc_push_staged_to_admin', function(){
     }
     exit;
 });
+
+// Helper: normalize URL to canonical host[:port] (ensure defined before use)
+if (!function_exists('tmon_uc_normalize_url')) {
+	function tmon_uc_normalize_url($url) {
+		$u = trim((string)$url);
+		if ($u === '') return '';
+		if (!preg_match('#^https?://#i', $u)) $u = 'https://' . ltrim($u, '/');
+		$parts = parse_url($u);
+		if (!$parts || empty($parts['host'])) return '';
+		$host = strtolower($parts['host']);
+		$port = isset($parts['port']) ? intval($parts['port']) : null;
+		return $port ? ($host . ':' . $port) : $host;
+	}
+}
+
+// Ensure command table with status column exists
+function tmon_uc_ensure_command_table() {
+	global $wpdb;
+	$table = $wpdb->prefix . 'tmon_device_commands';
+	$collate = $wpdb->get_charset_collate();
+	$sql = "CREATE TABLE IF NOT EXISTS {$table} (
+		id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+		device_id VARCHAR(64) NOT NULL,
+		command VARCHAR(64) NOT NULL,
+		params LONGTEXT NULL,
+		status VARCHAR(32) NOT NULL DEFAULT 'staged',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+		PRIMARY KEY (id),
+		KEY device_idx (device_id),
+		KEY status_idx (status)
+	) {$collate}";
+	$wpdb->query($sql);
+}
+add_action('init', 'tmon_uc_ensure_command_table');
+
+// Cron: requeue stale claimed commands back to queued
+add_action('init', function(){
+	if (!wp_next_scheduled('tmon_uc_command_requeue_cron')) {
+		wp_schedule_event(time() + 60, 'hourly', 'tmon_uc_command_requeue_cron');
+	}
+});
+add_action('tmon_uc_command_requeue_cron', function(){
+	global $wpdb;
+	tmon_uc_ensure_command_table();
+	$table = $wpdb->prefix . 'tmon_device_commands';
+	$wpdb->query("UPDATE {$table} SET status='queued' WHERE status='claimed' AND updated_at < (NOW() - INTERVAL 5 MINUTE)");
+});
+
+// First device check-in: claim flow (UC receives device, calls Admin to confirm and backfills local record)
+add_action('rest_api_init', function(){
+	register_rest_route('tmon/v1', '/device/first-checkin', [
+		'methods' => 'POST',
+		'callback' => function($req){
+			$unit_id = sanitize_text_field($req->get_param('unit_id'));
+			$machine_id = sanitize_text_field($req->get_param('machine_id'));
+			if (!$unit_id || !$machine_id) return new WP_REST_Response(['status'=>'error','message'=>'unit_id and machine_id required'], 400);
+
+			// Call Admin to confirm and fetch device record
+			$hub = trim(get_option('tmon_uc_hub_url', ''));
+			$key = get_option('tmon_uc_hub_shared_key', '');
+			if (!$hub || !$key) return new WP_REST_Response(['status'=>'error','message'=>'not_paired'], 400);
+
+			$endpoint = rtrim($hub, '/') . '/wp-json/tmon-admin/v1/uc/confirm-device';
+			$resp = wp_remote_post($endpoint, [
+				'timeout' => 15,
+				'headers' => ['Content-Type'=>'application/json','X-TMON-HUB'=>$key],
+				'body' => wp_json_encode(['unit_id'=>$unit_id,'machine_id'=>$machine_id,'site_url'=>home_url()]),
+			]);
+			if (is_wp_error($resp) || wp_remote_retrieve_response_code($resp) !== 200) {
+				return new WP_REST_Response(['status'=>'error','message'=>'admin_unreachable'], 502);
+			}
+			$data = json_decode(wp_remote_retrieve_body($resp), true);
+			// Upsert UC mirror
+			global $wpdb;
+			uc_devices_ensure_table();
+			$table = $wpdb->prefix . 'tmon_uc_devices';
+			$wpdb->query($wpdb->prepare(
+				"INSERT INTO {$table} (unit_id,machine_id,unit_name,role,assigned,updated_at)
+				 VALUES (%s,%s,%s,%s,%d,NOW())
+				 ON DUPLICATE KEY UPDATE unit_name=VALUES(unit_name), role=VALUES(role), assigned=VALUES(assigned), updated_at=NOW()",
+				$unit_id, $machine_id, sanitize_text_field($data['unit_name'] ?? ''), sanitize_text_field($data['role'] ?? ''), 1
+			));
+			return rest_ensure_response(['status'=>'ok','claimed'=>true,'device'=>$data]);
+		},
+		'permission_callback' => '__return_true',
+	]);
+});
+
+// Shortcode: claim device via Unit ID + Machine ID
+add_shortcode('tmon_uc_claim_device', function($atts){
+	if (!current_user_can('manage_options')) return '';
+	$action = isset($_POST['tmon_uc_claim_submit']);
+	$out = '<form method="post"><p><label>Unit ID <input type="text" name="unit_id" required></label> ';
+	$out .= '<label>Machine ID <input type="text" name="machine_id" required></label> ';
+	$out .= '<button type="submit" name="tmon_uc_claim_submit" class="button">Claim</button></p></form>';
+	if ($action) {
+		$unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
+		$machine_id = sanitize_text_field($_POST['machine_id'] ?? '');
+		$req = new WP_REST_Request('POST', '/tmon/v1/device/first-checkin');
+		$req->set_param('unit_id', $unit_id);
+		$req->set_param('machine_id', $machine_id);
+		$res = rest_do_request($req);
+		$data = rest_get_server()->response_to_data($res, false);
+		if (is_array($data) && ($data['status'] ?? '') === 'ok') {
+			$out .= '<div class="notice notice-success is-dismissible"><p>Device claimed.</p></div>';
+		} else {
+			$out .= '<div class="notice notice-error is-dismissible"><p>Claim failed.</p></div>';
+		}
+	}
+	return $out;
+});
+
+// Commands staging endpoints (ensure table exists before use)
+add_action('rest_api_init', function(){
+	tmon_uc_ensure_command_table();
+	// ...existing /admin/device/command, /device/commands, /device/command/confirm handlers...
+});
+
+// Pair with hub: persist normalized pairing; then backfill provisioned devices
+add_action('admin_post_tmon_uc_pair_with_hub', function(){
+	// ...existing pairing code building $hub and $body...
+	// After success:
+	// $paired[tmon_uc_normalize_url($hub)] = [ 'site' => $hub, 'paired_at' => current_time('mysql'), 'read_token'=> ... ];
+	// update_option('tmon_uc_paired_sites', $paired, false);
+	// Backfill provisioned cache
+	if (function_exists('tmon_uc_backfill_provisioned_from_admin')) {
+		tmon_uc_backfill_provisioned_from_admin();
+	}
+	// ...existing redirect...
+});
