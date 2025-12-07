@@ -4,25 +4,35 @@
 <div class="wrap tmon-admin-page">
     <h1>TMON Unit Connector Settings</h1>
     <?php if (isset($_GET['keygen'])): ?>
-        <div class="updated"><p>Shared key generated.</p></div>
+        <div class="notice notice-success is-dismissible"><p>Shared key generated.</p></div>
     <?php endif; ?>
     <?php if (isset($_GET['paired'])): ?>
         <?php if (intval($_GET['paired']) === 1): ?>
-            <div class="updated"><p>Paired with Hub successfully.</p></div>
+            <div class="notice notice-success is-dismissible"><p>Paired with Hub successfully.</p></div>
         <?php else: ?>
-            <div class="error"><p>Pairing failed<?php echo isset($_GET['msg']) ? ': ' . esc_html($_GET['msg']) : '.'; ?></p></div>
+            <div class="notice notice-error is-dismissible"><p>Pairing failed<?php echo isset($_GET['msg']) ? ': ' . esc_html($_GET['msg']) : '.'; ?></p></div>
         <?php endif; ?>
     <?php endif; ?>
     <?php if (isset($_GET['purge'])): ?>
-        <div class="updated"><p><?php echo $_GET['purge']==='all' ? 'All Unit Connector data purged.' : 'Unit data purged.'; ?></p></div>
+        <div class="notice notice-warning is-dismissible"><p><?php echo $_GET['purge']==='all' ? 'All Unit Connector data purged.' : 'Unit data purged.'; ?></p></div>
     <?php endif; ?>
     <?php if (isset($_GET['tmon_cfg'])): ?>
         <?php if ($_GET['tmon_cfg'] === 'staged'): ?>
-            <div class="updated"><p>Settings staged for Unit ID: <?php echo esc_html($_GET['unit_id'] ?? ''); ?></p></div>
+            <div class="notice notice-success is-dismissible"><p>Settings staged for Unit ID: <?php echo esc_html($_GET['unit_id'] ?? ''); ?></p></div>
         <?php else: ?>
-            <div class="error"><p>Settings staging failed<?php echo isset($_GET['msg']) ? ': ' . esc_html($_GET['msg']) : '.'; ?></p></div>
+            <div class="notice notice-error is-dismissible"><p>Settings staging failed<?php echo isset($_GET['msg']) ? ': ' . esc_html($_GET['msg']) : '.'; ?></p></div>
         <?php endif; ?>
     <?php endif; ?>
+    <script>
+    (function(){
+        // Auto-hide admin notices after 6 seconds
+        setTimeout(function(){
+            document.querySelectorAll('.notice.is-dismissible').forEach(function(n){
+                n.classList.add('hidden');
+            });
+        }, 6000);
+    })();
+    </script>
 
     <form method="post" action="options.php">
         <?php settings_fields('tmon_uc_settings'); do_settings_sections('tmon_uc_settings'); ?>

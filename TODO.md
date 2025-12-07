@@ -167,3 +167,24 @@ Testing
 - [ ] Firmware: staged settings fetch/apply path; confirm-applied POST.
 - [ ] UC: config form save/load; REST staging endpoints; device mirroring.
 - [ ] Admin: enqueue provisioning from UC post; UC pairings display; device lists in shortcodes.
+
+TMON Admin — Fixes
+- [x] Add fallback tmon_admin_provisioned_devices_page to prevent missing-callback fatal.
+- [ ] Ensure includes/provisioning.php defines the full Provisioned Devices page; wire menu to it.
+
+Unit Connector — Notices and Pairing
+- [x] Make admin notices dismissible and auto-hide.
+- [ ] Improve UC↔Admin pairing diagnostics: store normalized hub URL, show keys/state, add retry hints.
+
+Firmware (Micropython) — Optimization Plan
+- [ ] Consolidate duplicate imports and reduce global side effects in utils.py and main.py.
+- [ ] Gate LoRa, sampling, and uploader tasks with clear role/flag checks; avoid duplicate schedulers (one source of truth).
+- [ ] Reduce payload size in field_data.log: compact keys, skip zeros/defaults, configurable batch size per memory profile.
+- [ ] Centralize timestamp helpers and replace ad-hoc localtime uses.
+- [ ] Abstract OLED/debug output; ensure non-blocking, bounded-length messages.
+- [ ] Add backpressure-aware upload (pause when memory low or connectivity errors spike).
+- [ ] Extract configuration persistence helpers to a dedicated module; reuse across settings_apply/main/utils.
+
+Testing
+- [ ] Validate pairing flows: UC pairs, Admin recognizes, shortcodes list devices; add fake responses for dev.
+- [ ] End-to-end staged settings: UC form → staged JSON → device fetch/apply → confirm-applied → Admin notified.
