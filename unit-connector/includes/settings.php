@@ -150,10 +150,6 @@ add_action('admin_post_tmon_uc_pair_with_hub', function(){
     check_admin_referer('tmon_uc_pair_with_hub');
     $hub = trim(get_option('tmon_uc_hub_url', home_url()));
     if (stripos($hub, 'http') !== 0) { $hub = 'https://' . ltrim($hub, '/'); }
-    if (!$hub) {
-        wp_safe_redirect(admin_url('admin.php?page=tmon-settings&paired=0&msg=nohub'));
-        exit;
-    }
     $local_key = get_option('tmon_uc_admin_key', '');
     if (!$local_key) {
         try { $local_key = bin2hex(random_bytes(24)); } catch (Exception $e) { $local_key = wp_generate_password(48, false, false); }
@@ -165,7 +161,6 @@ add_action('admin_post_tmon_uc_pair_with_hub', function(){
         'headers' => ['Content-Type' => 'application/json', 'Accept'=>'application/json', 'User-Agent'=>'TMON-UC/1.0'],
         'body' => wp_json_encode([
             'site_url' => home_url(),
-            'site_name'=> get_option('blogname'),
             'uc_key'   => $local_key,
         ]),
     ]);
@@ -178,15 +173,20 @@ add_action('admin_post_tmon_uc_pair_with_hub', function(){
     if ($code === 200 && is_array($body) && !empty($body['hub_key'])) {
         update_option('tmon_uc_hub_shared_key', sanitize_text_field($body['hub_key']));
         if (!empty($body['read_token'])) update_option('tmon_uc_hub_read_token', sanitize_text_field($body['read_token']));
-        // Track normalized pairing for diagnostics
+        // Track normalized pairing
         $paired = get_option('tmon_uc_paired_sites', []);
         if (!is_array($paired)) $paired = [];
-        $paired[tmon_uc_normalize_url($hub)] = [
+        $norm = tmon_uc_normalize_url($hub);
+        $paired[$norm] = [
             'site'      => $hub,
             'paired_at' => current_time('mysql'),
             'read_token'=> isset($body['read_token']) ? sanitize_text_field($body['read_token']) : '',
         ];
         update_option('tmon_uc_paired_sites', $paired, false);
+        // Backfill devices
+        if (function_exists('tmon_uc_backfill_provisioned_from_admin')) {
+            tmon_uc_backfill_provisioned_from_admin();
+        }
         wp_safe_redirect(admin_url('admin.php?page=tmon-settings&paired=1'));
     } else {
         wp_safe_redirect(admin_url('admin.php?page=tmon-settings&paired=0&msg=bad_response'));
@@ -358,10 +358,6 @@ add_action('admin_post_tmon_uc_pair_with_hub', function(){
     check_admin_referer('tmon_uc_pair_with_hub');
     $hub = trim(get_option('tmon_uc_hub_url', home_url()));
     if (stripos($hub, 'http') !== 0) { $hub = 'https://' . ltrim($hub, '/'); }
-    if (!$hub) {
-        wp_safe_redirect(admin_url('admin.php?page=tmon-settings&paired=0&msg=nohub'));
-        exit;
-    }
     $local_key = get_option('tmon_uc_admin_key', '');
     if (!$local_key) {
         try { $local_key = bin2hex(random_bytes(24)); } catch (Exception $e) { $local_key = wp_generate_password(48, false, false); }
@@ -373,7 +369,6 @@ add_action('admin_post_tmon_uc_pair_with_hub', function(){
         'headers' => ['Content-Type' => 'application/json', 'Accept'=>'application/json', 'User-Agent'=>'TMON-UC/1.0'],
         'body' => wp_json_encode([
             'site_url' => home_url(),
-            'site_name'=> get_option('blogname'),
             'uc_key'   => $local_key,
         ]),
     ]);
@@ -386,15 +381,20 @@ add_action('admin_post_tmon_uc_pair_with_hub', function(){
     if ($code === 200 && is_array($body) && !empty($body['hub_key'])) {
         update_option('tmon_uc_hub_shared_key', sanitize_text_field($body['hub_key']));
         if (!empty($body['read_token'])) update_option('tmon_uc_hub_read_token', sanitize_text_field($body['read_token']));
-        // Track normalized pairing for diagnostics
+        // Track normalized pairing
         $paired = get_option('tmon_uc_paired_sites', []);
         if (!is_array($paired)) $paired = [];
-        $paired[tmon_uc_normalize_url($hub)] = [
+        $norm = tmon_uc_normalize_url($hub);
+        $paired[$norm] = [
             'site'      => $hub,
             'paired_at' => current_time('mysql'),
             'read_token'=> isset($body['read_token']) ? sanitize_text_field($body['read_token']) : '',
         ];
         update_option('tmon_uc_paired_sites', $paired, false);
+        // Backfill devices
+        if (function_exists('tmon_uc_backfill_provisioned_from_admin')) {
+            tmon_uc_backfill_provisioned_from_admin();
+        }
         wp_safe_redirect(admin_url('admin.php?page=tmon-settings&paired=1'));
     } else {
         wp_safe_redirect(admin_url('admin.php?page=tmon-settings&paired=0&msg=bad_response'));

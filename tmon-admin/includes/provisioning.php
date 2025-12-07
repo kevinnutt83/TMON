@@ -1208,3 +1208,97 @@ add_action('admin_post_tmon_admin_provision_device', function(){
 	}
 	exit;
 });
+
+// Ensure minimal schema helpers (idempotent)
+if (!function_exists('tmon_admin_ensure_table')) {
+	function tmon_admin_ensure_table() {
+		global $wpdb;
+		if (!$wpdb || empty($wpdb->prefix)) return;
+		$prov = $wpdb->prefix . 'tmon_provisioned_devices';
+		$collate = $wpdb->get_charset_collate();
+		$wpdb->query("CREATE TABLE IF NOT EXISTS {$prov} (
+			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+			unit_id VARCHAR(64) NOT NULL,
+			machine_id VARCHAR(64) NOT NULL,
+			unit_name VARCHAR(191) NULL,
+			plan VARCHAR(64) NULL,
+			role VARCHAR(32) NULL,
+			site_url VARCHAR(191) NULL,
+			settings_staged LONGTEXT NULL,
+			status VARCHAR(32) NOT NULL DEFAULT 'pending',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			UNIQUE KEY unit_machine (unit_id, machine_id),
+			KEY status_idx (status)
+		) {$collate}");
+		$dev = $wpdb->prefix . 'tmon_devices';
+		// Columns used by provisioning page
+		$cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev}");
+		if ($cols) {
+			if (!in_array('wordpress_api_url', $cols)) {
+				$wpdb->query("ALTER TABLE {$dev} ADD COLUMN wordpress_api_url VARCHAR(191) NULL");
+			}
+			if (!in_array('unit_name', $cols)) {
+				$wpdb->query("ALTER TABLE {$dev} ADD COLUMN unit_name VARCHAR(191) NULL");
+			}
+			if (!in_array('plan', $cols)) {
+				$wpdb->query("ALTER TABLE {$dev} ADD COLUMN plan VARCHAR(64) NULL");
+			}
+			if (!in_array('role', $cols)) {
+				$wpdb->query("ALTER TABLE {$dev} ADD COLUMN role VARCHAR(32) NULL");
+			}
+			if (!in_array('provisioned', $cols)) {
+				$wpdb->query("ALTER TABLE {$dev} ADD COLUMN provisioned TINYINT(1) NOT NULL DEFAULT 0");
+			}
+			if (!in_array('canBill', $cols)) {
+				$wpdb->query("ALTER TABLE {$dev} ADD COLUMN canBill TINYINT(1) NOT NULL DEFAULT 0");
+			}
+			if (!in_array('last_seen', $cols)) {
+				$wpdb->query("ALTER TABLE {$dev} ADD COLUMN last_seen DATETIME NULL");
+			}
+		}
+	}
+}
+
+// Save & Provision handler — persist and redirect with notice
+add_action('admin_post_tmon_admin_provision_device', function(){
+	if (!current_user_can('manage_options')) wp_die('Forbidden');
+	check_admin_referer('tmon_admin_provision_device');
+	global $wpdb;
+	tmon_admin_ensure_table();
+
+	$unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
+	$machine_id = sanitize_text_field($_POST['machine_id'] ?? '');
+	$unit_name = sanitize_text_field($_POST['unit_name'] ?? '');
+	$plan = sanitize_text_field($_POST['plan'] ?? '');
+	$role = sanitize_text_field($_POST['role'] ?? '');
+	$site_url = esc_url_raw($_POST['site_url'] ?? '');
+	$settings_staged = isset($_POST['settings_staged']) ? wp_unslash($_POST['settings_staged']) : '';
+	$settings_json = is_string($settings_staged) && $settings_staged !== '' ? $settings_staged : '';
+
+	$ok = false;
+	if ($unit_id && $machine_id) {
+		// Upsert provisioned_devices
+		$prov = $wpdb->prefix . 'tmon_provisioned_devices';
+		$wpdb->query($wpdb->prepare(
+			"INSERT INTO {$prov} (unit_id,machine_id,unit_name,plan,role,site_url,settings_staged,status,created_at,updated_at)
+			 VALUES (%s,%s,%s,%s,%s,%s,%s,'queued',NOW(),NOW())
+			 ON DUPLICATE KEY UPDATE unit_name=VALUES(unit_name), plan=VALUES(plan), role=VALUES(role), site_url=VALUES(site_url), settings_staged=VALUES(settings_staged), status='queued', updated_at=NOW()",
+			$unit_id,$machine_id,$unit_name,$plan,$role,$site_url,$settings_json
+		));
+		// Mirror to tmon_devices
+		$dev = $wpdb->prefix . 'tmon_devices';
+		$wpdb->query($wpdb->prepare(
+			"UPDATE {$dev} SET unit_name=%s, plan=%s, role=%s, wordpress_api_url=%s, provisioned=0 WHERE unit_id=%s OR machine_id=%s",
+			$unit_name,$plan,$role,$site_url,$unit_id,$machine_id
+		));
+		$ok = true;
+	}
+
+	// Redirect with success/failure
+	$redir = wp_get_referer() ?: admin_url('admin.php?page=tmon-admin-provisioning');
+	$args = ['provision' => $ok ? 'queued' : 'failed'];
+	wp_safe_redirect(add_query_arg($args, $redir));
+	exit;
+});

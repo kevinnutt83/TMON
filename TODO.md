@@ -277,3 +277,17 @@ Verification
 - [ ] Provisioned Devices page loads without fatal and displays rows.
 - [ ] Pairing/backfill populates UC devices; Admin offline notice clears via check-ins.
 - [ ] Commands staged → polled → executed → confirmed flow visible in UC/Admin logs.
+
+TMON Admin — Provisioning Save
+- [x] Persist Save & Provision to tmon_provisioned_devices and mirror to tmon_devices.
+- [x] Redirect-after-POST with success/failure notice.
+
+Unit Connector — Pairing Persistence
+- [x] Persist hub_key/read_token and normalized pairing.
+- [x] Backfill devices after pairing.
+
+Verification
+- [ ] Save & Provision updates DB rows and shows queued notice.
+- [ ] UC pairing creates records and devices backfill visible on UC provisioned page.
+- [ ] Device first check-in claims via Admin confirm and updates UC mirror.
+- [ ] Commands staged, polled, executed, confirmed; status visible.
