@@ -263,6 +263,49 @@ PLAN = ""  # NEW: subscription plan (standard/pro/enterprise) applied via provis
 
 PROVISION_REBOOT_GUARD_FILE = LOG_DIR + '/provision_reboot.flag'  # Prevent repeated soft resets after provisioning
 
+# --- UC Commands & Staged Settings Controls ---
+# Devices poll UC for staged commands; confirm after execution
+COMMANDS_POLL_INTERVAL_S = 20                # seconds between command polls
+COMMANDS_MAX_PER_POLL = 10                   # max commands to fetch in one poll
+COMMAND_CONFIRM_DELAY_S = 0.2                # small delay before confirming back
+
+# Staged settings application behavior
+APPLY_STAGED_SETTINGS_ON_BOOT = True         # if staged file exists, apply on boot
+APPLY_STAGED_SETTINGS_ON_SYNC = True         # re-check staged settings on each UC/Admin sync
+STAGED_SETTINGS_KEYS_ALLOW = [               # optional allowlist; if empty, accept all keys from UC
+    'WORDPRESS_API_URL','TMON_ADMIN_API_URL','NODE_TYPE','UNIT_Name','PLAN',
+    'ENABLE_WIFI','ENABLE_LORA','ENABLE_OLED','DEVICE_SUSPENDED',
+    'WIFI_SSID','WIFI_PASS','WIFI_CONN_RETRIES','WIFI_BACKOFF_S',
+    'OTA_ENABLED','OTA_CHECK_INTERVAL_S','OTA_APPLY_INTERVAL_S',
+    'OTA_VERSION_ENDPOINT','OTA_MANIFEST_URL',
+    'SAMPLE_TEMP','SAMPLE_BAR','SAMPLE_HUMID','SYS_VOLTAGE_SAMPLE_INTERVAL_S',
+    'GPS_ENABLED','GPS_SOURCE','GPS_LAT','GPS_LNG','GPS_ALT_M','GPS_ACCURACY_M',
+    'FIELD_DATA_HMAC_ENABLED','FIELD_DATA_HMAC_SECRET',
+    'DEBUG','DEBUG_PROVISION','DEBUG_LORA','DEBUG_WIFI','DEBUG_OTA'
+]
+
+# Optional denylist to prevent accidental overrides
+STAGED_SETTINGS_KEYS_DENY = [
+    'FIRMWARE_VERSION','MACHINE_ID'  # never override these from UC
+]
+
+# Command names expected from UC/Admin and their runtime aliases
+COMMAND_ALIASES = {
+    'relay_ctrl': 'relay_ctrl',      # {'relay':1,'state':'on'|'off'}
+    'set_var': 'set_var',            # {'key':'DEBUG','value':true}
+    'run_func': 'run_func',          # {'name':'reboot'|'ota_check'...,'args':[]}
+    'firmware_update': 'firmware_update'
+}
+
+# --- OTA/Repository integration aliases (used by ota.py and utils.py) ---
+OTA_VERSION_ENDPOINT = OTA_VERSION_ENDPOINT     # alias retained for clarity
+OTA_MANIFEST_URL = OTA_MANIFEST_URL             # alias retained for clarity
+OTA_FIRMWARE_BASE_URL = OTA_FIRMWARE_BASE_URL   # ensure consistency
+
+# --- Admin/UC integration defaults (device-side) ---
+# If WORDPRESS_API_URL is empty at first boot, device will read persisted file and defer until provisioned.
+# The device firmware prefers persisted WORDPRESS_API_URL loaded via utils.load_persisted_wordpress_api_url().
+
 # NOTE:
 # - sdata.py should include LAST_ERROR_* when TELEMETRY_INCLUDE_LAST_ERROR is True.
 # - Sender must append delivered entries to FIELD_DATA_DELIVERED_LOG and truncate FIELD_DATA_LOG post-send.
