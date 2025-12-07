@@ -469,7 +469,7 @@ add_action('admin_post_tmon_uc_push_staged_to_admin', function(){
     exit;
 });
 
-// Define early to avoid "undefined function tmon_uc_normalize_url" fatals
+// Early normalize helper to avoid fatal in admin_post handlers
 if (!function_exists('tmon_uc_normalize_url')) {
 	function tmon_uc_normalize_url($url) {
 		$u = trim((string)$url);
@@ -483,12 +483,12 @@ if (!function_exists('tmon_uc_normalize_url')) {
 	}
 }
 
-// Ensure command table with status column exists
+// Ensure command table exists (with status column) before any use
 function tmon_uc_ensure_command_table() {
 	global $wpdb;
 	$table = $wpdb->prefix . 'tmon_device_commands';
 	$collate = $wpdb->get_charset_collate();
-	$sql = "CREATE TABLE IF NOT EXISTS {$table} (
+	$wpdb->query("CREATE TABLE IF NOT EXISTS {$table} (
 		id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
 		device_id VARCHAR(64) NOT NULL,
 		command VARCHAR(64) NOT NULL,
@@ -499,12 +499,11 @@ function tmon_uc_ensure_command_table() {
 		PRIMARY KEY (id),
 		KEY device_idx (device_id),
 		KEY status_idx (status)
-	) {$collate}";
-	$wpdb->query($sql);
+	) {$collate}");
 }
 add_action('init', 'tmon_uc_ensure_command_table');
 
-// Cron: requeue stale claimed commands back to queued
+// Cron: requeue stale claimed commands back to queued (guard column exists)
 add_action('init', function(){
 	if (!wp_next_scheduled('tmon_uc_command_requeue_cron')) {
 		wp_schedule_event(time() + 60, 'hourly', 'tmon_uc_command_requeue_cron');
@@ -514,6 +513,7 @@ add_action('tmon_uc_command_requeue_cron', function(){
 	global $wpdb;
 	tmon_uc_ensure_command_table();
 	$table = $wpdb->prefix . 'tmon_device_commands';
+	// Status column ensured above; run requeue safely
 	$wpdb->query("UPDATE {$table} SET status='queued' WHERE status='claimed' AND updated_at < (NOW() - INTERVAL 5 MINUTE)");
 });
 

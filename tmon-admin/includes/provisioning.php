@@ -1153,93 +1153,58 @@ EOT;
     echo '</div>'; // end of provisioning page markup
 }
 
-/**
- * Push device registration + settings to a Unit Connector site.
- * Returns true on success.
- */
-function tmon_admin_push_to_uc_site($unit_id, $site_url, $role = 'base', $maybe_name = '', $company_id = 0, $gps_lat = null, $gps_lng = null, $firmware = '', $firmware_url = '') {
-	global $wpdb;
-	if (empty($unit_id) || empty($site_url)) return false;
-	$headers = ['Content-Type'=>'application/json'];
-	$pairings = get_option('tmon_admin_uc_sites', []);
-	$uc_key = is_array($pairings) && isset($pairings[$site_url]['uc_key']) ? $pairings[$site_url]['uc_key'] : '';
-
-	// Register device
-	$reg_endpoint = rtrim($site_url, '/') . '/wp-json/tmon/v1/admin/device/register';
-	$reg_body = ['unit_id' => $unit_id];
-	if (!empty($maybe_name)) $reg_body['unit_name'] = $maybe_name;
-	if ($company_id) $reg_body['company_id'] = $company_id;
-	$reg_resp = wp_remote_post($reg_endpoint, ['timeout'=>20,'headers'=>$headers,'body'=>wp_json_encode($reg_body)]);
-	$reg_code = !is_wp_error($reg_resp) ? wp_remote_retrieve_response_code($reg_resp) : 0;
-	$reg_ok = !is_wp_error($reg_resp) && in_array($reg_code, [200, 201], true);
-
-	// Push settings (NODE_TYPE and optional GPS + company + firmware)
-	$settings = ['NODE_TYPE'=>$role, 'WIFI_DISABLE_AFTER_PROVISION'=>($role === 'remote')];
-	if (!empty($maybe_name)) { $settings['UNIT_Name'] = $maybe_name; }
-	if ($company_id) { $settings['COMPANY_ID'] = $company_id; }
-	if (!is_null($gps_lat) && !is_null($gps_lng)) { $settings['GPS_LAT']=$gps_lat; $settings['GPS_LNG']=$gps_lng; }
-	if (!empty($firmware)) { $settings['FIRMWARE'] = $firmware; }
-	if (!empty($firmware_url)) { $settings['FIRMWARE_URL'] = $firmware_url; }
-	$set_endpoint = rtrim($site_url, '/') . '/wp-json/tmon/v1/admin/device/settings';
-	$set_resp = wp_remote_post($set_endpoint, ['timeout'=>20,'headers'=>$headers,'body'=>wp_json_encode(['unit_id'=>$unit_id,'settings'=>$settings])]);
-	$set_code = !is_wp_error($set_resp) ? wp_remote_retrieve_response_code($set_resp) : 0;
-	$set_ok = !is_wp_error($set_resp) && in_array($set_code, [200, 201], true);
-
-	do_action('tmon_admin_audit', 'send_to_uc_registry', sprintf('unit_id=%s name=%s role=%s site=%s firmware=%s firmware_url=%s', $unit_id, $maybe_name, $role, $site_url, $firmware, $firmware_url));
-	return ($reg_ok && $set_ok);
-}
-
-// Handle Admin purge actions from UI
-add_action('admin_init', function(){
-    if (!current_user_can('manage_options')) return;
-    // Remove duplicate purge logic (moved to settings.php)
-    # previously handled purge_all / purge_unit here; this logic is now centralized in includes/settings.php
-});
-
-// Provisioning History page renderer
-function tmon_admin_provisioning_history_page() {
+// Named renderer used by menu callback
+function tmon_admin_render_provisioned_devices() {
 	if (!current_user_can('manage_options')) wp_die('Forbidden');
 	global $wpdb;
-	$table = $wpdb->prefix . 'tmon_provision_history';
-	$has = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table));
-	echo '<div class="wrap"><h1>Provisioning History</h1>';
-	if (!$has) { echo '<p><em>No history table found.</em></p></div>'; return; }
-	$rows = $wpdb->get_results("SELECT id, unit_id, machine_id, action, user, created_at FROM {$table} ORDER BY id DESC LIMIT 200", ARRAY_A);
-	if (!$rows) { echo '<p><em>No history yet.</em></p></div>'; return; }
-	echo '<table class="wp-list-table widefat striped"><thead><tr><th>ID</th><th>Unit ID</th><th>Machine ID</th><th>Action</th><th>Actor</th><th>Time</th></tr></thead><tbody>';
+	$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+	$dev_table  = $wpdb->prefix . 'tmon_devices';
+	$rows = [];
+
+	$has_prov = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $prov_table));
+	$has_dev  = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table));
+
+	if ($has_prov) {
+		$dev_cols = $has_dev ? $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}") : [];
+		$join_name = $has_dev && in_array('unit_name',$dev_cols) ? ", d.unit_name AS unit_name_dev" : "";
+		$join_bill = $has_dev && in_array('canBill',$dev_cols) ? ", d.canBill AS canBill" : "";
+		$sql = "SELECT p.id,p.unit_id,p.machine_id,p.plan,p.status,p.site_url,p.unit_name,p.settings_staged,p.created_at,p.updated_at{$join_name}{$join_bill}
+		        FROM {$prov_table} p LEFT JOIN {$dev_table} d ON d.unit_id=p.unit_id AND d.machine_id=p.machine_id
+		        ORDER BY p.created_at DESC";
+		$rows = $wpdb->get_results($sql, ARRAY_A);
+	}
+
+	echo '<div class="wrap"><h1>Provisioned Devices</h1>';
+	if (!$rows) { echo '<p><em>No provisioned devices found.</em></p></div>'; return; }
+	echo '<table class="wp-list-table widefat striped"><thead><tr>';
+	echo '<th>ID</th><th>Unit ID</th><th>Machine ID</th><th>Name</th><th>Plan</th><th>Status</th><th>Site</th><th>Staged</th><th>Can Bill</th><th>Created</th><th>Updated</th>';
+	echo '</tr></thead><tbody>';
 	foreach ($rows as $r) {
+		$name = !empty($r['unit_name_dev']) ? $r['unit_name_dev'] : (!empty($r['unit_name']) ? $r['unit_name'] : '');
+		$canBill = isset($r['canBill']) ? (intval($r['canBill']) ? 'Yes' : 'No') : 'No';
+		$staged = !empty($r['settings_staged']) ? 'Yes' : 'No';
 		echo '<tr>';
-		echo '<td>'.intval($r['id']).'</td><td>'.esc_html($r['unit_id']).'</td><td>'.esc_html($r['machine_id']).'</td>';
-		echo '<td>'.esc_html($r['action']).'</td><td>'.esc_html($r['user']).'</td><td>'.esc_html($r['created_at']).'</td>';
+		echo '<td>'.intval($r['id']).'</td>';
+		echo '<td>'.esc_html($r['unit_id']).'</td>';
+		echo '<td>'.esc_html($r['machine_id']).'</td>';
+		echo '<td>'.esc_html($name).'</td>';
+		echo '<td>'.esc_html($r['plan']).'</td>';
+		echo '<td>'.esc_html($r['status']).'</td>';
+		echo '<td>'.esc_html($r['site_url']).'</td>';
+		echo '<td>'.esc_html($staged).'</td>';
+		echo '<td>'.esc_html($canBill).'</td>';
+		echo '<td>'.esc_html($r['created_at']).'</td>';
+		echo '<td>'.esc_html($r['updated_at']).'</td>';
 		echo '</tr>';
 	}
 	echo '</tbody></table></div>';
 }
 
-// Confirm-applied: notify UC with device record to cache
-add_action('rest_api_init', function(){
-	register_rest_route('tmon-admin/v1', '/uc/confirm-device', [
-		'methods' => 'POST',
-		'callback' => function($req){
-			$unit_id = sanitize_text_field($req->get_param('unit_id'));
-			$machine_id = sanitize_text_field($req->get_param('machine_id'));
-			$site_url = esc_url_raw($req->get_param('site_url'));
-			global $wpdb;
-			$dev_table = $wpdb->prefix . 'tmon_devices';
-			$dev = $wpdb->get_row($wpdb->prepare("SELECT unit_id, machine_id, unit_name, plan, role FROM {$dev_table} WHERE unit_id=%s OR machine_id=%s LIMIT 1", $unit_id, $machine_id), ARRAY_A);
-			if (!$dev) $dev = ['unit_id'=>$unit_id,'machine_id'=>$machine_id,'unit_name'=>'','plan'=>'','role'=>''];
-			// push to UC cache
-			$payload = ['status'=>'ok'] + $dev;
-			return rest_ensure_response($payload);
-		},
-		'permission_callback' => '__return_true',
-	]);
-});
-
-// Save & Provision: force redirect-after-POST
+// Fix white screen: enforce redirect-after-POST in Save & Provision handler
 add_action('admin_post_tmon_admin_provision_device', function(){
-	// ...existing logic...
 	$redir = wp_get_referer() ?: admin_url('admin.php?page=tmon-admin-provisioning');
-	if (!headers_sent()) wp_safe_redirect(add_query_arg(['provision'=>'queued'], $redir));
+	if (!headers_sent()) {
+		wp_safe_redirect(add_query_arg(['provision'=>'queued'], $redir));
+	}
 	exit;
 });

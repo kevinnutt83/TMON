@@ -1,4 +1,4 @@
-# Firmware Version: v2.02.0
+# Firmware Version: v2.02.1
 
 # Move LOG_DIR and essential file paths near the top so other constants can reference them.
 LOG_DIR = '/logs'
@@ -25,7 +25,7 @@ UNIT_Name = "No Device Name"    # Human-friendly name (provisioned)
 NODE_TYPE = 'base'             # 'base','wifi', or 'remote'; base can host LoRa network & WiFi; remote uses LoRa primarily
 #NODE_TYPE = 'remote'          # Uncomment for remote role during flashing
 
-FIRMWARE_VERSION = "v2.02.0"    # Bumped automatically by OTA; compared during update check
+FIRMWARE_VERSION = "v2.02.1"    # Bumped automatically by OTA; compared during update check
 
  # WordPress Unit Connector API integration
 WORDPRESS_API_URL = ""   # Customer Unit Connector site for provisioned devices
@@ -226,6 +226,19 @@ OTA_FILES_ALLOWLIST = [                   # Limit which files can be updated via
 ]
 OTA_MANIFEST_SIG_URL = OTA_MANIFEST_URL + '.sig'  # Optional detached HMAC signature (hex)
 OTA_MANIFEST_HMAC_SECRET = ''             # If set, verify manifest with HMAC(secret, manifest_bytes)
+
+# OTA fallback mirrors to reduce GitHub 400s during fetch
+OTA_VERSION_URLS = [
+    'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/version.txt',
+    'https://rawcdn.githack.com/kevinnutt83/TMON/main/micropython/version.txt',
+    'https://cdn.jsdelivr.net/gh/kevinnutt83/TMON@main/micropython/version.txt',
+]
+OTA_MANIFEST_URLS = [
+    'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/manifest.json',
+    'https://rawcdn.githack.com/kevinnutt83/TMON/main/micropython/manifest.json',
+    'https://cdn.jsdelivr.net/gh/kevinnutt83/TMON@main/micropython/manifest.json',
+]
+OTA_HTTP_HEADERS = {'User-Agent': 'TMON-Device/2.02.1', 'Accept': 'application/json'}
 
 # --- Connectivity ---
 ENABLE_WIFI = True

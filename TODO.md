@@ -253,3 +253,27 @@ Pending (from conversation)
 - [ ] Save & Provision: enforce redirect-after-POST; surface admin notices and errors.
 - [ ] UC Settings: show all firmware settings (typed + raw JSON), default Admin API URL to home_url().
 - [ ] Admin offline notice: update last_seen via UC heartbeat/check-in.
+
+TMON Admin — Firmware Fetch
+- [x] AJAX handler uses fallback mirrors with headers to avoid GitHub 400s.
+- [ ] Add admin UI notice for manifest/version and last fetch time.
+
+TMON Admin — Provisioned Devices
+- [x] Ensure menu callback exists and delegates to renderer.
+- [x] Renderer shows provisioned devices with canBill and staged flags.
+- [x] Save & Provision handler always redirects (no white screen).
+
+Unit Connector — Command Table & Cron
+- [x] Normalize URL helper defined early (prevents fatal).
+- [x] Ensure tmon_device_commands table schema includes status column.
+- [x] Requeue cron safely updates claimed → queued when stale.
+
+Firmware — Version & OTA
+- [x] Bump to v2.02.1.
+- [x] Add OTA fallback mirrors and headers.
+
+Verification
+- [ ] Firmware metadata fetch works via AJAX (no 400).
+- [ ] Provisioned Devices page loads without fatal and displays rows.
+- [ ] Pairing/backfill populates UC devices; Admin offline notice clears via check-ins.
+- [ ] Commands staged → polled → executed → confirmed flow visible in UC/Admin logs.

@@ -436,12 +436,63 @@ if (!function_exists('tmon_admin_firmware_page')) {
 	}
 }
 
-// Menu callback: use real renderer if present
+// Ensure menu callback exists to prevent "invalid function name" fatal
 if (!function_exists('tmon_admin_provisioned_devices_page')) {
-	// Fallback exists elsewhere; no-op here
-} else {
-	// already defined in includes/provisioning.php and will be used by menu
+	function tmon_admin_provisioned_devices_page() {
+		if (!current_user_can('manage_options')) wp_die('Forbidden');
+		// Delegate to includes/provisioning.php renderer if available
+		if (function_exists('tmon_admin_render_provisioned_devices')) {
+			tmon_admin_render_provisioned_devices();
+			return;
+		}
+		echo '<div class="wrap"><h1>Provisioned Devices</h1>';
+		echo '<div class="notice notice-info"><p>Provisioned devices renderer not loaded. Ensure includes/provisioning.php is included.</p></div>';
+		echo '</div>';
+	}
 }
+
+// Robust AJAX: fetch firmware manifest/version with fallback mirrors and headers to avoid GitHub 400s
+add_action('wp_ajax_tmon_admin_fetch_github_manifest', function(){
+	if (!current_user_can('manage_options')) wp_send_json_error(['message' => 'Forbidden'], 403);
+
+	$version_urls = [
+		'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/version.txt',
+		'https://rawcdn.githack.com/kevinnutt83/TMON/main/micropython/version.txt',
+		'https://cdn.jsdelivr.net/gh/kevinnutt83/TMON@main/micropython/version.txt',
+	];
+	$manifest_urls = [
+		'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/manifest.json',
+		'https://rawcdn.githack.com/kevinnutt83/TMON/main/micropython/manifest.json',
+		'https://cdn.jsdelivr.net/gh/kevinnutt83/TMON@main/micropython/manifest.json',
+	];
+	$headers = [
+		'User-Agent' => 'TMON-Admin/0.2.x',
+		'Accept'     => 'application/json',
+	];
+
+	$version = null;
+	foreach ($version_urls as $u) {
+		$r = wp_remote_get($u, ['timeout' => 15, 'headers' => $headers]);
+		if (!is_wp_error($r) && wp_remote_retrieve_response_code($r) === 200) {
+			$version = trim(wp_remote_retrieve_body($r));
+			if ($version) break;
+		}
+	}
+	$manifest = null;
+	foreach ($manifest_urls as $u) {
+		$r = wp_remote_get($u, ['timeout' => 15, 'headers' => $headers]);
+		if (!is_wp_error($r) && wp_remote_retrieve_response_code($r) === 200) {
+			$body = wp_remote_retrieve_body($r);
+			$m = json_decode($body, true);
+			if (is_array($m)) { $manifest = $m; break; }
+		}
+	}
+
+	if (!$version || !$manifest) {
+		wp_send_json_error(['message' => 'Failed to fetch firmware metadata from GitHub (checked mirrors).'], 400);
+	}
+	wp_send_json_success(['version' => $version, 'manifest' => $manifest]);
+});
 
 // Fallback helpers to avoid fatal errors if UC helper includes are not loaded
 if (!function_exists('tmon_admin_uc_pairings_get')) {
