@@ -148,36 +148,54 @@ function tmon_admin_ensure_commands_table() {
 	) {$collate}");
 }
 
-function tmon_admin_ensure_columns($table, $columns) {
-	// Fix warnings: declare and guard $wpdb
+function tmon_admin_column_exists($table, $column) {
 	global $wpdb;
-	if (!$wpdb || empty($wpdb->prefix)) { return false; }
-	$cols = $wpdb->get_results("SHOW COLUMNS FROM $table", ARRAY_A);
-	$have = [];
-	foreach (($cols ?: []) as $c) { $have[strtolower($c['Field'])] = true; }
+	if (!$wpdb || empty($wpdb->prefix)) return false;
+	$col = $wpdb->get_var($wpdb->prepare("SHOW COLUMNS FROM {$table} LIKE %s", $column));
+	return !empty($col);
+}
 
+function tmon_admin_ensure_columns($table, $columns) {
+	global $wpdb;
+	if (!$wpdb || empty($wpdb->prefix)) return false;
 	foreach ($columns as $col => $sql) {
-		if (empty($have[$col])) {
-			$wpdb->query($sql);
-			// Ensure updated_at uses ON UPDATE where created
-			if ($col === 'updated_at') {
-				$wpdb->query("ALTER TABLE $table MODIFY COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
-			}
+		// Skip if column already present
+		if (tmon_admin_column_exists($table, $col)) {
+			continue;
 		}
+		$wpdb->query($sql);
 	}
 	return true;
 }
 
-// Call ensure helpers during admin_init safely
+// Ensure device commands table exists (with status column)
+function tmon_admin_ensure_commands_table() {
+	global $wpdb;
+	if (!$wpdb || empty($wpdb->prefix)) return;
+	$table = $wpdb->prefix . 'tmon_device_commands';
+	$collate = $wpdb->get_charset_collate();
+	$wpdb->query("CREATE TABLE IF NOT EXISTS {$table} (
+		id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+		device_id VARCHAR(64) NOT NULL,
+		command VARCHAR(64) NOT NULL,
+		params LONGTEXT NULL,
+		status VARCHAR(32) NOT NULL DEFAULT 'queued',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+		PRIMARY KEY (id),
+		KEY device_idx (device_id),
+		KEY status_idx (status)
+	) {$collate}");
+}
+
 add_action('admin_init', function(){
 	global $wpdb;
-	if ($wpdb && !empty($wpdb->prefix)) {
-		tmon_admin_ensure_commands_table();
-		// Ensure canBill column exists on tmon_devices
-		tmon_admin_ensure_columns($wpdb->prefix . 'tmon_devices', [
-			'canBill' => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN canBill TINYINT(1) NOT NULL DEFAULT 0",
-		]);
-	}
+	if (!$wpdb || empty($wpdb->prefix)) return;
+	// Ensure canBill column exactly once
+	tmon_admin_ensure_columns($wpdb->prefix . 'tmon_devices', [
+		'canBill' => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN canBill TINYINT(1) NOT NULL DEFAULT 0",
+	]);
+	tmon_admin_ensure_commands_table();
 });
 
 // ...existing code...

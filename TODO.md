@@ -240,3 +240,16 @@ Verification
 - [ ] UC pairing populates hub_key/read_token; Provisioned Devices page shows devices post-backfill.
 - [ ] Admin offline notice cleared via UC/device check-ins (last_seen updated).
 - [ ] Relay commands toggle: staged, device executes, confirmation recorded.
+
+Fixes logged
+- [x] Guard $wpdb in Admin db helpers to avoid undefined warnings.
+- [x] Check column existence before ALTER to prevent duplicate-column errors.
+- [x] Define tmon_uc_normalize_url early in UC includes to avoid fatal.
+
+Pending (from conversation)
+- [ ] Provisioning History: ensure table tmon_provision_history exists and is populated on each queue/confirm step.
+- [ ] UC connection (v2.00m parity): align pairing, first-checkin claim, and Admin→UC device record push; verify device mirror populated.
+- [ ] Commands: stage from Admin shortcode buttons, device polls via UC, executes, and confirms; add Admin/UC logs and UI.
+- [ ] Save & Provision: enforce redirect-after-POST; surface admin notices and errors.
+- [ ] UC Settings: show all firmware settings (typed + raw JSON), default Admin API URL to home_url().
+- [ ] Admin offline notice: update last_seen via UC heartbeat/check-in.

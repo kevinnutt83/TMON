@@ -469,7 +469,7 @@ add_action('admin_post_tmon_uc_push_staged_to_admin', function(){
     exit;
 });
 
-// Helper: normalize URL to canonical host[:port] (ensure defined before use)
+// Define early to avoid "undefined function tmon_uc_normalize_url" fatals
 if (!function_exists('tmon_uc_normalize_url')) {
 	function tmon_uc_normalize_url($url) {
 		$u = trim((string)$url);
@@ -590,9 +590,16 @@ add_action('rest_api_init', function(){
 // Pair with hub: persist normalized pairing; then backfill provisioned devices
 add_action('admin_post_tmon_uc_pair_with_hub', function(){
 	// ...existing pairing code building $hub and $body...
-	// After success:
-	// $paired[tmon_uc_normalize_url($hub)] = [ 'site' => $hub, 'paired_at' => current_time('mysql'), 'read_token'=> ... ];
-	// update_option('tmon_uc_paired_sites', $paired, false);
+	// After success response, persist normalized pairing
+	$paired = get_option('tmon_uc_paired_sites', []);
+	if (!is_array($paired)) $paired = [];
+	$norm = tmon_uc_normalize_url($hub);
+	$paired[$norm] = [
+		'site'      => $hub,
+		'paired_at' => current_time('mysql'),
+		'read_token'=> isset($body['read_token']) ? sanitize_text_field($body['read_token']) : '',
+	];
+	update_option('tmon_uc_paired_sites', $paired, false);
 	// Backfill provisioned cache
 	if (function_exists('tmon_uc_backfill_provisioned_from_admin')) {
 		tmon_uc_backfill_provisioned_from_admin();
