@@ -129,3 +129,21 @@ Lower-priority
 Notes
 - Migrations idempotent; keep in `admin_init`.
 - Unique index `unit_machine (unit_id, machine_id)` ensures deduplication; ensure updates match normalized columns.
+
+Unit Connector — Configuration UI and Staging
+- [ ] Build a Device Configuration page that dynamically lists firmware variables from micropython/settings.py.
+- [ ] Render inputs for each variable (text, number, boolean, select where applicable) with validation and descriptions.
+- [ ] Save posted values to a staged settings record per Unit ID (DB and file), exposed via UC REST for devices.
+- [ ] Devices poll UC for staged settings; upon download, persist, apply, and soft-reboot to load new settings.
+- [ ] Add admin-post handlers: generate/read/update staged settings; push to Admin hub when appropriate.
+- [ ] Add REST endpoints for devices: GET staged settings, POST confirm-applied.
+- [ ] Ensure WiFi/base nodes: on each sync, send backlog field data, check Admin for provisioning changes, and consume UC staged settings.
+
+UC Pairings and Device Listing
+- [ ] Harden UC Pairings page by guarding helper calls and surfacing friendly errors if pairing store is missing.
+- [ ] Ensure device registrations in UC create rows consumed by shortcodes and admin pages (mirror table ensure + upsert on check-ins).
+- [ ] Add diagnostics for empty lists (explain pairing and data flow steps).
+
+MicroPython Logging
+- [x] Fix timestamp in debug_print using Unix-epoch-safe helper.
+- [ ] Confirm periodic_provision_check runs on each UC sync cycle and logs with correct time.

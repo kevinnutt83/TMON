@@ -121,7 +121,7 @@ if (!function_exists('tmon_admin_ensure_columns')) {
 			}
 		}
 
-		error_log('tmon-admin: tmon_admin_ensure_columns executed (idempotent).');
+		// error_log('tmon-admin: tmon_admin_ensure_columns executed (idempotent).'); // silenced
 		return true;
 	}
 }

@@ -615,8 +615,16 @@ async def debug_print(message, status):
             safe_msg = ''.join(ch if 32 <= ord(ch) <= 126 else ' ' for ch in safe_msg)
         except Exception:
             safe_msg = '<unprintable>'
-        current_time = time.localtime()
-        timestamp = f"{current_time[0]:04}-{current_time[1]:02}-{current_time[2]:02} {current_time[3]:02}:{current_time[4]:02}:{current_time[5]:02}"
+        # Build ISO timestamp using Unix epoch helper to avoid 2000-epoch skew
+        try:
+            unixt = get_unix_time()
+            ts = time.localtime(unixt) if hasattr(time, 'localtime') else None
+            if ts:
+                timestamp = f"{ts[0]:04}-{ts[1]:02}-{ts[2]:02} {ts[3]:02}:{ts[4]:02}:{ts[5]:02}"
+            else:
+                timestamp = str(unixt)
+        except Exception:
+            timestamp = '0'
         print(f"[{timestamp}] [{status}] {safe_msg}")
         try:
             # Gate OLED messages by ENABLE_OLED
