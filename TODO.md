@@ -165,3 +165,26 @@ Firmware (Micropython) — Optimization Plan
 Testing
 - [ ] Verify UC hourly backfill populates devices when Admin is reachable.
 - [ ] Verify Push-to-Admin triggers reprovision queue and devices receive staged settings.
+
+TMON Admin — Provisioned Devices
+- [x] Render table with joined fields and fallback to UC hub when local table is missing.
+- [x] Update DB on device confirm-applied: set provisioned, site_url, clear queued payloads.
+- [x] Add canBill column and set true on claim approval (hook-based).
+
+Unit Connector — Settings Page
+- [x] Remove duplicate element IDs (avoid multiple id="submit"/"_wpnonce").
+- [ ] Load hierarchy map JS only when Leaflet is present; suppress console noise.
+
+Command Flow (v2.00m review)
+- [ ] Verify command generation (relay on/off) format and endpoint usage in UC/Admin.
+- [ ] Ensure device firmware processes commands correctly (WiFi/LoRa paths) and posts confirmations.
+- [ ] Add command result logging to Admin/UC with status, timing, and device acknowledgements.
+- [ ] UI: add per-device command history table and current relay states.
+
+Billing (future)
+- [ ] Build billing scheduler: start when canBill=true, track cycles and usage.
+- [ ] UI: billing status per device; export/report.
+
+Testing
+- [ ] E2E: claim → canBill toggle → confirm-applied → provisioned table updates.
+- [ ] Commands: dispatch relay toggle, confirm back via device, logs reflected in Admin/UC.

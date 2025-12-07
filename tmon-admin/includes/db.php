@@ -38,6 +38,7 @@ function tmon_admin_install_schema() {
 		'provisioned' => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN provisioned TINYINT(1) NOT NULL DEFAULT 0",
 		'last_seen'   => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN last_seen DATETIME NULL DEFAULT NULL",
 		'settings'    => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN settings LONGTEXT NULL",
+		'canBill'     => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN canBill TINYINT(1) NOT NULL DEFAULT 0",
 	]);
 
 	// Generate Hub shared key if missing.

@@ -436,14 +436,11 @@ if (!function_exists('tmon_admin_firmware_page')) {
 	}
 }
 
-// Fallback: prevent fatal when menu registers Provisioned Devices page but callback is missing
+// Menu callback: use real renderer if present
 if (!function_exists('tmon_admin_provisioned_devices_page')) {
-	function tmon_admin_provisioned_devices_page() {
-		if (!current_user_can('manage_options')) wp_die('Forbidden');
-		echo '<div class="wrap"><h1>Provisioned Devices</h1>';
-		echo '<div class="notice notice-info"><p>This page depends on includes/provisioning.php. Ensure it is loaded for full features.</p></div>';
-		echo '</div>';
-	}
+	// Fallback exists elsewhere; no-op here
+} else {
+	// already defined in includes/provisioning.php and will be used by menu
 }
 
 // Fallback helpers to avoid fatal errors if UC helper includes are not loaded

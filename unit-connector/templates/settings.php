@@ -95,7 +95,7 @@
     <h2>Device Configuration (Staged Settings)</h2>
     <p class="description">Stage configuration values that devices will fetch and apply on next sync.</p>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
-        <?php wp_nonce_field('tmon_uc_stage_settings'); ?>
+        <?php wp_nonce_field('tmon_uc_stage_settings', 'tmon_uc_stage_settings_nonce'); ?>
         <input type="hidden" name="action" value="tmon_uc_stage_settings" />
         <table class="form-table">
             <tr>
@@ -127,7 +127,7 @@
             }
             ?>
         </table>
-        <?php submit_button('Stage Settings'); ?>
+        <button type="submit" class="button button-primary">Stage Settings</button>
     </form>
 
     <p>
@@ -138,16 +138,11 @@
             <input type="hidden" name="unit_id" value="" id="tmon_push_unit_id" />
             <button type="submit" class="button">Push Staged Settings to Admin</button>
         </form>
-        <script>
-        (function(){
-            // Simple helper: copy Unit ID from staging form into push form when user types
-            var unitInput = document.querySelector('input[name="unit_id"]');
-            var pushUnit = document.getElementById('tmon_push_unit_id');
-            if (unitInput && pushUnit) {
-                unitInput.addEventListener('input', function(){ pushUnit.value = unitInput.value; });
-            }
-        })();
-        </script>
+    </p>
+
+    <p>
+        <?php $refresh_url = wp_nonce_url(admin_url('admin-post.php?action=tmon_uc_refresh_devices'), 'tmon_uc_refresh_devices'); ?>
+        <a class="button button-secondary" href="<?php echo esc_url($refresh_url); ?>">Refresh Devices from Admin Hub</a>
     </p>
 
     <hr>

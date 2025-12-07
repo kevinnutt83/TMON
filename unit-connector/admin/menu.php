@@ -89,3 +89,12 @@ function tmon_uc_provisioned_page() {
     }
     echo '</tbody></table></div>';
 }
+
+// Admin-post: forward a claim to hub via proxy endpoint (already present)
+// Add action to notify Admin of approval for canBill updates when hub confirms
+add_action('admin_post_tmon_uc_submit_claim', function(){
+    // ...existing code...
+    // After success, emit a hook that Admin listens to for canBill updates
+    do_action('tmon_admin_claim_approved', $unit_id, $machine_id);
+    // ...existing code...
+});
