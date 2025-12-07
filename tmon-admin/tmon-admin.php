@@ -2,7 +2,7 @@
 /**
  * Plugin Name: TMON Admin
  * Description: Admin dashboard and management tools for TMON Unit Connector and IoT devices.
- * Version: 1.0.0
+ * Version: 0.2.0
  * Author: TMON DevOps
  */
 /*
@@ -25,7 +25,7 @@ if (!defined('ABSPATH')) exit;
 
 // Define required plugin constants early (fix: undefined constant)
 if (!defined('TMON_ADMIN_VERSION')) {
-	define('TMON_ADMIN_VERSION', '0.1.2');
+	define('TMON_ADMIN_VERSION', '0.2.0');
 }
 if (!defined('TMON_ADMIN_PATH')) {
 	define('TMON_ADMIN_PATH', plugin_dir_path(__FILE__));

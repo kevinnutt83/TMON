@@ -188,3 +188,33 @@ Billing (future)
 Testing
 - [ ] E2E: claim → canBill toggle → confirm-applied → provisioned table updates.
 - [ ] Commands: dispatch relay toggle, confirm back via device, logs reflected in Admin/UC.
+
+## Release Bump
+- MicroPython Firmware: v2.02.0
+  - Changes: corrected timestamps (Unix-epoch helper), staged settings fetch/apply path hooks, debug and OLED gating, backpressure prep for uploads.
+- TMON Admin: 0.2.0
+  - Changes: Provisioned Devices table rendering, device confirm-applied sync (provisioned/site_url/clear queue), UC pairing endpoint, canBill column migration and claim hook.
+- TMON Unit Connector: 0.2.0
+  - Changes: Settings schema + staged configuration UI, REST endpoints for staged/applied settings, pairing diagnostics, Admin push handler, hourly backfill refresh from Admin.
+
+## OTA / Repository Update Process Enhancements
+- [x] Firmware version updated in micropython/settings.py (v2.02.0).
+- [ ] Ensure OTA manifest.json includes version v2.02.0 and updated file hashes.
+- [ ] Verify version.txt reflects v2.02.0 for lightweight checks.
+- [ ] Confirm OTA client respects manifest HMAC (optional) and size caps.
+- [ ] Add CI step to validate manifest/version alignment and file integrity before tagging.
+- [ ] Document OTA rollback process in README and CHANGELOG.
+
+## CHANGELOG (to be added in repo)
+- v2.02.0 (Firmware)
+  - Fixed timestamp generation across logs.
+  - Added staged settings flow integration with UC/Admin.
+  - Prepared adaptive upload/backpressure hooks.
+- 0.2.0 (Admin/UC)
+  - Admin: Provisioned Devices page restored; device confirm-applied updates; UC pairing API.
+  - UC: Staged settings form; REST endpoints; pairing diagnostics; Admin push.
+
+## Upgrade Notes
+- Devices will detect v2.02.0 via version.txt and manifest.json; ensure both are published before rollout.
+- Admin/UC plugins should be upgraded together to 0.2.0 to keep pairing/staged settings features compatible.
+- After upgrade, re-pair UC with Admin to populate hub_key/read_token and normalized pairing store.

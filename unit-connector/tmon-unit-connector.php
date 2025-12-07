@@ -5,19 +5,19 @@
  *
  * @package TMON_Unit_Connector
  * @author  TMON DevOps
- * @version 0.1.0
+ * @version 0.2.0
  */
 
 /*
 Plugin Name: TMON Unit Connector
-Description: Connects and manages TMON devices with WordPress. Provides OTA, device management, and integration with tmon-admin.
-Version: 0.1.0
-Author: Your Name
+Description: Site-side connector for TMON devices; receives data and manages provisioning.
+Version: 0.2.0
+Author: TMON DevOps
 */
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
-define( 'TMON_UNIT_CONNECTOR_VERSION', '0.1.0' );
+define( 'TMON_UNIT_CONNECTOR_VERSION', '0.2.0' );
 define( 'TMON_UNIT_CONNECTOR_PATH', plugin_dir_path( __FILE__ ) );
 define( 'TMON_UNIT_CONNECTOR_URL', plugin_dir_url( __FILE__ ) );
 
