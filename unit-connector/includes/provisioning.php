@@ -306,3 +306,22 @@ add_shortcode('tmon_uc_devices', function ($atts) {
 	$out .= '</tbody></table></div>';
 	return $out;
 });
+
+/**
+ * Helper: get staged settings JSON for a unit or machine from UC mirror.
+ */
+function uc_get_staged_settings($unit_id = '', $machine_id = '') {
+	global $wpdb;
+	uc_devices_ensure_table();
+	$table = $wpdb->prefix . 'tmon_uc_devices';
+	$row = null;
+	if ($unit_id) {
+		$row = $wpdb->get_row($wpdb->prepare("SELECT staged_settings, staged_at FROM {$table} WHERE unit_id=%s LIMIT 1", $unit_id), ARRAY_A);
+	} elseif ($machine_id) {
+		$row = $wpdb->get_row($wpdb->prepare("SELECT staged_settings, staged_at FROM {$table} WHERE machine_id=%s LIMIT 1", $machine_id), ARRAY_A);
+	}
+	if (!$row || empty($row['staged_settings'])) return ['staged'=>false,'settings'=>[]];
+	$json = json_decode($row['staged_settings'], true);
+	if (!is_array($json)) $json = [];
+	return ['staged'=>true,'staged_at'=>$row['staged_at'],'settings'=>$json];
+}

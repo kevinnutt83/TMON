@@ -228,3 +228,181 @@ add_action('admin_post_tmon_uc_submit_claim', function(){
     wp_safe_redirect($redirect);
     exit;
 });
+
+// Firmware settings schema mapper (minimal scaffold; extend types/help as needed)
+function tmon_uc_settings_schema() {
+    return [
+        // Network
+        'WORDPRESS_API_URL' => ['type'=>'url','label'=>'Admin API URL','desc'=>'Hub endpoint for provisioning.'],
+        'WIFI_SSID' => ['type'=>'string','label'=>'WiFi SSID','desc'=>'Network SSID'],
+        'WIFI_PASSWORD' => ['type'=>'string','label'=>'WiFi Password','desc'=>'Network password'],
+        // Node role and behavior
+        'NODE_TYPE' => ['type'=>'enum','label'=>'Node Type','enum'=>['base','remote','wifi'],'desc'=>'Device role'],
+        'ENABLE_OLED' => ['type'=>'bool','label'=>'Enable OLED','desc'=>'Toggle OLED updates'],
+        // OTA
+        'OTA_CHECK_INTERVAL_S' => ['type'=>'number','label'=>'OTA Check Interval (s)','desc'=>'Periodic OTA check interval'],
+        // Debug
+        'DEBUG' => ['type'=>'bool','label'=>'Global Debug','desc'=>'Enable verbose logs'],
+    ];
+}
+
+// Admin-post: Stage settings for a device (stores JSON into tmon_uc_devices.staged_settings)
+add_action('admin_post_tmon_uc_stage_settings', function(){
+    if (!current_user_can('manage_options')) wp_die('Insufficient permissions');
+    check_admin_referer('tmon_uc_stage_settings');
+    $unit_id = isset($_POST['unit_id']) ? sanitize_text_field($_POST['unit_id']) : '';
+    if (!$unit_id) {
+        wp_safe_redirect(add_query_arg(['tmon_cfg'=>'fail','msg'=>'missing_unit'], wp_get_referer() ?: admin_url('admin.php?page=tmon-settings')));
+        exit;
+    }
+    // Build staged JSON from posted fields based on schema
+    $schema = tmon_uc_settings_schema();
+    $settings = [];
+    foreach ($schema as $key => $meta) {
+        $val = isset($_POST[$key]) ? wp_unslash($_POST[$key]) : null;
+        if ($val === null) continue;
+        switch ($meta['type']) {
+            case 'bool':
+                $settings[$key] = !!$val;
+                break;
+            case 'number':
+                $settings[$key] = is_numeric($val) ? 0 + $val : 0;
+                break;
+            default:
+                $settings[$key] = sanitize_text_field($val);
+                break;
+        }
+    }
+    global $wpdb;
+    uc_devices_ensure_table();
+    $table = $wpdb->prefix . 'tmon_uc_devices';
+    $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$table} WHERE unit_id=%s LIMIT 1", $unit_id), ARRAY_A);
+    if ($row) {
+        $wpdb->update($table, [
+            'staged_settings' => wp_json_encode($settings),
+            'staged_at' => current_time('mysql'),
+        ], ['unit_id' => $unit_id]);
+    } else {
+        $wpdb->insert($table, [
+            'unit_id' => $unit_id,
+            'machine_id' => '',
+            'staged_settings' => wp_json_encode($settings),
+            'staged_at' => current_time('mysql'),
+        ]);
+    }
+    wp_safe_redirect(add_query_arg(['tmon_cfg'=>'staged','unit_id'=>$unit_id], wp_get_referer() ?: admin_url('admin.php?page=tmon-settings')));
+    exit;
+});
+
+// REST endpoints: staged settings (GET) and applied confirmation (POST)
+add_action('rest_api_init', function(){
+    register_rest_route('tmon/v1', '/admin/device/settings-staged', [
+        'methods' => 'GET',
+        'callback' => function($request){
+            // Auth: allow hub/admin/read tokens or logged-in admin
+            $ok = is_user_logged_in() && current_user_can('manage_options');
+            $admin_key = (string) ($request->get_header('X-TMON-ADMIN') ?? '');
+            $hub_key = (string) ($request->get_header('X-TMON-HUB') ?? '');
+            $read_tok = (string) ($request->get_header('X-TMON-READ') ?? '');
+            if (!$ok) {
+                $exp_admin = get_option('tmon_uc_admin_key');
+                $exp_hub   = get_option('tmon_uc_hub_shared_key');
+                $exp_read  = get_option('tmon_uc_hub_read_token');
+                if ($exp_admin && hash_equals($exp_admin, $admin_key)) $ok = true;
+                if (!$ok && $exp_hub && hash_equals($exp_hub, $hub_key)) $ok = true;
+                if (!$ok && $exp_read && hash_equals($exp_read, $read_tok)) $ok = true;
+            }
+            if (!$ok) return new WP_REST_Response(['status'=>'forbidden'], 403);
+
+            $unit_id = sanitize_text_field($request->get_param('unit_id'));
+            $machine_id = sanitize_text_field($request->get_param('machine_id'));
+            global $wpdb;
+            uc_devices_ensure_table();
+            $table = $wpdb->prefix . 'tmon_uc_devices';
+            $row = null;
+            if ($unit_id) {
+                $row = $wpdb->get_row($wpdb->prepare("SELECT staged_settings, staged_at FROM {$table} WHERE unit_id=%s LIMIT 1", $unit_id), ARRAY_A);
+            } elseif ($machine_id) {
+                $row = $wpdb->get_row($wpdb->prepare("SELECT staged_settings, staged_at FROM {$table} WHERE machine_id=%s LIMIT 1", $machine_id), ARRAY_A);
+            }
+            if (!$row || empty($row['staged_settings'])) {
+                return rest_ensure_response(['status'=>'ok','staged'=>false,'settings'=>[]]);
+            }
+            $json = json_decode($row['staged_settings'], true);
+            if (!is_array($json)) $json = [];
+            return rest_ensure_response(['status'=>'ok','staged'=>true,'staged_at'=>$row['staged_at'],'settings'=>$json]);
+        },
+        'permission_callback' => '__return_true',
+    ]);
+
+    register_rest_route('tmon/v1', '/admin/device/settings-applied', [
+        'methods' => 'POST',
+        'callback' => function($request){
+            // same auth as above
+            $ok = is_user_logged_in() && current_user_can('manage_options');
+            $admin_key = (string) ($request->get_header('X-TMON-ADMIN') ?? '');
+            $hub_key = (string) ($request->get_header('X-TMON-HUB') ?? '');
+            $read_tok = (string) ($request->get_header('X-TMON-READ') ?? '');
+            if (!$ok) {
+                $exp_admin = get_option('tmon_uc_admin_key');
+                $exp_hub   = get_option('tmon_uc_hub_shared_key');
+                $exp_read  = get_option('tmon_uc_hub_read_token');
+                if ($exp_admin && hash_equals($exp_admin, $admin_key)) $ok = true;
+                if (!$ok && $exp_hub && hash_equals($exp_hub, $hub_key)) $ok = true;
+                if (!$ok && $exp_read && hash_equals($exp_read, $read_tok)) $ok = true;
+            }
+            if (!$ok) return new WP_REST_Response(['status'=>'forbidden'], 403);
+
+            $unit_id = sanitize_text_field($request->get_param('unit_id'));
+            $machine_id = sanitize_text_field($request->get_param('machine_id'));
+            $firmware = sanitize_text_field($request->get_param('firmware_version'));
+            $role = sanitize_text_field($request->get_param('role'));
+            global $wpdb;
+            uc_devices_ensure_table();
+            $table = $wpdb->prefix . 'tmon_uc_devices';
+            if ($unit_id) {
+                $wpdb->update($table, ['staged_settings'=>null], ['unit_id'=>$unit_id]);
+            } elseif ($machine_id) {
+                $wpdb->update($table, ['staged_settings'=>null], ['machine_id'=>$machine_id]);
+            }
+            // Optional: audit/log
+            do_action('tmon_uc_settings_applied', ['unit_id'=>$unit_id,'machine_id'=>$machine_id,'firmware'=>$firmware,'role'=>$role]);
+            return rest_ensure_response(['status'=>'ok']);
+        },
+        'permission_callback' => '__return_true',
+    ]);
+
+    // Devices list: assigned/unassigned, basic filters
+    register_rest_route('tmon/v1', '/admin/devices', [
+        'methods' => 'GET',
+        'callback' => function($request){
+            // auth: allow read token/hub/admin or logged-in admin
+            $ok = is_user_logged_in() && current_user_can('manage_options');
+            $admin_key = (string) ($request->get_header('X-TMON-ADMIN') ?? '');
+            $hub_key = (string) ($request->get_header('X-TMON-HUB') ?? '');
+            $read_tok = (string) ($request->get_header('X-TMON-READ') ?? '');
+            if (!$ok) {
+                $exp_admin = get_option('tmon_uc_admin_key');
+                $exp_hub   = get_option('tmon_uc_hub_shared_key');
+                $exp_read  = get_option('tmon_uc_hub_read_token');
+                if ($exp_admin && hash_equals($exp_admin, $admin_key)) $ok = true;
+                if (!$ok && $exp_hub && hash_equals($exp_hub, $hub_key)) $ok = true;
+                if (!$ok && $exp_read && hash_equals($exp_read, $read_tok)) $ok = true;
+            }
+            if (!$ok) return new WP_REST_Response(['status'=>'forbidden'], 403);
+
+            $assigned = strtolower(sanitize_text_field($request->get_param('assigned') ?? 'all'));
+            $limit = max(1, min(500, intval($request->get_param('limit') ?? 100)));
+            $offset = max(0, intval($request->get_param('offset') ?? 0));
+            $rows = $assigned === '1'
+                ? uc_devices_get_assigned(['limit'=>$limit,'offset'=>$offset,'assigned_only'=>true])
+                : ($assigned === '0'
+                    ? uc_devices_get_unassigned(['limit'=>$limit,'offset'=>$offset])
+                    : uc_devices_get_assigned(['limit'=>$limit,'offset'=>$offset,'assigned_only'=>false]));
+            return rest_ensure_response(['status'=>'ok','devices'=>$rows]);
+        },
+        'permission_callback' => '__return_true',
+    ]);
+});
+
+// ...existing code...

@@ -131,59 +131,39 @@ Notes
 - Unique index `unit_machine (unit_id, machine_id)` ensures deduplication; ensure updates match normalized columns.
 
 Unit Connector — Configuration UI and Staging
-- [ ] Create Device Configuration admin page (menu: TMON Devices → Settings) that renders a form for all variables from micropython/settings.py.
-- [ ] Add a settings schema mapper in UC (PHP) to describe types, defaults, help text, and constraints for each firmware variable.
-- [ ] Render inputs by type:
-  - string/number: text/number fields
-  - boolean: checkbox
-  - enums: select
-  - arrays/maps: textarea with JSON validation
-- [ ] Persist posted values as staged settings:
-  - DB: tmon_uc_devices.staged_settings + staged_at (already present)
-  - File: wp-content/tmon-field-logs/data_history_UNITID_*.log optional snapshot
-- [ ] Expose staged settings via UC REST:
-  - GET /wp-json/tmon/v1/admin/device/settings-staged?unit_id=... → returns JSON
-  - POST /wp-json/tmon/v1/admin/device/settings-applied (device confirms apply; includes unit_id, machine_id, firmware, role)
-- [ ] Device-side polling (firmware):
-  - On each sync cycle: poll UC for staged settings
-  - Persist to device settings, apply, soft reset once (guard flag)
-  - Post confirm-applied to UC, UC forwards summary to Admin (best-effort)
-- [ ] Admin hub integration (optional push):
-  - When staged in UC, optionally POST to Admin hub to enqueue provisioning (already supported); ensure keys are used (X-TMON-HUB or X-TMON-ADMIN)
+- [x] Create Device Configuration admin page (menu: TMON Devices → Settings) that renders a form for core variables from micropython/settings.py.
+- [x] Add a settings schema mapper in UC (PHP) to describe types, defaults, help text, and constraints for key firmware variables.
+- [x] Persist posted values as staged settings (DB: tmon_uc_devices.staged_settings + staged_at).
+- [x] Expose staged settings via UC REST:
+  - GET /wp-json/tmon/v1/admin/device/settings-staged → returns JSON
+  - POST /wp-json/tmon/v1/admin/device/settings-applied → device confirms apply
+- [ ] Extend schema coverage to all firmware variables and advanced types (arrays/maps), with JSON validation.
+- [ ] Admin hub integration button to push staged settings to Admin hub (optional).
 
 UC Pairings and Device Listing
-- [ ] Harden UC Pairings page:
-  - Guard calls to tmon_admin_uc_pairings_get with function_exists (fallback to option store)
-  - Normalize URLs consistently (host[:port]) to prevent duplicate entries
-- [ ] Ensure device registration flows populate UC mirror:
-  - Upsert into tmon_uc_devices on device check-ins (unit_id, machine_id, assigned flag)
-  - Display in admin pages and shortcodes
-  - Add empty-state diagnostics and refresh-from-admin button
-- [ ] Add cron-like refresh from Admin hub (best-effort) to backfill UC mirror
+- [ ] Harden UC Pairings page: guard calls and normalize URLs consistently.
+- [x] Ensure device registration flows populate UC mirror; provide REST listing endpoint.
+- [ ] Add cron-like refresh from Admin hub to backfill UC mirror.
+
+REST and Admin-post Endpoints (UC)
+- [x] admin_post: tmon_uc_stage_settings — saves staged settings from form.
+- [x] REST:
+  - GET /tmon/v1/admin/device/settings-staged
+  - POST /tmon/v1/admin/device/settings-applied
+  - GET /tmon/v1/admin/devices (pagination + filters: assigned)
+- [x] Security: accept X-TMON-ADMIN / X-TMON-HUB / X-TMON-READ or logged-in admin.
 
 MicroPython Sync Behavior
 - [x] Fix timestamp in debug_print using Unix-epoch-safe helper.
-- [ ] Ensure periodic_provision_check runs per sync cycle and logs with correct time.
-- [ ] Confirm field data uploader respects NODE_TYPE and suspension flags; retry/backlog logic validated.
-
-REST and Admin-post Endpoints (UC)
-- [ ] admin_post: tmon_uc_generate_key (exists), tmon_uc_pair_with_hub (exists), add:
-  - tmon_uc_stage_settings: accepts UNIT settings from form, saves to mirror DB
-- [ ] REST:
-  - GET /tmon/v1/admin/device/settings-staged: returns staged JSON by unit_id/machine_id
-  - POST /tmon/v1/admin/device/settings-applied: device confirms application
-  - POST /tmon/v1/admin/devices: list devices (assigned/unassigned) with pagination and filters
-- [ ] Security:
-  - Require X-TMON-ADMIN or X-TMON-HUB/X-TMON-READ as applicable
-  - Nonce for admin actions
+- [ ] Ensure periodic_provision_check runs per sync cycle and logs with correct time (verify on device).
+- [ ] Confirm field data uploader respects NODE_TYPE and suspension flags; retry/backlog logic validated (QA).
 
 UI/UX
-- [ ] Build configuration form sections (network, LoRa, sensors, OLED, OTA, debug) from schema
-- [ ] Validation and descriptions; show current applied vs staged values
-- [ ] Buttons: Save, Save & Push to Admin, Clear Staged
-- [ ] Notices: staged queued, device confirmed, errors
+- [ ] Build configuration form sections for all variables with validation and descriptions; show current applied vs staged values.
+- [ ] Buttons: Save & Push to Admin, Clear Staged.
+- [ ] Notices: staged queued, device confirmed, errors.
 
 Testing
-- [ ] Firmware: staged settings fetch/apply path; confirm-applied POST
-- [ ] UC: config form save/load; REST staging endpoints; device mirroring
-- [ ] Admin: enqueue provisioning from UC post; UC pairings display; device lists in shortcodes
+- [ ] Firmware: staged settings fetch/apply path; confirm-applied POST.
+- [ ] UC: config form save/load; REST staging endpoints; device mirroring.
+- [ ] Admin: enqueue provisioning from UC post; UC pairings display; device lists in shortcodes.
