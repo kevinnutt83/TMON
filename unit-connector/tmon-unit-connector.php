@@ -363,3 +363,10 @@ add_action('admin_init', function(){
         }
     }
 });
+
+// Ensure default Admin API URL shown in settings template comes from home_url()
+// (The templates/settings.php already renders WORDPRESS_API_URL and we now default it there via schema)
+add_filter('tmon_uc_default_options', function($defaults) {
+    $defaults['admin_api_url'] = rtrim(home_url('/'), '/');
+    return $defaults;
+});
