@@ -352,6 +352,14 @@ REST_DEFAULT_HEADERS  = {
     'Accept': 'application/json'
 }
 
+# Native WordPress REST auth (Application Passwords) — replaces JWT plugin usage
+REST_BASIC_AUTH_ENABLED = True
+REST_BASIC_AUTH_USERNAME = WORDPRESS_USERNAME
+REST_BASIC_AUTH_PASSWORD = FIELD_DATA_APP_PASS  # Application Password (set per UC site)
+
+# Helper: endpoints requiring auth will send Authorization: Basic base64(f"{REST_BASIC_AUTH_USERNAME}:{REST_BASIC_AUTH_PASSWORD}")
+# Note: keep FIELD_DATA_USE_JWT = False and FIELD_DATA_USE_APP_PASSWORD = True (already set above).
+
 # Optional device-side confirm token (pairs with Admin expected token)
 DEVICE_CONFIRM_TOKEN = TMON_ADMIN_CONFIRM_TOKEN
 
