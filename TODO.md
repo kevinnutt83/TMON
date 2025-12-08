@@ -328,21 +328,20 @@ Verification
 # TMON Implementation Tracker
 
 Completed
-- UC: v2.00m REST endpoints loaded via includes/v2-api.php (native WP auth; no JWT).
-- Admin: Compact UI assets enqueued; modal provisioning JS present.
+- Provisioning UI: Restored legacy form structure; integrated Save & Provision logic and notices.
+- Provisioning: CSV export for provisioning history added (Export History link).
+- Admin: Compact UI assets enqueued; modal JS remains available for list/commands.
 - Admin: Command Logs page with filter + CSV export; AJAX endpoint reads tmon_device_commands.
-- Admin: Firmware manifest/version notice displayed via transients set in AJAX handler.
-- Admin: Save & Provision inline notice rendering added (queued/failed).
-- Firmware: Switched to native WP Application Passwords; removed JWT dependency.
+- Firmware/Admin/UC: Removed JWT usage; switched to native WP auth (Application Passwords) where needed.
+- UC: v2.00m REST endpoints loaded; optional Basic Auth guard added.
 
 Pending verification
-- Save & Provision persists rows and history; notice shows queued/failed.
-- Provisioning History page renders cleanly with recent actions.
+- Save & Provision persists rows and appends history; queued/failed notice visible.
+- Provisioning History page renders cleanly and CSV export works.
 - UC pairing persists on both sides; devices backfill visible in UC cache.
 - Device first check-in confirms/applies; UC mirror updated.
 - Commands staged→polled→executed→confirmed; visible in Command Logs.
 
 Next
-- Invoke tmon_admin_render_provision_notice() in provisioning page output if not already.
-- Add CSV export to Provisioning History page.
-- Validate Basic Auth on UC admin endpoints (TMON_UC_REQUIRE_APP_PASSWORD option/constant).
+- Validate Basic Auth configuration on UC (TMON_UC_REQUIRE_APP_PASSWORD option/constant).
+- Confirm manifest fetch sets version/time transients and notice displays on Admin pages.

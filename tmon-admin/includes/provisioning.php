@@ -384,101 +384,101 @@ if (!function_exists('tmon_admin_render_provision_notice')) {
 	}
 }
 
-// When AJAX fetch manifest is called elsewhere, record version/time in transients for notice
+// Legacy provisioning form renderer (restores previous structure but uses current Save & Provision logic)
+if (!function_exists('tmon_admin_render_legacy_provision_form')) {
+	function tmon_admin_render_legacy_provision_form($device = array()) {
+		if (!current_user_can('manage_options')) wp_die('Forbidden');
+		$defaults = array(
+			'unit_id'    => '',
+			'unit_name'  => '',
+			'machine_id' => '',
+			'site_url'   => '',
+			'role'       => 'base',
+			'company_id' => '',
+			'plan'       => 'standard',
+			'status'     => 'pending',
+			'notes'      => '',
+			'checkin_time' => '',
+			'firmware'   => '',
+		);
+		$d = wp_parse_args($device, $defaults);
+		echo '<div class="wrap">';
+		echo '<h1>Device Provisioning</h1>';
+		tmon_admin_render_provision_notice();
+		echo '<div class="tmon-card tmon-provision-compact">';
+		echo '<form id="tmon-provision-form" method="post" action="' . esc_url(admin_url('admin-post.php')) . '">';
+		wp_nonce_field('tmon_admin_provision_device');
+		echo '<input type="hidden" name="action" value="tmon_admin_provision_device">';
+
+		echo '<table class="form-table"><tbody>';
+
+		echo '<tr><th scope="row"><label for="unit_id">Unit ID</label></th><td><input name="unit_id" id="unit_id" class="regular-text" value="'.esc_attr($d['unit_id']).'" required></td></tr>';
+		echo '<tr><th scope="row"><label for="unit_name">Unit Name</label></th><td><input name="unit_name" id="unit_name" class="regular-text" value="'.esc_attr($d['unit_name']).'"></td></tr>';
+		echo '<tr><th scope="row"><label for="machine_id">Machine ID</label></th><td><input name="machine_id" id="machine_id" class="regular-text" value="'.esc_attr($d['machine_id']).'" required></td></tr>';
+		echo '<tr><th scope="row"><label for="site_url">Unit Connector Site URL</label></th><td><input name="site_url" id="site_url" class="regular-text" value="'.esc_attr($d['site_url']).'" required></td></tr>';
+
+		echo '<tr><th scope="row"><label for="role">Role</label></th><td><select name="role" id="role">';
+		$roles = array('base' => 'base', 'remote' => 'remote', 'gateway' => 'gateway');
+		foreach ($roles as $val => $label) echo '<option value="'.esc_attr($val).'" '.selected($d['role'],$val,false).'>'.esc_html($label).'</option>';
+		echo '</select></td></tr>';
+
+		echo '<tr><th scope="row"><label for="company_id">Company ID</label></th><td><input name="company_id" id="company_id" type="number" class="small-text" value="'.esc_attr($d['company_id']).'"></td></tr>';
+
+		echo '<tr><th scope="row"><label for="plan">Plan</label></th><td><select name="plan" id="plan">';
+		$plans = array('standard'=>'standard','pro'=>'pro');
+		foreach ($plans as $val => $label) echo '<option value="'.esc_attr($val).'" '.selected($d['plan'],$val,false).'>'.esc_html($label).'</option>';
+		echo '</select></td></tr>';
+
+		echo '<tr><th scope="row"><label for="status">Status</label></th><td><select name="status" id="status">';
+		$statuses = array('pending'=>'pending','active'=>'active','provisioned'=>'provisioned','registered'=>'registered');
+		foreach ($statuses as $val => $label) echo '<option value="'.esc_attr($val).'" '.selected($d['status'],$val,false).'>'.esc_html($label).'</option>';
+		echo '</select></td></tr>';
+
+		echo '<tr><th scope="row"><label for="notes">Notes</label></th><td><textarea name="notes" id="notes" class="large-text">'.esc_textarea($d['notes']).'</textarea></td></tr>';
+
+		echo '<tr><th scope="row"><label for="checkin_time">Check-in Time</label></th><td><input name="checkin_time" id="checkin_time" class="regular-text" value="'.esc_attr($d['checkin_time']).'" readonly></td></tr>';
+
+		if (!empty($d['firmware'])) {
+			echo '<tr><th scope="row"><label for="firmware">Firmware</label></th><td><input name="firmware" id="firmware" class="regular-text" value="'.esc_attr($d['firmware']).'"></td></tr>';
+		}
+
+		// Staged settings JSON (optional)
+		echo '<tr><th scope="row"><label for="settings_staged">Staged Settings (JSON)</label></th><td><textarea name="settings_staged" id="settings_staged" class="large-text" rows="6"></textarea><p class="description">Optional JSON to stage to device via UC.</p></td></tr>';
+
+		echo '</tbody></table>';
+
+		echo '<p class="submit">';
+		echo '<button type="submit" class="button button-primary">Save & Provision</button> ';
+		echo '<a class="button" href="'.esc_url(add_query_arg(array('export'=>'provision-history'), admin_url('admin.php?page=tmon-admin-provisioning'))).'">Export History (CSV)</a>';
+		echo '</p>';
+
+		echo '</form></div></div>';
+	}
+}
+
+// CSV export for provisioning history
+add_action('admin_init', function(){
+	if (!current_user_can('manage_options')) return;
+	if (isset($_GET['page']) && $_GET['page']==='tmon-admin-provisioning' && isset($_GET['export']) && $_GET['export']==='provision-history') {
+		global $wpdb;
+		$table = $wpdb->prefix . 'tmon_provision_history';
+		$rows = $wpdb->get_results("SELECT id, unit_id, machine_id, action, user, created_at FROM {$table} ORDER BY id DESC LIMIT 1000", ARRAY_A) ?: array();
+		header('Content-Type: text/csv');
+		header('Content-Disposition: attachment; filename="tmon-provision-history.csv"');
+		$out = fopen('php://output', 'w');
+		fputcsv($out, array('id','unit_id','machine_id','action','user','created_at'));
+		foreach ($rows as $r) { fputcsv($out, array($r['id'],$r['unit_id'],$r['machine_id'],$r['action'],$r['user'],$r['created_at'])); }
+		fclose($out);
+		exit;
+	}
+});
+
+// Ensure firmware metadata transients are set when manifest fetch succeeds
 add_action('wp_ajax_tmon_admin_fetch_github_manifest', function(){
 	// ...existing fetch code...
 	// On success:
 	// set_transient('tmon_admin_firmware_version', $version, 12 * HOUR_IN_SECONDS);
-	// set_transient('tmon_admin_firmware_version_ts', current_time('mysql'), 12 * HOUR_IN_SECONDS);
-	// wp_send_json_success(['version'=>$version,'manifest'=>$manifest]);
-});
-
-// Save & Provision handler already redirects; add admin notice through query param
-// ...existing admin_post_tmon_admin_provision_device...
-// The page can read $_GET['provision'] and display a notice (implement in page renderer if desired).
-
-// Ensure core tables/columns exist (idempotent)
-if (!function_exists('tmon_admin_ensure_table')) {
-	function tmon_admin_ensure_table() {
-		global $wpdb;
-		if (!$wpdb || empty($wpdb->prefix)) return;
-		$prov = $wpdb->prefix . 'tmon_provisioned_devices';
-		$collate = $wpdb->get_charset_collate();
-		$wpdb->query("CREATE TABLE IF NOT EXISTS {$prov} (
-			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-			unit_id VARCHAR(64) NOT NULL,
-			machine_id VARCHAR(64) NOT NULL,
-			unit_name VARCHAR(191) NULL,
-			plan VARCHAR(64) NULL,
-			role VARCHAR(32) NULL,
-			site_url VARCHAR(191) NULL,
-			settings_staged LONGTEXT NULL,
-			status VARCHAR(32) NOT NULL DEFAULT 'pending',
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-			PRIMARY KEY (id),
-			UNIQUE KEY unit_machine (unit_id, machine_id),
-			KEY status_idx (status)
-		) {$collate}");
-		$dev = $wpdb->prefix . 'tmon_devices';
-		$cols = $wpdb->get_col("SHOW COLUMNS FROM {$dev}");
-		if ($cols) {
-			if (!in_array('wordpress_api_url', $cols)) $wpdb->query("ALTER TABLE {$dev} ADD COLUMN wordpress_api_url VARCHAR(191) NULL");
-			if (!in_array('unit_name', $cols))        $wpdb->query("ALTER TABLE {$dev} ADD COLUMN unit_name VARCHAR(191) NULL");
-			if (!in_array('plan', $cols))             $wpdb->query("ALTER TABLE {$dev} ADD COLUMN plan VARCHAR(64) NULL");
-			if (!in_array('role', $cols))             $wpdb->query("ALTER TABLE {$dev} ADD COLUMN role VARCHAR(32) NULL");
-			if (!in_array('provisioned', $cols))      $wpdb->query("ALTER TABLE {$dev} ADD COLUMN provisioned TINYINT(1) NOT NULL DEFAULT 0");
-			if (!in_array('canBill', $cols))          $wpdb->query("ALTER TABLE {$dev} ADD COLUMN canBill TINYINT(1) NOT NULL DEFAULT 0");
-			if (!in_array('last_seen', $cols))        $wpdb->query("ALTER TABLE {$dev} ADD COLUMN last_seen DATETIME NULL");
-		}
-	}
-}
-
-// Provisioning History table appender (idempotent call)
-if (!function_exists('tmon_admin_append_provision_history')) {
-	function tmon_admin_append_provision_history(array $entry) {
-		global $wpdb;
-		if (!$wpdb || empty($wpdb->prefix)) return false;
-		$table = $wpdb->prefix . 'tmon_provision_history';
-		$collate = $wpdb->get_charset_collate();
-		// Ensure table exists
-		$wpdb->query("CREATE TABLE IF NOT EXISTS {$table} (
-			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-			unit_id VARCHAR(64) NOT NULL,
-			machine_id VARCHAR(64) NOT NULL,
-			action VARCHAR(64) NOT NULL,
-			user VARCHAR(191) NULL,
-			meta LONGTEXT NULL,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			PRIMARY KEY (id),
-			KEY unit_machine (unit_id, machine_id),
-			KEY action_idx (action)
-		) {$collate}");
-		$wpdb->insert($table, array(
-			'unit_id'    => sanitize_text_field(isset($entry['unit_id']) ? $entry['unit_id'] : ''),
-			'machine_id' => sanitize_text_field(isset($entry['machine_id']) ? $entry['machine_id'] : ''),
-			'action'     => sanitize_text_field(isset($entry['action']) ? $entry['action'] : ''),
-			'user'       => sanitize_text_field(isset($entry['user']) ? $entry['user'] : ''),
-			'meta'       => wp_json_encode(isset($entry['meta']) ? $entry['meta'] : array()),
-		));
-		return !empty($wpdb->insert_id);
-	}
-}
-
-// Renderer used by the menu callback
-if (!function_exists('tmon_admin_render_provisioned_devices')) {
-	function tmon_admin_render_provisioned_devices() {
-		if (!current_user_can('manage_options')) wp_die('Forbidden');
-		global $wpdb;
-		$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
-		$dev_table  = $wpdb->prefix . 'tmon_devices';
-		$rows = array();
-
-		$has_prov = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $prov_table));
-		$has_dev  = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table));
-
-		if ($has_prov) {
-			$dev_cols = $has_dev ? $wpdb->get_col("SHOW COLUMNS FROM {$dev_table}") : array();
+	// set_transient('tmon_admin_firmware_version_ts', current_time('mysql'), 12 * H
 			$join_name = ($has_dev && in_array('unit_name', $dev_cols)) ? ", d.unit_name AS unit_name_dev" : "";
 			$join_bill = ($has_dev && in_array('canBill', $dev_cols)) ? ", d.canBill AS canBill" : "";
 			$sql = "SELECT p.id,p.unit_id,p.machine_id,p.plan,p.status,p.site_url,p.unit_name,p.settings_staged,p.created_at,p.updated_at{$join_name}{$join_bill}

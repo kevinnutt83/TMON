@@ -104,7 +104,7 @@ add_action('admin_enqueue_scripts', function () {
 	wp_localize_script('tmon-admin', 'TMON_ADMIN', $localized);
 });
 
-// Enqueue compact UI assets on TMON Admin pages (provisioning/devices/logs)
+// Enqueue compact UI assets on Admin provisioning/devices/logs pages
 add_action('admin_enqueue_scripts', function(){
 	$page = isset($_GET['page']) ? $_GET['page'] : '';
 	$targets = ['tmon-admin-provisioning','tmon-admin-devices','tmon-admin-command-logs'];
@@ -478,7 +478,7 @@ if (!function_exists('tmon_admin_firmware_page')) {
 		echo '<div class="card" style="padding:12px;"><h2 style="margin-top:0;">Releases</h2>';
 		$releases = wp_remote_get($api_base . '/releases', array('timeout' => 20, 'headers' => array('User-Agent' => 'TMON Admin')));
 		if (!is_wp_error($releases) && wp_remote_retrieve_response_code($releases) === 200) {
-			$list = json_decode(wp_remote_retrieve_body($releases), true);
+			$list = json_decode(wp_remote
 			if (is_array($list) && !empty($list)) {
 				echo '<table class="widefat striped"><thead><tr><th>Tag</th><th>Name</th><th>Published</th><th>Assets</th></tr></thead><tbody>';
 				foreach ($list as $rel) {
