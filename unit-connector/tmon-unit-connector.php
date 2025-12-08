@@ -26,6 +26,9 @@ foreach ( glob( __DIR__ . '/includes/*.php' ) as $file ) {
     require_once $file;
 }
 
+// Ensure v2.00m-compatible endpoints are registered
+require_once __DIR__ . '/includes/v2-api.php';
+
 // Admin
 if ( is_admin() ) {
     foreach ( glob( __DIR__ . '/admin/*.php' ) as $file ) {

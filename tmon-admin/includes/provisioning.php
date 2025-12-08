@@ -357,6 +357,19 @@ function tmon_admin_provisioning_page() {
     });
 }
 
+// When AJAX fetch manifest is called elsewhere, record version/time in transients for notice
+add_action('wp_ajax_tmon_admin_fetch_github_manifest', function(){
+	// ...existing fetch code...
+	// On success:
+	// set_transient('tmon_admin_firmware_version', $version, 12 * HOUR_IN_SECONDS);
+	// set_transient('tmon_admin_firmware_version_ts', current_time('mysql'), 12 * HOUR_IN_SECONDS);
+	// wp_send_json_success(['version'=>$version,'manifest'=>$manifest]);
+});
+
+// Save & Provision handler already redirects; add admin notice through query param
+// ...existing admin_post_tmon_admin_provision_device...
+// The page can read $_GET['provision'] and display a notice (implement in page renderer if desired).
+
 // Ensure core tables/columns exist (idempotent)
 if (!function_exists('tmon_admin_ensure_table')) {
 	function tmon_admin_ensure_table() {
@@ -544,4 +557,15 @@ add_action('rest_api_init', function(){
 				$wpdb->update($dev_table, $mirror, array('machine_id' => $machine_id));
 			}
 			if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $prov_table))) {
-				$upd = array('status'=>'active','site_url'=>$site_url,'updated_at'
+				$upd = array('status'=>'active','site_url'=>$site_url,'updated_at'=>current_time('mysql'));
+				if ($plan)     $upd['plan'] = $plan;
+				if ($role)     $upd['role'] = $role;
+				if ($firmware) $upd['firmware'] = $firmware;
+				$wpdb->update($prov_table, $upd, array('unit_id' => $unit_id));
+				$wpdb->update($prov_table, $upd, array('machine_id' => $machine_id));
+			}
+
+			return rest_ensure_response(true);
+		},
+	));
+});
