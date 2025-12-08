@@ -357,6 +357,28 @@ function tmon_admin_provisioning_page() {
     });
 }
 
+// Record firmware fetch transients when AJAX handler succeeds
+add_action('wp_ajax_tmon_admin_fetch_github_manifest', function(){
+	// ...existing fetch logic...
+	// on success:
+	// set_transient('tmon_admin_firmware_version', $version, 12 * HOUR_IN_SECONDS);
+	// set_transient('tmon_admin_firmware_version_ts', current_time('mysql'), 12 * HOUR_IN_SECONDS);
+	// wp_send_json_success(['version'=>$version,'manifest'=>$manifest]);
+});
+
+// Inline notice renderer (call near top of provisioning page render)
+if (!function_exists('tmon_admin_render_provision_notice')) {
+	function tmon_admin_render_provision_notice() {
+		if (!current_user_can('manage_options')) return;
+		$state = isset($_GET['provision']) ? sanitize_text_field($_GET['provision']) : '';
+		if ($state === 'queued') {
+			echo '<div class="notice notice-success"><p>Provisioning queued and saved.</p></div>';
+		} elseif ($state === 'failed') {
+			echo '<div class="notice notice-error"><p>Provisioning save failed.</p></div>';
+		}
+	}
+}
+
 // When AJAX fetch manifest is called elsewhere, record version/time in transients for notice
 add_action('wp_ajax_tmon_admin_fetch_github_manifest', function(){
 	// ...existing fetch code...

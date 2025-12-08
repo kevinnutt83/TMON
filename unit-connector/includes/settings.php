@@ -640,18 +640,16 @@ add_action('admin_post_tmon_uc_pair_with_hub', function(){
 add_action('wp_ajax_tmon_uc_get_devices', function(){
 	if (!current_user_can('manage_options')) wp_send_json_error(['message'=>'Forbidden'], 403);
 	global $wpdb;
-	$tbl = $wpdb->prefix . 'tmon_uc_devices';
+	$table = $wpdb->prefix . 'tmon_uc_devices';
 	$rows = [];
-	if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $tbl)) == $tbl) {
-		$rows = $wpdb->get_results("SELECT unit_id, unit_name, machine_id, role, company_id, plan, status, checkin_time, site_url, firmware, created_at FROM {$tbl} ORDER BY updated_at DESC LIMIT 500", ARRAY_A);
+	if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table)) == $table) {
+		$rows = $wpdb->get_results("SELECT unit_id, unit_name, machine_id, role, company_id, plan, status, checkin_time, site_url, firmware, created_at, updated_at FROM {$table} ORDER BY updated_at DESC LIMIT 500", ARRAY_A);
 	} else {
-		// Fallback to options cache
 		$rows = get_option('tmon_uc_devices_cache', []);
 	}
 	wp_send_json_success(['data' => $rows]);
 });
 
-// Admin AJAX: get UC device status (placeholder; relies on cache or REST)
 add_action('wp_ajax_tmon_uc_get_device_status', function(){
 	if (!current_user_can('manage_options')) wp_send_json_error(['message'=>'Forbidden'], 403);
 	$unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
