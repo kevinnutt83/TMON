@@ -162,13 +162,43 @@ add_action('rest_api_init', function() {
 	register_rest_route('tmon/v1', '/admin/unit/upsert',    ['methods'=>'POST','permission_callback'=>'tmon_uc_require_app_password_auth','callback'=>$upsert_cb('units','id')]);
 });
 
-// Optional AI hooks
-class TMON_AI {
-	public static $error_count = 0;
-	public static function observe_error($msg, $ctx = null) {
-		self::$error_count++; if (self::$error_count > 5) self::log('AI: recovery', $ctx);
+// Optional AI hooks — guard class redeclaration
+if (!class_exists('TMON_AI')) {
+	class TMON_AI {
+		public static $error_count = 0;
+		public static $last_error = null;
+		public static $recovery_actions = [];
+
+		public static function observe_error($error_msg, $context = null) {
+			self::$error_count++;
+			self::$last_error = [$error_msg, $context];
+			if (self::$error_count > 5) {
+				self::log('AI: Too many errors, attempting system recovery', $context);
+				self::recover_system();
+			}
+		}
+
+		public static function recover_system() {
+			self::log('AI: Performing system recovery', 'recovery');
+			// ...existing code...
+		}
+
+		public static function suggest_action($context) {
+			if (stripos($context, 'wifi') !== false) return 'Check WiFi credentials or signal.';
+			if (stripos($context, 'ota') !== false) return 'Retry OTA or check file integrity.';
+			return 'Check logs and restart the service if needed.';
+		}
+
+		public static function log($msg, $context = null) {
+			error_log('[TMON_AI] ' . $msg . ($context ? " | Context: $context" : ''));
+		}
 	}
-	public static function log($msg, $ctx = null){ error_log('[TMON_AI] '.$msg.($ctx ? " | $ctx" : '')); }
 }
-add_action('tmon_uc_error', function($msg, $ctx=null){ TMON_AI::observe_error($msg,$ctx); });
-add_action('tmon_admin_error', function($msg, $ctx=null){ TMON_AI::observe_error($msg,$ctx); });
+
+// Hook AI observers (safe to add even if class existed elsewhere)
+add_action('tmon_uc_error', function($msg, $context = null) {
+	if (class_exists('TMON_AI')) TMON_AI::observe_error($msg, $context);
+});
+add_action('tmon_admin_error', function($msg, $context = null) {
+	if (class_exists('TMON_AI')) TMON_AI::observe_error($msg, $context);
+});
