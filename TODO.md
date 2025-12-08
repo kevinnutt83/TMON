@@ -328,20 +328,21 @@ Verification
 # TMON Implementation Tracker
 
 Completed
-- Unit Connector: v2.00m-compatible REST endpoints (pull-install, admin device settings/confirm, hierarchy upserts) included via includes/v2-api.php.
-- Admin: Enqueue compact CSS (tmon.css) and modal JS (provision-modal.js) on provisioning/device pages.
-- Admin: Command Logs viewer page with filters; AJAX endpoint to read from tmon_device_commands.
-- Admin: Firmware manifest/version notice surfaced via admin_notices (using transients).
-- UC: Admin AJAX helpers for devices list and status (used by v2.00m JS). No existing logic removed.
+- UC: v2.00m REST endpoints loaded via includes/v2-api.php (native WP auth; no JWT).
+- Admin: Compact UI assets enqueued; modal provisioning JS present.
+- Admin: Command Logs page with filter + CSV export; AJAX endpoint reads tmon_device_commands.
+- Admin: Firmware manifest/version notice displayed via transients set in AJAX handler.
+- Admin: Save & Provision inline notice rendering added (queued/failed).
+- Firmware: Switched to native WP Application Passwords; removed JWT dependency.
 
 Pending verification
-- Save & Provision persists rows, appends provisioning history, and displays queued/failed notice.
-- Provisioning History page renders without parse errors and shows recent actions.
-- UC pairing persists keys on both Admin and UC; backfill devices visible in UC provisioned page.
-- Device first check-in triggers Admin confirm and updates UC mirror.
-- Commands staged → polled → executed → confirmed; statuses visible in Command Logs.
+- Save & Provision persists rows and history; notice shows queued/failed.
+- Provisioning History page renders cleanly with recent actions.
+- UC pairing persists on both sides; devices backfill visible in UC cache.
+- Device first check-in confirms/applies; UC mirror updated.
+- Commands staged→polled→executed→confirmed; visible in Command Logs.
 
-Next actions
-- Ensure Admin renderer reads ?provision=queued|failed and displays an inline notice.
-- Add export/download for command logs (CSV) and link on Command Logs page.
-- Add last fetch timestamp storage when firmware manifest/version AJAX runs (ensure transient set in handler).
+Next
+- Invoke tmon_admin_render_provision_notice() in provisioning page output if not already.
+- Add CSV export to Provisioning History page.
+- Validate Basic Auth on UC admin endpoints (TMON_UC_REQUIRE_APP_PASSWORD option/constant).
