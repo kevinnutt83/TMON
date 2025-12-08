@@ -440,14 +440,11 @@ if (!function_exists('tmon_admin_firmware_page')) {
 if (!function_exists('tmon_admin_provisioned_devices_page')) {
 	function tmon_admin_provisioned_devices_page() {
 		if (!current_user_can('manage_options')) wp_die('Forbidden');
-		// Delegate to includes/provisioning.php renderer if available
 		if (function_exists('tmon_admin_render_provisioned_devices')) {
 			tmon_admin_render_provisioned_devices();
-			return;
+		} else {
+			echo '<div class="wrap"><h1>Provisioned Devices</h1><div class="notice notice-warning"><p>Renderer not loaded.</p></div></div>';
 		}
-		echo '<div class="wrap"><h1>Provisioned Devices</h1>';
-		echo '<div class="notice notice-info"><p>Provisioned devices renderer not loaded. Ensure includes/provisioning.php is included.</p></div>';
-		echo '</div>';
 	}
 }
 

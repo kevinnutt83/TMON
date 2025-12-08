@@ -313,3 +313,14 @@ Verification
 Open items
 - [ ] Add Admin UI notices for firmware manifest/version and last fetch timestamp.
 - [ ] Add Admin/UC command logs viewer with status timeline and filters.
+
+# TMON Admin — Provisioning
+- [x] Fix parse error in includes/provisioning.php (short array → array(), balanced brackets).
+- [x] Persist Save & Provision and append history; redirect with queued/failed.
+- [x] Provisioned Devices page callback delegates to renderer; no invalid callback fatal.
+
+Verification
+- [ ] Save & Provision writes to tmon_provisioned_devices and tmon_devices; history row added.
+- [ ] Provisioning History page lists latest actions.
+- [ ] Devices that confirm-applied update records and history.
+- [ ] UC pairing persists on both sides; UC backfills devices.
