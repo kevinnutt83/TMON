@@ -1,6 +1,22 @@
 <?php
 if (!defined('ABSPATH')) exit;
 
+// Permission callback: require Basic Authorization (Application Passwords) when enabled
+if (!function_exists('tmon_uc_require_app_password_auth')) {
+	function tmon_uc_require_app_password_auth() {
+		// Toggle via constant or option
+		$require = defined('TMON_UC_REQUIRE_APP_PASSWORD') ? TMON_UC_REQUIRE_APP_PASSWORD : (bool) get_option('tmon_uc_require_app_password', false);
+		if (!$require) return true;
+		// WordPress core handles Application Password authentication for REST when Authorization: Basic is present.
+		$auth = isset($_SERVER['HTTP_AUTHORIZATION']) ? $_SERVER['HTTP_AUTHORIZATION'] : '';
+		if (!$auth) return false;
+		// If core authenticated user via Application Password, current_user_can will work
+		if (is_user_logged_in()) return current_user_can('manage_options');
+		// Allow if Basic header present; core will validate and set user for REST callbacks
+		return true;
+	}
+}
+
 // UC: remote install/update orchestrated by Admin
 add_action('rest_api_init', function(){
 	register_rest_route('tmon/v1', '/uc/pull-install', [
@@ -80,10 +96,11 @@ function tmon_uc_pull_install($request){
 	return rest_ensure_response(['status' => $status]);
 }
 
-// Admin → UC: push staged settings and confirm
+// Admin → UC: push staged settings and confirm (guarded by app password auth)
 add_action('rest_api_init', function() {
 	register_rest_route('tmon/v1', '/admin/device/settings', [
-		'methods' => 'POST', 'permission_callback' => '__return_true',
+		'methods' => 'POST',
+		'permission_callback' => 'tmon_uc_require_app_password_auth',
 		'callback' => function(WP_REST_Request $req) {
 			$body = json_decode($req->get_body(), true);
 			if (!is_array($body)) $body = (array)$req->get_params();
@@ -99,7 +116,8 @@ add_action('rest_api_init', function() {
 		}
 	]);
 	register_rest_route('tmon/v1', '/admin/device/confirm', [
-		'methods' => 'POST', 'permission_callback' => '__return_true',
+		'methods' => 'POST',
+		'permission_callback' => 'tmon_uc_require_app_password_auth',
 		'callback' => function(WP_REST_Request $req) {
 			$body = json_decode($req->get_body(), true);
 			if (!is_array($body)) $body = (array)$req->get_params();
@@ -112,7 +130,7 @@ add_action('rest_api_init', function() {
 		}
 	]);
 
-	// Hierarchy upserts (companies/sites/zones/clusters/units)
+	// Hierarchy upserts (companies/sites/zones/clusters/units) — guarded by app password auth
 	$upsert_cb = function($what, $id_key) {
 		return function(WP_REST_Request $req) use ($what, $id_key) {
 			$data = json_decode($req->get_body(), true);
@@ -126,11 +144,11 @@ add_action('rest_api_init', function() {
 			return rest_ensure_response(['ok'=>true]);
 		};
 	};
-	register_rest_route('tmon/v1', '/admin/company/upsert', ['methods'=>'POST','permission_callback'=>'__return_true','callback'=>$upsert_cb('companies','company_id')]);
-	register_rest_route('tmon/v1', '/admin/site/upsert',    ['methods'=>'POST','permission_callback'=>'__return_true','callback'=>$upsert_cb('sites','id')]);
-	register_rest_route('tmon/v1', '/admin/zone/upsert',    ['methods'=>'POST','permission_callback'=>'__return_true','callback'=>$upsert_cb('zones','id')]);
-	register_rest_route('tmon/v1', '/admin/cluster/upsert', ['methods'=>'POST','permission_callback'=>'__return_true','callback'=>$upsert_cb('clusters','id')]);
-	register_rest_route('tmon/v1', '/admin/unit/upsert',    ['methods'=>'POST','permission_callback'=>'__return_true','callback'=>$upsert_cb('units','id')]);
+	register_rest_route('tmon/v1', '/admin/company/upsert', ['methods'=>'POST','permission_callback'=>'tmon_uc_require_app_password_auth','callback'=>$upsert_cb('companies','company_id')]);
+	register_rest_route('tmon/v1', '/admin/site/upsert',    ['methods'=>'POST','permission_callback'=>'tmon_uc_require_app_password_auth','callback'=>$upsert_cb('sites','id')]);
+	register_rest_route('tmon/v1', '/admin/zone/upsert',    ['methods'=>'POST','permission_callback'=>'tmon_uc_require_app_password_auth','callback'=>$upsert_cb('zones','id')]);
+	register_rest_route('tmon/v1', '/admin/cluster/upsert', ['methods'=>'POST','permission_callback'=>'tmon_uc_require_app_password_auth','callback'=>$upsert_cb('clusters','id')]);
+	register_rest_route('tmon/v1', '/admin/unit/upsert',    ['methods'=>'POST','permission_callback'=>'tmon_uc_require_app_password_auth','callback'=>$upsert_cb('units','id')]);
 });
 
 // Optional AI hooks
