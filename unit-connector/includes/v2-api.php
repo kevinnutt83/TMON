@@ -1,102 +1,113 @@
 <?php
 if (!defined('ABSPATH')) exit;
 
-// Permission callback: require Basic Authorization (Application Passwords) when enabled
-if (!function_exists('tmon_uc_require_app_password_auth')) {
-	function tmon_uc_require_app_password_auth() {
-		// Toggle via constant or option
-		$require = defined('TMON_UC_REQUIRE_APP_PASSWORD') ? TMON_UC_REQUIRE_APP_PASSWORD : (bool) get_option('tmon_uc_require_app_password', false);
-		if (!$require) return true;
-		// WordPress core handles Application Password authentication for REST when Authorization: Basic is present.
-		$auth = isset($_SERVER['HTTP_AUTHORIZATION']) ? $_SERVER['HTTP_AUTHORIZATION'] : '';
-		if (!$auth) return false;
-		// If core authenticated user via Application Password, current_user_can will work
-		if (is_user_logged_in()) return current_user_can('manage_options');
-		// Allow if Basic header present; core will validate and set user for REST callbacks
-		return true;
-	}
+// Prevent double-inclusion of this file
+if (!defined('TMON_UC_V2_API_LOADED')) {
+	define('TMON_UC_V2_API_LOADED', true);
 }
 
-// UC: remote install/update orchestrated by Admin
+// Register pull-install route only if our function is not already declared elsewhere
 add_action('rest_api_init', function(){
+	// If core tmon_uc_pull_install exists (e.g., declared in includes/api.php), do not re-register
+	if (function_exists('tmon_uc_pull_install')) {
+		return;
+	}
 	register_rest_route('tmon/v1', '/uc/pull-install', [
 		'methods' => 'POST',
 		'callback' => 'tmon_uc_pull_install',
 		'permission_callback' => '__return_true',
 	]);
 });
-function tmon_uc_pull_install($request){
-	if (!current_user_can('manage_options')) return new WP_REST_Response(['status'=>'forbidden'], 403);
-	$payload = $request->get_param('payload');
-	$sig = $request->get_param('sig');
-	$require_auth = defined('TMON_UC_PULL_REQUIRE_AUTH') ? TMON_UC_PULL_REQUIRE_AUTH : false;
-	if ($require_auth) {
-		$auth = isset($_SERVER['HTTP_AUTHORIZATION']) ? $_SERVER['HTTP_AUTHORIZATION'] : '';
-		if (!$auth) return new WP_REST_Response(['status'=>'forbidden','message'=>'Missing Authorization'], 403);
-	}
-	if (!$payload || !$sig) return rest_ensure_response(['status'=>'error','message'=>'Missing payload or sig']);
-	$secret = defined('TMON_HUB_SHARED_SECRET') ? TMON_HUB_SHARED_SECRET : wp_salt('auth');
-	$calc = hash_hmac('sha256', wp_json_encode($payload), $secret);
-	if (!hash_equals($calc, $sig)) return new WP_REST_Response(['status'=>'forbidden'], 403);
 
-	$package_url = esc_url_raw($payload['package_url'] ?? '');
-	if (stripos($package_url, 'https://') !== 0) return rest_ensure_response(['status'=>'error','message'=>'HTTPS required for package_url']);
-	$expected_hash = isset($payload['sha256']) ? strtolower(sanitize_text_field($payload['sha256'])) : '';
-	$action = sanitize_text_field($payload['action'] ?? 'install');
-	$callback = esc_url_raw($payload['callback'] ?? '');
-	if (!$package_url) return rest_ensure_response(['status'=>'error','message'=>'Missing package_url']);
+// Define tmon_uc_pull_install only if not already defined
+if (!function_exists('tmon_uc_pull_install')) {
+	function tmon_uc_pull_install($request){
+		if (!current_user_can('manage_options')) return new WP_REST_Response(['status'=>'forbidden'], 403);
+		$payload = $request->get_param('payload');
+		$sig = $request->get_param('sig');
+		$require_auth = defined('TMON_UC_PULL_REQUIRE_AUTH') ? TMON_UC_PULL_REQUIRE_AUTH : false;
+		if ($require_auth) {
+			$auth = isset($_SERVER['HTTP_AUTHORIZATION']) ? $_SERVER['HTTP_AUTHORIZATION'] : '';
+			if (!$auth) return new WP_REST_Response(['status'=>'forbidden','message'=>'Missing Authorization'], 403);
+		}
+		if (!$payload || !$sig) return rest_ensure_response(['status'=>'error','message'=>'Missing payload or sig']);
+		$secret = defined('TMON_HUB_SHARED_SECRET') ? TMON_HUB_SHARED_SECRET : wp_salt('auth');
+		$calc = hash_hmac('sha256', wp_json_encode($payload), $secret);
+		if (!hash_equals($calc, $sig)) return new WP_REST_Response(['status'=>'forbidden'], 403);
 
-	include_once ABSPATH . 'wp-admin/includes/file.php';
-	include_once ABSPATH . 'wp-admin/includes/misc.php';
-	include_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
-	include_once ABSPATH . 'wp-admin/includes/plugin.php';
-	WP_Filesystem();
-	$upgrader = new Plugin_Upgrader();
-	$result = null;
+		$package_url = esc_url_raw($payload['package_url'] ?? '');
+		if (stripos($package_url, 'https://') !== 0) return rest_ensure_response(['status'=>'error','message'=>'HTTPS required for package_url']);
+		$expected_hash = isset($payload['sha256']) ? strtolower(sanitize_text_field($payload['sha256'])) : '';
+		$action = sanitize_text_field($payload['action'] ?? 'install');
+		$callback = esc_url_raw($payload['callback'] ?? '');
+		if (!$package_url) return rest_ensure_response(['status'=>'error','message'=>'Missing package_url']);
 
-	if ($expected_hash) {
-		$tmp = download_url($package_url);
-		if (is_wp_error($tmp)) {
-			$result = $tmp;
-		} else {
-			$data = file_get_contents($tmp);
-			$hash = strtolower(hash('sha256', $data));
-			if ($hash !== $expected_hash) {
-				@unlink($tmp);
-				return rest_ensure_response(['status'=>'error','message'=>'Package hash mismatch']);
+		include_once ABSPATH . 'wp-admin/includes/file.php';
+		include_once ABSPATH . 'wp-admin/includes/misc.php';
+		include_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
+		include_once ABSPATH . 'wp-admin/includes/plugin.php';
+		WP_Filesystem();
+		$upgrader = new Plugin_Upgrader();
+		$result = null;
+
+		if ($expected_hash) {
+			$tmp = download_url($package_url);
+			if (is_wp_error($tmp)) {
+				$result = $tmp;
+			} else {
+				$data = file_get_contents($tmp);
+				$hash = strtolower(hash('sha256', $data));
+				if ($hash !== $expected_hash) {
+					@unlink($tmp);
+					return rest_ensure_response(['status'=>'error','message'=>'Package hash mismatch']);
+				}
+				$result = $upgrader->install($tmp, ['overwrite_package' => ($action === 'update')]);
 			}
-			$result = $upgrader->install($tmp, ['overwrite_package' => ($action === 'update')]);
+		} else {
+			$result = $upgrader->install($package_url, ['overwrite_package' => ($action === 'update')]);
 		}
-	} else {
-		$result = $upgrader->install($package_url, ['overwrite_package' => ($action === 'update')]);
-	}
 
-	$status = 'ok';
-	$details = $result;
-	if ($result && is_wp_error($result) === false) {
-		$plugins = get_plugins();
-		foreach ($plugins as $file => $data) {
-			if (stripos($file, 'tmon-unit-connector.php') !== false) { activate_plugin($file); break; }
+		$status = 'ok';
+		$details = $result;
+		if ($result && is_wp_error($result) === false) {
+			$plugins = get_plugins();
+			foreach ($plugins as $file => $data) {
+				if (stripos($file, 'tmon-unit-connector.php') !== false) {
+					activate_plugin($file);
+					break;
+				}
+			}
+		} else {
+			$status = 'error';
 		}
-	} else {
-		$status = 'error';
-	}
 
-	if ($callback) {
-		wp_remote_post($callback, [
-			'timeout' => 10,
-			'headers' => ['Content-Type'=>'application/json'],
-			'body' => wp_json_encode([
-				'site_url' => home_url(),
-				'status' => $status,
-				'details' => is_wp_error($result) ? $result->get_error_message() : $details,
-			]),
-		]);
+		if ($callback) {
+			wp_remote_post($callback, [
+				'timeout' => 10,
+				'headers' => ['Content-Type'=>'application/json'],
+				'body' => wp_json_encode([
+					'site_url' => home_url(),
+					'status' => $status,
+					'details' => is_wp_error($result) ? $result->get_error_message() : $details,
+				]),
+			]);
+		}
+		return rest_ensure_response(['status' => $status]);
 	}
-	return rest_ensure_response(['status' => $status]);
 }
 
-// Admin → UC: push staged settings and confirm (guarded by app password auth)
+// Permission callback (native WP Application Passwords)
+if (!function_exists('tmon_uc_require_app_password_auth')) {
+	function tmon_uc_require_app_password_auth() {
+		$require = defined('TMON_UC_REQUIRE_APP_PASSWORD') ? TMON_UC_REQUIRE_APP_PASSWORD : (bool) get_option('tmon_uc_require_app_password', false);
+		if (!$require) return true;
+		$auth = isset($_SERVER['HTTP_AUTHORIZATION']) ? $_SERVER['HTTP_AUTHORIZATION'] : '';
+		if (!$auth) return false;
+		return true;
+	}
+}
+
+// Admin → UC routes (guarded by app password auth)
 add_action('rest_api_init', function() {
 	register_rest_route('tmon/v1', '/admin/device/settings', [
 		'methods' => 'POST',
@@ -115,6 +126,7 @@ add_action('rest_api_init', function() {
 			return rest_ensure_response(['ok'=>true]);
 		}
 	]);
+
 	register_rest_route('tmon/v1', '/admin/device/confirm', [
 		'methods' => 'POST',
 		'permission_callback' => 'tmon_uc_require_app_password_auth',
@@ -130,7 +142,6 @@ add_action('rest_api_init', function() {
 		}
 	]);
 
-	// Hierarchy upserts (companies/sites/zones/clusters/units) — guarded by app password auth
 	$upsert_cb = function($what, $id_key) {
 		return function(WP_REST_Request $req) use ($what, $id_key) {
 			$data = json_decode($req->get_body(), true);

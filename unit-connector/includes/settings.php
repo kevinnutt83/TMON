@@ -610,49 +610,26 @@ add_shortcode('tmon_uc_claim_device', function($atts){
 	return $out;
 });
 
-// Commands staging endpoints (ensure table exists before use)
-add_action('rest_api_init', function(){
-	tmon_uc_ensure_command_table();
-	// ...existing /admin/device/command, /device/commands, /device/command/confirm handlers...
+// Shortcode: [tmon_device_list]
+add_shortcode('tmon_device_list', function($atts){
+	$atts = shortcode_atts(['class'=>''], $atts, 'tmon_device_list');
+	$html = '<div id="tmon-device-list" class="'.esc_attr($atts['class']).'"></div><div id="tmon-device-details" class="tmon-card"></div>';
+	return $html;
 });
 
-// Pair with hub: persist normalized pairing; then backfill provisioned devices
-add_action('admin_post_tmon_uc_pair_with_hub', function(){
-	// ...existing pairing code building $hub and $body...
-	// After success response, persist normalized pairing
-	$paired = get_option('tmon_uc_paired_sites', []);
-	if (!is_array($paired)) $paired = [];
-	$norm = tmon_uc_normalize_url($hub);
-	$paired[$norm] = [
-		'site'      => $hub,
-		'paired_at' => current_time('mysql'),
-		'read_token'=> isset($body['read_token']) ? sanitize_text_field($body['read_token']) : '',
-	];
-	update_option('tmon_uc_paired_sites', $paired, false);
-	// Backfill provisioned cache
-	if (function_exists('tmon_uc_backfill_provisioned_from_admin')) {
-		tmon_uc_backfill_provisioned_from_admin();
-	}
-	// ...existing redirect...
+// Shortcode: [tmon_device_status unit_id="..."]
+add_shortcode('tmon_device_status', function($atts){
+	$atts = shortcode_atts(['unit_id'=>'', 'class'=>''], $atts, 'tmon_device_status');
+	$html = '<div id="tmon-device-status" data-unit_id="'.esc_attr($atts['unit_id']).'" class="'.esc_attr($atts['class']).'">Loading…</div>';
+	return $html;
 });
 
-// Admin AJAX: get UC devices (simple mirror via options or table if present)
-add_action('wp_ajax_tmon_uc_get_devices', function(){
-	if (!current_user_can('manage_options')) wp_send_json_error(['message'=>'Forbidden'], 403);
-	global $wpdb;
-	$table = $wpdb->prefix . 'tmon_uc_devices';
-	$rows = [];
-	if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table)) == $table) {
-		$rows = $wpdb->get_results("SELECT unit_id, unit_name, machine_id, role, company_id, plan, status, checkin_time, site_url, firmware, created_at, updated_at FROM {$table} ORDER BY updated_at DESC LIMIT 500", ARRAY_A);
-	} else {
-		$rows = get_option('tmon_uc_devices_cache', []);
-	}
-	wp_send_json_success(['data' => $rows]);
-});
-
-add_action('wp_ajax_tmon_uc_get_device_status', function(){
-	if (!current_user_can('manage_options')) wp_send_json_error(['message'=>'Forbidden'], 403);
-	$unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
-	$status = ['unit_id'=>$unit_id,'online'=>true,'last_seen'=>current_time('mysql')];
-	wp_send_json_success(['status' => $status]);
+// Ensure AJAX URL is exposed for frontend JS
+add_action('wp_enqueue_scripts', function(){
+	wp_register_script('tmon-uc-frontend', plugins_url('assets/js/uc-frontend.js', dirname(__FILE__)), ['jquery'], '1.0', true);
+	// Fallback localization for AJAX in case theme does not use admin_url
+	wp_localize_script('tmon-uc-frontend', 'tmon_uc_ajax', [
+		'ajaxurl' => admin_url('admin-ajax.php'),
+	]);
+	// Do not force enqueue here; frontend scripts in v2.00m snippets may load via theme or admin enqueue.
 });
