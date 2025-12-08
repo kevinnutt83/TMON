@@ -357,32 +357,48 @@ function tmon_admin_provisioning_page() {
     });
 }
 
-// Record firmware fetch transients when AJAX handler succeeds
-add_action('wp_ajax_tmon_admin_fetch_github_manifest', function(){
-	if (!current_user_can('manage_options')) wp_send_json_error(['message'=>'Forbidden'], 403);
-	// ...existing fetch logic...
-	// Assume $version and $manifest populated on success
-	// ...existing code...
-	if (!empty($version) && !empty($manifest)) {
-		set_transient('tmon_admin_firmware_version', $version, 12 * HOUR_IN_SECONDS);
-		set_transient('tmon_admin_firmware_version_ts', current_time('mysql'), 12 * HOUR_IN_SECONDS);
-		wp_send_json_success(['version'=>$version,'manifest'=>$manifest]);
-	}
-	wp_send_json_error(['message'=>'Failed to fetch firmware metadata'], 400);
-});
-
-// Inline notice renderer for Save & Provision results; call this in your page renderer.
+// Inline notice renderer for Save & Provision results; safe standalone function
 if (!function_exists('tmon_admin_render_provision_notice')) {
 	function tmon_admin_render_provision_notice() {
-		if (!current_user_can('manage_options')) return;
+		if (!current_user_can('manage_options')) {
+			return;
+		}
 		$state = isset($_GET['provision']) ? sanitize_text_field($_GET['provision']) : '';
 		if ($state === 'queued') {
-			echo '<div class="notice notice-success"><p>Provisioning queued and saved.</p></div>';
+			// Output a success notice
+			?>
+			<div class="notice notice-success">
+				<p>Provisioning queued and saved.</p>
+			</div>
+			<?php
 		} elseif ($state === 'failed') {
-			echo '<div class="notice notice-error"><p>Provisioning save failed.</p></div>';
+			// Output an error notice
+			?>
+			<div class="notice notice-error">
+				<p>Provisioning save failed.</p>
+			</div>
+			<?php
 		}
 	}
 }
+
+// Record firmware fetch transients when AJAX handler succeeds (ensure clean blocks)
+add_action('wp_ajax_tmon_admin_fetch_github_manifest', function(){
+	if (!current_user_can('manage_options')) {
+		wp_send_json_error(array('message' => 'Forbidden'), 403);
+	}
+	// ...existing fetch logic...
+	// On success, set transients and respond
+	// Example:
+	// $version = 'v2.02.1';
+	// $manifest = array(/* ... */);
+	if (!empty($version) && !empty($manifest)) {
+		set_transient('tmon_admin_firmware_version', $version, 12 * HOUR_IN_SECONDS);
+		set_transient('tmon_admin_firmware_version_ts', current_time('mysql'), 12 * HOUR_IN_SECONDS);
+		wp_send_json_success(array('version' => $version, 'manifest' => $manifest));
+	}
+	wp_send_json_error(array('message' => 'Failed to fetch firmware metadata'), 400);
+});
 
 // Legacy provisioning form renderer (restores previous structure but uses current Save & Provision logic)
 if (!function_exists('tmon_admin_render_legacy_provision_form')) {
@@ -478,41 +494,14 @@ add_action('wp_ajax_tmon_admin_fetch_github_manifest', function(){
 	// ...existing fetch code...
 	// On success:
 	// set_transient('tmon_admin_firmware_version', $version, 12 * HOUR_IN_SECONDS);
-	// set_transient('tmon_admin_firmware_version_ts', current_time('mysql'), 12 * H
-			$join_name = ($has_dev && in_array('unit_name', $dev_cols)) ? ", d.unit_name AS unit_name_dev" : "";
-			$join_bill = ($has_dev && in_array('canBill', $dev_cols)) ? ", d.canBill AS canBill" : "";
-			$sql = "SELECT p.id,p.unit_id,p.machine_id,p.plan,p.status,p.site_url,p.unit_name,p.settings_staged,p.created_at,p.updated_at{$join_name}{$join_bill}
-			        FROM {$prov_table} p LEFT JOIN {$dev_table} d ON d.unit_id=p.unit_id AND d.machine_id=p.machine_id
-			        ORDER BY p.created_at DESC";
-			$rows = $wpdb->get_results($sql, ARRAY_A);
-		}
-
-		echo '<div class="wrap"><h1>Provisioned Devices</h1>';
-		if (!$rows) { echo '<p><em>No provisioned devices found.</em></p></div>'; return; }
-		echo '<table class="wp-list-table widefat striped"><thead><tr>';
-		echo '<th>ID</th><th>Unit ID</th><th>Machine ID</th><th>Name</th><th>Plan</th><th>Status</th><th>Site</th><th>Staged</th><th>Can Bill</th><th>Created</th><th>Updated</th>';
-		echo '</tr></thead><tbody>';
-		foreach ($rows as $r) {
-			$name = !empty($r['unit_name_dev']) ? $r['unit_name_dev'] : (!empty($r['unit_name']) ? $r['unit_name'] : '');
-			$canBill = isset($r['canBill']) ? (intval($r['canBill']) ? 'Yes' : 'No') : 'No';
-			$staged = !empty($r['settings_staged']) ? 'Yes' : 'No';
-			echo '<tr>';
-			echo '<td>'.intval($r['id']).'</td>';
-			echo '<td>'.esc_html($r['unit_id']).'</td>';
-			echo '<td>'.esc_html($r['machine_id']).'</td>';
-			echo '<td>'.esc_html($name).'</td>';
-			echo '<td>'.esc_html($r['plan']).'</td>';
-			echo '<td>'.esc_html($r['status']).'</td>';
-			echo '<td>'.esc_html(isset($r['site_url']) ? $r['site_url'] : '').'</td>';
-			echo '<td>'.esc_html($staged).'</td>';
-			echo '<td>'.esc_html($canBill).'</td>';
-			echo '<td>'.esc_html($r['created_at']).'</td>';
-			echo '<td>'.esc_html($r['updated_at']).'</td>';
-			echo '</tr>';
-		}
-		echo '</tbody></table></div>';
+	// set_transient('tmon_admin_firmware_version_ts', current_time('mysql'), 12 * HOUR_IN_SECONDS);
+	if (!empty($version) && !empty($manifest)) {
+		set_transient('tmon_admin_firmware_version', $version, 12 * HOUR_IN_SECONDS);
+		set_transient('tmon_admin_firmware_version_ts', current_time('mysql'), 12 * HOUR_IN_SECONDS);
+		wp_send_json_success(['version'=>$version,'manifest'=>$manifest]);
 	}
-}
+	wp_send_json_error(['message'=>'Failed to fetch firmware metadata'], 400);
+});
 
 // Save & Provision — persist and log, then redirect with notice
 add_action('admin_post_tmon_admin_provision_device', function(){
