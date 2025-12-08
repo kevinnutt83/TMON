@@ -104,74 +104,125 @@ add_action('admin_enqueue_scripts', function () {
 	wp_localize_script('tmon-admin', 'TMON_ADMIN', $localized);
 });
 
-// Enqueue compact UI assets on Admin provisioning/devices/logs pages
+// Enqueue compact UI assets on TMON Admin pages (provisioning/devices/logs)
 add_action('admin_enqueue_scripts', function(){
 	$page = isset($_GET['page']) ? $_GET['page'] : '';
-	$targets = ['tmon-admin-provisioning','tmon-admin-devices','tmon-admin-command-logs'];
+	$targets = array('tmon-admin-provisioning','tmon-admin-devices','tmon-admin-command-logs');
 	if (in_array($page, $targets, true)) {
-		wp_enqueue_style('tmon-admin-core', TMON_ADMIN_URL . 'assets/css/tmon.css', [], TMON_ADMIN_VERSION);
-		wp_enqueue_script('tmon-admin-provision-modal', TMON_ADMIN_URL . 'assets/js/provision-modal.js', [], TMON_ADMIN_VERSION, true);
-		wp_localize_script('tmon-admin-provision-modal', 'tmonProvisionData', [
+		wp_enqueue_style('tmon-admin-core', TMON_ADMIN_URL . 'assets/css/tmon.css', array(), TMON_ADMIN_VERSION);
+		wp_enqueue_script('tmon-admin-provision-modal', TMON_ADMIN_URL . 'assets/js/provision-modal.js', array('jquery'), TMON_ADMIN_VERSION, true);
+		wp_localize_script('tmon-admin-provision-modal', 'tmonProvisionData', array(
 			'ajax_url' => admin_url('admin-ajax.php'),
 			'nonce'    => wp_create_nonce('tmon_admin_ajax'),
-		]);
+		));
 	}
 });
 
-// Command Logs menu
+// Command Logs menu and page
 add_action('admin_menu', function(){
 	add_menu_page('TMON Command Logs', 'TMON Command Logs', 'manage_options', 'tmon-admin-command-logs', function(){
-		echo '<div class="wrap"><h1>Command Logs</h1>';
-		echo '<div class="tmon-filter-form"><form id="tmon-command-filter"><div>';
-		echo '<div><label>Unit ID</label><input type="text" name="unit_id" /></div>';
-		echo '<div><label>Status</label><select name="status"><option value="">Any</option><option>staged</option><option>queued</option><option>claimed</option><option>applied</option><option>failed</option></select></div>';
-		echo '<div><button type="submit" class="button button-primary">Filter</button> <a id="tmon-command-export" href="#" class="button">Export CSV</a></div>';
-		echo '</div></form></div>';
-		echo '<div class="tmon-responsive-table"><table class="wp-list-table widefat striped tmon-stack-table">';
-		echo '<thead><tr><th>ID</th><th>Unit ID</th><th>Command</th><th>Params</th><th>Status</th><th>Updated</th></tr></thead><tbody id="tmon-command-rows"><tr><td colspan="6">Loading…</td></tr></tbody></table></div></div>';
-		echo "<script>(function($){
-			function loadLogs(q,cb){
-				$.post(ajaxurl,{action:'tmon_admin_get_command_logs',_wpnonce:'".wp_create_nonce('tmon_admin_ajax')."',unit_id:q.unit_id,status:q.status},function(res){
-					var tb=$('#tmon-command-rows'); tb.empty();
-					if(res && res.success && res.data && res.data.length){
-						res.data.forEach(function(r){
-							tb.append('<tr><td>'+r.id+'</td><td>'+r.unit_id+'</td><td>'+r.command+'</td><td><code>'+ (r.params||'') +'</code></td><td><span class=\"tmon-status-badge tmon-status-'+r.status+'\">'+r.status+'</span></td><td>'+r.updated_at+'</td></tr>');
+		?>
+		<div class="wrap">
+			<h1>Command Logs</h1>
+			<div class="tmon-filter-form">
+				<form id="tmon-command-filter">
+					<div>
+						<div><label>Unit ID</label><input type="text" name="unit_id" /></div>
+						<div>
+							<label>Status</label>
+							<select name="status">
+								<option value="">Any</option>
+								<option>staged</option>
+								<option>queued</option>
+								<option>claimed</option>
+								<option>applied</option>
+								<option>failed</option>
+							</select>
+						</div>
+						<div>
+							<button type="submit" class="button button-primary">Filter</button>
+							<a id="tmon-command-export" href="#" class="button">Export CSV</a>
+						</div>
+					</div>
+				</form>
+			</div>
+			<div class="tmon-responsive-table">
+				<table class="wp-list-table widefat striped tmon-stack-table">
+					<thead><tr><th>ID</th><th>Unit ID</th><th>Command</th><th>Params</th><th>Status</th><th>Updated</th></tr></thead>
+					<tbody id="tmon-command-rows"><tr><td colspan="6">Loading…</td></tr></tbody>
+				</table>
+			</div>
+		</div>
+		<script>
+		(function($){
+			function loadLogs(q, cb){
+				$.post(ajaxurl, {
+					action: 'tmon_admin_get_command_logs',
+					_wpnonce: '<?php echo esc_js( wp_create_nonce('tmon_admin_ajax') ); ?>',
+					unit_id: q.unit_id,
+					status: q.status
+				}, function(res){
+					var tb = $('#tmon-command-rows'); tb.empty();
+					var rows = (res && res.success && res.data) ? res.data : [];
+					if (rows.length){
+						rows.forEach(function(r){
+							tb.append('<tr><td>'+r.id+'</td><td>'+r.unit_id+'</td><td>'+r.command+'</td><td><code>'+ (r.params||'').replace(/</g,'&lt;') +'</code></td><td><span class="tmon-status-badge tmon-status-'+r.status+'">'+r.status+'</span></td><td>'+r.updated_at+'</td></tr>');
 						});
-					}else{ tb.append('<tr><td colspan=\"6\">No records found.</td></tr>'); }
-					if(cb) cb(res && res.data ? res.data : []);
+					} else {
+						tb.append('<tr><td colspan="6">No records found.</td></tr>');
+					}
+					if (cb) cb(rows);
 				});
 			}
-			$('#tmon-command-filter').on('submit',function(e){
+			$('#tmon-command-filter').on('submit', function(e){
 				e.preventDefault();
-				var q={unit_id:this.unit_id.value.trim(),status:this.status.value};
-				loadLogs(q,function(rows){
-					$('#tmon-command-export').off('click').on('click',function(ev){
+				var q = { unit_id: this.unit_id.value.trim(), status: this.status.value };
+				loadLogs(q, function(rows){
+					$('#tmon-command-export').off('click').on('click', function(ev){
 						ev.preventDefault();
-						var csv='id,unit_id,command,params,status,updated_at\\n';
-						rows.forEach(function(r){ csv+= [r.id,r.unit_id,r.command,(r.params||'').replaceAll('\\n',' '),r.status,r.updated_at].map(function(x){return '\"'+String(x||'').replaceAll('\"','\"\"')+'\"';}).join(',') + '\\n'; });
-						var blob=new Blob([csv],{type:'text/csv'}); var url=URL.createObjectURL(blob); var a=document.createElement('a'); a.href=url; a.download='tmon-command-logs.csv'; a.click(); URL.revokeObjectURL(url);
+						var csv = 'id,unit_id,command,params,status,updated_at\n';
+						rows.forEach(function(r){
+							var cols = [r.id, r.unit_id, r.command, (r.params||'').replace(/\n/g,' '), r.status, r.updated_at].map(function(x){
+								var s = String(x||'').replace(/"/g,'""');
+								return '"' + s + '"';
+							});
+							csv += cols.join(',') + '\n';
+						});
+						var blob = new Blob([csv], {type:'text/csv'});
+						var url = URL.createObjectURL(blob);
+						var a = document.createElement('a');
+						a.href = url; a.download = 'tmon-command-logs.csv'; a.click();
+						URL.revokeObjectURL(url);
 					});
 				});
 			});
-			loadLogs({unit_id:'',status:''});
-		})(jQuery);</script>";
+			loadLogs({ unit_id: '', status: '' });
+		})(jQuery);
+		</script>
+		<?php
 	});
 });
 
 // AJAX: Command logs
 add_action('wp_ajax_tmon_admin_get_command_logs', function(){
 	check_ajax_referer('tmon_admin_ajax');
-	if (!current_user_can('manage_options')) wp_send_json_error(['message'=>'Forbidden'], 403);
+	if (!current_user_can('manage_options')) {
+		wp_send_json_error(array('message' => 'Forbidden'), 403);
+	}
 	global $wpdb;
 	$table = $wpdb->prefix . 'tmon_device_commands';
-	$where = '1=1'; $params = [];
-	$unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
-	$status  = sanitize_text_field($_POST['status'] ?? '');
+	$where = '1=1';
+	$params = array();
+
+	$unit_id = isset($_POST['unit_id']) ? sanitize_text_field($_POST['unit_id']) : '';
+	$status  = isset($_POST['status']) ? sanitize_text_field($_POST['status']) : '';
+
 	if ($unit_id !== '') { $where .= ' AND device_id=%s'; $params[] = $unit_id; }
 	if ($status !== '')  { $where .= ' AND status=%s'; $params[] = $status; }
+
 	$sql = "SELECT id, device_id AS unit_id, command, params, status, updated_at FROM {$table} WHERE {$where} ORDER BY updated_at DESC LIMIT 200";
 	$rows = $params ? $wpdb->get_results($wpdb->prepare($sql, $params), ARRAY_A) : $wpdb->get_results($sql, ARRAY_A);
-	wp_send_json_success($rows ?: []);
+	wp_send_json_success($rows ?: array());
 });
 
 // Firmware fetch notice (reads transients set by AJAX handler)
@@ -180,7 +231,7 @@ add_action('admin_notices', function(){
 	$ver = get_transient('tmon_admin_firmware_version');
 	$ts  = get_transient('tmon_admin_firmware_version_ts');
 	if ($ver) {
-		echo '<div class="notice notice-info"><p>Firmware manifest fetched: version '.esc_html($ver).' at '.esc_html($ts ?: current_time('mysql')).'</p></div>';
+		echo '<div class="notice notice-info"><p>Firmware manifest fetched: version ' . esc_html($ver) . ' at ' . esc_html($ts ?: current_time('mysql')) . '</p></div>';
 	}
 });
 
@@ -478,7 +529,7 @@ if (!function_exists('tmon_admin_firmware_page')) {
 		echo '<div class="card" style="padding:12px;"><h2 style="margin-top:0;">Releases</h2>';
 		$releases = wp_remote_get($api_base . '/releases', array('timeout' => 20, 'headers' => array('User-Agent' => 'TMON Admin')));
 		if (!is_wp_error($releases) && wp_remote_retrieve_response_code($releases) === 200) {
-			$list = json_decode(wp_remote
+			$list = json_decode(wp_remote_retrieve_body($releases), true);
 			if (is_array($list) && !empty($list)) {
 				echo '<table class="widefat striped"><thead><tr><th>Tag</th><th>Name</th><th>Published</th><th>Assets</th></tr></thead><tbody>';
 				foreach ($list as $rel) {
