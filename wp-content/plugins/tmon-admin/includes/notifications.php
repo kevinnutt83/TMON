@@ -16,7 +16,7 @@ add_action('tmon_admin_notifications_page', function () {
 	if (!$exists) {
 		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 		$charset = $wpdb->get_charset_collate();
-		$sql = "CREATE TABLE {$table} (
+		dbDelta("CREATE TABLE {$table} (
 			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
 			title VARCHAR(255) NOT NULL,
 			message LONGTEXT NULL,
@@ -26,8 +26,7 @@ add_action('tmon_admin_notifications_page', function () {
 			PRIMARY KEY (id),
 			KEY idx_created (created_at),
 			KEY idx_read (read_at)
-		) {$charset};";
-		dbDelta($sql);
+		) {$charset};");
 	}
 
 	$rows = $wpdb->get_results("SELECT id, title, message, level, created_at, read_at FROM {$table} ORDER BY created_at DESC LIMIT 200");

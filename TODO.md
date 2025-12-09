@@ -55,25 +55,16 @@
 ## Updated Next Actions (Scope-aligned)
 
 Firmware (Micropython)
-- [x] LoRa loop dedicated; disabled for wifi role.
-- [x] Persist NODE_TYPE; gate tasks until fully provisioned (flag + URL + UNIT_ID).
-- [x] Command polling applies set_var/run_func/firmware_update/relay_ctrl.
 - [ ] Add persistence helpers for custom vars changed via set_var.
 - [ ] Base <-> Remote LoRa envelopes with HMAC + replay protection; optional encryption.
 
 Admin
-- [x] Audit page restored and tables ensured.
-- [x] UC endpoints: devices, reprovision, command.
 - [ ] Add audit hooks across provisioning save/queue paths.
 
 Unit Connector
-- [x] Mirror table ensure; refresh assigned/unassigned.
-- [x] Reprovision staging & push to Admin hub.
-- [x] Commands page for variables/functions/firmware/relay.
 - [ ] Widgets/graphs for device data; relay controls; shortcodes polish.
 
 Docs/QA
-- [x] README updated with data flow.
 - [ ] Add data flow graphics/screenshots.
 - [ ] End-to-end tests for reprovision and command relay via base.
 
@@ -87,13 +78,6 @@ Docs/QA
 - [ ] Tag minor release after QA.
 
 # TODO
-
-- [x] Mirror provisioned settings to tmon_devices (provisioned, wordpress_api_url, unit_name, provisioned_at) on Save & Provision.
-- [x] Migration: add provisioned/provisioned_at/wordpress_api_url columns if missing.
-- [x] Deliver staged provisioning to devices (settings_staged).
-- [x] Add device confirm endpoint with token; device posts confirm after apply.
-- [x] Admin UI Provisioning Activity page with pending queue and history.
-- [x] Add history auditing/logging option in Admin.
 - [ ] Add per-device HMAC confirmation or device-specific key to confirm endpoint.
 - [ ] Add email notifications for provisioning events (optional).
 - [ ] Add per-device staging preview and direct push tools in UI.
@@ -101,60 +85,41 @@ Docs/QA
 
 # TMON Admin — Updated TODO
 
-Completed (from this session)
-- Fixed fatal parse error at file end.
-- Restored redirect-after-POST in `admin_post_tmon_admin_provision_device`.
-- Added firmware fields and GitHub manifest fetch (AJAX: `tmon_admin_fetch_github_manifest`).
-- Added migrations: normalized IDs, firmware metadata, settings_staged, device mirror columns.
-- Queue helpers: enqueue/dequeue/lookup by normalized keys.
-- Diagnostics: known IDs refresh, queue/DB staging check, API calls and provisioning history tables.
-- Claims approval/denial flow and provisioning history page.
-
 High-priority
-- Define missing vars in inline update branch in provisioning page.
-- Validate nonce usage across forms/handlers.
-- Confirm device-side queue consumption and normalized key matching.
+- [ ] Define missing vars in inline update branch in provisioning page.
+- [ ] Validate nonce usage across forms/handlers.
+- [ ] Confirm device-side queue consumption and normalized key matching.
 
 Medium
-- Device mirror consistency updates and backfills.
-- Admin notices reliability.
-- Hierarchy Sync audit logs.
+- [ ] Device mirror consistency updates and backfills.
+- [ ] Admin notices reliability.
+- [ ] Hierarchy Sync audit logs.
 
 Lower-priority
-- UX: typeahead for Known IDs; loading spinners.
-- Security: verify cross-site tokens and rotation.
-- Maintenance: centralize purge ops in settings.php; docs.
-- Docs: admin guide for provisioning workflow and diagnostics.
+- [ ] UX: typeahead for Known IDs; loading spinners.
+- [ ] Security: verify cross-site tokens and rotation.
+- [ ] Maintenance: centralize purge ops in settings.php; docs.
+- [ ] Docs: admin guide for provisioning workflow and diagnostics.
 
 Notes
 - Migrations idempotent; keep in `admin_init`.
 - Unique index `unit_machine (unit_id, machine_id)` ensures deduplication; ensure updates match normalized columns.
 
 Unit Connector — Configuration UI and Staging
-- [x] Create Device Configuration admin page (menu: TMON Devices → Settings) that renders a form for core variables from micropython/settings.py.
-- [x] Add a settings schema mapper in UC (PHP) to describe types, defaults, help text, and constraints for key firmware variables.
-- [x] Persist posted values as staged settings (DB: tmon_uc_devices.staged_settings + staged_at).
-- [x] Expose staged settings via UC REST:
-  - GET /wp-json/tmon/v1/admin/device/settings-staged → returns JSON
-  - POST /wp-json/tmon/v1/admin/device/settings-applied → device confirms apply
 - [ ] Extend schema coverage to all firmware variables and advanced types (arrays/maps), with JSON validation.
 - [ ] Admin hub integration button to push staged settings to Admin hub (optional).
 
 UC Pairings and Device Listing
-- [x] Add cron-like refresh from Admin hub to backfill UC mirror (hourly).
 - [ ] Add settings to control refresh cadence (hourly/daily/off) and diagnostics.
 
 REST and Admin-post Endpoints (UC)
-- [x] Admin push handler for staged settings → Admin hub reprovision endpoint.
 - [ ] Add retry/backoff and result notice details.
 
 TMON Admin — Fixes
-- [x] Fallback tmon_admin_provisioned_devices_page to prevent missing-callback fatal.
 - [ ] Wire full provisioning page to includes/provisioning.php and remove fallback after verification.
 
 Unit Connector — Notices and Pairing
-- [x] Make admin notices dismissible and auto-hide.
-- [x] Store normalized hub URL with pairing diagnostics in settings.
+- [ ] (no pending items)
 
 Firmware (Micropython) — Optimization Plan
 - [ ] Implement compact telemetry keys and conditional inclusion (skip zeros/defaults).
@@ -167,12 +132,9 @@ Testing
 - [ ] Verify Push-to-Admin triggers reprovision queue and devices receive staged settings.
 
 TMON Admin — Provisioned Devices
-- [x] Render table with joined fields and fallback to UC hub when local table is missing.
-- [x] Update DB on device confirm-applied: set provisioned, site_url, clear queued payloads.
-- [x] Add canBill column and set true on claim approval (hook-based).
+- [ ] (no pending items beyond other sections)
 
 Unit Connector — Settings Page
-- [x] Remove duplicate element IDs (avoid multiple id="submit"/"_wpnonce").
 - [ ] Load hierarchy map JS only when Leaflet is present; suppress console noise.
 
 Command Flow (v2.00m review)
@@ -198,7 +160,6 @@ Testing
   - Changes: Settings schema + staged configuration UI, REST endpoints for staged/applied settings, pairing diagnostics, Admin push handler, hourly backfill refresh from Admin.
 
 ## OTA / Repository Update Process Enhancements
-- [x] Firmware version updated in micropython/settings.py (v2.02.0).
 - [ ] Ensure OTA manifest.json includes version v2.02.0 and updated file hashes.
 - [ ] Verify version.txt reflects v2.02.0 for lightweight checks.
 - [ ] Confirm OTA client respects manifest HMAC (optional) and size caps.
@@ -213,6 +174,15 @@ Testing
 - 0.2.0 (Admin/UC)
   - Admin: Provisioned Devices page restored; device confirm-applied updates; UC pairing API.
   - UC: Staged settings form; REST endpoints; pairing diagnostics; Admin push.
+- Session removals (pruned from TODO for clarity)
+  - Setup & Infrastructure: rename to micropython, LICENSE → MIT, debug system, expanded settings with persistence, CHANGELOG seeded, initial testing.
+  - Firmware Basics: MACHINE_ID persistence, WiFi logic, first-boot + OTA check, admin registration/check-in, async loop/task flags, OLED optimization, environmental sampling, boot flow tests.
+  - LoRa & Node Logic: LoRa security/basics, remote/base node logic, frost/heat watch, data relay, multi-node communication tests.
+  - Admin fixes: audit page restore, UC endpoints (devices/reprovision/command), migrations for normalized IDs, firmware metadata, settings_staged, device mirror columns, history page renderer.
+  - Unit Connector: mirror ensure/refresh, reprovision staging + push to Admin, commands page, pairing helper/shortcodes, cron requeue safety.
+  - White screen fix: enforced redirect-after-POST on Save & Provision.
+  - DB schema guards: column existence checks for commands/status/updated_at and OTA/action.
+  - Firmware/OTA: version bumps to v2.02.1, OTA mirrors/headers for stable fetch.
 
 ## Upgrade Notes
 - Devices will detect v2.02.0 via version.txt and manifest.json; ensure both are published before rollout.
@@ -220,21 +190,16 @@ Testing
 - After upgrade, re-pair UC with Admin to populate hub_key/read_token and normalized pairing store.
 
 Admin — Provisioning History
-- [x] Add renderer to display latest actions; verify table exists.
+- [ ] (no pending items)
 
 Unit Connector — Post-provisioning
-- [x] Normalize URL helper defined early to avoid fatal.
-- [x] Ensure command table includes status; fix requeue cron UPDATE.
-- [x] First check-in REST: call Admin to confirm and upsert UC cache; mark claimed.
-- [x] Shortcode: claim device by UNIT_ID + MACHINE_ID using first-checkin flow.
-- [x] Backfill provisioned devices after pairing and on page load if empty.
+- [ ] (no pending items)
 
 Commands
-- [x] Stage commands in UC, devices poll, confirm applied; add cron requeue for stale claimed.
 - [ ] Add Admin-side mirror/log viewer for commands (status timeline).
 
 White screen on Save & Provision
-- [x] Force redirect-after-POST in handler to avoid blank page; add safe fallback redirect.
+- [ ] (no pending items)
 
 Verification
 - [ ] UC pairing populates hub_key/read_token; Provisioned Devices page shows devices post-backfill.
@@ -255,22 +220,16 @@ Pending (from conversation)
 - [ ] Admin offline notice: update last_seen via UC heartbeat/check-in.
 
 TMON Admin — Firmware Fetch
-- [x] AJAX handler uses fallback mirrors with headers to avoid GitHub 400s.
 - [ ] Add admin UI notice for manifest/version and last fetch time.
 
 TMON Admin — Provisioned Devices
-- [x] Ensure menu callback exists and delegates to renderer.
-- [x] Renderer shows provisioned devices with canBill and staged flags.
-- [x] Save & Provision handler always redirects (no white screen).
+- [ ] (no pending items beyond other sections)
 
 Unit Connector — Command Table & Cron
-- [x] Normalize URL helper defined early (prevents fatal).
-- [x] Ensure tmon_device_commands table schema includes status column.
-- [x] Requeue cron safely updates claimed → queued when stale.
+- [ ] (no pending items beyond other sections)
 
 Firmware — Version & OTA
-- [x] Bump to v2.02.1.
-- [x] Add OTA fallback mirrors and headers.
+- [ ] (no pending items beyond OTA section)
 
 Verification
 - [ ] Firmware metadata fetch works via AJAX (no 400).
@@ -279,51 +238,26 @@ Verification
 - [ ] Commands staged → polled → executed → confirmed flow visible in UC/Admin logs.
 
 TMON Admin — Provisioning Save
-- [x] Persist Save & Provision to tmon_provisioned_devices and mirror to tmon_devices.
-- [x] Redirect-after-POST with success/failure notice.
+- [ ] (no pending items)
 
 Unit Connector — Pairing Persistence
-- [x] Persist hub_key/read_token and normalized pairing.
-- [x] Backfill devices after pairing.
-
-Verification
-- [ ] Save & Provision updates DB rows and shows queued notice.
-- [ ] UC pairing creates records and devices backfill visible on UC provisioned page.
-- [ ] Device first check-in claims via Admin confirm and updates UC mirror.
-- [ ] Commands staged, polled, executed, confirmed; status visible.
+- [ ] (no pending items)
 
 TMON Admin — Provisioning Save & History
-- [x] Persist Save & Provision into tmon_provisioned_devices and mirror into tmon_devices.
-- [x] Append provisioning history on save and device confirm; render History page.
-- [x] Enforce redirect-after-POST to avoid blank page; show queued/failed notice.
+- [ ] (no pending items)
 
 Unit Connector — Pairing & Backfill
-- [x] Persist hub_key/read_token; normalized pairing record.
-- [x] Backfill provisioned devices from Admin after pairing.
+- [ ] (no pending items)
 
 Firmware/OTA
-- [x] v2.02.1 settings and OTA mirrors; headers for fetch stability.
-
-Verification
-- [ ] Save & Provision updates DB and history; queued notice visible.
-- [ ] UC pairing creates records on both sides; UC provisioned page shows devices.
-- [ ] First device check-in triggers Admin confirm and UC claim; mirrors updated.
-- [ ] Commands staged/polled/executed/confirmed; status reflects in UC/Admin.
+- [ ] (no pending items beyond OTA section)
 
 Open items
 - [ ] Add Admin UI notices for firmware manifest/version and last fetch timestamp.
 - [ ] Add Admin/UC command logs viewer with status timeline and filters.
 
 # TMON Admin — Provisioning
-- [x] Fix parse error in includes/provisioning.php (short array → array(), balanced brackets).
-- [x] Persist Save & Provision and append history; redirect with queued/failed.
-- [x] Provisioned Devices page callback delegates to renderer; no invalid callback fatal.
-
-Verification
-- [ ] Save & Provision writes to tmon_provisioned_devices and tmon_devices; history row added.
-- [ ] Provisioning History page lists latest actions.
-- [ ] Devices that confirm-applied update records and history.
-- [ ] UC pairing persists on both sides; UC backfills devices.
+- [ ] (no pending items beyond provisioning sections)
 
 # TMON Implementation Tracker
 
@@ -570,25 +504,16 @@ Verification plan
 ## Updated Next Actions (Scope-aligned)
 
 Firmware (Micropython)
-- [x] LoRa loop dedicated; disabled for wifi role.
-- [x] Persist NODE_TYPE; gate tasks until fully provisioned (flag + URL + UNIT_ID).
-- [x] Command polling applies set_var/run_func/firmware_update/relay_ctrl.
 - [ ] Add persistence helpers for custom vars changed via set_var.
 - [ ] Base <-> Remote LoRa envelopes with HMAC + replay protection; optional encryption.
 
 Admin
-- [x] Audit page restored and tables ensured.
-- [x] UC endpoints: devices, reprovision, command.
 - [ ] Add audit hooks across provisioning save/queue paths.
 
 Unit Connector
-- [x] Mirror table ensure; refresh assigned/unassigned.
-- [x] Reprovision staging & push to Admin hub.
-- [x] Commands page for variables/functions/firmware/relay.
 - [ ] Widgets/graphs for device data; relay controls; shortcodes polish.
 
 Docs/QA
-- [x] README updated with data flow.
 - [ ] Add data flow graphics/screenshots.
 - [ ] End-to-end tests for reprovision and command relay via base.
 
@@ -602,13 +527,6 @@ Docs/QA
 - [ ] Tag minor release after QA.
 
 # TODO
-
-- [x] Mirror provisioned settings to tmon_devices (provisioned, wordpress_api_url, unit_name, provisioned_at) on Save & Provision.
-- [x] Migration: add provisioned/provisioned_at/wordpress_api_url columns if missing.
-- [x] Deliver staged provisioning to devices (settings_staged).
-- [x] Add device confirm endpoint with token; device posts confirm after apply.
-- [x] Admin UI Provisioning Activity page with pending queue and history.
-- [x] Add history auditing/logging option in Admin.
 - [ ] Add per-device HMAC confirmation or device-specific key to confirm endpoint.
 - [ ] Add email notifications for provisioning events (optional).
 - [ ] Add per-device staging preview and direct push tools in UI.
@@ -616,60 +534,41 @@ Docs/QA
 
 # TMON Admin — Updated TODO
 
-Completed (from this session)
-- Fixed fatal parse error at file end.
-- Restored redirect-after-POST in `admin_post_tmon_admin_provision_device`.
-- Added firmware fields and GitHub manifest fetch (AJAX: `tmon_admin_fetch_github_manifest`).
-- Added migrations: normalized IDs, firmware metadata, settings_staged, device mirror columns.
-- Queue helpers: enqueue/dequeue/lookup by normalized keys.
-- Diagnostics: known IDs refresh, queue/DB staging check, API calls and provisioning history tables.
-- Claims approval/denial flow and provisioning history page.
-
 High-priority
-- Define missing vars in inline update branch in provisioning page.
-- Validate nonce usage across forms/handlers.
-- Confirm device-side queue consumption and normalized key matching.
+- [ ] Define missing vars in inline update branch in provisioning page.
+- [ ] Validate nonce usage across forms/handlers.
+- [ ] Confirm device-side queue consumption and normalized key matching.
 
 Medium
-- Device mirror consistency updates and backfills.
-- Admin notices reliability.
-- Hierarchy Sync audit logs.
+- [ ] Device mirror consistency updates and backfills.
+- [ ] Admin notices reliability.
+- [ ] Hierarchy Sync audit logs.
 
 Lower-priority
-- UX: typeahead for Known IDs; loading spinners.
-- Security: verify cross-site tokens and rotation.
-- Maintenance: centralize purge ops in settings.php; docs.
-- Docs: admin guide for provisioning workflow and diagnostics.
+- [ ] UX: typeahead for Known IDs; loading spinners.
+- [ ] Security: verify cross-site tokens and rotation.
+- [ ] Maintenance: centralize purge ops in settings.php; docs.
+- [ ] Docs: admin guide for provisioning workflow and diagnostics.
 
 Notes
 - Migrations idempotent; keep in `admin_init`.
 - Unique index `unit_machine (unit_id, machine_id)` ensures deduplication; ensure updates match normalized columns.
 
 Unit Connector — Configuration UI and Staging
-- [x] Create Device Configuration admin page (menu: TMON Devices → Settings) that renders a form for core variables from micropython/settings.py.
-- [x] Add a settings schema mapper in UC (PHP) to describe types, defaults, help text, and constraints for key firmware variables.
-- [x] Persist posted values as staged settings (DB: tmon_uc_devices.staged_settings + staged_at).
-- [x] Expose staged settings via UC REST:
-  - GET /wp-json/tmon/v1/admin/device/settings-staged → returns JSON
-  - POST /wp-json/tmon/v1/admin/device/settings-applied → device confirms apply
 - [ ] Extend schema coverage to all firmware variables and advanced types (arrays/maps), with JSON validation.
 - [ ] Admin hub integration button to push staged settings to Admin hub (optional).
 
 UC Pairings and Device Listing
-- [x] Add cron-like refresh from Admin hub to backfill UC mirror (hourly).
 - [ ] Add settings to control refresh cadence (hourly/daily/off) and diagnostics.
 
 REST and Admin-post Endpoints (UC)
-- [x] Admin push handler for staged settings → Admin hub reprovision endpoint.
 - [ ] Add retry/backoff and result notice details.
 
 TMON Admin — Fixes
-- [x] Fallback tmon_admin_provisioned_devices_page to prevent missing-callback fatal.
 - [ ] Wire full provisioning page to includes/provisioning.php and remove fallback after verification.
 
 Unit Connector — Notices and Pairing
-- [x] Make admin notices dismissible and auto-hide.
-- [x] Store normalized hub URL with pairing diagnostics in settings.
+- [ ] (no pending items)
 
 Firmware (Micropython) — Optimization Plan
 - [ ] Implement compact telemetry keys and conditional inclusion (skip zeros/defaults).
@@ -682,12 +581,9 @@ Testing
 - [ ] Verify Push-to-Admin triggers reprovision queue and devices receive staged settings.
 
 TMON Admin — Provisioned Devices
-- [x] Render table with joined fields and fallback to UC hub when local table is missing.
-- [x] Update DB on device confirm-applied: set provisioned, site_url, clear queued payloads.
-- [x] Add canBill column and set true on claim approval (hook-based).
+- [ ] (no pending items beyond other sections)
 
 Unit Connector — Settings Page
-- [x] Remove duplicate element IDs (avoid multiple id="submit"/"_wpnonce").
 - [ ] Load hierarchy map JS only when Leaflet is present; suppress console noise.
 
 Command Flow (v2.00m review)
@@ -713,7 +609,6 @@ Testing
   - Changes: Settings schema + staged configuration UI, REST endpoints for staged/applied settings, pairing diagnostics, Admin push handler, hourly backfill refresh from Admin.
 
 ## OTA / Repository Update Process Enhancements
-- [x] Firmware version updated in micropython/settings.py (v2.02.0).
 - [ ] Ensure OTA manifest.json includes version v2.02.0 and updated file hashes.
 - [ ] Verify version.txt reflects v2.02.0 for lightweight checks.
 - [ ] Confirm OTA client respects manifest HMAC (optional) and size caps.
@@ -728,6 +623,15 @@ Testing
 - 0.2.0 (Admin/UC)
   - Admin: Provisioned Devices page restored; device confirm-applied updates; UC pairing API.
   - UC: Staged settings form; REST endpoints; pairing diagnostics; Admin push.
+- Session removals (pruned from TODO for clarity)
+  - Setup & Infrastructure: rename to micropython, LICENSE → MIT, debug system, expanded settings with persistence, CHANGELOG seeded, initial testing.
+  - Firmware Basics: MACHINE_ID persistence, WiFi logic, first-boot + OTA check, admin registration/check-in, async loop/task flags, OLED optimization, environmental sampling, boot flow tests.
+  - LoRa & Node Logic: LoRa security/basics, remote/base node logic, frost/heat watch, data relay, multi-node communication tests.
+  - Admin fixes: audit page restore, UC endpoints (devices/reprovision/command), migrations for normalized IDs, firmware metadata, settings_staged, device mirror columns, history page renderer.
+  - Unit Connector: mirror ensure/refresh, reprovision staging + push to Admin, commands page, pairing helper/shortcodes, cron requeue safety.
+  - White screen fix: enforced redirect-after-POST on Save & Provision.
+  - DB schema guards: column existence checks for commands/status/updated_at and OTA/action.
+  - Firmware/OTA: version bumps to v2.02.1, OTA mirrors/headers for stable fetch.
 
 ## Upgrade Notes
 - Devices will detect v2.02.0 via version.txt and manifest.json; ensure both are published before rollout.
@@ -735,21 +639,16 @@ Testing
 - After upgrade, re-pair UC with Admin to populate hub_key/read_token and normalized pairing store.
 
 Admin — Provisioning History
-- [x] Add renderer to display latest actions; verify table exists.
+- [ ] (no pending items)
 
 Unit Connector — Post-provisioning
-- [x] Normalize URL helper defined early to avoid fatal.
-- [x] Ensure command table includes status; fix requeue cron UPDATE.
-- [x] First check-in REST: call Admin to confirm and upsert UC cache; mark claimed.
-- [x] Shortcode: claim device by UNIT_ID + MACHINE_ID using first-checkin flow.
-- [x] Backfill provisioned devices after pairing and on page load if empty.
+- [ ] (no pending items)
 
 Commands
-- [x] Stage commands in UC, devices poll, confirm applied; add cron requeue for stale claimed.
 - [ ] Add Admin-side mirror/log viewer for commands (status timeline).
 
 White screen on Save & Provision
-- [x] Force redirect-after-POST in handler to avoid blank page; add safe fallback redirect.
+- [ ] (no pending items)
 
 Verification
 - [ ] UC pairing populates hub_key/read_token; Provisioned Devices page shows devices post-backfill.
@@ -770,22 +669,16 @@ Pending (from conversation)
 - [ ] Admin offline notice: update last_seen via UC heartbeat/check-in.
 
 TMON Admin — Firmware Fetch
-- [x] AJAX handler uses fallback mirrors with headers to avoid GitHub 400s.
 - [ ] Add admin UI notice for manifest/version and last fetch time.
 
 TMON Admin — Provisioned Devices
-- [x] Ensure menu callback exists and delegates to renderer.
-- [x] Renderer shows provisioned devices with canBill and staged flags.
-- [x] Save & Provision handler always redirects (no white screen).
+- [ ] (no pending items beyond other sections)
 
 Unit Connector — Command Table & Cron
-- [x] Normalize URL helper defined early (prevents fatal).
-- [x] Ensure tmon_device_commands table schema includes status column.
-- [x] Requeue cron safely updates claimed → queued when stale.
+- [ ] (no pending items beyond other sections)
 
 Firmware — Version & OTA
-- [x] Bump to v2.02.1.
-- [x] Add OTA fallback mirrors and headers.
+- [ ] (no pending items beyond OTA section)
 
 Verification
 - [ ] Firmware metadata fetch works via AJAX (no 400).
@@ -794,51 +687,26 @@ Verification
 - [ ] Commands staged → polled → executed → confirmed flow visible in UC/Admin logs.
 
 TMON Admin — Provisioning Save
-- [x] Persist Save & Provision to tmon_provisioned_devices and mirror to tmon_devices.
-- [x] Redirect-after-POST with success/failure notice.
+- [ ] (no pending items)
 
 Unit Connector — Pairing Persistence
-- [x] Persist hub_key/read_token and normalized pairing.
-- [x] Backfill devices after pairing.
-
-Verification
-- [ ] Save & Provision updates DB rows and shows queued notice.
-- [ ] UC pairing creates records and devices backfill visible on UC provisioned page.
-- [ ] Device first check-in claims via Admin confirm and updates UC mirror.
-- [ ] Commands staged, polled, executed, confirmed; status visible.
+- [ ] (no pending items)
 
 TMON Admin — Provisioning Save & History
-- [x] Persist Save & Provision into tmon_provisioned_devices and mirror into tmon_devices.
-- [x] Append provisioning history on save and device confirm; render History page.
-- [x] Enforce redirect-after-POST to avoid blank page; show queued/failed notice.
+- [ ] (no pending items)
 
 Unit Connector — Pairing & Backfill
-- [x] Persist hub_key/read_token; normalized pairing record.
-- [x] Backfill provisioned devices from Admin after pairing.
+- [ ] (no pending items)
 
 Firmware/OTA
-- [x] v2.02.1 settings and OTA mirrors; headers for fetch stability.
-
-Verification
-- [ ] Save & Provision updates DB and history; queued notice visible.
-- [ ] UC pairing creates records on both sides; UC provisioned page shows devices.
-- [ ] First device check-in triggers Admin confirm and UC claim; mirrors updated.
-- [ ] Commands staged/polled/executed/confirmed; status reflects in UC/Admin.
+- [ ] (no pending items beyond OTA section)
 
 Open items
 - [ ] Add Admin UI notices for firmware manifest/version and last fetch timestamp.
 - [ ] Add Admin/UC command logs viewer with status timeline and filters.
 
 # TMON Admin — Provisioning
-- [x] Fix parse error in includes/provisioning.php (short array → array(), balanced brackets).
-- [x] Persist Save & Provision and append history; redirect with queued/failed.
-- [x] Provisioned Devices page callback delegates to renderer; no invalid callback fatal.
-
-Verification
-- [ ] Save & Provision writes to tmon_provisioned_devices and tmon_devices; history row added.
-- [ ] Provisioning History page lists latest actions.
-- [ ] Devices that confirm-applied update records and history.
-- [ ] UC pairing persists on both sides; UC backfills devices.
+- [ ] (no pending items beyond provisioning sections)
 
 # TMON Implementation Tracker
 
@@ -1085,25 +953,16 @@ Verification plan
 ## Updated Next Actions (Scope-aligned)
 
 Firmware (Micropython)
-- [x] LoRa loop dedicated; disabled for wifi role.
-- [x] Persist NODE_TYPE; gate tasks until fully provisioned (flag + URL + UNIT_ID).
-- [x] Command polling applies set_var/run_func/firmware_update/relay_ctrl.
 - [ ] Add persistence helpers for custom vars changed via set_var.
 - [ ] Base <-> Remote LoRa envelopes with HMAC + replay protection; optional encryption.
 
 Admin
-- [x] Audit page restored and tables ensured.
-- [x] UC endpoints: devices, reprovision, command.
 - [ ] Add audit hooks across provisioning save/queue paths.
 
 Unit Connector
-- [x] Mirror table ensure; refresh assigned/unassigned.
-- [x] Reprovision staging & push to Admin hub.
-- [x] Commands page for variables/functions/firmware/relay.
 - [ ] Widgets/graphs for device data; relay controls; shortcodes polish.
 
 Docs/QA
-- [x] README updated with data flow.
 - [ ] Add data flow graphics/screenshots.
 - [ ] End-to-end tests for reprovision and command relay via base.
 
@@ -1117,13 +976,6 @@ Docs/QA
 - [ ] Tag minor release after QA.
 
 # TODO
-
-- [x] Mirror provisioned settings to tmon_devices (provisioned, wordpress_api_url, unit_name, provisioned_at) on Save & Provision.
-- [x] Migration: add provisioned/provisioned_at/wordpress_api_url columns if missing.
-- [x] Deliver staged provisioning to devices (settings_staged).
-- [x] Add device confirm endpoint with token; device posts confirm after apply.
-- [x] Admin UI Provisioning Activity page with pending queue and history.
-- [x] Add history auditing/logging option in Admin.
 - [ ] Add per-device HMAC confirmation or device-specific key to confirm endpoint.
 - [ ] Add email notifications for provisioning events (optional).
 - [ ] Add per-device staging preview and direct push tools in UI.
@@ -1131,60 +983,41 @@ Docs/QA
 
 # TMON Admin — Updated TODO
 
-Completed (from this session)
-- Fixed fatal parse error at file end.
-- Restored redirect-after-POST in `admin_post_tmon_admin_provision_device`.
-- Added firmware fields and GitHub manifest fetch (AJAX: `tmon_admin_fetch_github_manifest`).
-- Added migrations: normalized IDs, firmware metadata, settings_staged, device mirror columns.
-- Queue helpers: enqueue/dequeue/lookup by normalized keys.
-- Diagnostics: known IDs refresh, queue/DB staging check, API calls and provisioning history tables.
-- Claims approval/denial flow and provisioning history page.
-
 High-priority
-- Define missing vars in inline update branch in provisioning page.
-- Validate nonce usage across forms/handlers.
-- Confirm device-side queue consumption and normalized key matching.
+- [ ] Define missing vars in inline update branch in provisioning page.
+- [ ] Validate nonce usage across forms/handlers.
+- [ ] Confirm device-side queue consumption and normalized key matching.
 
 Medium
-- Device mirror consistency updates and backfills.
-- Admin notices reliability.
-- Hierarchy Sync audit logs.
+- [ ] Device mirror consistency updates and backfills.
+- [ ] Admin notices reliability.
+- [ ] Hierarchy Sync audit logs.
 
 Lower-priority
-- UX: typeahead for Known IDs; loading spinners.
-- Security: verify cross-site tokens and rotation.
-- Maintenance: centralize purge ops in settings.php; docs.
-- Docs: admin guide for provisioning workflow and diagnostics.
+- [ ] UX: typeahead for Known IDs; loading spinners.
+- [ ] Security: verify cross-site tokens and rotation.
+- [ ] Maintenance: centralize purge ops in settings.php; docs.
+- [ ] Docs: admin guide for provisioning workflow and diagnostics.
 
 Notes
 - Migrations idempotent; keep in `admin_init`.
 - Unique index `unit_machine (unit_id, machine_id)` ensures deduplication; ensure updates match normalized columns.
 
 Unit Connector — Configuration UI and Staging
-- [x] Create Device Configuration admin page (menu: TMON Devices → Settings) that renders a form for core variables from micropython/settings.py.
-- [x] Add a settings schema mapper in UC (PHP) to describe types, defaults, help text, and constraints for key firmware variables.
-- [x] Persist posted values as staged settings (DB: tmon_uc_devices.staged_settings + staged_at).
-- [x] Expose staged settings via UC REST:
-  - GET /wp-json/tmon/v1/admin/device/settings-staged → returns JSON
-  - POST /wp-json/tmon/v1/admin/device/settings-applied → device confirms apply
 - [ ] Extend schema coverage to all firmware variables and advanced types (arrays/maps), with JSON validation.
 - [ ] Admin hub integration button to push staged settings to Admin hub (optional).
 
 UC Pairings and Device Listing
-- [x] Add cron-like refresh from Admin hub to backfill UC mirror (hourly).
 - [ ] Add settings to control refresh cadence (hourly/daily/off) and diagnostics.
 
 REST and Admin-post Endpoints (UC)
-- [x] Admin push handler for staged settings → Admin hub reprovision endpoint.
 - [ ] Add retry/backoff and result notice details.
 
 TMON Admin — Fixes
-- [x] Fallback tmon_admin_provisioned_devices_page to prevent missing-callback fatal.
 - [ ] Wire full provisioning page to includes/provisioning.php and remove fallback after verification.
 
 Unit Connector — Notices and Pairing
-- [x] Make admin notices dismissible and auto-hide.
-- [x] Store normalized hub URL with pairing diagnostics in settings.
+- [ ] (no pending items)
 
 Firmware (Micropython) — Optimization Plan
 - [ ] Implement compact telemetry keys and conditional inclusion (skip zeros/defaults).
@@ -1197,12 +1030,9 @@ Testing
 - [ ] Verify Push-to-Admin triggers reprovision queue and devices receive staged settings.
 
 TMON Admin — Provisioned Devices
-- [x] Render table with joined fields and fallback to UC hub when local table is missing.
-- [x] Update DB on device confirm-applied: set provisioned, site_url, clear queued payloads.
-- [x] Add canBill column and set true on claim approval (hook-based).
+- [ ] (no pending items beyond other sections)
 
 Unit Connector — Settings Page
-- [x] Remove duplicate element IDs (avoid multiple id="submit"/"_wpnonce").
 - [ ] Load hierarchy map JS only when Leaflet is present; suppress console noise.
 
 Command Flow (v2.00m review)
@@ -1228,7 +1058,6 @@ Testing
   - Changes: Settings schema + staged configuration UI, REST endpoints for staged/applied settings, pairing diagnostics, Admin push handler, hourly backfill refresh from Admin.
 
 ## OTA / Repository Update Process Enhancements
-- [x] Firmware version updated in micropython/settings.py (v2.02.0).
 - [ ] Ensure OTA manifest.json includes version v2.02.0 and updated file hashes.
 - [ ] Verify version.txt reflects v2.02.0 for lightweight checks.
 - [ ] Confirm OTA client respects manifest HMAC (optional) and size caps.
@@ -1243,6 +1072,15 @@ Testing
 - 0.2.0 (Admin/UC)
   - Admin: Provisioned Devices page restored; device confirm-applied updates; UC pairing API.
   - UC: Staged settings form; REST endpoints; pairing diagnostics; Admin push.
+- Session removals (pruned from TODO for clarity)
+  - Setup & Infrastructure: rename to micropython, LICENSE → MIT, debug system, expanded settings with persistence, CHANGELOG seeded, initial testing.
+  - Firmware Basics: MACHINE_ID persistence, WiFi logic, first-boot + OTA check, admin registration/check-in, async loop/task flags, OLED optimization, environmental sampling, boot flow tests.
+  - LoRa & Node Logic: LoRa security/basics, remote/base node logic, frost/heat watch, data relay, multi-node communication tests.
+  - Admin fixes: audit page restore, UC endpoints (devices/reprovision/command), migrations for normalized IDs, firmware metadata, settings_staged, device mirror columns, history page renderer.
+  - Unit Connector: mirror ensure/refresh, reprovision staging + push to Admin, commands page, pairing helper/shortcodes, cron requeue safety.
+  - White screen fix: enforced redirect-after-POST on Save & Provision.
+  - DB schema guards: column existence checks for commands/status/updated_at and OTA/action.
+  - Firmware/OTA: version bumps to v2.02.1, OTA mirrors/headers for stable fetch.
 
 ## Upgrade Notes
 - Devices will detect v2.02.0 via version.txt and manifest.json; ensure both are published before rollout.
@@ -1250,21 +1088,16 @@ Testing
 - After upgrade, re-pair UC with Admin to populate hub_key/read_token and normalized pairing store.
 
 Admin — Provisioning History
-- [x] Add renderer to display latest actions; verify table exists.
+- [ ] (no pending items)
 
 Unit Connector — Post-provisioning
-- [x] Normalize URL helper defined early to avoid fatal.
-- [x] Ensure command table includes status; fix requeue cron UPDATE.
-- [x] First check-in REST: call Admin to confirm and upsert UC cache; mark claimed.
-- [x] Shortcode: claim device by UNIT_ID + MACHINE_ID using first-checkin flow.
-- [x] Backfill provisioned devices after pairing and on page load if empty.
+- [ ] (no pending items)
 
 Commands
-- [x] Stage commands in UC, devices poll, confirm applied; add cron requeue for stale claimed.
 - [ ] Add Admin-side mirror/log viewer for commands (status timeline).
 
 White screen on Save & Provision
-- [x] Force redirect-after-POST in handler to avoid blank page; add safe fallback redirect.
+- [ ] (no pending items)
 
 Verification
 - [ ] UC pairing populates hub_key/read_token; Provisioned Devices page shows devices post-backfill.
@@ -1285,22 +1118,16 @@ Pending (from conversation)
 - [ ] Admin offline notice: update last_seen via UC heartbeat/check-in.
 
 TMON Admin — Firmware Fetch
-- [x] AJAX handler uses fallback mirrors with headers to avoid GitHub 400s.
 - [ ] Add admin UI notice for manifest/version and last fetch time.
 
 TMON Admin — Provisioned Devices
-- [x] Ensure menu callback exists and delegates to renderer.
-- [x] Renderer shows provisioned devices with canBill and staged flags.
-- [x] Save & Provision handler always redirects (no white screen).
+- [ ] (no pending items beyond other sections)
 
 Unit Connector — Command Table & Cron
-- [x] Normalize URL helper defined early (prevents fatal).
-- [x] Ensure tmon_device_commands table schema includes status column.
-- [x] Requeue cron safely updates claimed → queued when stale.
+- [ ] (no pending items beyond other sections)
 
 Firmware — Version & OTA
-- [x] Bump to v2.02.1.
-- [x] Add OTA fallback mirrors and headers.
+- [ ] (no pending items beyond OTA section)
 
 Verification
 - [ ] Firmware metadata fetch works via AJAX (no 400).
@@ -1309,51 +1136,26 @@ Verification
 - [ ] Commands staged → polled → executed → confirmed flow visible in UC/Admin logs.
 
 TMON Admin — Provisioning Save
-- [x] Persist Save & Provision to tmon_provisioned_devices and mirror to tmon_devices.
-- [x] Redirect-after-POST with success/failure notice.
+- [ ] (no pending items)
 
 Unit Connector — Pairing Persistence
-- [x] Persist hub_key/read_token and normalized pairing.
-- [x] Backfill devices after pairing.
-
-Verification
-- [ ] Save & Provision updates DB rows and shows queued notice.
-- [ ] UC pairing creates records and devices backfill visible on UC provisioned page.
-- [ ] Device first check-in claims via Admin confirm and updates UC mirror.
-- [ ] Commands staged, polled, executed, confirmed; status visible.
+- [ ] (no pending items)
 
 TMON Admin — Provisioning Save & History
-- [x] Persist Save & Provision into tmon_provisioned_devices and mirror into tmon_devices.
-- [x] Append provisioning history on save and device confirm; render History page.
-- [x] Enforce redirect-after-POST to avoid blank page; show queued/failed notice.
+- [ ] (no pending items)
 
 Unit Connector — Pairing & Backfill
-- [x] Persist hub_key/read_token; normalized pairing record.
-- [x] Backfill provisioned devices from Admin after pairing.
+- [ ] (no pending items)
 
 Firmware/OTA
-- [x] v2.02.1 settings and OTA mirrors; headers for fetch stability.
-
-Verification
-- [ ] Save & Provision updates DB and history; queued notice visible.
-- [ ] UC pairing creates records on both sides; UC provisioned page shows devices.
-- [ ] First device check-in triggers Admin confirm and UC claim; mirrors updated.
-- [ ] Commands staged/polled/executed/confirmed; status reflects in UC/Admin.
+- [ ] (no pending items beyond OTA section)
 
 Open items
 - [ ] Add Admin UI notices for firmware manifest/version and last fetch timestamp.
 - [ ] Add Admin/UC command logs viewer with status timeline and filters.
 
 # TMON Admin — Provisioning
-- [x] Fix parse error in includes/provisioning.php (short array → array(), balanced brackets).
-- [x] Persist Save & Provision and append history; redirect with queued/failed.
-- [x] Provisioned Devices page callback delegates to renderer; no invalid callback fatal.
-
-Verification
-- [ ] Save & Provision writes to tmon_provisioned_devices and tmon_devices; history row added.
-- [ ] Provisioning History page lists latest actions.
-- [ ] Devices that confirm-applied update records and history.
-- [ ] UC pairing persists on both sides; UC backfills devices.
+- [ ] (no pending items beyond provisioning sections)
 
 # TMON Implementation Tracker
 
@@ -1375,66 +1177,3 @@ Pending verification
 Next
 - Validate Basic Auth configuration on UC (TMON_UC_REQUIRE_APP_PASSWORD option/constant).
 - Confirm manifest fetch sets version/time transients and notice displays on Admin pages.
-
-# TMON Admin & Unit Connector – Implementation Tracker (Consolidated)
-
-Status summary
-- Pairing completed but UC not listed in Admin.
-- Multiple admin pages show placeholders or fatal errors.
-- Command logs schema mismatches (status column missing).
-- Provisioning callbacks missing or using invalid function names.
-- Shortcodes not rendering; UC REST include collisions; CSS overlaying admin menu.
-- JWT removed; migrate to native WP Application Passwords verified in firmware.
-
-Priorities (P0 = critical, P1 = high, P2 = normal)
-
-P0 – Critical fixes
-- Pairing visibility in Admin:
-  - Ensure tmon-admin shows paired Unit Connectors under “Registered Unit Connectors”.
-  - Read from pairing storage (options or tmon_uc_sites table) and render normalized Hub URL, paired time, tokens.
-  - Verify capability mapping so plugin users with tmon_view_devices see paired UCs.
-
-- Menu and pages wire-up:
-  - Move “TMON Command Logs” under TMON Admin submenu.
-  - Ensure main “TMON Admin” menu links to dashboard page rendering:
-    - Tables: Unit Connectors + status + last check-in.
-    - Device alerts and health (device/network/connection KPIs).
-    - Scrollable logs area; hyperlink keys to device/UC detail pages.
-
-- Firmware page:
-  - Display current TMON version (read transients or option).
-  - Fetch repository README.md and render content.
-  - Provide links to download current MicroPython firmware files from repository (manifest-driven).
-
-- Provisioning pages:
-  - Fix callbacks: implement tmon_admin_provisioning_activity_page and tmon_admin_provisioning_history_page.
-  - Resolve warnings Undefined array keys: guard access for id and settings_staged in includes/provisioning.php.
-  - Ensure queue updates/clears after device provisioning; add job to clear claimed/applied items and UI refresh.
-
-- Notifications page:
-  - Replace placeholder “Ensure includes/notifications.php is active” with live list:
-    - Unread + recent logs, SSE stream status, filters, mark-as-read, export.
-    - Use existing tmon_notifications table and rendering helpers.
-
-- OTA admin page:
-  - Replace placeholder; render OTA logs and actions:
-    - Commands: download device logs, reboot device, update firmware, clear logs (preserve settings/provisioning), etc.
-    - Show job queue, last run, error messages.
-
-- Files admin page:
-  - Replace placeholder; render uploaded user files list with actions:
-    - Send to device, run as MicroPython script, function override notes, dependency merge hints.
-    - Provide secure download and “load with custom logic” toggle.
-    - Display execution policy and override safeguards.
-
-- Groups admin page:
-  - Render hierarchy Companies > Locations > Zones > Groups > Devices.
-  - Provide CRUD and drag-and-drop organization; link devices to groups.
-
-- Provisioned device admin page:
-  - Fix “Renderer not loaded.” – ensure renderer function exists and hooked to the page slug.
-  - Render provisioned devices list with filters, details modal, health status.
-
-- CSS overlay fix:
-  - Fix provisioning page CSS overlaying admin left menu; adjust container top/left padding and z-index.
- 

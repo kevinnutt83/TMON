@@ -2,12 +2,10 @@
 function tmon_admin_install_schema() {
 	global $wpdb;
 	$charset_collate = $wpdb->get_charset_collate();
-
 	require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 
-	// Admin devices mirror
-	$devices = $wpdb->prefix . 'tmon_devices';
-	$sql_devices = "CREATE TABLE {$devices} (
+	// Devices mirror
+	$sql = "CREATE TABLE {$wpdb->prefix}tmon_devices (
 		id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
 		machine_id VARCHAR(64) NOT NULL,
 		unit_id VARCHAR(64) NOT NULL,
@@ -26,13 +24,12 @@ function tmon_admin_install_schema() {
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 		UNIQUE KEY uq_machine_id (machine_id),
 		UNIQUE KEY uq_unit_id (unit_id),
-		PRIMARY KEY  (id)
+		PRIMARY KEY (id)
 	) $charset_collate;";
-	dbDelta($sql_devices);
+	dbDelta($sql);
 
-	// Provisioned devices (authoritative in Admin)
-	$prov = $wpdb->prefix . 'tmon_provisioned_devices';
-	$sql_prov = "CREATE TABLE {$prov} (
+	// Provisioned devices (authoritative)
+	$sql = "CREATE TABLE {$wpdb->prefix}tmon_provisioned_devices (
 		id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
 		unit_id VARCHAR(64) NOT NULL,
 		machine_id VARCHAR(64) NOT NULL,
@@ -56,11 +53,10 @@ function tmon_admin_install_schema() {
 		KEY company_idx (company_id),
 		KEY status_idx (status)
 	) $charset_collate;";
-	dbDelta($sql_prov);
+	dbDelta($sql);
 
 	// Notifications
-	$notifications = $wpdb->prefix . 'tmon_notifications';
-	$sql_notif = "CREATE TABLE {$notifications} (
+	$sql = "CREATE TABLE {$wpdb->prefix}tmon_notifications (
 		id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
 		title VARCHAR(255) NOT NULL,
 		message LONGTEXT NULL,
@@ -71,11 +67,10 @@ function tmon_admin_install_schema() {
 		KEY idx_created (created_at),
 		KEY idx_read (read_at)
 	) $charset_collate;";
-	dbDelta($sql_notif);
+	dbDelta($sql);
 
-	// Companies hierarchy (requested)
-	$companies = $wpdb->prefix . 'tmon_companies';
-	$sql_companies = "CREATE TABLE {$companies} (
+	// Companies hierarchy
+	$sql = "CREATE TABLE {$wpdb->prefix}tmon_companies (
 		id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
 		name VARCHAR(191) NOT NULL,
 		slug VARCHAR(191) NOT NULL,
@@ -84,11 +79,10 @@ function tmon_admin_install_schema() {
 		UNIQUE KEY uniq_slug (slug),
 		KEY idx_created (created_at)
 	) $charset_collate;";
-	dbDelta($sql_companies);
+	dbDelta($sql);
 
-	// OTA jobs with 'action'
-	$ota = $wpdb->prefix . 'tmon_ota_jobs';
-	$sql_ota = "CREATE TABLE {$ota} (
+	// OTA jobs (with action)
+	$sql = "CREATE TABLE {$wpdb->prefix}tmon_ota_jobs (
 		id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
 		unit_id VARCHAR(64) NOT NULL,
 		action VARCHAR(64) NOT NULL,
@@ -101,17 +95,17 @@ function tmon_admin_install_schema() {
 		KEY idx_status (status),
 		KEY idx_created (created_at)
 	) $charset_collate;";
-	dbDelta($sql_ota);
+	dbDelta($sql);
 
-	// Commands and history tables (idempotent)
+	// Commands/history tables (idempotent)
 	tmon_admin_ensure_commands_table();
 	tmon_admin_ensure_history_table();
 
-	// Ensure columns on devices (idempotent)
+	// Ensure device columns referenced by UI
 	tmon_admin_ensure_columns($wpdb->prefix . 'tmon_devices', [
 		'wordpress_api_url' => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN wordpress_api_url VARCHAR(255) DEFAULT ''",
-		'last_seen' => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN last_seen DATETIME NULL DEFAULT NULL",
-		'canBill' => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN canBill TINYINT(1) NOT NULL DEFAULT 0",
+		'last_seen'         => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN last_seen DATETIME NULL DEFAULT NULL",
+		'canBill'           => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN canBill TINYINT(1) NOT NULL DEFAULT 0",
 	]);
 
 	// Hub shared key
@@ -141,10 +135,8 @@ function tmon_admin_ensure_columns($table, $columns) {
 
 function tmon_admin_ensure_commands_table() {
 	global $wpdb;
-	if (!$wpdb || empty($wpdb->prefix)) return;
-	$table = $wpdb->prefix . 'tmon_device_commands';
 	$collate = $wpdb->get_charset_collate();
-	$wpdb->query("CREATE TABLE IF NOT EXISTS {$table} (
+	$wpdb->query("CREATE TABLE IF NOT EXISTS {$wpdb->prefix}tmon_device_commands (
 		id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
 		device_id VARCHAR(64) NOT NULL,
 		command VARCHAR(64) NOT NULL,
@@ -160,10 +152,8 @@ function tmon_admin_ensure_commands_table() {
 
 function tmon_admin_ensure_history_table() {
 	global $wpdb;
-	if (!$wpdb || empty($wpdb->prefix)) return;
-	$table = $wpdb->prefix . 'tmon_provision_history';
 	$collate = $wpdb->get_charset_collate();
-	$wpdb->query("CREATE TABLE IF NOT EXISTS {$table} (
+	$wpdb->query("CREATE TABLE IF NOT EXISTS {$wpdb->prefix}tmon_provision_history (
 		id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
 		unit_id VARCHAR(64) NOT NULL,
 		machine_id VARCHAR(64) NOT NULL,
@@ -179,8 +169,7 @@ function tmon_admin_ensure_history_table() {
 
 // Silent ensures during admin_init
 add_action('admin_init', function(){
-	global $wpdb;
-	if (!$wpdb || empty($wpdb->prefix)) return;
+	// Run ensures silently each admin load
 	tmon_admin_ensure_commands_table();
 	tmon_admin_ensure_history_table();
 });

@@ -41,7 +41,7 @@ add_action('admin_init', function () {
 	});
 });
 
-// Only register menus here if master is NOT present
+// Only register menus here if master is not active
 if (!defined('TMON_ADMIN_MASTER_MENU')) {
 	add_action('admin_menu', function () {
 		$cap = 'manage_options';
