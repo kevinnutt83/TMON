@@ -726,3 +726,35 @@ add_action('rest_api_init', function () {
 		'permission_callback' => '__return_true',
 	]);
 });
+
+// Load include files safely after plugins_loaded to ensure pluggable functions exist
+add_action('plugins_loaded', function(){
+	$tmon_includes = plugin_dir_path(__FILE__) . 'includes/';
+
+	// Use require_once; included files must not call wp_create_nonce at file scope
+	require_once $tmon_includes . 'db.php';
+	require_once $tmon_includes . 'admin-dashboard.php';
+	require_once $tmon_includes . 'settings.php';
+	require_once $tmon_includes . 'api.php';
+
+	// Centralized AJAX handlers & CLI diagnostics
+	require_once $tmon_includes . 'ajax-handlers.php';
+	require_once $tmon_includes . 'cli-commands.php';
+
+	require_once $tmon_includes . 'provisioning.php';
+	require_once $tmon_includes . 'ai.php';
+	require_once $tmon_includes . 'audit.php';
+	require_once $tmon_includes . 'api-uc.php'; // NEW: UC handoff & command endpoints
+	require_once $tmon_includes . 'notifications.php';
+	require_once $tmon_includes . 'ota.php';
+	require_once $tmon_includes . 'files.php';
+	require_once $tmon_includes . 'groups.php';
+	require_once $tmon_includes . 'custom-code.php';
+	require_once $tmon_includes . 'export.php';
+	require_once $tmon_includes . 'ai-feedback.php';
+	require_once $tmon_includes . 'dashboard-widgets.php';
+	require_once $tmon_includes . 'field-data-api.php';
+	// Admin pages
+	require_once TMON_ADMIN_PATH . 'admin/location.php';
+	require_once TMON_ADMIN_PATH . 'admin/firmware.php';
+});
