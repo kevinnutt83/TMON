@@ -1,5 +1,11 @@
 # Firmware Version: v2.02.1
 
+# Bootstrap critical variables before any reference
+try:
+	FIELD_DATA_APP_PASS
+except NameError:
+	FIELD_DATA_APP_PASS = ""  # default; overridden by persisted config later
+
 # Move LOG_DIR and essential file paths near the top so other constants can reference them.
 LOG_DIR = '/logs'
 
@@ -405,18 +411,18 @@ MODAL_DEFAULT_STATUS_OPTIONS = ['pending', 'active', 'provisioned']
 # --- Command names used by modal buttons → firmware mapping ---
 COMMAND_NAME_REBOOT = 'reboot'
 COMMAND_NAME_FACTORY_RESET = 'factory_reset'
-
-# Bootstrap critical variables early to avoid import-time NameError
-try:
-    FIELD_DATA_APP_PASS
-except NameError:
-    FIELD_DATA_APP_PASS = ""  # default; overridden by persisted config later
 
 # Later, when loading persisted settings:
 # FIELD_DATA_APP_PASS = persisted.get("FIELD_DATA_APP_PASS", FIELD_DATA_APP_PASS)
 
 # Firmware Version: v2.02.1
 
+# Bootstrap critical variables before any reference
+try:
+	FIELD_DATA_APP_PASS
+except NameError:
+	FIELD_DATA_APP_PASS = ""  # default; overridden by persisted config later
+
 # Move LOG_DIR and essential file paths near the top so other constants can reference them.
 LOG_DIR = '/logs'
 
@@ -822,12 +828,6 @@ MODAL_DEFAULT_STATUS_OPTIONS = ['pending', 'active', 'provisioned']
 # --- Command names used by modal buttons → firmware mapping ---
 COMMAND_NAME_REBOOT = 'reboot'
 COMMAND_NAME_FACTORY_RESET = 'factory_reset'
-
-# Bootstrap critical variables early to avoid import-time NameError
-try:
-    FIELD_DATA_APP_PASS
-except NameError:
-    FIELD_DATA_APP_PASS = ""  # default; overridden by persisted config later
 
 # Later, when loading persisted settings:
 # FIELD_DATA_APP_PASS = persisted.get("FIELD_DATA_APP_PASS", FIELD_DATA_APP_PASS)
