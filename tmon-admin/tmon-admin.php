@@ -97,76 +97,61 @@ add_action('admin_enqueue_scripts', function () {
 	]);
 });
 
-// Primary TMON Admin menu (single owner)
-if (!has_action('admin_menu', 'tmon_admin_menu')) {
-	add_action('admin_menu', 'tmon_admin_menu');
-	function tmon_admin_menu() {
-		// Mark we have registered the main menu to prevent any other registrar from adding another top-level
-		if (!defined('TMON_ADMIN_HAVE_MAIN_MENU')) define('TMON_ADMIN_HAVE_MAIN_MENU', true);
-
-		$menu_title = 'TMON Admin';
-		add_menu_page('TMON Admin', $menu_title, 'manage_options', 'tmon-admin', 'tmon_admin_dashboard_page', 'dashicons-admin-generic', 58);
-
-		add_submenu_page('tmon-admin', 'Settings', 'Settings', 'manage_options', 'tmon-admin-settings', 'tmon_admin_settings_page');
-		add_submenu_page('tmon-admin', 'Audit Log', 'Audit Log', 'manage_options', 'tmon-admin-audit', 'tmon_admin_audit_page');
-		add_submenu_page('tmon-admin', 'Notifications', 'Notifications', 'manage_options', 'tmon-admin-notifications', 'tmon_admin_notifications_page');
-		add_submenu_page('tmon-admin', 'OTA Jobs', 'OTA Jobs', 'manage_options', 'tmon-admin-ota', 'tmon_admin_ota_page');
-		add_submenu_page('tmon-admin', 'Files', 'Files', 'manage_options', 'tmon-admin-files', 'tmon_admin_files_page');
-		add_submenu_page('tmon-admin', 'Groups', 'Groups', 'manage_options', 'tmon-admin-groups', 'tmon_admin_groups_page');
-
-		add_submenu_page('tmon-admin', 'Provisioning', 'Provisioning', 'manage_options', 'tmon-admin-provisioning', 'tmon_admin_provisioning_page');
-		add_submenu_page('tmon-admin', 'Provisioned Devices', 'Provisioned Devices', 'manage_options', 'tmon-admin-provisioned', 'tmon_admin_provisioned_devices_page');
-		add_submenu_page('tmon-admin', 'Provisioning Activity', 'Provisioning Activity', 'manage_options', 'tmon-admin-provisioning-activity', 'tmon_admin_provisioning_activity_page');
-		add_submenu_page('tmon-admin', 'Provisioning History', 'Provisioning History', 'manage_options', 'tmon-admin-provisioning-history', 'tmon_admin_provisioning_history_page');
-
-		// Move Command Logs under TMON Admin
-		add_submenu_page('tmon-admin', 'Command Logs', 'Command Logs', 'manage_options', 'tmon-admin-command-logs', function(){
-			do_action('tmon_admin_render_command_logs');
-		});
-	}add_submenu_page('tmon-admin', 'Firmware', 'Firmware', 'manage_options', 'tmon-admin-firmware', function(){
-}		if (function_exists('tmon_admin_firmware_page')) {
-				tmon_admin_firmware_page();
-// Remove any stray standalone top-level Command Logs menu registered elsewhere
-add_action('admin_menu', function(){ Firmware</h1><p><em>Firmware renderer not loaded.</em></p></div>';
-	remove_menu_page('tmon-admin-command-logs');
-}, 999);
+// Primary TMON Admin menu (single owner; balanced parentheses/syntax)
+add_action('admin_menu', function () {
+	// Prevent duplicate top-level menu
+	if (defined('TMON_ADMIN_HAVE_MAIN_MENU')) {
+		return;
 	}
-// Ensure schema present on admin_init (silent)
-add_action('admin_init', function () {
-	if (function_exists('tmon_admin_install_schema')) {e.php didn’t load)
-		ob_start();_exists('tmon_admin_firmware_page')) {
-		tmon_admin_install_schema();page() {
-		@ob_end_clean();="wrap"><h1>TMON Firmware</h1><p><em>Renderer not loaded. Ensure admin/firmware.php is included.</em></p></div>';
-	}
-});
+	define('TMON_ADMIN_HAVE_MAIN_MENU', true);
 
+	add_menu_page(
+		'TMON Admin',
+		'TMON Admin',
+		'manage_options',
+		'tmon-admin',
+		function () { do_action('tmon_admin_dashboard_page'); },
+		'dashicons-admin-generic',
+		58
+	);
 
+	add_submenu_page('tmon-admin', 'Settings', 'Settings', 'manage_options', 'tmon-admin-settings', function () {
+		do_action('tmon_admin_settings_page');
+	});
+	add_submenu_page('tmon-admin', 'Audit Log', 'Audit Log', 'manage_options', 'tmon-admin-audit', function () {
+		do_action('tmon_admin_audit_page');
+	});
+	add_submenu_page('tmon-admin', 'Notifications', 'Notifications', 'manage_options', 'tmon-admin-notifications', function () {
+		do_action('tmon_admin_notifications_page');
+	});
+	add_submenu_page('tmon-admin', 'OTA Jobs', 'OTA Jobs', 'manage_options', 'tmon-admin-ota', function () {
+		do_action('tmon_admin_ota_page');
+	});
+	add_submenu_page('tmon-admin', 'Files', 'Files', 'manage_options', 'tmon-admin-files', function () {
+		do_action('tmon_admin_files_page');
+	});
+	add_submenu_page('tmon-admin', 'Groups', 'Groups', 'manage_options', 'tmon-admin-groups', function () {
+		do_action('tmon_admin_groups_page');
+	});
+	add_submenu_page('tmon-admin', 'Provisioning', 'Provisioning', 'manage_options', 'tmon-admin-provisioning', function () {
+		do_action('tmon_admin_provisioning_page');
+	});
+	add_submenu_page('tmon-admin', 'Provisioned Devices', 'Provisioned Devices', 'manage_options', 'tmon-admin-provisioned', function () {
+		do_action('tmon_admin_provisioned_devices_page');
+	});
+	add_submenu_page('tmon-admin', 'Provisioning Activity', 'Provisioning Activity', 'manage_options', 'tmon-admin-provisioning-activity', function () {
+		do_action('tmon_admin_provisioning_activity_page');
+	});
+	add_submenu_page('tmon-admin', 'Provisioning History', 'Provisioning History', 'manage_options', 'tmon-admin-provisioning-history', function () {
+		do_action('tmon_admin_provisioning_history_page');
+	});
+	add_submenu_page('tmon-admin', 'Command Logs', 'Command Logs', 'manage_options', 'tmon-admin-command-logs', function () {
+		do_action('tmon_admin_command_logs_page');
+	});
+}, 9);
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-});	wp_send_json_success($rows ?: array());	$rows = $params ? $wpdb->get_results($wpdb->prepare($sql, ...$params), ARRAY_A) : $wpdb->get_results($sql, ARRAY_A);	$sql = "SELECT id, device_id AS unit_id, command, params, status, COALESCE(updated_at, created_at) AS updated_at FROM {$table} {$where_sql} ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 200";	$where_sql = $where ? ('WHERE ' . implode(' AND ', $where)) : '';	if ($status !== '')  { $where[] = 'status=%s';     $params[] = $status; }	if ($unit_id !== '') { $where[] = 'device_id=%s'; $params[] = $unit_id; }	$status  = isset($_POST['status']) ? sanitize_text_field($_POST['status']) : '';	$unit_id = isset($_POST['unit_id']) ? sanitize_text_field($_POST['unit_id']) : '';	$params = [];	$where = [];	$table = $wpdb->prefix . 'tmon_device_commands';	global $wpdb;	}		wp_send_json_error(array('message' => 'Forbidden'), 403);	if (!current_user_can('manage_options')) {	check_ajax_referer('tmon_admin_ajax');add_action('wp_ajax_tmon_admin_get_command_logs', function(){// Remove any stray standalone top-level Command Logs menu registered elsewhere
-add_action('admin_menu', function(){
+// Remove any stray standalone Command Logs top-level page
+add_action('admin_menu', function () {
 	remove_menu_page('tmon-admin-command-logs');
 }, 999);
 
