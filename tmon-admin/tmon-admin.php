@@ -278,7 +278,13 @@ add_action('admin_menu', function(){
 	add_menu_page('TMON Admin', 'TMON Admin', 'manage_options', 'tmon-admin-dashboard', 'tmon_admin_dashboard_page', 'dashicons-admin-generic', 58);
 
 	// Submenus
-	add_submenu_page('tmon-admin-dashboard', 'Firmware', 'Firmware', 'manage_options', 'tmon-admin-firmware', 'tmon_admin_firmware_page');
+	add_submenu_page('tmon-admin-dashboard', 'Firmware', 'Firmware', 'manage_options', 'tmon-admin-firmware', function(){
+		if (function_exists('tmon_admin_firmware_page')) {
+			tmon_admin_firmware_page();
+		} else {
+			echo '<div class="wrap"><h1>TMON Firmware</h1><p>Renderer not loaded.</p></div>';
+		}
+	});
 	add_submenu_page('tmon-admin-dashboard', 'Provisioning', 'Provisioning', 'manage_options', 'tmon-admin-provisioning', function(){
 		if (function_exists('tmon_admin_provisioning_page')) { tmon_admin_provisioning_page(); } else { echo '<div class="wrap"><h1>Provisioning</h1><p>Renderer not loaded.</p></div>'; }
 	});
