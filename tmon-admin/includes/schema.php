@@ -11,50 +11,75 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit; // Exit if accessed directly.
 }
 
-/**
- * tmon_admin_install_schema
- *
- * Creates and updates the database tables required for TMON Admin.
- */
-function tmon_admin_install_schema() {
-	global $wpdb;
-	$charset_collate = $wpdb->get_charset_collate();
+if ( ! function_exists('tmon_admin_install_schema') ) {
+	function tmon_admin_install_schema() {
+		global $wpdb;
+		$charset_collate = $wpdb->get_charset_collate();
+		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 
-	// Create tmon_devices table if it doesn't exist
-	$table_name = $wpdb->prefix . 'tmon_devices';
-	$sql = "CREATE TABLE IF NOT EXISTS $table_name (
-		id mediumint(9) NOT NULL AUTO_INCREMENT,
-		device_name tinytext NOT NULL,
-		device_type tinytext NOT NULL,
-		provisioned tinyint(1) DEFAULT 0,
-		provisioned_at datetime DEFAULT NULL,
-		wordpress_api_url varchar(255) DEFAULT '',
-		PRIMARY KEY  (id)
-	) $charset_collate;";
-	require_once( ABSPATH . 'wp-admin/includes/upgrade.php' );
-	dbDelta( $sql );
+		// Devices
+		$dev = $wpdb->prefix . 'tmon_devices';
+		dbDelta("CREATE TABLE {$dev} (
+			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+			machine_id VARCHAR(64) NOT NULL,
+			unit_id VARCHAR(64) NOT NULL,
+			unit_name VARCHAR(100) DEFAULT NULL,
+			company VARCHAR(191) DEFAULT NULL,
+			site VARCHAR(191) DEFAULT NULL,
+			zone VARCHAR(191) DEFAULT NULL,
+			cluster VARCHAR(191) DEFAULT NULL,
+			suspended TINYINT(1) NOT NULL DEFAULT 0,
+			provisioned TINYINT(1) NOT NULL DEFAULT 0,
+			last_seen DATETIME NULL DEFAULT NULL,
+			wordpress_api_url VARCHAR(255) DEFAULT '',
+			settings LONGTEXT NULL,
+			canBill TINYINT(1) NOT NULL DEFAULT 0,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			UNIQUE KEY uq_machine_id (machine_id),
+			UNIQUE KEY uq_unit_id (unit_id),
+			PRIMARY KEY  (id)
+		) $charset_collate;");
 
-	// Create tmon_provisioned_devices table if it doesn't exist
-	$table_name = $wpdb->prefix . 'tmon_provisioned_devices';
-	$sql = "CREATE TABLE IF NOT EXISTS $table_name (
-		id mediumint(9) NOT NULL AUTO_INCREMENT,
-		device_id mediumint(9) NOT NULL,
-		settings_staged tinyint(1) DEFAULT 0,
-		PRIMARY KEY  (id)
-	) $charset_collate;";
-	dbDelta( $sql );
+		// Provisioned devices
+		$prov = $wpdb->prefix . 'tmon_provisioned_devices';
+		dbDelta("CREATE TABLE {$prov} (
+			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+			unit_id VARCHAR(64) NOT NULL,
+			machine_id VARCHAR(64) NOT NULL,
+			unit_name VARCHAR(128) DEFAULT '',
+			role VARCHAR(32) DEFAULT 'base',
+			company_id BIGINT UNSIGNED NULL,
+			plan VARCHAR(64) DEFAULT 'standard',
+			status VARCHAR(32) DEFAULT 'active',
+			notes TEXT NULL,
+			site_url VARCHAR(255) DEFAULT '',
+			wordpress_api_url VARCHAR(255) DEFAULT '',
+			settings_staged TINYINT(1) DEFAULT 0,
+			firmware VARCHAR(128) DEFAULT '',
+			firmware_url VARCHAR(255) DEFAULT '',
+			machine_id_norm VARCHAR(64) DEFAULT '',
+			unit_id_norm VARCHAR(64) DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			UNIQUE KEY unit_machine (unit_id, machine_id),
+			KEY company_idx (company_id),
+			KEY status_idx (status)
+		) $charset_collate;");
 
-	// Ensure tmon_devices includes provisioned fields
-	$dev_table = $wpdb->prefix . 'tmon_devices';
-	if ( $wpdb->get_var( $wpdb->prepare( "SHOW TABLES LIKE %s", $dev_table ) ) ) {
-		$cols = $wpdb->get_col( "SHOW COLUMNS FROM {$dev_table}" );
-		if ( ! in_array( 'provisioned', $cols ) ) $wpdb->query( "ALTER TABLE {$dev_table} ADD COLUMN provisioned TINYINT(1) DEFAULT 0" );
-		if ( ! in_array( 'provisioned_at', $cols ) ) $wpdb->query( "ALTER TABLE {$dev_table} ADD COLUMN provisioned_at DATETIME DEFAULT NULL" );
-		if ( ! in_array( 'wordpress_api_url', $cols ) ) $wpdb->query( "ALTER TABLE {$dev_table} ADD COLUMN wordpress_api_url VARCHAR(255) DEFAULT ''" );
+		// Notifications
+		$notifications = $wpdb->prefix . 'tmon_notifications';
+		dbDelta("CREATE TABLE {$notifications} (
+			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+			title VARCHAR(255) NOT NULL,
+			message LONGTEXT NULL,
+			level VARCHAR(32) NOT NULL DEFAULT 'info',
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			read_at DATETIME NULL,
+			PRIMARY KEY (id),
+			KEY idx_created (created_at),
+			KEY idx_read (read_at)
+		) $charset_collate;");
 	}
-
-	// Ensure settings_staged exists in provisioned table
-	$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
-	$cols = $wpdb->get_col( "SHOW COLUMNS FROM {$prov_table}" );
-	if ( ! in_array( 'settings_staged', $cols ) ) $wpdb->query( "ALTER TABLE {$prov_table} ADD COLUMN settings_staged TINYINT(1) DEFAULT 0" );
 }

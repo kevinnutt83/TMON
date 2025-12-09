@@ -96,7 +96,6 @@ add_action('admin_menu', function () {
 add_action('tmon_admin_render_dashboard', function () {
 	static $printed = false; if ($printed) return; $printed = true;
 	echo '<div class="wrap"><h1>TMON Admin</h1>';
-	// ...existing code...
 	echo '</div>';
 });
 

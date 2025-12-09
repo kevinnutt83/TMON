@@ -1,15 +1,16 @@
 <?php
-// ...existing code...
-
 function tmon_admin_install_schema() {
 	global $wpdb;
 	$charset_collate = $wpdb->get_charset_collate();
-	$devices = $wpdb->prefix . 'tmon_devices';
 
-	$sql = "CREATE TABLE {$devices} (
+	require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+
+	// 1) Devices mirror (Admin hub)
+	$devices = $wpdb->prefix . 'tmon_devices';
+	$sql_devices = "CREATE TABLE {$devices} (
 		id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
 		machine_id VARCHAR(64) NOT NULL,
-		unit_id VARCHAR(6) NOT NULL,
+		unit_id VARCHAR(64) NOT NULL,
 		unit_name VARCHAR(100) DEFAULT NULL,
 		company VARCHAR(191) DEFAULT NULL,
 		site VARCHAR(191) DEFAULT NULL,
@@ -17,121 +18,95 @@ function tmon_admin_install_schema() {
 		cluster VARCHAR(191) DEFAULT NULL,
 		suspended TINYINT(1) NOT NULL DEFAULT 0,
 		provisioned TINYINT(1) NOT NULL DEFAULT 0,
+		last_seen DATETIME NULL DEFAULT NULL,
+		wordpress_api_url VARCHAR(255) DEFAULT '',
+		settings LONGTEXT NULL,
+		canBill TINYINT(1) NOT NULL DEFAULT 0,
 		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 		UNIQUE KEY uq_machine_id (machine_id),
 		UNIQUE KEY uq_unit_id (unit_id),
 		PRIMARY KEY  (id)
 	) $charset_collate;";
+	dbDelta($sql_devices);
 
-	require_once ABSPATH . 'wp-admin/includes/upgrade.php';
-	dbDelta($sql);
+	// 2) Provisioned devices (Admin authoritative table used by UI joins)
+	$prov = $wpdb->prefix . 'tmon_provisioned_devices';
+	$sql_prov = "CREATE TABLE {$prov} (
+		id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+		unit_id VARCHAR(64) NOT NULL,
+		machine_id VARCHAR(64) NOT NULL,
+		unit_name VARCHAR(128) DEFAULT '',
+		role VARCHAR(32) DEFAULT 'base',
+		company_id BIGINT UNSIGNED NULL,
+		plan VARCHAR(64) DEFAULT 'standard',
+		status VARCHAR(32) DEFAULT 'active',
+		notes TEXT NULL,
+		site_url VARCHAR(255) DEFAULT '',
+		wordpress_api_url VARCHAR(255) DEFAULT '',
+		settings_staged TINYINT(1) DEFAULT 0,
+		firmware VARCHAR(128) DEFAULT '',
+		firmware_url VARCHAR(255) DEFAULT '',
+		machine_id_norm VARCHAR(64) DEFAULT '',
+		unit_id_norm VARCHAR(64) DEFAULT '',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+		PRIMARY KEY (id),
+		UNIQUE KEY unit_machine (unit_id, machine_id),
+		KEY company_idx (company_id),
+		KEY status_idx (status)
+	) $charset_collate;";
+	dbDelta($sql_prov);
 
-	// Ensure additional columns exist for features that reference them.
-	tmon_admin_ensure_columns($wpdb->prefix . 'tmon_devices', [
-		'unit_name'   => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN unit_name VARCHAR(100) DEFAULT NULL",
-		'company'     => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN company VARCHAR(191) DEFAULT NULL",
-		'site'        => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN site VARCHAR(191) DEFAULT NULL",
-		'zone'        => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN zone VARCHAR(191) DEFAULT NULL",
-		'cluster'     => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN cluster VARCHAR(191) DEFAULT NULL",
-		'suspended'   => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN suspended TINYINT(1) NOT NULL DEFAULT 0",
-		'provisioned' => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN provisioned TINYINT(1) NOT NULL DEFAULT 0",
-		'last_seen'   => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN last_seen DATETIME NULL DEFAULT NULL",
-		'settings'    => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN settings LONGTEXT NULL",
-		'canBill'     => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN canBill TINYINT(1) NOT NULL DEFAULT 0",
-	]);
+	// 3) Notifications used by Notifications page
+	$notifications = $wpdb->prefix . 'tmon_notifications';
+	$sql_notif = "CREATE TABLE {$notifications} (
+		id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+		title VARCHAR(255) NOT NULL,
+		message LONGTEXT NULL,
+		level VARCHAR(32) NOT NULL DEFAULT 'info',
+		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		read_at DATETIME NULL,
+		PRIMARY KEY (id),
+		KEY idx_created (created_at),
+		KEY idx_read (read_at)
+	) $charset_collate;";
+	dbDelta($sql_notif);
+
+	// 4) Device commands (Admin logs) — ensure table exists (idempotent)
+	tmon_admin_ensure_commands_table();
+
+	// 5) Provision history (audit of provisioning)
+	tmon_admin_ensure_history_table();
 
 	// Generate Hub shared key if missing.
 	if (!get_option('tmon_admin_uc_key')) {
 		update_option('tmon_admin_uc_key', wp_generate_password(32, false, false));
 	}
 
-	// Allow other modules (provisioning, claims, etc.) to install their own schemas.
 	do_action('tmon_admin_install_schema_after');
 }
 
-// Guard utility to avoid future redeclare warnings if included twice somewhere.
-if (!function_exists('tmon_admin_generate_unique_unit_id')) {
-	function tmon_admin_generate_unique_unit_id() {
-		global $wpdb;
-		$table = $wpdb->prefix . 'tmon_devices';
-		for ($i = 0; $i < 20; $i++) {
-			$unit_id = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
-			$exists = (int) $wpdb->get_var($wpdb->prepare("SELECT COUNT(1) FROM {$table} WHERE unit_id = %s", $unit_id));
-			if ($exists === 0) {
-				return $unit_id;
-			}
-		}
-		return strtoupper(wp_generate_password(6, false, false));
-	}
-}
-
-// Fallback: ensure tmon_admin_ensure_columns is defined (avoid activation fatal)
-if (!function_exists('tmon_admin_ensure_columns')) {
-	function tmon_admin_ensure_columns() {
-		global $wpdb;
-		$table = $wpdb->prefix . 'tmon_provisioned_devices';
-		$exists = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table));
-		if (!$exists) {
-			// Nothing to ensure when table does not exist
-			return false;
-		}
-
-		$cols = $wpdb->get_results("SHOW COLUMNS FROM $table", ARRAY_A);
-		$have = [];
-		foreach (($cols ?: []) as $c) { $have[strtolower($c['Field'])] = true; }
-
-		$needed = [
-			'role' => "ALTER TABLE $table ADD COLUMN role VARCHAR(32) DEFAULT 'base'",
-			'company_id' => "ALTER TABLE $table ADD COLUMN company_id BIGINT UNSIGNED NULL",
-			'plan' => "ALTER TABLE $table ADD COLUMN plan VARCHAR(64) DEFAULT 'standard'",
-			'status' => "ALTER TABLE $table ADD COLUMN status VARCHAR(32) DEFAULT 'active'",
-			'notes' => "ALTER TABLE $table ADD COLUMN notes TEXT",
-			'created_at' => "ALTER TABLE $table ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP",
-			'updated_at' => "ALTER TABLE $table ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP",
-			'site_url' => "ALTER TABLE $table ADD COLUMN site_url VARCHAR(255) DEFAULT ''",
-			'unit_name' => "ALTER TABLE $table ADD COLUMN unit_name VARCHAR(128) DEFAULT ''",
-			'firmware' => "ALTER TABLE $table ADD COLUMN firmware VARCHAR(128) DEFAULT ''",
-			'firmware_url' => "ALTER TABLE $table ADD COLUMN firmware_url VARCHAR(255) DEFAULT ''",
-			'settings_staged' => "ALTER TABLE $table ADD COLUMN settings_staged TINYINT(1) DEFAULT 0",
-			'machine_id_norm' => "ALTER TABLE $table ADD COLUMN machine_id_norm VARCHAR(64) DEFAULT ''",
-			'unit_id_norm' => "ALTER TABLE $table ADD COLUMN unit_id_norm VARCHAR(64) DEFAULT ''",
-		];
-
-		foreach ($needed as $col => $sql) {
-			if (empty($have[$col])) {
-				$wpdb->query($sql);
-				// Ensure updated_at uses ON UPDATE where created
-				if ($col === 'updated_at') {
-					$wpdb->query("ALTER TABLE $table MODIFY COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
-				}
-			}
-		}
-
-		// Ensure unique index on (unit_id, machine_id)
-		$indexes = $wpdb->get_results("SHOW INDEX FROM $table", ARRAY_A);
-		$hasIndex = false;
-		foreach (($indexes?:[]) as $idx) {
-			if (isset($idx['Key_name']) && $idx['Key_name'] === 'unit_machine') { $hasIndex = true; break; }
-		}
-		if (!$hasIndex) {
-			$colsUnit = $wpdb->get_col("SHOW COLUMNS FROM $table LIKE 'unit_id'");
-			$colsMachine = $wpdb->get_col("SHOW COLUMNS FROM $table LIKE 'machine_id'");
-			if (!empty($colsUnit) && !empty($colsMachine)) {
-				$wpdb->query("ALTER TABLE $table ADD UNIQUE KEY unit_machine (unit_id, machine_id)");
-			}
-		}
-
-		// error_log('tmon-admin: tmon_admin_ensure_columns executed (idempotent).'); // silenced
-		return true;
-	}
-}
-
-// Ensure device commands table for Admin logs (mirror minimal schema)
-function tmon_admin_ensure_commands_table() {
-	// Ensure $wpdb is available
+function tmon_admin_column_exists($table, $column) {
 	global $wpdb;
-	if (!$wpdb || empty($wpdb->prefix)) { return; }
+	if (!$wpdb || empty($wpdb->prefix)) return false;
+	return (bool) $wpdb->get_var($wpdb->prepare("SHOW COLUMNS FROM {$table} LIKE %s", $column));
+}
+
+function tmon_admin_ensure_columns($table, $columns) {
+	global $wpdb;
+	if (!$wpdb || empty($wpdb->prefix)) return false;
+	foreach ($columns as $col => $sql) {
+		if (!tmon_admin_column_exists($table, $col)) {
+			$wpdb->query($sql);
+		}
+	}
+	return true;
+}
+
+function tmon_admin_ensure_commands_table() {
+	global $wpdb;
+	if (!$wpdb || empty($wpdb->prefix)) return;
 	$table = $wpdb->prefix . 'tmon_device_commands';
 	$collate = $wpdb->get_charset_collate();
 	$wpdb->query("CREATE TABLE IF NOT EXISTS {$table} (
@@ -148,81 +123,38 @@ function tmon_admin_ensure_commands_table() {
 	) {$collate}");
 }
 
-if (!function_exists('tmon_admin_column_exists')) {
-	function tmon_admin_column_exists($table, $column) {
-		global $wpdb;
-		if (!$wpdb || empty($wpdb->prefix)) return false;
-		$col = $wpdb->get_var($wpdb->prepare("SHOW COLUMNS FROM {$table} LIKE %s", $column));
-		return !empty($col);
-	}
+function tmon_admin_ensure_history_table() {
+	global $wpdb;
+	if (!$wpdb || empty($wpdb->prefix)) return;
+	$table = $wpdb->prefix . 'tmon_provision_history';
+	$collate = $wpdb->get_charset_collate();
+	$wpdb->query("CREATE TABLE IF NOT EXISTS {$table} (
+		id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+		unit_id VARCHAR(64) NOT NULL,
+		machine_id VARCHAR(64) NOT NULL,
+		action VARCHAR(64) NOT NULL,
+		user VARCHAR(191) NULL,
+		meta LONGTEXT NULL,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		PRIMARY KEY (id),
+		KEY unit_machine (unit_id, machine_id),
+		KEY action_idx (action)
+	) {$collate}");
 }
 
-if (!function_exists('tmon_admin_ensure_columns')) {
-	function tmon_admin_ensure_columns($table, $columns) {
-		global $wpdb;
-		if (!$wpdb || empty($wpdb->prefix)) return false;
-		foreach ($columns as $col => $sql) {
-			if (tmon_admin_column_exists($table, $col)) {
-				continue;
-			}
-			$wpdb->query($sql);
-		}
-		return true;
-	}
-}
-
-if (!function_exists('tmon_admin_ensure_commands_table')) {
-	function tmon_admin_ensure_commands_table() {
-		global $wpdb;
-		if (!$wpdb || empty($wpdb->prefix)) return;
-		$table = $wpdb->prefix . 'tmon_device_commands';
-		$collate = $wpdb->get_charset_collate();
-		$wpdb->query("CREATE TABLE IF NOT EXISTS {$table} (
-			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-			device_id VARCHAR(64) NOT NULL,
-			command VARCHAR(64) NOT NULL,
-			params LONGTEXT NULL,
-			status VARCHAR(32) NOT NULL DEFAULT 'queued',
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-			PRIMARY KEY (id),
-			KEY device_idx (device_id),
-			KEY status_idx (status)
-		) {$collate}");
-	}
-}
-
-if (!function_exists('tmon_admin_ensure_history_table')) {
-	function tmon_admin_ensure_history_table() {
-		global $wpdb;
-		if (!$wpdb || empty($wpdb->prefix)) return;
-		$table = $wpdb->prefix . 'tmon_provision_history';
-		$collate = $wpdb->get_charset_collate();
-		$wpdb->query("CREATE TABLE IF NOT EXISTS {$table} (
-			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-			unit_id VARCHAR(64) NOT NULL,
-			machine_id VARCHAR(64) NOT NULL,
-			action VARCHAR(64) NOT NULL,
-			user VARCHAR(191) NULL,
-			meta LONGTEXT NULL,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			PRIMARY KEY (id),
-			KEY unit_machine (unit_id, machine_id),
-			KEY action_idx (action)
-		) {$collate}");
-	}
-}
-
+// Ensure essential columns on admin init (idempotent; silent)
 add_action('admin_init', function(){
 	global $wpdb;
 	if (!$wpdb || empty($wpdb->prefix)) return;
-	// Ensure canBill column exists on tmon_devices (idempotent)
+
+	// Ensure canBill on devices table
 	tmon_admin_ensure_columns($wpdb->prefix . 'tmon_devices', [
 		'canBill' => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN canBill TINYINT(1) NOT NULL DEFAULT 0",
+		'wordpress_api_url' => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN wordpress_api_url VARCHAR(255) DEFAULT ''",
+		'last_seen' => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN last_seen DATETIME NULL DEFAULT NULL",
 	]);
-	// Ensure commands table exists
+
+	// Ensure commands/history tables exist
 	tmon_admin_ensure_commands_table();
 	tmon_admin_ensure_history_table();
 });
-
-// ...existing code...
