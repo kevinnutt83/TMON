@@ -279,10 +279,18 @@ add_action('admin_menu', function(){
 
 	// Submenus
 	add_submenu_page('tmon-admin-dashboard', 'Firmware', 'Firmware', 'manage_options', 'tmon-admin-firmware', 'tmon_admin_firmware_page');
-	add_submenu_page('tmon-admin-dashboard', 'Provisioning', 'Provisioning', 'manage_options', 'tmon-admin-provisioning', 'tmon_admin_provisioning_page');
-	add_submenu_page('tmon-admin-dashboard', 'Provisioned Devices', 'Provisioned Devices', 'manage_options', 'tmon-admin-provisioned', 'tmon_admin_provisioned_devices_page');
-	add_submenu_page('tmon-admin-dashboard', 'Provisioning Activity', 'Provisioning Activity', 'manage_options', 'tmon-admin-provisioning-activity', 'tmon_admin_provisioning_activity_page');
-	add_submenu_page('tmon-admin-dashboard', 'Provisioning History', 'Provisioning History', 'manage_options', 'tmon-admin-provisioning-history', 'tmon_admin_provisioning_history_page');
+	add_submenu_page('tmon-admin-dashboard', 'Provisioning', 'Provisioning', 'manage_options', 'tmon-admin-provisioning', function(){
+		if (function_exists('tmon_admin_provisioning_page')) { tmon_admin_provisioning_page(); } else { echo '<div class="wrap"><h1>Provisioning</h1><p>Renderer not loaded.</p></div>'; }
+	});
+	add_submenu_page('tmon-admin-dashboard', 'Provisioned Devices', 'Provisioned Devices', 'manage_options', 'tmon-admin-provisioned', function(){
+		if (function_exists('tmon_admin_provisioned_devices_page')) { tmon_admin_provisioned_devices_page(); } else { echo '<div class="wrap"><h1>Provisioned Devices</h1><p>Renderer not loaded.</p></div>'; }
+	});
+	add_submenu_page('tmon-admin-dashboard', 'Provisioning Activity', 'Provisioning Activity', 'manage_options', 'tmon-admin-provisioning-activity', function(){
+		if (function_exists('tmon_admin_provisioning_activity_page')) { tmon_admin_provisioning_activity_page(); } else { echo '<div class="wrap"><h1>Provisioning Activity</h1><p>Renderer not loaded.</p></div>'; }
+	});
+	add_submenu_page('tmon-admin-dashboard', 'Provisioning History', 'Provisioning History', 'manage_options', 'tmon-admin-provisioning-history', function(){
+		if (function_exists('tmon_admin_provisioning_history_page')) { tmon_admin_provisioning_history_page(); } else { echo '<div class="wrap"><h1>Provisioning History</h1><p>Renderer not loaded.</p></div>'; }
+	});
 	add_submenu_page('tmon-admin-dashboard', 'Notifications', 'Notifications', 'manage_options', 'tmon-admin-notifications', 'tmon_admin_notifications_page');
 	add_submenu_page('tmon-admin-dashboard', 'OTA', 'OTA', 'manage_options', 'tmon-admin-ota', 'tmon_admin_ota_page');
 	add_submenu_page('tmon-admin-dashboard', 'Files', 'Files', 'manage_options', 'tmon-admin-files', 'tmon_admin_files_page');
@@ -380,11 +388,14 @@ function tmon_admin_groups_page(){
 	<?php
 }
 
-// Provisioning pages (renderers exist in includes/provisioning.php)
-function tmon_admin_provisioning_page(){ if (function_exists('tmon_admin_render_provisioning_page')) tmon_admin_render_provisioning_page(); }
-function tmon_admin_provisioned_devices_page(){ if (function_exists('tmon_admin_render_provisioned_devices')) tmon_admin_render_provisioned_devices(); else echo '<div class="wrap"><h1>Provisioned Devices</h1><p>Renderer not loaded.</p></div>'; }
-function tmon_admin_provisioning_activity_page(){ if (function_exists('tmon_admin_render_provisioning_activity')) tmon_admin_render_provisioning_activity(); else echo '<div class="wrap"><h1>Provisioning Activity</h1><p>Renderer not loaded.</p></div>'; }
-function tmon_admin_provisioning_history_page(){ if (function_exists('tmon_admin_render_provisioning_history')) tmon_admin_render_provisioning_history(); else echo '<div class="wrap"><h1>Provisioning History</h1><p>Renderer not loaded.</p></div>'; }
+// Submenu registration remains unchanged; ensure callbacks point to functions defined in includes/provisioning.php
+add_action('admin_menu', function(){
+	// Provisioning: top subpage with children
+	add_submenu_page('tmon-admin', 'Provisioning', 'Provisioning', 'manage_options', 'tmon-admin-provisioning', 'tmon_admin_provisioning_page');
+	add_submenu_page('tmon-admin', 'Provisioned Devices', 'Provisioned Devices', 'manage_options', 'tmon-admin-provisioned', 'tmon_admin_provisioned_devices_page');
+	add_submenu_page('tmon-admin', 'Provisioning Activity', 'Provisioning Activity', 'manage_options', 'tmon-admin-provisioning-activity', 'tmon_admin_provisioning_activity_page');
+	add_submenu_page('tmon-admin', 'Provisioning History', 'Provisioning History', 'manage_options', 'tmon-admin-provisioning-history', 'tmon_admin_provisioning_history_page');
+});
 
 // Command Logs submenu page: delegate to existing implementation
 function tmon_admin_command_logs_page(){ do_action('tmon_admin_render_command_logs'); }

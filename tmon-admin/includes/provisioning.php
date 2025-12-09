@@ -143,219 +143,250 @@ function tmon_admin_get_all_devices() {
     return $wpdb->get_results($sql, ARRAY_A);
 }
 
-// Provisioning page UI
-function tmon_admin_provisioning_page() {
-    if (!current_user_can('manage_options')) wp_die('Forbidden');
-    global $wpdb;
-
-    // Show queue diagnostics at top of the page to help debugging
-    $queue = get_option('tmon_admin_pending_provision', []);
-    $queue_count = (is_array($queue)) ? count($queue) : 0;
-    $last_ts = '';
-    if ($queue_count) {
-        // try to find most-recent requested_at across queued entries
-        $most_recent = 0;
-        foreach ($queue as $key => $payload) {
-            $t = strtotime($payload['requested_at'] ?? '1970-01-01 00:00:00');
-            if ($t && $t > $most_recent) $most_recent = $t;
-        }
-        if ($most_recent) $last_ts = date('Y-m-d H:i:s', $most_recent);
-    }
-
-    // Small admin notice area with queued count and latest queue timestamp
-    echo '<div class="notice notice-info inline" style="margin-bottom:10px;">';
-    echo '<p><strong>Provisioning queue:</strong> ' . intval($queue_count) . ' pending payload' . ($queue_count !== 1 ? 's' : '') . '.';
-    if ($last_ts) echo ' (<em>last queued at ' . esc_html($last_ts) . '</em>)';
-    echo '</p>';
-    echo '<p class="description">Provisioning "Save & Provision" enqueues payloads for devices; use the Provisioning Activity page to review or re-enqueue / delete.</p>';
-    echo '</div>';
-
-    // Remove purge forms from this page (moved to Settings). Provide a hint.
-    echo '<p class="description"><em>Data maintenance (purge & other destructive ops) moved to <a href="'.esc_url(admin_url('admin.php?page=tmon-admin-settings')).'">Settings</a> to avoid accidental data loss.</em></p>';
-
-    $prov_table = $wpdb->prefix . 'tmon_provisioned_devices'; // PATCH: ensure $prov_table is available to all branches below
-    // --- PATCH: Handle POST with redirect-after-POST pattern ---
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && function_exists('tmon_admin_verify_nonce') && tmon_admin_verify_nonce('tmon_admin_provision')) {
-        $action = sanitize_text_field($_POST['action'] ?? '');
-        $do_provision = isset($_POST['save_provision']);
-        $redirect_url = remove_query_arg(['provision'], wp_get_referer() ?: admin_url('admin.php?page=tmon-admin-provisioning'));
-
-        // --- UPDATE DEVICE ROW (table row form) ---
-        if ($action === 'update') {
-            $id = intval($_POST['id'] ?? 0);
-            // Load DB row early to provide fallback values for payloads & mirroring
-            $row_tmp = [];
-            if ($id > 0) {
-                $row_tmp = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE id = %d LIMIT 1", $id), ARRAY_A) ?: [];
-            }
-            // Compute normalized or fallback ids for the row
-            $unit_id = sanitize_text_field($_POST['unit_id'] ?? $row_tmp['unit_id'] ?? '');
-            $machine_id = sanitize_text_field($_POST['machine_id'] ?? $row_tmp['machine_id'] ?? '');
-            // Ensure we have a value for unit_name (use posted or fallback to DB row)
-            $unit_name = sanitize_text_field($_POST['unit_name'] ?? $row_tmp['unit_name'] ?? '');
-            $unit_norm = tmon_admin_normalize_key($unit_id);
-            $mac_norm = tmon_admin_normalize_mac($machine_id);
-
-            // Ensure $exists is defined for this branch (look up by keys)
-            // $exists is computed later and update/insert logic handled below; no direct $data upsert here.
- 
-             // Always set these so later mirror updates have canonical id vars
-             $row_unit_id = $unit_id;
-             $row_machine_id = $machine_id;
- 
-            // Update staged flags using normalized columns
-            if ($do_provision) {
-                if (!empty($mac_norm)) {
-                    $wpdb->update($prov_table, ['settings_staged'=>1,'updated_at'=>current_time('mysql')], ['machine_id_norm' => $mac_norm]);
-                } else {
-                    $wpdb->update($prov_table, ['settings_staged'=>1,'updated_at'=>current_time('mysql')], ['unit_id_norm' => $unit_norm]);
-                }
-            }
-
-            // --- INSERT/UPDATE DEVICE HISTORY RECORD ---
-            // Always log provisioning attempts, even for existing devices
-            $history_data = [
-                'unit_id' => $unit_id,
-                'machine_id' => $machine_id,
-                'action' => $do_provision ? 'save_provision' : 'update',
-                'user' => wp_get_current_user()->user_login,
-                'meta' => [
-                    'plan' => sanitize_text_field($_POST['plan'] ?? ''),
-                    'role' => sanitize_text_field($_POST['role'] ?? ''),
-                    'site_url' => esc_url_raw($_POST['site_url'] ?? ''),
-                    'settings_staged' => !empty($_POST['settings_staged']) ? 1 : 0,
-                ],
-            ];
-            tmon_admin_append_provision_history($history_data);
-
-            // --- REDIRECT AFTER SAVE ---
-            // Redirect to the same page with a success flag
-            wp_safe_redirect(add_query_arg(['provision' => 'saved'], $redirect_url));
-            exit;
-        }
-    }
-
-    // --- LIST DEVICES TABLE ---
-    $all_devices = tmon_admin_get_all_devices();
-    $has_devices = !empty($all_devices);
-    $table_id = 'tmon-provisioning-devices';
-    echo '<div class="wrap"><h1>Device Provisioning</h1>';
-
-    // Table: device list
-    echo '<table class="wp-list-table widefat striped" id="'.esc_attr($table_id).'">';
-    echo '<thead><tr>';
-    echo '<th>ID</th><th>Unit ID</th><th>Machine ID</th><th>Name</th><th>Plan</th><th>Status</th><th>Site</th><th>Staged</th><th>Can Bill</th><th>Created</th><th>Updated</th>';
-    echo '</tr></thead><tbody>';
-    if ($has_devices) {
-        foreach ($all_devices as $r) {
-            $name = !empty($r['unit_name_dev']) ? $r['unit_name_dev'] : (!empty($r['unit_name']) ? $r['unit_name'] : '');
-            $canBill = isset($r['canBill']) ? (intval($r['canBill']) ? 'Yes' : 'No') : 'No';
-            $staged = !empty($r['settings_staged']) ? 'Yes' : 'No';
-            echo '<tr>';
-            echo '<td>'.intval($r['id']).'</td>';
-            echo '<td>'.esc_html($r['unit_id']).'</td>';
-            echo '<td>'.esc_html($r['machine_id']).'</td>';
-            echo '<td>'.esc_html($name).'</td>';
-            echo '<td>'.esc_html($r['plan']).'</td>';
-            echo '<td>'.esc_html($r['status']).'</td>';
-            echo '<td>'.esc_html(isset($r['site_url']) ? $r['site_url'] : '').'</td>';
-            echo '<td>'.esc_html($staged).'</td>';
-            echo '<td>'.esc_html($canBill).'</td>';
-            echo '<td>'.esc_html($r['created_at']).'</td>';
-            echo '<td>'.esc_html($r['updated_at']).'</td>';
-            echo '</tr>';
-        }
-    } else {
-        echo '<tr><td colspan="11"><em>No devices found. Use "Save & Provision" to add new devices.</em></td></tr>';
-    }
-    echo '</tbody></table>';
-
-    // --- SAVE & PROVISION FORM ---
-    // Show form to add new or update existing device provisioning
-    $form_action = admin_url('admin-post.php');
-    $nonce = wp_create_nonce('tmon_admin_provision_device');
-    echo '<h2>'.($has_devices ? 'Update' : 'Add').' Device Provisioning</h2>';
-    echo '<form method="post" action="'.esc_url($form_action).'">';
-    echo '<input type="hidden" name="action" value="tmon_admin_provision_device">';
-    echo '<input type="hidden" name="_wpnonce" value="'.esc_attr($nonce).'">';
-    // Device ID (hidden for existing devices)
-    echo '<input type="hidden" name="id" value="'.esc_attr($has_devices ? $all_devices[0]['id'] : '').'">';
-    // Unit ID
-    echo '<table class="form-table"><tr>';
-    echo '<th scope="row"><label for="unit_id">Unit ID</label></th>';
-    echo '<td><input name="unit_id" type="text" id="unit_id" value="'.esc_attr($has_devices ? $all_devices[0]['unit_id'] : '').'" class="regular-text" required>';
-    echo '<p class="description">Unique identifier for the unit (e.g., serial number).</p>';
-    echo '</td></tr>';
-    // Machine ID
-    echo '<tr>';
-    echo '<th scope="row"><label for="machine_id">Machine ID</label></th>';
-    echo '<td><input name="machine_id" type="text" id="machine_id" value="'.esc_attr($has_devices ? $all_devices[0]['machine_id'] : '').'" class="regular-text" required>';
-    echo '<p class="description">MAC address or unique machine identifier.</p>';
-    echo '</td></tr>';
-    // Device Name
-    echo '<tr>';
-    echo '<th scope="row"><label for="unit_name">Device Name</label></th>';
-    echo '<td><input name="unit_name" type="text" id="unit_name" value="'.esc_attr($has_devices ? $all_devices[0]['unit_name'] : '').'" class="regular-text">';
-    echo '<p class="description">Friendly name for the device (optional).</p>';
-    echo '</td></tr>';
-    // Plan
-    echo '<tr>';
-    echo '<th scope="row"><label for="plan">Plan</label></th>';
-    echo '<td><input name="plan" type="text" id="plan" value="'.esc_attr($has_devices ? $all_devices[0]['plan'] : '').'" class="regular-text">';
-    echo '<p class="description">Provisioning plan (e.g., standard, premium).</p>';
-    echo '</td></tr>';
-    // Role
-    echo '<tr>';
-    echo '<th scope="row"><label for="role">Role</label></th>';
-    echo '<td><input name="role" type="text" id="role" value="'.esc_attr($has_devices ? $all_devices[0]['role'] : '').'" class="regular-text">';
-    echo '<p class="description">Device role (e.g., base, extender).</p>';
-    echo '</td></tr>';
-    // Site URL
-    echo '<tr>';
-    echo '<th scope="row"><label for="site_url">Site URL</label></th>';
-    echo '<td><input name="site_url" type="url" id="site_url" value="'.esc_url($has_devices ? $all_devices[0]['site_url'] : '').'" class="regular-text">';
-    echo '<p class="description">URL of the site to provision (fallback to WordPress API URL if empty).</p>';
-    echo '</td></tr>';
-    // Settings Staged
-    echo '<tr>';
-    echo '<th scope="row"><label for="settings_staged">Settings Staged</label></th>';
-    echo '<td>';
-    echo '<input name="settings_staged" type="checkbox" id="settings_staged" value="1" '.checked($has_devices && $all_devices[0]['settings_staged'], 1, false).'> ';
-    echo '<label for="settings_staged">Check to stage settings for provisioning.</label>';
-    echo '</td></tr>';
-    echo '</table>';
-
-    // Submit button
-    echo '<p class="submit">';
-    echo '<input type="submit" name="save_provision" id="save_provision" class="button button-primary" value="'.esc_attr($has_devices ? 'Update & Provision' : 'Save & Provision').'">';
-    echo '</p>';
-
-    echo '</form>';
-
-    // --- PROVISIONING HISTORY LINK ---
-    // Link to the provisioning history page
-    echo '<h2>Provisioning History</h2>';
-    echo '<p><a href="'.esc_url(admin_url('admin.php?page=tmon-admin-provisioning-history')).'" class="button">View Provisioning History</a></p>';
-
-    echo '</div>';
-
-    // --- DATA TABLES SCRIPT ---
-    // Enqueue DataTables script for device list table
-    add_action('admin_footer', function() use ($table_id) {
-        ?>
-        <script>
-        jQuery(document).ready(function($) {
-            $('#<?php echo esc_js($table_id); ?>').DataTable({
-                "order": [[ 0, "desc" ]], // Order by ID descending
-                "columnDefs": [
-                    { "visible": false, "targets": [0] } // Hide ID column
-                ]
-            });
-        });
-        </script>
-        <?php
-    });
+// Primary Provisioning page renderer
+if (!function_exists('tmon_admin_provisioning_page')) {
+	function tmon_admin_provisioning_page() {
+		if (function_exists('tmon_admin_render_provisioning_page')) {
+			tmon_admin_render_provisioning_page();
+		} else {
+			echo '<div class="wrap"><h1>Provisioning</h1><p>Renderer not loaded.</p></div>';
+		}
+	}
 }
+
+// Provisioned Devices page renderer
+if (!function_exists('tmon_admin_provisioned_devices_page')) {
+	function tmon_admin_provisioned_devices_page() {
+		if (function_exists('tmon_admin_render_provisioned_devices')) {
+			tmon_admin_render_provisioned_devices();
+		} else {
+			echo '<div class="wrap"><h1>Provisioned Devices</h1><p>Renderer not loaded.</p></div>';
+		}
+	}
+}
+
+// Provisioning Activity page renderer
+if (!function_exists('tmon_admin_provisioning_activity_page')) {
+	function tmon_admin_provisioning_activity_page() {
+		if (function_exists('tmon_admin_render_provisioning_activity')) {
+			tmon_admin_render_provisioning_activity();
+		} else {
+			echo '<div class="wrap"><h1>Provisioning Activity</h1><p>Renderer not loaded.</p></div>';
+		}
+	}
+}
+
+// Provisioning History page renderer
+if (!function_exists('tmon_admin_provisioning_history_page')) {
+	function tmon_admin_provisioning_history_page() {
+		if (function_exists('tmon_admin_render_provisioning_history')) {
+			tmon_admin_render_provisioning_history();
+		} else {
+			echo '<div class="wrap"><h1>Provisioning History</h1><p>Renderer not loaded.</p></div>';
+		}
+	}
+}
+
+// Safe content renderers (already guarded earlier; keep guards to avoid duplicates)
+if (!function_exists('tmon_admin_render_provisioning_page')) {
+	function tmon_admin_render_provisioning_page() {
+		// ...existing code...
+	}
+}
+if (!function_exists('tmon_admin_render_provisioned_devices')) {
+	function tmon_admin_render_provisioned_devices() {
+		// ...existing code...
+	}
+}
+if (!function_exists('tmon_admin_render_provisioning_activity')) {
+	function tmon_admin_render_provisioning_activity() {
+		// ...existing code...
+	}
+}
+if (!function_exists('tmon_admin_render_provisioning_history')) {
+	function tmon_admin_render_provisioning_history() {
+		// ...existing code...
+	}
+}
+
+// --- PATCH: Handle POST with redirect-after-POST pattern ---
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && function_exists('tmon_admin_verify_nonce') && tmon_admin_verify_nonce('tmon_admin_provision')) {
+    $action = sanitize_text_field($_POST['action'] ?? '');
+    $do_provision = isset($_POST['save_provision']);
+    $redirect_url = remove_query_arg(['provision'], wp_get_referer() ?: admin_url('admin.php?page=tmon-admin-provisioning'));
+
+    // --- UPDATE DEVICE ROW (table row form) ---
+    if ($action === 'update') {
+        $id = intval($_POST['id'] ?? 0);
+        // Load DB row early to provide fallback values for payloads & mirroring
+        $row_tmp = [];
+        if ($id > 0) {
+            $row_tmp = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE id = %d LIMIT 1", $id), ARRAY_A) ?: [];
+        }
+        // Compute normalized or fallback ids for the row
+        $unit_id = sanitize_text_field($_POST['unit_id'] ?? $row_tmp['unit_id'] ?? '');
+        $machine_id = sanitize_text_field($_POST['machine_id'] ?? $row_tmp['machine_id'] ?? '');
+        // Ensure we have a value for unit_name (use posted or fallback to DB row)
+        $unit_name = sanitize_text_field($_POST['unit_name'] ?? $row_tmp['unit_name'] ?? '');
+        $unit_norm = tmon_admin_normalize_key($unit_id);
+        $mac_norm = tmon_admin_normalize_mac($machine_id);
+
+        // Ensure $exists is defined for this branch (look up by keys)
+        // $exists is computed later and update/insert logic handled below; no direct $data upsert here.
+  
+         // Always set these so later mirror updates have canonical id vars
+         $row_unit_id = $unit_id;
+         $row_machine_id = $machine_id;
+  
+        // Update staged flags using normalized columns
+        if ($do_provision) {
+            if (!empty($mac_norm)) {
+                $wpdb->update($prov_table, ['settings_staged'=>1,'updated_at'=>current_time('mysql')], ['machine_id_norm' => $mac_norm]);
+            } else {
+                $wpdb->update($prov_table, ['settings_staged'=>1,'updated_at'=>current_time('mysql')], ['unit_id_norm' => $unit_norm]);
+            }
+        }
+
+        // --- INSERT/UPDATE DEVICE HISTORY RECORD ---
+        // Always log provisioning attempts, even for existing devices
+        $history_data = [
+            'unit_id' => $unit_id,
+            'machine_id' => $machine_id,
+            'action' => $do_provision ? 'save_provision' : 'update',
+            'user' => wp_get_current_user()->user_login,
+            'meta' => [
+                'plan' => sanitize_text_field($_POST['plan'] ?? ''),
+                'role' => sanitize_text_field($_POST['role'] ?? ''),
+                'site_url' => esc_url_raw($_POST['site_url'] ?? ''),
+                'settings_staged' => !empty($_POST['settings_staged']) ? 1 : 0,
+            ],
+        ];
+        tmon_admin_append_provision_history($history_data);
+
+        // --- REDIRECT AFTER SAVE ---
+        // Redirect to the same page with a success flag
+        wp_safe_redirect(add_query_arg(['provision' => 'saved'], $redirect_url));
+        exit;
+    }
+}
+
+// --- LIST DEVICES TABLE ---
+$all_devices = tmon_admin_get_all_devices();
+$has_devices = !empty($all_devices);
+$table_id = 'tmon-provisioning-devices';
+echo '<div class="wrap"><h1>Device Provisioning</h1>';
+
+// Table: device list
+echo '<table class="wp-list-table widefat striped" id="'.esc_attr($table_id).'">';
+echo '<thead><tr>';
+echo '<th>ID</th><th>Unit ID</th><th>Machine ID</th><th>Name</th><th>Plan</th><th>Status</th><th>Site</th><th>Staged</th><th>Can Bill</th><th>Created</th><th>Updated</th>';
+echo '</tr></thead><tbody>';
+if ($has_devices) {
+    foreach ($all_devices as $r) {
+        $name = !empty($r['unit_name_dev']) ? $r['unit_name_dev'] : (!empty($r['unit_name']) ? $r['unit_name'] : '');
+        $canBill = isset($r['canBill']) ? (intval($r['canBill']) ? 'Yes' : 'No') : 'No';
+        $staged = !empty($r['settings_staged']) ? 'Yes' : 'No';
+        echo '<tr>';
+        echo '<td>'.intval($r['id']).'</td>';
+        echo '<td>'.esc_html($r['unit_id']).'</td>';
+        echo '<td>'.esc_html($r['machine_id']).'</td>';
+        echo '<td>'.esc_html($name).'</td>';
+        echo '<td>'.esc_html($r['plan']).'</td>';
+        echo '<td>'.esc_html($r['status']).'</td>';
+        echo '<td>'.esc_html(isset($r['site_url']) ? $r['site_url'] : '').'</td>';
+        echo '<td>'.esc_html($staged).'</td>';
+        echo '<td>'.esc_html($canBill).'</td>';
+        echo '<td>'.esc_html($r['created_at']).'</td>';
+        echo '<td>'.esc_html($r['updated_at']).'</td>';
+        echo '</tr>';
+    }
+} else {
+    echo '<tr><td colspan="11"><em>No devices found. Use "Save & Provision" to add new devices.</em></td></tr>';
+}
+echo '</tbody></table>';
+
+// --- SAVE & PROVISION FORM ---
+$form_action = admin_url('admin-post.php');
+$nonce = wp_create_nonce('tmon_admin_provision_device');
+echo '<h2>'.($has_devices ? 'Update' : 'Add').' Device Provisioning</h2>';
+echo '<form method="post" action="'.esc_url($form_action).'">';
+echo '<input type="hidden" name="action" value="tmon_admin_provision_device">';
+echo '<input type="hidden" name="_wpnonce" value="'.esc_attr($nonce).'">';
+// Device ID (hidden for existing devices)
+echo '<input type="hidden" name="id" value="'.esc_attr($has_devices ? $all_devices[0]['id'] : '').'">';
+// Unit ID
+echo '<table class="form-table"><tr>';
+echo '<th scope="row"><label for="unit_id">Unit ID</label></th>';
+echo '<td><input name="unit_id" type="text" id="unit_id" value="'.esc_attr($has_devices ? $all_devices[0]['unit_id'] : '').'" class="regular-text" required>';
+echo '<p class="description">Unique identifier for the unit (e.g., serial number).</p>';
+echo '</td></tr>';
+// Machine ID
+echo '<tr>';
+echo '<th scope="row"><label for="machine_id">Machine ID</label></th>';
+echo '<td><input name="machine_id" type="text" id="machine_id" value="'.esc_attr($has_devices ? $all_devices[0]['machine_id'] : '').'" class="regular-text" required>';
+echo '<p class="description">MAC address or unique machine identifier.</p>';
+echo '</td></tr>';
+// Device Name
+echo '<tr>';
+echo '<th scope="row"><label for="unit_name">Device Name</label></th>';
+echo '<td><input name="unit_name" type="text" id="unit_name" value="'.esc_attr($has_devices ? $all_devices[0]['unit_name'] : '').'" class="regular-text">';
+echo '<p class="description">Friendly name for the device (optional).</p>';
+echo '</td></tr>';
+// Plan
+echo '<tr>';
+echo '<th scope="row"><label for="plan">Plan</label></th>';
+echo '<td><input name="plan" type="text" id="plan" value="'.esc_attr($has_devices ? $all_devices[0]['plan'] : '').'" class="regular-text">';
+echo '<p class="description">Provisioning plan (e.g., standard, premium).</p>';
+echo '</td></tr>';
+// Role
+echo '<tr>';
+echo '<th scope="row"><label for="role">Role</label></th>';
+echo '<td><input name="role" type="text" id="role" value="'.esc_attr($has_devices ? $all_devices[0]['role'] : '').'" class="regular-text">';
+echo '<p class="description">Device role (e.g., base, extender).</p>';
+echo '</td></tr>';
+// Site URL
+echo '<tr>';
+echo '<th scope="row"><label for="site_url">Site URL</label></th>';
+echo '<td><input name="site_url" type="url" id="site_url" value="'.esc_url($has_devices ? $all_devices[0]['site_url'] : '').'" class="regular-text">';
+echo '<p class="description">URL of the site to provision (fallback to WordPress API URL if empty).</p>';
+echo '</td></tr>';
+// Settings Staged
+echo '<tr>';
+echo '<th scope="row"><label for="settings_staged">Settings Staged</label></th>';
+echo '<td>';
+echo '<input name="settings_staged" type="checkbox" id="settings_staged" value="1" '.checked($has_devices && $all_devices[0]['settings_staged'], 1, false).'> ';
+echo '<label for="settings_staged">Check to stage settings for provisioning.</label>';
+echo '</td></tr>';
+echo '</table>';
+
+// Submit button
+echo '<p class="submit">';
+echo '<input type="submit" name="save_provision" id="save_provision" class="button button-primary" value="'.esc_attr($has_devices ? 'Update & Provision' : 'Save & Provision').'">';
+echo '</p>';
+
+echo '</form>';
+
+// --- PROVISIONING HISTORY LINK ---
+echo '<h2>Provisioning History</h2>';
+echo '<p><a href="'.esc_url(admin_url('admin.php?page=tmon-admin-provisioning-history')).'" class="button">View Provisioning History</a></p>';
+
+echo '</div>';
+
+// --- DATA TABLES SCRIPT ---
+add_action('admin_footer', function() use ($table_id) {
+    ?>
+    <script>
+    jQuery(document).ready(function($) {
+        $('#<?php echo esc_js($table_id); ?>').DataTable({
+            "order": [[ 0, "desc" ]], // Order by ID descending
+            "columnDefs": [
+                { "visible": false, "targets": [0] } // Hide ID column
+            ]
+        });
+    });
+    </script>
+    <?php
+});
 
 // Inline notice renderer for Save & Provision results; safe standalone function
 if (!function_exists('tmon_admin_render_provision_notice')) {
@@ -365,14 +396,12 @@ if (!function_exists('tmon_admin_render_provision_notice')) {
 		}
 		$state = isset($_GET['provision']) ? sanitize_text_field($_GET['provision']) : '';
 		if ($state === 'queued') {
-			// Output a success notice
 			?>
 			<div class="notice notice-success">
 				<p>Provisioning queued and saved.</p>
 			</div>
 			<?php
 		} elseif ($state === 'failed') {
-			// Output an error notice
 			?>
 			<div class="notice notice-error">
 				<p>Provisioning save failed.</p>
@@ -585,29 +614,6 @@ add_action('rest_api_init', function(){
 		},
 	));
 });
-
-// Safe renderers to avoid invalid callback fatals
-if (!function_exists('tmon_admin_render_provisioning_activity')) {
-	function tmon_admin_render_provisioning_activity(){
-		echo '<div class="wrap"><h1>Provisioning Activity</h1>';
-		// ...existing code...
-		echo '<p>Queue and active jobs appear here.</p></div>';
-	}
-}
-if (!function_exists('tmon_admin_render_provisioning_history')) {
-	function tmon_admin_render_provisioning_history(){
-		echo '<div class="wrap"><h1>Provisioning History</h1>';
-		// ...existing code...
-		echo '<p>Recent provisioning events will render here.</p></div>';
-	}
-}
-if (!function_exists('tmon_admin_render_provisioned_devices')) {
-	function tmon_admin_render_provisioned_devices(){
-		echo '<div class="wrap"><h1>Provisioned Devices</h1>';
-		// ...existing code...
-		echo '<p>Devices list will render here.</p></div>';
-	}
-}
 
 // Guard undefined array keys when reading queue/device arrays
 function tmon_admin_arr_get($arr, $key, $default=''){ return isset($arr[$key]) ? $arr[$key] : $default; }
