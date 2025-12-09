@@ -13,6 +13,10 @@ gc.enable()
 
 from settings import FIELD_DATA_APP_PASS  # must be defined in settings.py before this import
 
+if not FIELD_DATA_APP_PASS:
+    # No app password available; skip auth-required requests or log a warning
+    pass
+
 def _should_attempt_connect():
     # If remote node and provisioned, and policy disables WiFi, don't attempt
     try:
