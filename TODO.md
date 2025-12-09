@@ -345,3 +345,170 @@ Pending verification
 Next
 - Validate Basic Auth configuration on UC (TMON_UC_REQUIRE_APP_PASSWORD option/constant).
 - Confirm manifest fetch sets version/time transients and notice displays on Admin pages.
+
+# TMON Admin & Unit Connector – Implementation Tracker (Consolidated)
+
+Status summary
+- Pairing completed but UC not listed in Admin.
+- Multiple admin pages show placeholders or fatal errors.
+- Command logs schema mismatches (status column missing).
+- Provisioning callbacks missing or using invalid function names.
+- Shortcodes not rendering; UC REST include collisions; CSS overlaying admin menu.
+- JWT removed; migrate to native WP Application Passwords verified in firmware.
+
+Priorities (P0 = critical, P1 = high, P2 = normal)
+
+P0 – Critical fixes
+- Pairing visibility in Admin:
+  - Ensure tmon-admin shows paired Unit Connectors under “Registered Unit Connectors”.
+  - Read from pairing storage (options or tmon_uc_sites table) and render normalized Hub URL, paired time, tokens.
+  - Verify capability mapping so plugin users with tmon_view_devices see paired UCs.
+
+- Menu and pages wire-up:
+  - Move “TMON Command Logs” under TMON Admin submenu.
+  - Ensure main “TMON Admin” menu links to dashboard page rendering:
+    - Tables: Unit Connectors + status + last check-in.
+    - Device alerts and health (device/network/connection KPIs).
+    - Scrollable logs area; hyperlink keys to device/UC detail pages.
+
+- Firmware page:
+  - Display current TMON version (read transients or option).
+  - Fetch repository README.md and render content.
+  - Provide links to download current MicroPython firmware files from repository (manifest-driven).
+
+- Provisioning pages:
+  - Fix callbacks: implement tmon_admin_provisioning_activity_page and tmon_admin_provisioning_history_page.
+  - Resolve warnings Undefined array keys: guard access for id and settings_staged in includes/provisioning.php.
+  - Ensure queue updates/clears after device provisioning; add job to clear claimed/applied items and UI refresh.
+
+- Notifications page:
+  - Replace placeholder “Ensure includes/notifications.php is active” with live list:
+    - Unread + recent logs, SSE stream status, filters, mark-as-read, export.
+    - Use existing tmon_notifications table and rendering helpers.
+
+- OTA admin page:
+  - Replace placeholder; render OTA logs and actions:
+    - Commands: download device logs, reboot device, update firmware, clear logs (preserve settings/provisioning), etc.
+    - Show job queue, last run, error messages.
+
+- Files admin page:
+  - Replace placeholder; render uploaded user files list with actions:
+    - Send to device, run as MicroPython script, function override notes, dependency merge hints.
+    - Provide secure download and “load with custom logic” toggle.
+    - Display execution policy and override safeguards.
+
+- Groups admin page:
+  - Render hierarchy Companies > Locations > Zones > Groups > Devices.
+  - Provide CRUD and drag-and-drop organization; link devices to groups.
+
+- Provisioned device admin page:
+  - Fix “Renderer not loaded.” – ensure renderer function exists and hooked to the page slug.
+  - Render provisioned devices list with filters, details modal, health status.
+
+- CSS overlay fix:
+  - Fix provisioning page CSS overlaying admin left menu; adjust container top/left padding and z-index.
+  - Audit .tmon-provision-grid and modal to avoid fixed positioning collisions.
+
+- Remove deprecated page:
+  - Remove “Device location” admin page.
+
+- DB schema fix – command logs:
+  - Add status column to tmon_device_commands (Admin) and Unit Connector tables if absent.
+  - Migrate and back-fill workflow: staged → queued → claimed → applied → failed.
+  - Update requeue cron queries to use existing columns safely (guards when status column missing).
+
+- UC include collisions:
+  - Prevent redeclare errors: guard function_exists for tmon_uc_pull_install and class_exists TMON_AI.
+  - Single-include v2-api with define guard.
+  - Ensure shortcodes registered and frontend JS enqueued or localized AJAX URL.
+
+P1 – High-priority improvements
+- Add “Clear Audit Log” button beside “Purge Data” on settings page:
+  - Wire to admin_post action clearing tmon_admin audit logs table.
+  - Add “Export CSV” button on audit log admin page to export all entries.
+
+- Command Logs CSV export:
+  - Fix SQL to avoid missing status column.
+  - Add CSV export endpoint and button.
+
+- Admin Notices:
+  - Ensure firmware fetch AJAX sets transients and notice renders without parse errors.
+  - Fix parse errors in includes/provisioning.php (clean echo blocks).
+
+- JWT removal follow-through:
+  - Confirm all endpoints/auth use native WP Application Passwords where required.
+  - Remove residual JWT paths and logic from Admin/UC code.
+
+P2 – Normal maintenance and UX
+- Add hyperlinks across tables for drill-down (devices, UCs, sites, companies).
+- Improve error messaging in pages for clearer diagnostics.
+- Add job/history export for provisioning activity.
+
+Action checklist
+
+1) Pairing display and Admin dashboard
+- Query paired UCs storage and render in Admin dashboard.
+- Ensure capabilities allow non-admin plugin users to view.
+
+2) Menus and pages
+- Register “TMON Command Logs” as submenu under TMON Admin.
+- Implement dashboard renderer: UCs, device alerts, KPIs, logs with hyperlinks.
+
+3) Firmware page
+- Read TMON version from option/transient.
+- Fetch README.md via GitHub raw URL; render markdown (simple sanitized HTML).
+- Link to current firmware files per manifest.
+
+4) Provisioning pages
+- Implement missing functions: tmon_admin_provisioning_activity_page, tmon_admin_provisioning_history_page.
+- Add null/array key guards for id and settings_staged.
+- Fix CSS overlay; adjust layout container padding.
+- Ensure queue worker clears staged/applied; refresh counts.
+
+5) Notifications
+- Render unread notifications and logs; SSE heartbeat status.
+- Filters and mark-as-read UX.
+
+6) OTA page
+- Render logs; actions for device commands (download logs, reboot, update firmware, clear logs preserving settings).
+- Show OTA job queue and last runs.
+
+7) Files page
+- Render uploaded files table with actions.
+- Safe execution policy details and override mechanism docs.
+
+8) Groups page
+- Implement hierarchy rendering and CRUD.
+
+9) Provisioned devices page
+- Implement renderer to list devices with filters and modal.
+
+10) DB schema – Command logs
+- Add status column if absent:
+  - ALTER TABLE {prefix}tmon_device_commands ADD COLUMN status varchar(32) DEFAULT 'staged';
+  - Same for UC table if needed.
+- Update cron queries to guard when status not present and migrate to new column.
+
+11) UC guards and shortcodes
+- Guard function/class redeclarations in includes/v2-api.php.
+- Include v2-api once.
+- Register shortcodes: [tmon_device_list], [tmon_device_status]; ensure AJAX URL localization.
+
+12) Parse errors and warnings
+- Fix parse/echo blocks in tmon-admin/includes/provisioning.php.
+- Verify admin_notices blocks and enqueue functions use balanced PHP.
+
+13) Remove Device location admin page
+- Unregister/remove the page from admin menu.
+
+14) CSV exports
+- Add “Export CSV” to Audit Log and Command Logs pages.
+
+Verification plan
+- Visit Admin dashboard and confirm paired UCs listed.
+- Open each Admin page: dashboards, notifications, OTA, files, groups, provisioning, provisioned devices – ensure content renders.
+- Trigger provisioning queue and observe processing + clearing.
+- Confirm command logs schema; requeue cron runs without DB errors.
+- Run CSV exports; confirm file download and encoding.
+- Confirm shortcodes render on frontend.
+- Confirm Application Password auth on UC endpoints works (no JWT refs).
