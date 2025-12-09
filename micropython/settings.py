@@ -405,3 +405,9 @@ MODAL_DEFAULT_STATUS_OPTIONS = ['pending', 'active', 'provisioned']
 # --- Command names used by modal buttons → firmware mapping ---
 COMMAND_NAME_REBOOT = 'reboot'
 COMMAND_NAME_FACTORY_RESET = 'factory_reset'
+
+# Ensure required globals exist before any use/imports.
+try:
+    FIELD_DATA_APP_PASS
+except NameError:
+    FIELD_DATA_APP_PASS = ""  # Application Password for Admin; overridden by persisted config if present

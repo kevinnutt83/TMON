@@ -9,8 +9,9 @@ import gc
 from utils import runGC, debug_print
 import sdata
 
-
 gc.enable()
+
+from settings import FIELD_DATA_APP_PASS  # must be defined in settings.py before this import
 
 def _should_attempt_connect():
     # If remote node and provisioned, and policy disables WiFi, don't attempt
