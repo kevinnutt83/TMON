@@ -11,7 +11,8 @@ import sdata
 
 gc.enable()
 
-from settings import FIELD_DATA_APP_PASS
+# Use getattr to avoid NameError when settings initializes later.
+FIELD_DATA_APP_PASS = getattr(settings, 'FIELD_DATA_APP_PASS', '')
 
 if not FIELD_DATA_APP_PASS:
     # Skip auth-required flows or log a warning; prevents boot-time NameError
