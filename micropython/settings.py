@@ -5,6 +5,15 @@ try:
 	FIELD_DATA_APP_PASS
 except NameError:
 	FIELD_DATA_APP_PASS = ""  # default; overridden by persisted config later
+# Ensure claim-flow toggles exist before use
+try:
+	ENABLE_FIRST_CHECKIN_CLAIM
+except NameError:
+	ENABLE_FIRST_CHECKIN_CLAIM = False
+try:
+	CLAIM_CONFIRM_DELAY_S
+except NameError:
+	CLAIM_CONFIRM_DELAY_S = 0
 
 # Move LOG_DIR and essential file paths near the top so other constants can reference them.
 LOG_DIR = '/logs'
@@ -422,6 +431,15 @@ try:
 	FIELD_DATA_APP_PASS
 except NameError:
 	FIELD_DATA_APP_PASS = ""  # default; overridden by persisted config later
+# Ensure claim-flow toggles exist before use
+try:
+	ENABLE_FIRST_CHECKIN_CLAIM
+except NameError:
+	ENABLE_FIRST_CHECKIN_CLAIM = False
+try:
+	CLAIM_CONFIRM_DELAY_S
+except NameError:
+	CLAIM_CONFIRM_DELAY_S = 0
 
 # Move LOG_DIR and essential file paths near the top so other constants can reference them.
 LOG_DIR = '/logs'
