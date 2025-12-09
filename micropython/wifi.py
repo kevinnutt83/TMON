@@ -9,6 +9,34 @@ import sdata
 
 gc.enable()
 
+# Inserted: lazy settings accessor must exist before use
+_settings_mod = None
+def get_settings():
+	# Return the real settings module or a safe proxy if import fails.
+	global _settings_mod
+	if _settings_mod is not None:
+		return _settings_mod
+	try:
+		import settings as _s
+		_settings_mod = _s
+		return _settings_mod
+	except Exception:
+		class _SettingsProxy:
+			FIELD_DATA_APP_PASS = ""
+			NODE_TYPE = 'base'
+			UNIT_PROVISIONED = False
+			WIFI_DISABLE_AFTER_PROVISION = False
+			ENABLE_WIFI = True
+			WIFI_SSID = ""
+			WIFI_PASS = ""
+			WIFI_CONN_RETRIES = 5
+			WIFI_BACKOFF_S = 15
+			WIFI_SIGNAL_SAMPLE_INTERVAL_S = 30
+			net_wifi_MAC = None
+			net_wifi_IP = None
+		_settings_mod = _SettingsProxy()
+		return _settings_mod
+
 # Lazy settings accessor and bootstrap remain as implemented.
 
 # 1) Ensure settings has FIELD_DATA_APP_PASS before importing utils (which imports settings)
@@ -16,7 +44,6 @@ _s = get_settings()
 try:
 	getattr(_s, 'FIELD_DATA_APP_PASS')
 except Exception:
-	# Declare with safe default; real value will override later when persisted config loads.
 	setattr(_s, 'FIELD_DATA_APP_PASS', "")
 
 # 2) Import utils after bootstrap; provide safe fallbacks if import fails
