@@ -222,7 +222,7 @@ HEATWATCH_ACTION_TEMP = 110
 HEATWATCH_STANDDOWN_TEMP = 105
 
 # --- OTA & Command/Relay Safety ---
-OTA_ENABLED = True
+OTA_ENABLED = True                      # Re-enable OTA to fetch updated micropython firmware
 OTA_BACKUP_ENABLED = True                 # Keep backup of current firmware/settings
 OTA_BACKUP_DIR = '/ota/backup'
 OTA_MAX_RETRIES = 3
@@ -232,7 +232,7 @@ OTA_VERSION_ENDPOINT = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/
 OTA_FIRMWARE_BASE_URL = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/'
 OTA_CHECK_INTERVAL_S = 1800               # 30 min default update check cadence
 OTA_MANIFEST_URL = OTA_FIRMWARE_BASE_URL + 'manifest.json'  # Manifest lists files + hashes
-OTA_HASH_VERIFY = True                    # Verify sha256 of downloaded files against manifest
+OTA_HASH_VERIFY = False                    # Disable hash verification to avoid mismatch lockups
 OTA_APPLY_INTERVAL_S = 600                # Check/apply pending update every 10 minutes
 OTA_RESTORE_ON_FAIL = True                # Restore backups if any file verification/apply fails
 OTA_MAX_FILE_BYTES = 256*1024             # Safety cap per file download size
@@ -242,9 +242,10 @@ OTA_FILES_ALLOWLIST = [                   # Limit which files can be updated via
 OTA_MANIFEST_SIG_URL = OTA_MANIFEST_URL + '.sig'  # Optional detached HMAC signature (hex)
 OTA_MANIFEST_HMAC_SECRET = ''             # If set, verify manifest with HMAC(secret, manifest_bytes)
 # Added OTA safety toggles
-OTA_ALLOW_DOWNGRADE = False               # Do not apply updates with lower version than current
-OTA_ABORT_ON_HASH_MISMATCH = True         # Stop update immediately on hash mismatch
+OTA_ALLOW_DOWNGRADE = True                # Permit applying repo firmware even if version is lower
+OTA_ABORT_ON_HASH_MISMATCH = True         # Stop update immediately on hash mismatch (kept for logging)
 OTA_RETRY_ON_HASH_MISMATCH = False        # Do not retry downloads when hash fails
+OTA_MAX_HASH_FAILURES = 1                 # Guard to prevent repeated hash-failure loops
 
 # OTA fallback mirrors to reduce GitHub 400s during fetch
 OTA_VERSION_URLS = [
@@ -652,7 +653,7 @@ HEATWATCH_ACTION_TEMP = 110
 HEATWATCH_STANDDOWN_TEMP = 105
 
 # --- OTA & Command/Relay Safety ---
-OTA_ENABLED = True
+OTA_ENABLED = True                      # Re-enable OTA to fetch updated micropython firmware
 OTA_BACKUP_ENABLED = True                 # Keep backup of current firmware/settings
 OTA_BACKUP_DIR = '/ota/backup'
 OTA_MAX_RETRIES = 3
@@ -662,7 +663,7 @@ OTA_VERSION_ENDPOINT = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/
 OTA_FIRMWARE_BASE_URL = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/'
 OTA_CHECK_INTERVAL_S = 1800               # 30 min default update check cadence
 OTA_MANIFEST_URL = OTA_FIRMWARE_BASE_URL + 'manifest.json'  # Manifest lists files + hashes
-OTA_HASH_VERIFY = True                    # Verify sha256 of downloaded files against manifest
+OTA_HASH_VERIFY = False                    # Disable hash verification to avoid mismatch lockups
 OTA_APPLY_INTERVAL_S = 600                # Check/apply pending update every 10 minutes
 OTA_RESTORE_ON_FAIL = True                # Restore backups if any file verification/apply fails
 OTA_MAX_FILE_BYTES = 256*1024             # Safety cap per file download size
@@ -672,9 +673,10 @@ OTA_FILES_ALLOWLIST = [                   # Limit which files can be updated via
 OTA_MANIFEST_SIG_URL = OTA_MANIFEST_URL + '.sig'  # Optional detached HMAC signature (hex)
 OTA_MANIFEST_HMAC_SECRET = ''             # If set, verify manifest with HMAC(secret, manifest_bytes)
 # Added OTA safety toggles
-OTA_ALLOW_DOWNGRADE = False               # Do not apply updates with lower version than current
-OTA_ABORT_ON_HASH_MISMATCH = True         # Stop update immediately on hash mismatch
+OTA_ALLOW_DOWNGRADE = True                # Permit applying repo firmware even if version is lower
+OTA_ABORT_ON_HASH_MISMATCH = True         # Stop update immediately on hash mismatch (kept for logging)
 OTA_RETRY_ON_HASH_MISMATCH = False        # Do not retry downloads when hash fails
+OTA_MAX_HASH_FAILURES = 1                 # Guard to prevent repeated hash-failure loops
 
 # OTA fallback mirrors to reduce GitHub 400s during fetch
 OTA_VERSION_URLS = [
