@@ -222,7 +222,7 @@ HEATWATCH_ACTION_TEMP = 110
 HEATWATCH_STANDDOWN_TEMP = 105
 
 # --- OTA & Command/Relay Safety ---
-OTA_ENABLED = False                      # Disable OTA while repo is older than device firmware
+OTA_ENABLED = True                       # Re-enable OTA updates
 OTA_BACKUP_ENABLED = True                 # Keep backup of current firmware/settings
 OTA_BACKUP_DIR = '/ota/backup'
 OTA_MAX_RETRIES = 3
@@ -230,9 +230,9 @@ ALLOW_REMOTE_COMMANDS = True              # Accept OTA commands/relay toggles
 RELAY_SAFETY_MAX_RUNTIME_MIN = 1440       # Safety cap for relay runtime
 OTA_VERSION_ENDPOINT = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/version.txt'
 OTA_FIRMWARE_BASE_URL = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/'
-OTA_CHECK_INTERVAL_S = 86400             # Defer checks (24h) until repo is updated
+OTA_CHECK_INTERVAL_S = 1800              # Restore 30 min check cadence
 OTA_MANIFEST_URL = OTA_FIRMWARE_BASE_URL + 'manifest.json'  # Manifest lists files + hashes
-OTA_HASH_VERIFY = False                    # Disable hash verification to avoid mismatch lockups
+OTA_HASH_VERIFY = True                   # Re-enable hash verification for integrity
 OTA_APPLY_INTERVAL_S = 600                # Check/apply pending update every 10 minutes
 OTA_RESTORE_ON_FAIL = True                # Restore backups if any file verification/apply fails
 OTA_MAX_FILE_BYTES = 256*1024             # Safety cap per file download size
@@ -243,7 +243,7 @@ OTA_MANIFEST_SIG_URL = OTA_MANIFEST_URL + '.sig'  # Optional detached HMAC signa
 OTA_MANIFEST_HMAC_SECRET = ''             # If set, verify manifest with HMAC(secret, manifest_bytes)
 # Added OTA safety toggles
 OTA_ALLOW_DOWNGRADE = False              # Block downgrades; avoid hanging on older firmware apply
-OTA_SKIP_OLDER_VERSION = True            # Explicitly skip applies when repo version < current
+OTA_SKIP_OLDER_VERSION = True            # Skip applies when repo version < current
 OTA_ABORT_ON_HASH_MISMATCH = True         # Stop update immediately on hash mismatch (kept for logging)
 OTA_RETRY_ON_HASH_MISMATCH = False        # Do not retry downloads when hash fails
 OTA_MAX_HASH_FAILURES = 1                 # Guard to prevent repeated hash-failure loops
@@ -654,7 +654,7 @@ HEATWATCH_ACTION_TEMP = 110
 HEATWATCH_STANDDOWN_TEMP = 105
 
 # --- OTA & Command/Relay Safety ---
-OTA_ENABLED = False                      # Disable OTA while repo is older than device firmware
+OTA_ENABLED = True                       # Re-enable OTA updates
 OTA_BACKUP_ENABLED = True                 # Keep backup of current firmware/settings
 OTA_BACKUP_DIR = '/ota/backup'
 OTA_MAX_RETRIES = 3
@@ -662,9 +662,9 @@ ALLOW_REMOTE_COMMANDS = True              # Accept OTA commands/relay toggles
 RELAY_SAFETY_MAX_RUNTIME_MIN = 1440       # Safety cap for relay runtime
 OTA_VERSION_ENDPOINT = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/version.txt'
 OTA_FIRMWARE_BASE_URL = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/'
-OTA_CHECK_INTERVAL_S = 86400             # Defer checks (24h) until repo is updated
+OTA_CHECK_INTERVAL_S = 1800              # Restore 30 min check cadence
 OTA_MANIFEST_URL = OTA_FIRMWARE_BASE_URL + 'manifest.json'  # Manifest lists files + hashes
-OTA_HASH_VERIFY = False                    # Disable hash verification to avoid mismatch lockups
+OTA_HASH_VERIFY = True                   # Re-enable hash verification for integrity
 OTA_APPLY_INTERVAL_S = 600                # Check/apply pending update every 10 minutes
 OTA_RESTORE_ON_FAIL = True                # Restore backups if any file verification/apply fails
 OTA_MAX_FILE_BYTES = 256*1024             # Safety cap per file download size
@@ -675,7 +675,7 @@ OTA_MANIFEST_SIG_URL = OTA_MANIFEST_URL + '.sig'  # Optional detached HMAC signa
 OTA_MANIFEST_HMAC_SECRET = ''             # If set, verify manifest with HMAC(secret, manifest_bytes)
 # Added OTA safety toggles
 OTA_ALLOW_DOWNGRADE = False              # Block downgrades; avoid hanging on older firmware apply
-OTA_SKIP_OLDER_VERSION = True            # Explicitly skip applies when repo version < current
+OTA_SKIP_OLDER_VERSION = True            # Skip applies when repo version < current
 OTA_ABORT_ON_HASH_MISMATCH = True         # Stop update immediately on hash mismatch (kept for logging)
 OTA_RETRY_ON_HASH_MISMATCH = False        # Do not retry downloads when hash fails
 OTA_MAX_HASH_FAILURES = 1                 # Guard to prevent repeated hash-failure loops
