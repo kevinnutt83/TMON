@@ -2,8 +2,6 @@
 /**
  * TMON Admin Notifications
  *
- * Displays and manages notifications for the TMON Admin.
- *
  * @package TMON\Admin
  */
 
