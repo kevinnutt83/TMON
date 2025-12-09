@@ -5,7 +5,6 @@ import network
 import uasyncio as asyncio
 import urequests
 import gc
-from utils import runGC, debug_print
 import sdata
 
 gc.enable()
@@ -37,6 +36,29 @@ def get_settings():
 			net_wifi_IP = None
 		_settings_mod = _SettingsProxy()
 		return _settings_mod
+
+# 1) Ensure settings has FIELD_DATA_APP_PASS before importing utils (which imports settings)
+_s = get_settings()
+try:
+	getattr(_s, 'FIELD_DATA_APP_PASS')
+except Exception:
+	# Declare with safe default; real value will override later when persisted config loads.
+	setattr(_s, 'FIELD_DATA_APP_PASS', "")
+
+# 2) Import utils after bootstrap; provide safe fallbacks if import fails
+try:
+	from utils import runGC, debug_print
+except Exception:
+	async def debug_print(msg, tag="DEBUG"):
+		try:
+			print("[{}] {}".format(tag, msg))
+		except Exception:
+			pass
+	async def runGC():
+		try:
+			gc.collect()
+		except Exception:
+			pass
 
 # Use getattr to avoid NameError when settings initializes later.
 FIELD_DATA_APP_PASS = getattr(get_settings(), 'FIELD_DATA_APP_PASS', '')
