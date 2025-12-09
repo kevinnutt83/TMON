@@ -232,7 +232,7 @@ OTA_VERSION_ENDPOINT = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/
 OTA_FIRMWARE_BASE_URL = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/'
 OTA_CHECK_INTERVAL_S = 1800              # Restore 30 min check cadence
 OTA_MANIFEST_URL = OTA_FIRMWARE_BASE_URL + 'manifest.json'  # Manifest lists files + hashes
-OTA_HASH_VERIFY = True                   # Keep integrity checks enabled
+OTA_HASH_VERIFY = True                   # keep integrity checks enabled
 OTA_APPLY_INTERVAL_S = 600                # Check/apply pending update every 10 minutes
 OTA_RESTORE_ON_FAIL = True                # Restore backups if any file verification/apply fails
 OTA_MAX_FILE_BYTES = 256*1024             # Safety cap per file download size
@@ -242,11 +242,11 @@ OTA_FILES_ALLOWLIST = [                   # Limit which files can be updated via
 OTA_MANIFEST_SIG_URL = OTA_MANIFEST_URL + '.sig'  # Optional detached HMAC signature (hex)
 OTA_MANIFEST_HMAC_SECRET = ''             # If set, verify manifest with HMAC(secret, manifest_bytes)
 # Added OTA safety toggles
-OTA_ALLOW_DOWNGRADE = True               # Permit applying repo payload even if version is lower
-OTA_SKIP_OLDER_VERSION = False           # Do not skip older repo versions; allow apply
-OTA_ABORT_ON_HASH_MISMATCH = False       # Keep main loop running; do not abort on mismatch
-OTA_RETRY_ON_HASH_MISMATCH = True        # Retry download when hash fails
-OTA_MAX_HASH_FAILURES = 5                # Allow a few retries before giving up
+OTA_ALLOW_DOWNGRADE = False              # block downgrades to avoid stale hashes
+OTA_SKIP_OLDER_VERSION = True            # skip applies when repo version < current
+OTA_ABORT_ON_HASH_MISMATCH = False       # keep main loop running; do not abort on mismatch
+OTA_RETRY_ON_HASH_MISMATCH = True        # retry download when hash fails
+OTA_MAX_HASH_FAILURES = 3                # bounded retries before giving up
 
 # OTA fallback mirrors to reduce GitHub 400s during fetch
 OTA_VERSION_URLS = [
@@ -664,7 +664,7 @@ OTA_VERSION_ENDPOINT = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/
 OTA_FIRMWARE_BASE_URL = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/'
 OTA_CHECK_INTERVAL_S = 1800              # Restore 30 min check cadence
 OTA_MANIFEST_URL = OTA_FIRMWARE_BASE_URL + 'manifest.json'  # Manifest lists files + hashes
-OTA_HASH_VERIFY = True                   # Keep integrity checks enabled
+OTA_HASH_VERIFY = True                   # keep integrity checks enabled
 OTA_APPLY_INTERVAL_S = 600                # Check/apply pending update every 10 minutes
 OTA_RESTORE_ON_FAIL = True                # Restore backups if any file verification/apply fails
 OTA_MAX_FILE_BYTES = 256*1024             # Safety cap per file download size
@@ -674,11 +674,11 @@ OTA_FILES_ALLOWLIST = [                   # Limit which files can be updated via
 OTA_MANIFEST_SIG_URL = OTA_MANIFEST_URL + '.sig'  # Optional detached HMAC signature (hex)
 OTA_MANIFEST_HMAC_SECRET = ''             # If set, verify manifest with HMAC(secret, manifest_bytes)
 # Added OTA safety toggles
-OTA_ALLOW_DOWNGRADE = True               # Permit applying repo payload even if version is lower
-OTA_SKIP_OLDER_VERSION = False           # Do not skip older repo versions; allow apply
-OTA_ABORT_ON_HASH_MISMATCH = False       # Keep main loop running; do not abort on mismatch
-OTA_RETRY_ON_HASH_MISMATCH = True        # Retry download when hash fails
-OTA_MAX_HASH_FAILURES = 5                # Allow a few retries before giving up
+OTA_ALLOW_DOWNGRADE = False              # block downgrades to avoid stale hashes
+OTA_SKIP_OLDER_VERSION = True            # skip applies when repo version < current
+OTA_ABORT_ON_HASH_MISMATCH = False       # keep main loop running; do not abort on mismatch
+OTA_RETRY_ON_HASH_MISMATCH = True        # retry download when hash fails
+OTA_MAX_HASH_FAILURES = 3                # bounded retries before giving up
 
 # OTA fallback mirrors to reduce GitHub 400s during fetch
 OTA_VERSION_URLS = [
