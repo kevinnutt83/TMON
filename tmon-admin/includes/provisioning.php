@@ -585,3 +585,34 @@ add_action('rest_api_init', function(){
 		},
 	));
 });
+
+// Safe renderers to avoid invalid callback fatals
+if (!function_exists('tmon_admin_render_provisioning_activity')) {
+	function tmon_admin_render_provisioning_activity(){
+		echo '<div class="wrap"><h1>Provisioning Activity</h1>';
+		// ...existing code...
+		echo '<p>Queue and active jobs appear here.</p></div>';
+	}
+}
+if (!function_exists('tmon_admin_render_provisioning_history')) {
+	function tmon_admin_render_provisioning_history(){
+		echo '<div class="wrap"><h1>Provisioning History</h1>';
+		// ...existing code...
+		echo '<p>Recent provisioning events will render here.</p></div>';
+	}
+}
+if (!function_exists('tmon_admin_render_provisioned_devices')) {
+	function tmon_admin_render_provisioned_devices(){
+		echo '<div class="wrap"><h1>Provisioned Devices</h1>';
+		// ...existing code...
+		echo '<p>Devices list will render here.</p></div>';
+	}
+}
+
+// Guard undefined array keys when reading queue/device arrays
+function tmon_admin_arr_get($arr, $key, $default=''){ return isset($arr[$key]) ? $arr[$key] : $default; }
+
+// Use tmon_admin_arr_get() where provisioning code reads $row['id'] or $row['settings_staged']
+// Example:
+// $id = tmon_admin_arr_get($row, 'id', 0);
+// $staged = tmon_admin_arr_get($row, 'settings_staged', '{}');

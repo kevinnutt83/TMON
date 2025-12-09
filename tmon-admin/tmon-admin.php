@@ -272,129 +272,164 @@ if (!has_action('admin_menu', 'tmon_admin_menu')) {
 	}
 }
 
-// Process pending provisioning payloads: send to saved site URL (WORDPRESS_API_URL)
-add_action('admin_init', function () {
-	// Simple lock with transient to avoid concurrent dispatch
-	if (get_transient('tmon_admin_provision_dispatch_lock')) { return; }
-	set_transient('tmon_admin_provision_dispatch_lock', 1, 30);
+// Main menu and pages
+add_action('admin_menu', function(){
+	// Main TMON Admin menu → Dashboard page
+	add_menu_page('TMON Admin', 'TMON Admin', 'manage_options', 'tmon-admin-dashboard', 'tmon_admin_dashboard_page', 'dashicons-admin-generic', 58);
 
-	$queue = get_option('tmon_admin_pending_provision', []);
-	if (!is_array($queue) || empty($queue)) {
-		delete_transient('tmon_admin_provision_dispatch_lock');
-		return;
-	}
-	// Optional: provisioning devices table for site_url lookup
-	global $wpdb;
-	$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
-
-	// Load UC pairings for shared key lookup
-	$pairings = function_exists('tmon_admin_uc_pairings_get') ? tmon_admin_uc_pairings_get() : array();
-
-	$updated_queue = $queue;
-	foreach ($queue as $key => $item) {
-		// Expect shape: ['unit_id'=>..., 'machine_id'=>..., 'payload'=>json, 'enqueued_at'=>..., 'type'=>'reprovision']
-		$unit = isset($item['unit_id']) ? sanitize_text_field($item['unit_id']) : '';
-		$mach = isset($item['machine_id']) ? sanitize_text_field($item['machine_id']) : '';
-		$payload_json = isset($item['payload']) ? $item['payload'] : '{}';
-
-		// Resolve target Site URL
-		$site_url = '';
-		if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $prov_table))) {
-			$row = $wpdb->get_row($wpdb->prepare("SELECT site_url FROM {$prov_table} WHERE unit_id=%s OR machine_id=%s ORDER BY updated_at DESC LIMIT 1", $unit, $mach), ARRAY_A);
-			if ($row && !empty($row['site_url'])) {
-				$site_url = esc_url_raw($row['site_url']);
-			}
-		}
-		// Fallback: try per-device meta option
-		if (!$site_url) {
-			$map = get_option('tmon_admin_device_sites', []);
-			if (is_array($map) && !empty($map[$unit])) {
-				$site_url = esc_url_raw($map[$unit]);
-			}
-		}
-		if (!$site_url) {
-			// keep in queue; cannot resolve destination
-			continue;
-		}
-
-		// Lookup shared key by normalized UC URL
-		$shared_key = '';
-		if (function_exists('tmon_admin_uc_normalize_url')) {
-			$key_id = tmon_admin_uc_normalize_url($site_url);
-			if ($key_id && !empty($pairings[$key_id]['key']) && !empty($pairings[$key_id]['active'])) {
-				$shared_key = $pairings[$key_id]['key'];
-			}
-		}
-
-		if (!$shared_key) {
-			// No key; cannot authenticate to UC
-			if (function_exists('tmon_admin_audit_log')) {
-				tmon_admin_audit_log('provision_dispatch_fail', 'uc_push', array(
-					'unit_id' => $unit,
-					'machine_id' => $mach,
-					'extra' => array('endpoint' => $site_url, 'reason' => 'missing_shared_key')
-				));
-			}
-			continue;
-		}
-
-		// Dispatch to Unit Connector endpoint(s) with shared key header
-		$base = trailingslashit($site_url);
-		$paths = array(
-			'wp-json/tmon/v1/admin/provision-apply',
-			'wp-json/tmon-uc/v1/provision/apply',
-			'wp-json/tmon-uc/v1/provision-apply',
-		);
-		$delivered = false;
-		foreach ($paths as $path) {
-			$endpoint = $base . $path;
-			$args = array(
-				'headers' => array(
-					'Content-Type' => 'application/json',
-					'Accept' => 'application/json',
-					'User-Agent' => 'TMON-Admin/1.0',
-					'X-TMON-HUB' => $shared_key, // UC validates this against its tmon_uc_shared_key
-				),
-				'body' => $payload_json,
-				'timeout' => 20,
-				'method' => 'POST',
-			);
-			$resp = wp_remote_post($endpoint, $args);
-			if (!is_wp_error($resp) && wp_remote_retrieve_response_code($resp) === 200) {
-				$delivered = true;
-				// Remove from queue on success
-				unset($updated_queue[$key]);
-				if (function_exists('tmon_admin_audit_log')) {
-					tmon_admin_audit_log('provision_dispatch', 'uc_push', array(
-						'unit_id' => $unit,
-						'machine_id' => $mach,
-						'extra' => array('endpoint' => $endpoint)
-					));
-				}
-				break;
-			}
-		}
-		if (!$delivered) {
-			// Leave in queue; record failure in audit
-			if (function_exists('tmon_admin_audit_log')) {
-				tmon_admin_audit_log('provision_dispatch_fail', 'uc_push', array(
-					'unit_id' => $unit,
-					'machine_id' => $mach,
-					'extra' => array('endpoint' => $base, 'reason' => 'all_endpoints_failed')
-				));
-			}
-		}
-	}
-	// Persist updated queue
-	update_option('tmon_admin_pending_provision', $updated_queue, false);
-	delete_transient('tmon_admin_provision_dispatch_lock');
+	// Submenus
+	add_submenu_page('tmon-admin-dashboard', 'Firmware', 'Firmware', 'manage_options', 'tmon-admin-firmware', 'tmon_admin_firmware_page');
+	add_submenu_page('tmon-admin-dashboard', 'Provisioning', 'Provisioning', 'manage_options', 'tmon-admin-provisioning', 'tmon_admin_provisioning_page');
+	add_submenu_page('tmon-admin-dashboard', 'Provisioned Devices', 'Provisioned Devices', 'manage_options', 'tmon-admin-provisioned', 'tmon_admin_provisioned_devices_page');
+	add_submenu_page('tmon-admin-dashboard', 'Provisioning Activity', 'Provisioning Activity', 'manage_options', 'tmon-admin-provisioning-activity', 'tmon_admin_provisioning_activity_page');
+	add_submenu_page('tmon-admin-dashboard', 'Provisioning History', 'Provisioning History', 'manage_options', 'tmon-admin-provisioning-history', 'tmon_admin_provisioning_history_page');
+	add_submenu_page('tmon-admin-dashboard', 'Notifications', 'Notifications', 'manage_options', 'tmon-admin-notifications', 'tmon_admin_notifications_page');
+	add_submenu_page('tmon-admin-dashboard', 'OTA', 'OTA', 'manage_options', 'tmon-admin-ota', 'tmon_admin_ota_page');
+	add_submenu_page('tmon-admin-dashboard', 'Files', 'Files', 'manage_options', 'tmon-admin-files', 'tmon_admin_files_page');
+	add_submenu_page('tmon-admin-dashboard', 'Groups', 'Groups', 'manage_options', 'tmon-admin-groups', 'tmon_admin_groups_page');
+	add_submenu_page('tmon-admin-dashboard', 'Command Logs', 'Command Logs', 'manage_options', 'tmon-admin-command-logs', 'tmon_admin_command_logs_page');
 });
 
-// Remove banner text from Provisioning page
-add_filter('tmon_admin_provisioning_banner', function ($text) {
-	// Return empty to suppress the “Data maintenance...” banner
-	return '';
-}, 10, 1);
+// Dashboard renderer
+function tmon_admin_dashboard_page(){
+	?>
+	<div class="wrap">
+		<h1>TMON Admin Dashboard</h1>
+		<?php if (function_exists('tmon_admin_render_provision_notice')) { tmon_admin_render_provision_notice(); } ?>
+		<div class="tmon-grid tmon-grid-2">
+			<div class="tmon-card">
+				<h2>Registered Unit Connectors</h2>
+				<?php tmon_admin_render_uc_list(); ?>
+			</div>
+			<div class="tmon-card">
+				<h2>Device Alerts & Health</h2>
+				<?php tmon_admin_render_device_alerts(); ?>
+			</div>
+			<div class="tmon-card">
+				<h2>Logs</h2>
+				<div style="max-height:280px; overflow:auto"><?php tmon_admin_render_recent_logs(); ?></div>
+			</div>
+		</div>
+	</div>
+	<?php
+}
+
+// Firmware page: version, README, downloads
+function tmon_admin_firmware_page(){
+	$ver = get_transient('tmon_admin_firmware_version');
+	$ts  = get_transient('tmon_admin_firmware_version_ts');
+	$readme_url = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/README.md';
+	$manifest_url = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/manifest.json';
+	$version_txt = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/version.txt';
+	$readme = wp_remote_retrieve_body( wp_remote_get($readme_url, ['timeout'=>10]) );
+	$manifest = wp_remote_retrieve_body( wp_remote_get($manifest_url, ['timeout'=>10]) );
+	?>
+	<div class="wrap">
+		<h1>TMON Firmware</h1>
+		<p>Current version: <strong><?php echo esc_html($ver ?: 'unknown'); ?></strong> (last fetch: <?php echo esc_html($ts ?: 'n/a'); ?>)</p>
+		<p>
+			<a class="button" href="<?php echo esc_url($version_txt); ?>" target="_blank">version.txt</a>
+			<a class="button" href="<?php echo esc_url($manifest_url); ?>" target="_blank">manifest.json</a>
+			<a class="button" href="https://github.com/kevinnutt83/TMON/tree/main/micropython" target="_blank">Browse Micropython Repo</a>
+		</p>
+		<h2>README</h2>
+		<div class="tmon-card" style="max-height:480px;overflow:auto;white-space:pre-wrap"><?php echo wp_kses_post( nl2br( esc_html( $readme ?: 'README not available' ) ) ); ?></div>
+		<h2>Manifest Files</h2>
+		<div class="tmon-card" style="max-height:480px;overflow:auto;white-space:pre"><?php echo wp_kses_post( esc_html( $manifest ?: 'Manifest not available' ) ); ?></div>
+	</div>
+	<?php
+}
+
+// Notifications page
+function tmon_admin_notifications_page(){
+	?>
+	<div class="wrap">
+		<h1>Notifications</h1>
+		<?php tmon_admin_render_notifications(); ?>
+	</div>
+	<?php
+}
+
+// OTA page
+function tmon_admin_ota_page(){
+	?>
+	<div class="wrap">
+		<h1>OTA Management</h1>
+		<?php tmon_admin_render_ota_jobs_and_actions(); ?>
+	</div>
+	<?php
+}
+
+// Files page
+function tmon_admin_files_page(){
+	?>
+	<div class="wrap">
+		<h1>Device Files</h1>
+		<?php tmon_admin_render_files_table(); ?>
+	</div>
+	<?php
+}
+
+// Groups page
+function tmon_admin_groups_page(){
+	?>
+	<div class="wrap">
+		<h1>Groups & Hierarchy</h1>
+		<?php tmon_admin_render_groups_hierarchy(); ?>
+	</div>
+	<?php
+}
+
+// Provisioning pages (renderers exist in includes/provisioning.php)
+function tmon_admin_provisioning_page(){ if (function_exists('tmon_admin_render_provisioning_page')) tmon_admin_render_provisioning_page(); }
+function tmon_admin_provisioned_devices_page(){ if (function_exists('tmon_admin_render_provisioned_devices')) tmon_admin_render_provisioned_devices(); else echo '<div class="wrap"><h1>Provisioned Devices</h1><p>Renderer not loaded.</p></div>'; }
+function tmon_admin_provisioning_activity_page(){ if (function_exists('tmon_admin_render_provisioning_activity')) tmon_admin_render_provisioning_activity(); else echo '<div class="wrap"><h1>Provisioning Activity</h1><p>Renderer not loaded.</p></div>'; }
+function tmon_admin_provisioning_history_page(){ if (function_exists('tmon_admin_render_provisioning_history')) tmon_admin_render_provisioning_history(); else echo '<div class="wrap"><h1>Provisioning History</h1><p>Renderer not loaded.</p></div>'; }
+
+// Command Logs submenu page: delegate to existing implementation
+function tmon_admin_command_logs_page(){ do_action('tmon_admin_render_command_logs'); }
+
+// Settings: Clear Audit Log alongside Purge Data
+add_action('admin_post_tmon_admin_clear_audit', function(){
+	if (!current_user_can('manage_options')) wp_die('Forbidden');
+	check_admin_referer('tmon_admin_clear_audit');
+	global $wpdb; $tbl = $wpdb->prefix.'tmon_admin_audit';
+	$wpdb->query("TRUNCATE TABLE {$tbl}");
+	wp_safe_redirect( add_query_arg(array('page'=>'tmon-admin-dashboard','audit'=>'cleared'), admin_url('admin.php')) ); exit;
+});
+
+// Audit CSV export
+add_action('admin_post_tmon_admin_export_audit', function(){
+	if (!current_user_can('manage_options')) wp_die('Forbidden');
+	check_admin_referer('tmon_admin_export_audit');
+	global $wpdb; $tbl = $wpdb->prefix.'tmon_admin_audit';
+	$rows = $wpdb->get_results("SELECT id, actor, action, context, created_at FROM {$tbl} ORDER BY id DESC", ARRAY_A);
+	$csv = "id,actor,action,context,created_at\n";
+	foreach ($rows as $r) {
+		$csv .= '"' . implode('","', array_map(function($v){ return str_replace('"','""', (string)$v); }, $r)) . '"' . "\n";
+	}
+	header('Content-Type: text/csv'); header('Content-Disposition: attachment; filename="tmon-admin-audit.csv"');
+	echo $csv; exit;
+});
+
+// Helpers to render UC list and health/logs (stub implementations)
+function tmon_admin_render_uc_list(){
+	$sites = get_option('tmon_uc_pairings', array());
+	if (empty($sites)) { echo '<p>No Unit Connectors paired yet.</p>'; return; }
+	echo '<table class="wp-list-table widefat striped"><thead><tr><th>Hub URL</th><th>Normalized</th><th>Paired At</th><th>Read Token</th></tr></thead><tbody>';
+	foreach ($sites as $s) {
+		echo '<tr><td>'.esc_html($s['hub_url'] ?? '').'</td><td>'.esc_html($s['normalized'] ?? '').'</td><td>'.esc_html($s['paired_at'] ?? '').'</td><td><code>'.esc_html($s['read_token'] ?? '').'</code></td></tr>';
+	}
+	echo '</tbody></table>';
+}
+function tmon_admin_render_device_alerts(){
+	// Display alerts stub; replace with actual queries
+	echo '<ul><li>No alerts.</li></ul>';
+}
+function tmon_admin_render_recent_logs(){
+	// Display recent logs stub; replace with actual logs store
+	echo '<pre>Logs will appear here.</pre>';
+}
 
 // Ensure schema is present before any UI/REST interaction
 add_action('admin_init', function () {

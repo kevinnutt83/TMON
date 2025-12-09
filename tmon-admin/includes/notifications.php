@@ -22,3 +22,14 @@ function tmon_admin_get_notifications($unread_only = false) {
     }
     return array_reverse($notices);
 }
+
+function tmon_admin_render_notifications(){
+	global $wpdb; $tbl = $wpdb->prefix.'tmon_notifications';
+	$rows = $wpdb->get_results("SELECT id, title, message, level, created_at, read_at FROM {$tbl} ORDER BY created_at DESC LIMIT 200", ARRAY_A);
+	echo '<table class="wp-list-table widefat striped"><thead><tr><th>ID</th><th>Title</th><th>Level</th><th>Message</th><th>Created</th><th>Status</th></tr></thead><tbody>';
+	foreach ($rows as $r) {
+		$status = $r['read_at'] ? 'read' : 'unread';
+		echo '<tr><td>'.esc_html($r['id']).'</td><td>'.esc_html($r['title']).'</td><td>'.esc_html($r['level']).'</td><td>'.esc_html($r['message']).'</td><td>'.esc_html($r['created_at']).'</td><td>'.esc_html($status).'</td></tr>';
+	}
+	echo '</tbody></table>';
+}
