@@ -230,7 +230,6 @@ ALLOW_REMOTE_COMMANDS = True              # Accept OTA commands/relay toggles
 RELAY_SAFETY_MAX_RUNTIME_MIN = 1440       # Safety cap for relay runtime
 OTA_VERSION_ENDPOINT = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/version.txt'
 OTA_FIRMWARE_BASE_URL = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/'
-OTA_CHECK_INTERVAL_S = 1800              # Restore 30 min check cadence
 OTA_MANIFEST_URL = OTA_FIRMWARE_BASE_URL + 'manifest.json'  # Manifest lists files + hashes
 OTA_HASH_VERIFY = True                   # keep integrity checks enabled
 OTA_APPLY_INTERVAL_S = 5                  # Check/apply pending update every few seconds (was 600)
@@ -252,13 +251,9 @@ OTA_HASH_RETRY_INTERVAL_S = 2            # short delay (seconds) before retrying
 # OTA fallback mirrors to reduce GitHub 400s during fetch
 OTA_VERSION_URLS = [
     'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/version.txt',
-    'https://rawcdn.githack.com/kevinnutt83/TMON/main/micropython/version.txt',
-    'https://cdn.jsdelivr.net/gh/kevinnutt83/TMON@main/micropython/version.txt',
 ]
 OTA_MANIFEST_URLS = [
     'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/manifest.json',
-    'https://rawcdn.githack.com/kevinnutt83/TMON/main/micropython/manifest.json',
-    'https://cdn.jsdelivr.net/gh/kevinnutt83/TMON@main/micropython/manifest.json',
 ]
 OTA_HTTP_HEADERS = {
     'User-Agent': 'TMON-Device/2.02.1',
@@ -668,7 +663,6 @@ ALLOW_REMOTE_COMMANDS = True              # Accept OTA commands/relay toggles
 RELAY_SAFETY_MAX_RUNTIME_MIN = 1440       # Safety cap for relay runtime
 OTA_VERSION_ENDPOINT = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/version.txt'
 OTA_FIRMWARE_BASE_URL = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/'
-OTA_CHECK_INTERVAL_S = 1800              # Restore 30 min check cadence
 OTA_MANIFEST_URL = OTA_FIRMWARE_BASE_URL + 'manifest.json'  # Manifest lists files + hashes
 OTA_HASH_VERIFY = True                   # keep integrity checks enabled
 OTA_APPLY_INTERVAL_S = 5                  # Check/apply pending update every few seconds (was 600)
@@ -690,13 +684,9 @@ OTA_HASH_RETRY_INTERVAL_S = 2            # short delay (seconds) before retrying
 # OTA fallback mirrors to reduce GitHub 400s during fetch
 OTA_VERSION_URLS = [
     'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/version.txt',
-    'https://rawcdn.githack.com/kevinnutt83/TMON/main/micropython/version.txt',
-    'https://cdn.jsdelivr.net/gh/kevinnutt83/TMON@main/micropython/version.txt',
 ]
 OTA_MANIFEST_URLS = [
     'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/manifest.json',
-    'https://rawcdn.githack.com/kevinnutt83/TMON/main/micropython/manifest.json',
-    'https://cdn.jsdelivr.net/gh/kevinnutt83/TMON@main/micropython/manifest.json',
 ]
 OTA_HTTP_HEADERS = {
     'User-Agent': 'TMON-Device/2.02.1',
