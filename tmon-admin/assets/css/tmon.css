@@ -41,7 +41,10 @@
 .tmon-modal-close:hover{color:#333}
 
 /* Provisioning Styles */
-.tmon-provision-container{max-width:1200px;margin:0 auto;padding:10px}
+.tmon-provision-container{max-width:1200px;margin:0 auto;padding:20px 10px 10px 10px}
+.tmon-provision-wrap{padding-top:20px;position:relative;z-index:1}
+/* Modal on top but not hiding menu content containers */
+#tmon-action-modal{position:fixed;z-index:100001}
 .tmon-provision-grid{display:grid;grid-template-columns:1fr 380px;gap:18px;align-items:start}
 .tmon-provision-card{background:#fff;border:1px solid #e1e1e1;padding:12px;border-radius:6px;box-shadow:0 1px 0 rgba(0,0,0,0.03)}
 .tmon-provision-card h3{margin:0 0 8px 0;font-size:1.05rem}

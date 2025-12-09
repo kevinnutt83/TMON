@@ -58,6 +58,12 @@ if (!function_exists('tmon_admin_settings_page')) {
 		submit_button('Save Queue Settings');
 		echo '</form>';
 
+		// Audit log actions
+		if (current_user_can('manage_options')) {
+			echo '<h2>Audit Log</h2>';
+			tmon_admin_render_settings_buttons();
+		}
+
 		echo '</div>';
 	}
 }
@@ -193,3 +199,13 @@ add_action('admin_init', function(){
         add_action('admin_notices', function(){ echo '<div class="updated"><p>Unit data purged.</p></div>'; });
     }
 });
+
+if (!function_exists('tmon_admin_render_settings_buttons')) {
+	function tmon_admin_render_settings_buttons(){
+		echo '<p>';
+		echo '<a class="button" href="'.esc_url( wp_nonce_url( admin_url('admin-post.php?action=tmon_admin_clear_audit'), 'tmon_admin_clear_audit') ).'">Clear Audit Log</a> ';
+		echo '<a class="button" href="'.esc_url( wp_nonce_url( admin_url('admin-post.php?action=tmon_admin_export_audit'), 'tmon_admin_export_audit') ).'">Export Audit CSV</a> ';
+		// ...existing purge data button...
+		echo '</p>';
+	}
+}

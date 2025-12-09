@@ -610,18 +610,14 @@ add_shortcode('tmon_uc_claim_device', function($atts){
 	return $out;
 });
 
-// Shortcode: [tmon_device_list]
+// Shortcodes
 add_shortcode('tmon_device_list', function($atts){
 	$atts = shortcode_atts(['class'=>''], $atts, 'tmon_device_list');
-	$html = '<div id="tmon-device-list" class="'.esc_attr($atts['class']).'"></div><div id="tmon-device-details" class="tmon-card"></div>';
-	return $html;
+	return '<div id="tmon-device-list" class="'.esc_attr($atts['class']).'"></div><div id="tmon-device-details" class="tmon-card"></div>';
 });
-
-// Shortcode: [tmon_device_status unit_id="..."]
 add_shortcode('tmon_device_status', function($atts){
 	$atts = shortcode_atts(['unit_id'=>'', 'class'=>''], $atts, 'tmon_device_status');
-	$html = '<div id="tmon-device-status" data-unit_id="'.esc_attr($atts['unit_id']).'" class="'.esc_attr($atts['class']).'">Loading…</div>';
-	return $html;
+	return '<div id="tmon-device-status" data-unit_id="'.esc_attr($atts['unit_id']).'" class="'.esc_attr($atts['class']).'">Loading…</div>';
 });
 
 // Ensure AJAX URL is exposed for frontend JS

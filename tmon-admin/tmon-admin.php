@@ -301,7 +301,7 @@ add_action('admin_menu', function(){
 	add_submenu_page('tmon-admin-dashboard', 'OTA', 'OTA', 'manage_options', 'tmon-admin-ota', 'tmon_admin_ota_page');
 	add_submenu_page('tmon-admin-dashboard', 'Files', 'Files', 'manage_options', 'tmon-admin-files', 'tmon_admin_files_page');
 	add_submenu_page('tmon-admin-dashboard', 'Groups', 'Groups', 'manage_options', 'tmon-admin-groups', 'tmon_admin_groups_page');
-	add_submenu_page('tmon-admin-dashboard', 'Command Logs', 'Command Logs', 'manage_options', 'tmon-admin-command-logs', 'tmon_admin_command_logs_page');
+	add_submenu_page('tmon-admin-dashboard', 'Command Logs', 'Command Logs', 'manage_options', 'tmon-admin-command-logs', function(){ do_action('tmon_admin_render_command_logs'); });
 });
 
 // Dashboard renderer
@@ -309,7 +309,7 @@ function tmon_admin_dashboard_page(){
 	?>
 	<div class="wrap">
 		<h1>TMON Admin Dashboard</h1>
-		<?php if (function_exists('tmon_admin_render_provision_notice')) { tmon_admin_render_provision_notice(); } ?>
+		<?php if (function_exists('tmon_admin_render_provision_notice')) tmon_admin_render_provision_notice(); ?>
 		<div class="tmon-grid tmon-grid-2">
 			<div class="tmon-card">
 				<h2>Registered Unit Connectors</h2>
@@ -328,125 +328,56 @@ function tmon_admin_dashboard_page(){
 	<?php
 }
 
-// Firmware page: version, README, downloads
-function tmon_admin_firmware_page(){
-	$ver = get_transient('tmon_admin_firmware_version');
-	$ts  = get_transient('tmon_admin_firmware_version_ts');
-	$readme_url = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/README.md';
-	$manifest_url = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/manifest.json';
-	$version_txt = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/version.txt';
-	$readme = wp_remote_retrieve_body( wp_remote_get($readme_url, ['timeout'=>10]) );
-	$manifest = wp_remote_retrieve_body( wp_remote_get($manifest_url, ['timeout'=>10]) );
-	?>
-	<div class="wrap">
-		<h1>TMON Firmware</h1>
-		<p>Current version: <strong><?php echo esc_html($ver ?: 'unknown'); ?></strong> (last fetch: <?php echo esc_html($ts ?: 'n/a'); ?>)</p>
-		<p>
-			<a class="button" href="<?php echo esc_url($version_txt); ?>" target="_blank">version.txt</a>
-			<a class="button" href="<?php echo esc_url($manifest_url); ?>" target="_blank">manifest.json</a>
-			<a class="button" href="https://github.com/kevinnutt83/TMON/tree/main/micropython" target="_blank">Browse Micropython Repo</a>
-		</p>
-		<h2>README</h2>
-		<div class="tmon-card" style="max-height:480px;overflow:auto;white-space:pre-wrap"><?php echo wp_kses_post( nl2br( esc_html( $readme ?: 'README not available' ) ) ); ?></div>
-		<h2>Manifest Files</h2>
-		<div class="tmon-card" style="max-height:480px;overflow:auto;white-space:pre"><?php echo wp_kses_post( esc_html( $manifest ?: 'Manifest not available' ) ); ?></div>
-	</div>
-	<?php
+// Firmware page renderer (delegate or stub)
+if (!function_exists('tmon_admin_firmware_page')) {
+	function tmon_admin_firmware_page(){
+		$ver = get_transient('tmon_admin_firmware_version');
+		$ts  = get_transient('tmon_admin_firmware_version_ts');
+		$readme_url = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/README.md';
+		$manifest_url = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/manifest.json';
+		$version_txt = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/version.txt';
+		$readme = wp_remote_retrieve_body( wp_remote_get($readme_url, ['timeout'=>10]) );
+		$manifest = wp_remote_retrieve_body( wp_remote_get($manifest_url, ['timeout'=>10]) );
+		echo '<div class="wrap"><h1>TMON Firmware</h1>';
+		echo '<p>Current version: <strong>'.esc_html($ver ?: 'unknown').'</strong> (last fetch: '.esc_html($ts ?: 'n/a').')</p>';
+		echo '<p><a class="button" href="'.esc_url($version_txt).'" target="_blank">version.txt</a> ';
+		echo '<a class="button" href="'.esc_url($manifest_url).'" target="_blank">manifest.json</a> ';
+		echo '<a class="button" href="https://github.com/kevinnutt83/TMON/tree/main/micropython" target="_blank">Browse Micropython Repo</a></p>';
+		echo '<h2>README</h2><div class="tmon-card" style="max-height:480px;overflow:auto;white-space:pre-wrap">'.wp_kses_post( nl2br( esc_html( $readme ?: 'README not available' ) ) ).'</div>';
+		echo '<h2>Manifest</h2><div class="tmon-card" style="max-height:480px;overflow:auto;white-space:pre">'.wp_kses_post( esc_html( $manifest ?: 'Manifest not available' ) ).'</div></div>';
+	}
 }
 
-// Notifications page
-function tmon_admin_notifications_page(){
-	?>
-	<div class="wrap">
-		<h1>Notifications</h1>
-		<?php tmon_admin_render_notifications(); ?>
-	</div>
-	<?php
-}
-
-// OTA page
-function tmon_admin_ota_page(){
-	?>
-	<div class="wrap">
-		<h1>OTA Management</h1>
-		<?php tmon_admin_render_ota_jobs_and_actions(); ?>
-	</div>
-	<?php
-}
-
-// Files page
-function tmon_admin_files_page(){
-	?>
-	<div class="wrap">
-		<h1>Device Files</h1>
-		<?php tmon_admin_render_files_table(); ?>
-	</div>
-	<?php
-}
-
-// Groups page
-function tmon_admin_groups_page(){
-	?>
-	<div class="wrap">
-		<h1>Groups & Hierarchy</h1>
-		<?php tmon_admin_render_groups_hierarchy(); ?>
-	</div>
-	<?php
-}
-
-// Submenu registration remains unchanged; ensure callbacks point to functions defined in includes/provisioning.php
-add_action('admin_menu', function(){
-	// Provisioning: top subpage with children
-	add_submenu_page('tmon-admin', 'Provisioning', 'Provisioning', 'manage_options', 'tmon-admin-provisioning', 'tmon_admin_provisioning_page');
-	add_submenu_page('tmon-admin', 'Provisioned Devices', 'Provisioned Devices', 'manage_options', 'tmon-admin-provisioned', 'tmon_admin_provisioned_devices_page');
-	add_submenu_page('tmon-admin', 'Provisioning Activity', 'Provisioning Activity', 'manage_options', 'tmon-admin-provisioning-activity', 'tmon_admin_provisioning_activity_page');
-	add_submenu_page('tmon-admin', 'Provisioning History', 'Provisioning History', 'manage_options', 'tmon-admin-provisioning-history', 'tmon_admin_provisioning_history_page');
-});
-
-// Command Logs submenu page: delegate to existing implementation
-function tmon_admin_command_logs_page(){ do_action('tmon_admin_render_command_logs'); }
-
-// Settings: Clear Audit Log alongside Purge Data
+// Audit actions
 add_action('admin_post_tmon_admin_clear_audit', function(){
 	if (!current_user_can('manage_options')) wp_die('Forbidden');
 	check_admin_referer('tmon_admin_clear_audit');
 	global $wpdb; $tbl = $wpdb->prefix.'tmon_admin_audit';
 	$wpdb->query("TRUNCATE TABLE {$tbl}");
-	wp_safe_redirect( add_query_arg(array('page'=>'tmon-admin-dashboard','audit'=>'cleared'), admin_url('admin.php')) ); exit;
+	wp_safe_redirect( add_query_arg(['page'=>'tmon-admin-dashboard','audit'=>'cleared'], admin_url('admin.php')) ); exit;
 });
-
-// Audit CSV export
 add_action('admin_post_tmon_admin_export_audit', function(){
 	if (!current_user_can('manage_options')) wp_die('Forbidden');
 	check_admin_referer('tmon_admin_export_audit');
 	global $wpdb; $tbl = $wpdb->prefix.'tmon_admin_audit';
 	$rows = $wpdb->get_results("SELECT id, actor, action, context, created_at FROM {$tbl} ORDER BY id DESC", ARRAY_A);
 	$csv = "id,actor,action,context,created_at\n";
-	foreach ($rows as $r) {
-		$csv .= '"' . implode('","', array_map(function($v){ return str_replace('"','""', (string)$v); }, $r)) . '"' . "\n";
-	}
-	header('Content-Type: text/csv'); header('Content-Disposition: attachment; filename="tmon-admin-audit.csv"');
-	echo $csv; exit;
+	foreach ($rows as $r) { $csv .= '"' . implode('","', array_map(function($v){ return str_replace('"','""', (string)$v); }, $r)) . '"' . "\n"; }
+	header('Content-Type: text/csv'); header('Content-Disposition: attachment; filename="tmon-admin-audit.csv"'); echo $csv; exit;
 });
 
-// Helpers to render UC list and health/logs (stub implementations)
+// Dashboard helpers (stub)
 function tmon_admin_render_uc_list(){
-	$sites = get_option('tmon_uc_pairings', array());
+	$sites = get_option('tmon_uc_pairings', []);
 	if (empty($sites)) { echo '<p>No Unit Connectors paired yet.</p>'; return; }
 	echo '<table class="wp-list-table widefat striped"><thead><tr><th>Hub URL</th><th>Normalized</th><th>Paired At</th><th>Read Token</th></tr></thead><tbody>';
 	foreach ($sites as $s) {
-		echo '<tr><td>'.esc_html($s['hub_url'] ?? '').'</td><td>'.esc_html($s['normalized'] ?? '').'</td><td>'.esc_html($s['paired_at'] ?? '').'</td><td><code>'.esc_html($s['read_token'] ?? '').'</code></td></tr>';
+		echo '<tr><td><a href="'.esc_url($s['hub_url'] ?? '#').'" target="_blank">'.esc_html($s['hub_url'] ?? '').'</a></td><td>'.esc_html($s['normalized'] ?? '').'</td><td>'.esc_html($s['paired_at'] ?? '').'</td><td><code>'.esc_html($s['read_token'] ?? '').'</code></td></tr>';
 	}
 	echo '</tbody></table>';
 }
-function tmon_admin_render_device_alerts(){
-	// Display alerts stub; replace with actual queries
-	echo '<ul><li>No alerts.</li></ul>';
-}
-function tmon_admin_render_recent_logs(){
-	// Display recent logs stub; replace with actual logs store
-	echo '<pre>Logs will appear here.</pre>';
-}
+function tmon_admin_render_device_alerts(){ echo '<ul><li>No alerts.</li></ul>'; }
+function tmon_admin_render_recent_logs(){ echo '<pre>Logs will appear here.</pre>'; }
 
 // Ensure schema is present before any UI/REST interaction
 add_action('admin_init', function () {
@@ -733,34 +664,24 @@ add_action('rest_api_init', function () {
 	]);
 });
 
-// Load include files safely after plugins_loaded to ensure pluggable functions exist
+// Load includes after pluggable functions are available
 add_action('plugins_loaded', function(){
-	$tmon_includes = plugin_dir_path(__FILE__) . 'includes/';
+	$inc = plugin_dir_path(__FILE__) . 'includes/';
 
 	// Use require_once; included files must not call wp_create_nonce at file scope
-	require_once $tmon_includes . 'db.php';
-	require_once $tmon_includes . 'admin-dashboard.php';
-	require_once $tmon_includes . 'settings.php';
-	require_once $tmon_includes . 'api.php';
+	require_once $inc . 'db.php';
+	require_once $inc . 'admin-dashboard.php';
+	require_once $inc . 'settings.php';
+	require_once $inc . 'api.php';
 
 	// Centralized AJAX handlers & CLI diagnostics
-	require_once $tmon_includes . 'ajax-handlers.php';
-	require_once $tmon_includes . 'cli-commands.php';
+	require_once $inc . 'ajax-handlers.php';
+	require_once $inc . 'cli-commands.php';
 
-	require_once $tmon_includes . 'provisioning.php';
-	require_once $tmon_includes . 'ai.php';
-	require_once $tmon_includes . 'audit.php';
-	require_once $tmon_includes . 'api-uc.php'; // NEW: UC handoff & command endpoints
-	require_once $tmon_includes . 'notifications.php';
-	require_once $tmon_includes . 'ota.php';
-	require_once $tmon_includes . 'files.php';
-	require_once $tmon_includes . 'groups.php';
-	require_once $tmon_includes . 'custom-code.php';
-	require_once $tmon_includes . 'export.php';
-	require_once $tmon_includes . 'ai-feedback.php';
-	require_once $tmon_includes . 'dashboard-widgets.php';
-	require_once $tmon_includes . 'field-data-api.php';
-	// Admin pages
-	require_once TMON_ADMIN_PATH . 'admin/location.php';
-	require_once TMON_ADMIN_PATH . 'admin/firmware.php';
+	require_once $inc . 'provisioning.php';
+	require_once $inc . 'notifications.php';
+	require_once $inc . 'ota.php';
+	require_once $inc . 'files.php';
+	require_once $inc . 'groups.php';
+	require_once $inc . 'command-logs.php';
 });

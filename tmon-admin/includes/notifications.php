@@ -23,6 +23,11 @@ function tmon_admin_get_notifications($unread_only = false) {
     return array_reverse($notices);
 }
 
+function tmon_admin_notifications_page(){
+	echo '<div class="wrap"><h1>Notifications</h1>';
+	tmon_admin_render_notifications();
+	echo '</div>';
+}
 function tmon_admin_render_notifications(){
 	global $wpdb; $tbl = $wpdb->prefix.'tmon_notifications';
 	$rows = $wpdb->get_results("SELECT id, title, message, level, created_at, read_at FROM {$tbl} ORDER BY created_at DESC LIMIT 200", ARRAY_A);

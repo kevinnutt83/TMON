@@ -6,7 +6,7 @@ if (!defined('TMON_UC_V2_API_LOADED')) {
 	define('TMON_UC_V2_API_LOADED', true);
 }
 
-// Register pull-install route only if our function is not already declared elsewhere
+// Guard pull-install function registration
 add_action('rest_api_init', function(){
 	// If core tmon_uc_pull_install exists (e.g., declared in includes/api.php), do not re-register
 	if (function_exists('tmon_uc_pull_install')) {
@@ -101,9 +101,7 @@ if (!function_exists('tmon_uc_require_app_password_auth')) {
 	function tmon_uc_require_app_password_auth() {
 		$require = defined('TMON_UC_REQUIRE_APP_PASSWORD') ? TMON_UC_REQUIRE_APP_PASSWORD : (bool) get_option('tmon_uc_require_app_password', false);
 		if (!$require) return true;
-		$auth = isset($_SERVER['HTTP_AUTHORIZATION']) ? $_SERVER['HTTP_AUTHORIZATION'] : '';
-		if (!$auth) return false;
-		return true;
+		return isset($_SERVER['HTTP_AUTHORIZATION']) && $_SERVER['HTTP_AUTHORIZATION'] !== '';
 	}
 }
 
@@ -201,4 +199,14 @@ add_action('tmon_uc_error', function($msg, $context = null) {
 });
 add_action('tmon_admin_error', function($msg, $context = null) {
 	if (class_exists('TMON_AI')) TMON_AI::observe_error($msg, $context);
+});
+
+// Safe requeue cron: run only if status column exists
+add_action('tmon_uc_command_requeue_cron', function(){
+	global $wpdb; $t = $wpdb->prefix.'tmon_device_commands';
+	$cols = $wpdb->get_results("SHOW COLUMNS FROM {$t}", ARRAY_A);
+	$names = array_map(function($c){ return $c['Field']; }, $cols ?: []);
+	if ($cols && in_array('status', $names, true)) {
+		$wpdb->query("UPDATE {$t} SET status='queued' WHERE status='claimed' AND updated_at < (NOW() - INTERVAL 5 MINUTE)");
+	}
 });
