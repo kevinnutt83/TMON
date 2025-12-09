@@ -228,10 +228,11 @@ OTA_BACKUP_DIR = '/ota/backup'
 OTA_MAX_RETRIES = 3
 ALLOW_REMOTE_COMMANDS = True              # Accept OTA commands/relay toggles
 RELAY_SAFETY_MAX_RUNTIME_MIN = 1440       # Safety cap for relay runtime
-OTA_VERSION_ENDPOINT = 'https://raw.githubusercontent.com/kevinnutt83/TMON/v2.02.1/micropython/version.txt'
-OTA_FIRMWARE_BASE_URL = 'https://raw.githubusercontent.com/kevinnutt83/TMON/v2.02.1/micropython/'
+OTA_VERSION_ENDPOINT = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/version.txt'
+OTA_FIRMWARE_BASE_URL = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/'
 OTA_MANIFEST_URL = OTA_FIRMWARE_BASE_URL + 'manifest.json'
-OTA_MIN_VERSION = FIRMWARE_VERSION         # do not apply updates older than current firmware
+OTA_MIN_VERSION = FIRMWARE_VERSION         # block any update older than running firmware
+OTA_REQUIRE_NEWER_VERSION = True           # skip when remote version <= current
 OTA_HASH_VERIFY = True                   # keep integrity checks enabled
 OTA_APPLY_INTERVAL_S = 5                  # Check/apply pending update every few seconds (was 600)
 OTA_RESTORE_ON_FAIL = True                # Restore backups if any file verification/apply fails
@@ -251,14 +252,14 @@ OTA_HASH_RETRY_INTERVAL_S = 2            # short delay (seconds) before retrying
 
 # OTA fallback mirrors to reduce GitHub 400s during fetch
 OTA_VERSION_URLS = [
-    'https://raw.githubusercontent.com/kevinnutt83/TMON/v2.02.1/micropython/version.txt',
+    'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/version.txt',
 ]
 OTA_MANIFEST_URLS = [
-    'https://raw.githubusercontent.com/kevinnutt83/TMON/v2.02.1/micropython/manifest.json',
+    'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/manifest.json',
 ]
 OTA_HTTP_HEADERS = {
     'User-Agent': 'TMON-Device/2.02.1',
-    'Accept': 'application/json',
+    'Accept': '*/*',
     'Cache-Control': 'no-cache',
     'Pragma': 'no-cache',
 }
@@ -662,10 +663,11 @@ OTA_BACKUP_DIR = '/ota/backup'
 OTA_MAX_RETRIES = 3
 ALLOW_REMOTE_COMMANDS = True              # Accept OTA commands/relay toggles
 RELAY_SAFETY_MAX_RUNTIME_MIN = 1440       # Safety cap for relay runtime
-OTA_VERSION_ENDPOINT = 'https://raw.githubusercontent.com/kevinnutt83/TMON/v2.02.1/micropython/version.txt'
-OTA_FIRMWARE_BASE_URL = 'https://raw.githubusercontent.com/kevinnutt83/TMON/v2.02.1/micropython/'
+OTA_VERSION_ENDPOINT = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/version.txt'
+OTA_FIRMWARE_BASE_URL = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/'
 OTA_MANIFEST_URL = OTA_FIRMWARE_BASE_URL + 'manifest.json'
-OTA_MIN_VERSION = FIRMWARE_VERSION         # do not apply updates older than current firmware
+OTA_MIN_VERSION = FIRMWARE_VERSION         # block any update older than running firmware
+OTA_REQUIRE_NEWER_VERSION = True           # skip when remote version <= current
 OTA_HASH_VERIFY = True                   # keep integrity checks enabled
 OTA_APPLY_INTERVAL_S = 5                  # Check/apply pending update every few seconds (was 600)
 OTA_RESTORE_ON_FAIL = True                # Restore backups if any file verification/apply fails
@@ -685,14 +687,14 @@ OTA_HASH_RETRY_INTERVAL_S = 2            # short delay (seconds) before retrying
 
 # OTA fallback mirrors to reduce GitHub 400s during fetch
 OTA_VERSION_URLS = [
-    'https://raw.githubusercontent.com/kevinnutt83/TMON/v2.02.1/micropython/version.txt',
+    'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/version.txt',
 ]
 OTA_MANIFEST_URLS = [
-    'https://raw.githubusercontent.com/kevinnutt83/TMON/v2.02.1/micropython/manifest.json',
+    'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/manifest.json',
 ]
 OTA_HTTP_HEADERS = {
     'User-Agent': 'TMON-Device/2.02.1',
-    'Accept': 'application/json',
+    'Accept': '*/*',
     'Cache-Control': 'no-cache',
     'Pragma': 'no-cache',
 }
