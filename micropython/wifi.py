@@ -11,10 +11,10 @@ import sdata
 
 gc.enable()
 
-from settings import FIELD_DATA_APP_PASS  # must be defined in settings.py before this import
+from settings import FIELD_DATA_APP_PASS
 
 if not FIELD_DATA_APP_PASS:
-    # No app password available; skip auth-required requests or log a warning
+    # Skip auth-required flows or log a warning; prevents boot-time NameError
     pass
 
 def _should_attempt_connect():

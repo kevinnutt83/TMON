@@ -406,11 +406,11 @@ MODAL_DEFAULT_STATUS_OPTIONS = ['pending', 'active', 'provisioned']
 COMMAND_NAME_REBOOT = 'reboot'
 COMMAND_NAME_FACTORY_RESET = 'factory_reset'
 
-# Required globals must exist before modules import this file
+# Ensure critical globals exist before imports/usage
 try:
     FIELD_DATA_APP_PASS
 except NameError:
-    FIELD_DATA_APP_PASS = ""  # Default; overridden by persisted config if present
+    FIELD_DATA_APP_PASS = ""  # default; overridden by persisted config if present
 
 # During persisted settings load:
 # FIELD_DATA_APP_PASS = persisted.get("FIELD_DATA_APP_PASS", FIELD_DATA_APP_PASS)
