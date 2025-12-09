@@ -241,6 +241,10 @@ OTA_FILES_ALLOWLIST = [                   # Limit which files can be updated via
 ]
 OTA_MANIFEST_SIG_URL = OTA_MANIFEST_URL + '.sig'  # Optional detached HMAC signature (hex)
 OTA_MANIFEST_HMAC_SECRET = ''             # If set, verify manifest with HMAC(secret, manifest_bytes)
+# Added OTA safety toggles
+OTA_ALLOW_DOWNGRADE = False               # Do not apply updates with lower version than current
+OTA_ABORT_ON_HASH_MISMATCH = True         # Stop update immediately on hash mismatch
+OTA_RETRY_ON_HASH_MISMATCH = False        # Do not retry downloads when hash fails
 
 # OTA fallback mirrors to reduce GitHub 400s during fetch
 OTA_VERSION_URLS = [
@@ -667,6 +671,10 @@ OTA_FILES_ALLOWLIST = [                   # Limit which files can be updated via
 ]
 OTA_MANIFEST_SIG_URL = OTA_MANIFEST_URL + '.sig'  # Optional detached HMAC signature (hex)
 OTA_MANIFEST_HMAC_SECRET = ''             # If set, verify manifest with HMAC(secret, manifest_bytes)
+# Added OTA safety toggles
+OTA_ALLOW_DOWNGRADE = False               # Do not apply updates with lower version than current
+OTA_ABORT_ON_HASH_MISMATCH = True         # Stop update immediately on hash mismatch
+OTA_RETRY_ON_HASH_MISMATCH = False        # Do not retry downloads when hash fails
 
 # OTA fallback mirrors to reduce GitHub 400s during fetch
 OTA_VERSION_URLS = [
