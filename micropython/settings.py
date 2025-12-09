@@ -406,7 +406,7 @@ MODAL_DEFAULT_STATUS_OPTIONS = ['pending', 'active', 'provisioned']
 COMMAND_NAME_REBOOT = 'reboot'
 COMMAND_NAME_FACTORY_RESET = 'factory_reset'
 
-# Bootstrap critical globals to avoid import-time NameError in dependent modules
+# Bootstrap critical variables early to avoid import-time NameError
 try:
     FIELD_DATA_APP_PASS
 except NameError:
@@ -823,7 +823,7 @@ MODAL_DEFAULT_STATUS_OPTIONS = ['pending', 'active', 'provisioned']
 COMMAND_NAME_REBOOT = 'reboot'
 COMMAND_NAME_FACTORY_RESET = 'factory_reset'
 
-# Bootstrap critical globals to avoid import-time NameError in dependent modules
+# Bootstrap critical variables early to avoid import-time NameError
 try:
     FIELD_DATA_APP_PASS
 except NameError:
