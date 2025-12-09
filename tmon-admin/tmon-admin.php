@@ -123,10 +123,49 @@ if (!has_action('admin_menu', 'tmon_admin_menu')) {
 		add_submenu_page('tmon-admin', 'Command Logs', 'Command Logs', 'manage_options', 'tmon-admin-command-logs', function(){
 			do_action('tmon_admin_render_command_logs');
 		});
-	}
-}
-
+	}add_submenu_page('tmon-admin', 'Firmware', 'Firmware', 'manage_options', 'tmon-admin-firmware', function(){
+}		if (function_exists('tmon_admin_firmware_page')) {
+				tmon_admin_firmware_page();
 // Remove any stray standalone top-level Command Logs menu registered elsewhere
+add_action('admin_menu', function(){ Firmware</h1><p><em>Firmware renderer not loaded.</em></p></div>';
+	remove_menu_page('tmon-admin-command-logs');
+}, 999);
+	}
+// Ensure schema present on admin_init (silent)
+add_action('admin_init', function () {
+	if (function_exists('tmon_admin_install_schema')) {e.php didn’t load)
+		ob_start();_exists('tmon_admin_firmware_page')) {
+		tmon_admin_install_schema();page() {
+		@ob_end_clean();="wrap"><h1>TMON Firmware</h1><p><em>Renderer not loaded. Ensure admin/firmware.php is included.</em></p></div>';
+	}
+});
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+});	wp_send_json_success($rows ?: array());	$rows = $params ? $wpdb->get_results($wpdb->prepare($sql, ...$params), ARRAY_A) : $wpdb->get_results($sql, ARRAY_A);	$sql = "SELECT id, device_id AS unit_id, command, params, status, COALESCE(updated_at, created_at) AS updated_at FROM {$table} {$where_sql} ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 200";	$where_sql = $where ? ('WHERE ' . implode(' AND ', $where)) : '';	if ($status !== '')  { $where[] = 'status=%s';     $params[] = $status; }	if ($unit_id !== '') { $where[] = 'device_id=%s'; $params[] = $unit_id; }	$status  = isset($_POST['status']) ? sanitize_text_field($_POST['status']) : '';	$unit_id = isset($_POST['unit_id']) ? sanitize_text_field($_POST['unit_id']) : '';	$params = [];	$where = [];	$table = $wpdb->prefix . 'tmon_device_commands';	global $wpdb;	}		wp_send_json_error(array('message' => 'Forbidden'), 403);	if (!current_user_can('manage_options')) {	check_ajax_referer('tmon_admin_ajax');add_action('wp_ajax_tmon_admin_get_command_logs', function(){// Remove any stray standalone top-level Command Logs menu registered elsewhere
 add_action('admin_menu', function(){
 	remove_menu_page('tmon-admin-command-logs');
 }, 999);
