@@ -1,6 +1,6 @@
 <!--
-	TMON Root README
-	This document gives a high-level project overview.  For firmware details see mircopython/README.md.
+    TMON Root README
+    This document gives a high-level project overview.  For firmware details see micropython/README.md.
 -->
 
 # TMON – Environmental Monitoring & Device Management Platform
@@ -41,7 +41,7 @@ TMON is a multi-component system for environmental sensing, secure device provis
 ## Components
 | Layer | Purpose |
 |-------|---------|
-| Firmware (`mircopython/`) | Sampling, LoRa mesh, Wi-Fi provisioning, OLED UX, OTA scaffold, persistence. |
+| Firmware (`micropython/`) | Sampling, LoRa mesh, Wi-Fi provisioning, OLED UX, OTA scaffold, persistence. |
 | Unit Connector Plugin | Accepts device field data (`/wp-json/tmon/v1/device/field-data`), normalizes, archives, forwards to Admin. |
 | TMON Admin Plugin | Device registration, provisioning pushes, settings distribution, dashboards, audit, OTA coordination. |
 
@@ -62,7 +62,7 @@ TMON is a multi-component system for environmental sensing, secure device provis
 4. Future: staged settings file `/logs/remote_settings.staged.json` applied then archived.
 
 ## Quick Start
-1. Flash firmware; edit `mircopython/settings.py` (Wi-Fi, API URLs, NODE_TYPE, sensor flags).
+1. Flash firmware; edit `micropython/settings.py` (Wi-Fi, API URLs, NODE_TYPE, sensor flags).
 2. Install & activate WordPress plugins (`tmon-admin`, `unit-connector`).
 3. Configure shared secrets / keys in each plugin settings page.
 4. Power device → confirm first-boot check-in appears in Admin dashboard.
@@ -80,13 +80,13 @@ TMON is a multi-component system for environmental sensing, secure device provis
 
 | Path | Description |
 |------|-------------|
-| `mircopython/` | Core MicroPython firmware (tasks, LoRa, Wi-Fi, OLED, OTA, sampling). |
+| `micropython/` | Core MicroPython firmware (tasks, LoRa, Wi-Fi, OLED, OTA, sampling). |
 | `tmon-admin/` | Admin plugin (provisioning, audit, dashboards, notifications). |
 | `unit-connector/` | Device ingestion + data relay plugin. |
 | `CHANGELOG.md` | Release notes & feature progression. |
 | `LICENSE` | Project licensing (MIT). |
 
-Additional firmware doc: `mircopython/README.md`.
+Additional firmware doc: `micropython/README.md`.
 
 ## Telemetry & Logs
 - Field data: `/logs/field_data.log` (rotated into `data_history.log` after delivery).

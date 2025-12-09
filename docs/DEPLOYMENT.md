@@ -2,8 +2,8 @@
 
 ## Firmware (MicroPython)
 1. Prepare board (ESP32-S3 recommended); flash MicroPython firmware.
-2. Copy `mircopython/` contents to the device filesystem (e.g., via `mpremote` or `ampy`).
-3. Edit `mircopython/settings.py` minimally:
+2. Copy `micropython/` contents to the device filesystem (e.g., via `mpremote` or `ampy`).
+3. Edit `micropython/settings.py` minimally:
    - `TMON_ADMIN_API_URL`, `WORDPRESS_API_URL`
    - `WIFI_SSID`, `WIFI_PASS`
    - `NODE_TYPE` (`base` or `remote`)

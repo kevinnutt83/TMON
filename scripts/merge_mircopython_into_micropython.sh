@@ -23,6 +23,27 @@ rsync -av --ignore-existing --exclude='.git' "$DUP"/ "$CANON"/
 echo "The following files would be overwritten if forced (dry-run):"
 rsync -av --dry-run --itemize-changes --exclude='.git' "$DUP"/ "$CANON"/ | grep '^>f' || true
 
+# Merge stray wp-content into tmon-admin (non-destructive)
+WP_SRC="$ROOT_DIR/wp-content"
+WP_DEST="$ROOT_DIR/tmon-admin"
+PLUGIN_SRC="$WP_SRC/plugins/tmon-admin"
+if [ -d "$PLUGIN_SRC" ]; then
+  echo "Merging plugin from $PLUGIN_SRC into $WP_DEST (non-destructive)."
+  mkdir -p "$WP_DEST"
+  rsync -av --ignore-existing --exclude='.git' "$PLUGIN_SRC"/ "$WP_DEST"/
+  echo "Removing duplicate plugin directory: $PLUGIN_SRC"
+  rm -rf "$PLUGIN_SRC"
+fi
+if [ -d "$WP_SRC" ]; then
+  echo "Merging from $WP_SRC into $WP_DEST (non-destructive)."
+  mkdir -p "$WP_DEST"
+  rsync -av --ignore-existing --exclude='.git' "$WP_SRC"/ "$WP_DEST"/
+  echo "The following wp-content files would be overwritten if forced (dry-run):"
+  rsync -av --dry-run --itemize-changes --exclude='.git' "$WP_SRC"/ "$WP_DEST"/ | grep '^>f' || true
+  echo "Removing duplicate wp-content directory: $WP_SRC"
+  rm -rf "$WP_SRC"
+fi
+
 # If you want to allow forced overwrite, re-run with --ignore-existing removed.
 # Remove the duplicate directory after merge
 echo "Removing duplicate directory: $DUP"
