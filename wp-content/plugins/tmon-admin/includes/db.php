@@ -1,15 +1,16 @@
 <?php
 // ...existing code...
+
 function tmon_admin_db_ensure() {
 	global $wpdb;
 	require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 	$charset = $wpdb->get_charset_collate();
 	$prefix = $wpdb->prefix;
 
-	// Notifications table
+	// Notifications
 	$notifications = "{$prefix}tmon_notifications";
 	if (!tmon_admin_table_exists($notifications)) {
-		$sql = "CREATE TABLE $notifications (
+		dbDelta("CREATE TABLE $notifications (
 			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
 			title VARCHAR(255) NOT NULL,
 			message LONGTEXT NULL,
@@ -19,14 +20,13 @@ function tmon_admin_db_ensure() {
 			PRIMARY KEY (id),
 			KEY idx_created (created_at),
 			KEY idx_read (read_at)
-		) $charset;";
-		dbDelta($sql);
+		) $charset;");
 	}
 
-	// OTA jobs table (ensure 'action' column exists)
+	// OTA jobs
 	$ota = "{$prefix}tmon_ota_jobs";
 	if (!tmon_admin_table_exists($ota)) {
-		$sql = "CREATE TABLE $ota (
+		dbDelta("CREATE TABLE $ota (
 			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
 			unit_id VARCHAR(64) NOT NULL,
 			action VARCHAR(64) NOT NULL,
@@ -38,21 +38,21 @@ function tmon_admin_db_ensure() {
 			KEY idx_unit (unit_id),
 			KEY idx_status (status),
 			KEY idx_created (created_at)
-		) $charset;";
-		dbDelta($sql);
+		) $charset;");
 	} else {
 		if (!tmon_admin_column_exists($ota, 'action')) {
 			$wpdb->query("ALTER TABLE $ota ADD COLUMN action VARCHAR(64) NOT NULL AFTER unit_id");
 		}
 		if (!tmon_admin_column_exists($ota, 'updated_at')) {
 			$wpdb->query("ALTER TABLE $ota ADD COLUMN updated_at DATETIME NULL AFTER created_at");
+			$wpdb->query("UPDATE $ota SET updated_at = created_at WHERE updated_at IS NULL");
 		}
 	}
 
 	// Companies hierarchy
 	$companies = "{$prefix}tmon_companies";
 	if (!tmon_admin_table_exists($companies)) {
-		$sql = "CREATE TABLE $companies (
+		dbDelta("CREATE TABLE $companies (
 			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
 			name VARCHAR(191) NOT NULL,
 			slug VARCHAR(191) NOT NULL,
@@ -60,11 +60,10 @@ function tmon_admin_db_ensure() {
 			PRIMARY KEY (id),
 			UNIQUE KEY uniq_slug (slug),
 			KEY idx_created (created_at)
-		) $charset;";
-		dbDelta($sql);
+		) $charset;");
 	}
 
-	// Device commands: ensure status and updated_at columns
+	// Device commands columns
 	$commands = "{$prefix}tmon_device_commands";
 	if (tmon_admin_table_exists($commands)) {
 		if (!tmon_admin_column_exists($commands, 'status')) {
@@ -77,10 +76,10 @@ function tmon_admin_db_ensure() {
 		}
 	}
 
-	// Optional: UC sites mirror if used for paired connectors
-	$uc_sites = "{$prefix}tmon_uc_sites";
-	if (!tmon_admin_table_exists($uc_sites)) {
-		$sql = "CREATE TABLE $uc_sites (
+	// UC mirror table (for paired connectors)
+	$uc = "{$prefix}tmon_uc_sites";
+	if (!tmon_admin_table_exists($uc)) {
+		dbDelta("CREATE TABLE $uc (
 			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
 			site_url VARCHAR(255) NOT NULL,
 			normalized_url VARCHAR(255) NOT NULL,
@@ -91,8 +90,8 @@ function tmon_admin_db_ensure() {
 			PRIMARY KEY (id),
 			UNIQUE KEY uniq_norm (normalized_url),
 			KEY idx_last_seen (last_seen)
-		) $charset;";
-		dbDelta($sql);
+		) $charset;");
 	}
 }
+
 // ...existing code...

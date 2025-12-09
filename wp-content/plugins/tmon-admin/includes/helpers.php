@@ -1,6 +1,19 @@
 <?php
 // TMON Admin Helpers
 
+function tmon_admin_silence(callable $cb) {
+	ob_start();
+	$prev = null;
+	if (isset($GLOBALS['wpdb'])) {
+		$prev = $GLOBALS['wpdb']->suppress_errors();
+		$GLOBALS['wpdb']->suppress_errors(true);
+	}
+	try { $cb(); } finally {
+		if ($prev !== null) { $GLOBALS['wpdb']->suppress_errors($prev); }
+		ob_end_clean();
+	}
+}
+
 function tmon_admin_safe_prepare($sql, $args = []) {
 	global $wpdb;
 	// Only prepare when placeholders are present.
@@ -12,19 +25,14 @@ function tmon_admin_safe_prepare($sql, $args = []) {
 
 function tmon_admin_table_exists($table) {
 	global $wpdb;
-	$table = esc_sql($table);
-	$sql = "SHOW TABLES LIKE %s";
-	$found = $wpdb->get_var($wpdb->prepare($sql, $table));
-	return !empty($found);
+	if (empty($table)) return false;
+	return (bool) $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $table));
 }
 
 function tmon_admin_column_exists($table, $column) {
 	global $wpdb;
-	$table = esc_sql($table);
-	$column = esc_sql($column);
-	$sql = "SHOW COLUMNS FROM `$table` LIKE %s";
-	$found = $wpdb->get_var($wpdb->prepare($sql, $column));
-	return !empty($found);
+	if (empty($table) || empty($column)) return false;
+	return (bool) $wpdb->get_var($wpdb->prepare("SHOW COLUMNS FROM `$table` LIKE %s", $column));
 }
 
 function tmon_admin_normalize_url($url) {
@@ -44,5 +52,3 @@ function tmon_admin_once($key) {
 	$done[$key] = true;
 	return true;
 }
-
-// ...existing code...

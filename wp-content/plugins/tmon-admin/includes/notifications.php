@@ -9,26 +9,17 @@
 
 add_action('tmon_admin_notifications_page', function () {
 	static $printed = false; if ($printed) return; $printed = true;
-
 	global $wpdb;
+
 	$table = $wpdb->prefix . 'tmon_notifications';
-
-	// Ensure table exists
-	if (function_exists('tmon_admin_db_ensure')) {
-		tmon_admin_db_ensure();
-	}
-
-	echo '<div class="wrap"><h1>Notifications</h1>';
-
 	if (!tmon_admin_table_exists($table)) {
-		echo '<p>Notifications table is not available yet.</p></div>';
+		echo '<div class="wrap"><h1>Notifications</h1><p>Notifications table missing.</p></div>';
 		return;
 	}
 
-	$sql = "SELECT id, title, message, level, created_at, read_at FROM $table ORDER BY created_at DESC LIMIT 200";
-	$rows = $wpdb->get_results($sql);
+	$rows = $wpdb->get_results("SELECT id, title, message, level, created_at, read_at FROM $table ORDER BY created_at DESC LIMIT 200");
 
-	// Keep concise:
+	echo '<div class="wrap"><h1>Notifications</h1>';
 	echo '<table class="widefat striped"><thead><tr><th>ID</th><th>Title</th><th>Level</th><th>Created</th><th>Read</th></tr></thead><tbody>';
 	if ($rows) {
 		foreach ($rows as $r) {
