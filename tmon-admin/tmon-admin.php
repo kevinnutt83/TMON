@@ -274,34 +274,35 @@ if (!has_action('admin_menu', 'tmon_admin_menu')) {
 
 // Main menu and pages
 add_action('admin_menu', function(){
-	// Main TMON Admin menu → Dashboard page
+	// Top-level
 	add_menu_page('TMON Admin', 'TMON Admin', 'manage_options', 'tmon-admin-dashboard', 'tmon_admin_dashboard_page', 'dashicons-admin-generic', 58);
 
-	// Submenus
+	// Submenus (single set under TMON Admin)
 	add_submenu_page('tmon-admin-dashboard', 'Firmware', 'Firmware', 'manage_options', 'tmon-admin-firmware', function(){
-		if (function_exists('tmon_admin_firmware_page')) {
-			tmon_admin_firmware_page();
-		} else {
-			echo '<div class="wrap"><h1>TMON Firmware</h1><p>Renderer not loaded.</p></div>';
-		}
+		if (function_exists('tmon_admin_firmware_page')) tmon_admin_firmware_page(); else echo '<div class="wrap"><h1>TMON Firmware</h1><p>Renderer not loaded.</p></div>';
 	});
 	add_submenu_page('tmon-admin-dashboard', 'Provisioning', 'Provisioning', 'manage_options', 'tmon-admin-provisioning', function(){
-		if (function_exists('tmon_admin_provisioning_page')) { tmon_admin_provisioning_page(); } else { echo '<div class="wrap"><h1>Provisioning</h1><p>Renderer not loaded.</p></div>'; }
+		if (function_exists('tmon_admin_provisioning_page')) tmon_admin_provisioning_page(); else echo '<div class="wrap"><h1>Provisioning</h1><p>Renderer not loaded.</p></div>';
 	});
 	add_submenu_page('tmon-admin-dashboard', 'Provisioned Devices', 'Provisioned Devices', 'manage_options', 'tmon-admin-provisioned', function(){
-		if (function_exists('tmon_admin_provisioned_devices_page')) { tmon_admin_provisioned_devices_page(); } else { echo '<div class="wrap"><h1>Provisioned Devices</h1><p>Renderer not loaded.</p></div>'; }
+		if (function_exists('tmon_admin_provisioned_devices_page')) tmon_admin_provisioned_devices_page(); else echo '<div class="wrap"><h1>Provisioned Devices</h1><p>Renderer not loaded.</p></div>';
 	});
 	add_submenu_page('tmon-admin-dashboard', 'Provisioning Activity', 'Provisioning Activity', 'manage_options', 'tmon-admin-provisioning-activity', function(){
-		if (function_exists('tmon_admin_provisioning_activity_page')) { tmon_admin_provisioning_activity_page(); } else { echo '<div class="wrap"><h1>Provisioning Activity</h1><p>Renderer not loaded.</p></div>'; }
+		if (function_exists('tmon_admin_provisioning_activity_page')) tmon_admin_provisioning_activity_page(); else echo '<div class="wrap"><h1>Provisioning Activity</h1><p>Renderer not loaded.</p></div>';
 	});
 	add_submenu_page('tmon-admin-dashboard', 'Provisioning History', 'Provisioning History', 'manage_options', 'tmon-admin-provisioning-history', function(){
-		if (function_exists('tmon_admin_provisioning_history_page')) { tmon_admin_provisioning_history_page(); } else { echo '<div class="wrap"><h1>Provisioning History</h1><p>Renderer not loaded.</p></div>'; }
+		if (function_exists('tmon_admin_provisioning_history_page')) tmon_admin_provisioning_history_page(); else echo '<div class="wrap"><h1>Provisioning History</h1><p>Renderer not loaded.</p></div>';
 	});
 	add_submenu_page('tmon-admin-dashboard', 'Notifications', 'Notifications', 'manage_options', 'tmon-admin-notifications', 'tmon_admin_notifications_page');
 	add_submenu_page('tmon-admin-dashboard', 'OTA', 'OTA', 'manage_options', 'tmon-admin-ota', 'tmon_admin_ota_page');
 	add_submenu_page('tmon-admin-dashboard', 'Files', 'Files', 'manage_options', 'tmon-admin-files', 'tmon_admin_files_page');
-	add_submenu_page('tmon-admin-dashboard', 'Groups', 'Groups', 'manage_options', 'tmon-admin-groups', 'tmon_admin_groups_page');
-	add_submenu_page('tmon-admin-dashboard', 'Command Logs', 'Command Logs', 'manage_options', 'tmon-admin-command-logs', function(){ do_action('tmon_admin_render_command_logs'); });
+	add_submenu_page('tmon-admin-dashboard', 'Groups & Hierarchy', 'Groups & Hierarchy', 'manage_options', 'tmon-admin-groups', 'tmon_admin_groups_page');
+
+	// Move Command Logs under TMON Admin and ensure single renderer
+	add_submenu_page('tmon-admin-dashboard', 'Command Logs', 'Command Logs', 'manage_options', 'tmon-admin-command-logs', function(){
+		// Delegate to centralized renderer hook, avoid duplicate tables by ensuring only one render path
+		do_action('tmon_admin_render_command_logs');
+	});
 });
 
 // Dashboard renderer
