@@ -1,5 +1,5 @@
 <?php
-// Ensure status column exists
+// Migrate status column if missing
 add_action('admin_init', function(){
 	global $wpdb; $t = $wpdb->prefix.'tmon_device_commands';
 	$cols = $wpdb->get_results("SHOW COLUMNS FROM {$t}", ARRAY_A);
@@ -11,7 +11,7 @@ add_action('admin_init', function(){
 	}
 });
 
-// Single renderer hook to be used by submenu callback (prevents double tables)
+// Single renderer hook used by the submenu to prevent duplicates
 add_action('tmon_admin_render_command_logs', function(){
 	echo '<div class="wrap"><h1>Command Logs</h1>';
 	echo '<div class="tmon-filter-form"><form id="tmon-command-filter"><div>';
@@ -20,8 +20,8 @@ add_action('tmon_admin_render_command_logs', function(){
 	echo '<div><button type="submit" class="button button-primary">Filter</button> <a id="tmon-command-export" href="#" class="button">Export CSV</a></div>';
 	echo '</div></form></div>';
 	echo '<div class="tmon-responsive-table"><table class="wp-list-table widefat striped tmon-stack-table">';
-	echo '<thead><tr><th>ID</th><th>Unit ID</th><th>Command</th><th>Params</th><th>Status</th><th>Updated</th></tr></thead><tbody id="tmon-command-rows"><tr><td colspan="6">Loading…</td></tr></tbody></table></div></div>';
-	// Page JS is enqueued via tmon-admin.php; ensure only one renderer path is used.
+	echo '<thead><tr><th>ID</th><th>Unit ID</th><th>Command</th><th>Params</th><th>Status</th><th>Updated</th></tr></thead>';
+	echo '<tbody id="tmon-command-rows"><tr><td colspan="6">Loading…</td></tr></tbody></table></div></div>';
 });
 
 // ...existing code...

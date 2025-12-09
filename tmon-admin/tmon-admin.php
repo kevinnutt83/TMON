@@ -306,27 +306,29 @@ add_action('admin_menu', function(){
 });
 
 // Dashboard renderer
-function tmon_admin_dashboard_page(){
-	?>
-	<div class="wrap">
-		<h1>TMON Admin Dashboard</h1>
-		<?php if (function_exists('tmon_admin_render_provision_notice')) tmon_admin_render_provision_notice(); ?>
-		<div class="tmon-grid tmon-grid-2">
-			<div class="tmon-card">
-				<h2>Registered Unit Connectors</h2>
-				<?php tmon_admin_render_uc_list(); ?>
-			</div>
-			<div class="tmon-card">
-				<h2>Device Alerts & Health</h2>
-				<?php tmon_admin_render_device_alerts(); ?>
-			</div>
-			<div class="tmon-card">
-				<h2>Logs</h2>
-				<div style="max-height:280px; overflow:auto"><?php tmon_admin_render_recent_logs(); ?></div>
+if (!function_exists('tmon_admin_dashboard_page')) {
+	function tmon_admin_dashboard_page(){
+		?>
+		<div class="wrap">
+			<h1>TMON Admin Dashboard</h1>
+			<?php if (function_exists('tmon_admin_render_provision_notice')) tmon_admin_render_provision_notice(); ?>
+			<div class="tmon-grid tmon-grid-2">
+				<div class="tmon-card">
+					<h2>Registered Unit Connectors</h2>
+					<?php tmon_admin_render_uc_list(); ?>
+				</div>
+				<div class="tmon-card">
+					<h2>Device Alerts & Health</h2>
+					<?php tmon_admin_render_device_alerts(); ?>
+				</div>
+				<div class="tmon-card">
+					<h2>Logs</h2>
+					<div style="max-height:280px; overflow:auto"><?php tmon_admin_render_recent_logs(); ?></div>
+				</div>
 			</div>
 		</div>
-	</div>
-	<?php
+		<?php
+	}
 }
 
 // Firmware page renderer (delegate or stub)
@@ -368,17 +370,36 @@ add_action('admin_post_tmon_admin_export_audit', function(){
 });
 
 // Dashboard helpers (stub)
-function tmon_admin_render_uc_list(){
-	$sites = get_option('tmon_uc_pairings', []);
-	if (empty($sites)) { echo '<p>No Unit Connectors paired yet.</p>'; return; }
-	echo '<table class="wp-list-table widefat striped"><thead><tr><th>Hub URL</th><th>Normalized</th><th>Paired At</th><th>Read Token</th></tr></thead><tbody>';
-	foreach ($sites as $s) {
-		echo '<tr><td><a href="'.esc_url($s['hub_url'] ?? '#').'" target="_blank">'.esc_html($s['hub_url'] ?? '').'</a></td><td>'.esc_html($s['normalized'] ?? '').'</td><td>'.esc_html($s['paired_at'] ?? '').'</td><td><code>'.esc_html($s['read_token'] ?? '').'</code></td></tr>';
+if (!function_exists('tmon_admin_render_uc_list')) {
+	function tmon_admin_render_uc_list(){
+		// Canonical store: array of pairings (ensure your pairing logic updates this option)
+		$pairings = get_option('tmon_uc_pairings', []);
+		if (empty($pairings)) {
+			echo '<p>No Unit Connectors paired yet.</p>';
+			return;
+		}
+		echo '<table class="wp-list-table widefat striped"><thead><tr><th>Hub URL</th><th>Normalized</th><th>Paired At</th><th>Read Token</th></tr></thead><tbody>';
+		foreach ($pairings as $p) {
+			$hub = isset($p['hub_url']) ? $p['hub_url'] : '';
+			$norm = isset($p['normalized']) ? $p['normalized'] : '';
+			$at = isset($p['paired_at']) ? $p['paired_at'] : '';
+			$tok = isset($p['read_token']) ? $p['read_token'] : '';
+			echo '<tr>';
+			echo '<td><a href="'.esc_url($hub).'" target="_blank">'.esc_html($hub).'</a></td>';
+			echo '<td>'.esc_html($norm).'</td>';
+			echo '<td>'.esc_html($at).'</td>';
+			echo '<td><code>'.esc_html($tok).'</code></td>';
+			echo '</tr>';
+		}
+		echo '</tbody></table>';
 	}
-	echo '</tbody></table>';
 }
-function tmon_admin_render_device_alerts(){ echo '<ul><li>No alerts.</li></ul>'; }
-function tmon_admin_render_recent_logs(){ echo '<pre>Logs will appear here.</pre>'; }
+if (!function_exists('tmon_admin_render_device_alerts')) {
+	function tmon_admin_render_device_alerts(){ echo '<ul><li>No alerts.</li></ul>'; }
+}
+if (!function_exists('tmon_admin_render_recent_logs')) {
+	function tmon_admin_render_recent_logs(){ echo '<pre>Logs will appear here.</pre>'; }
+}
 
 // Ensure schema is present before any UI/REST interaction
 add_action('admin_init', function () {
