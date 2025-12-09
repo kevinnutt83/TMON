@@ -44,6 +44,7 @@ _s = get_settings()
 try:
 	getattr(_s, 'FIELD_DATA_APP_PASS')
 except Exception:
+	# Declare with safe default; real value will override later when persisted config loads.
 	setattr(_s, 'FIELD_DATA_APP_PASS', "")
 
 # 2) Import utils after bootstrap; provide safe fallbacks if import fails
