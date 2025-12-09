@@ -143,9 +143,11 @@ function tmon_admin_get_all_devices() {
     return $wpdb->get_results($sql, ARRAY_A);
 }
 
-// Safe getter
+// Safe getter to avoid undefined index notices
 if (!function_exists('tmon_admin_arr_get')) {
-	function tmon_admin_arr_get($arr, $key, $default=''){ return (is_array($arr) && array_key_exists($key, $arr)) ? $arr[$key] : $default; }
+	function tmon_admin_arr_get($arr, $key, $default='') {
+		return (is_array($arr) && array_key_exists($key, $arr)) ? $arr[$key] : $default;
+	}
 }
 
 // Notice renderer
@@ -182,21 +184,30 @@ if (!function_exists('tmon_admin_provisioning_page')) {
 		echo '</tr></thead><tbody>';
 		if ($has_devices) {
 			foreach ($all_devices as $r) {
-				$name = !empty($r['unit_name_dev']) ? $r['unit_name_dev'] : (!empty($r['unit_name']) ? $r['unit_name'] : '');
-				$canBill = isset($r['canBill']) ? (intval($r['canBill']) ? 'Yes' : 'No') : 'No';
-				$staged = !empty($r['settings_staged']) ? 'Yes' : 'No';
+				$id          = tmon_admin_arr_get($r, 'id', 0);
+				$unit_id     = tmon_admin_arr_get($r, 'unit_id', '');
+				$machine_id  = tmon_admin_arr_get($r, 'machine_id', '');
+				$name        = tmon_admin_arr_get($r, 'unit_name', '');
+				$plan        = tmon_admin_arr_get($r, 'plan', '');
+				$status      = tmon_admin_arr_get($r, 'status', '');
+				$site_url    = tmon_admin_arr_get($r, 'site_url', '');
+				$staged_raw  = tmon_admin_arr_get($r, 'settings_staged', '');
+				$staged_flag = $staged_raw ? 'Yes' : 'No';
+				$can_bill    = tmon_admin_arr_get($r, 'canBill', 0) ? 'Yes' : 'No';
+				$created_at  = tmon_admin_arr_get($r, 'created_at', '');
+				$updated_at  = tmon_admin_arr_get($r, 'updated_at', '');
 				echo '<tr>';
-				echo '<td>'.intval($r['id']).'</td>';
-				echo '<td>'.esc_html($r['unit_id']).'</td>';
-				echo '<td>'.esc_html($r['machine_id']).'</td>';
+				echo '<td>'.intval($id).'</td>';
+				echo '<td>'.esc_html($unit_id).'</td>';
+				echo '<td>'.esc_html($machine_id).'</td>';
 				echo '<td>'.esc_html($name).'</td>';
-				echo '<td>'.esc_html($r['plan']).'</td>';
-				echo '<td>'.esc_html($r['status']).'</td>';
+				echo '<td>'.esc_html($plan).'</td>';
+				echo '<td>'.esc_html($status).'</td>';
 				echo '<td>'.esc_html(isset($r['site_url']) ? $r['site_url'] : '').'</td>';
-				echo '<td>'.esc_html($staged).'</td>';
-				echo '<td>'.esc_html($canBill).'</td>';
-				echo '<td>'.esc_html($r['created_at']).'</td>';
-				echo '<td>'.esc_html($r['updated_at']).'</td>';
+				echo '<td>'.esc_html($staged_flag).'</td>';
+				echo '<td>'.esc_html($can_bill).'</td>';
+				echo '<td>'.esc_html($created_at).'</td>';
+				echo '<td>'.esc_html($updated_at).'</td>';
 				echo '</tr>';
 			}
 		} else {
@@ -331,21 +342,30 @@ if (!function_exists('tmon_admin_render_provisioning_page')) {
 		echo '</tr></thead><tbody>';
 		if ($has_devices) {
 			foreach ($all_devices as $r) {
-				$name = !empty($r['unit_name_dev']) ? $r['unit_name_dev'] : (!empty($r['unit_name']) ? $r['unit_name'] : '');
-				$canBill = isset($r['canBill']) ? (intval($r['canBill']) ? 'Yes' : 'No') : 'No';
-				$staged = !empty($r['settings_staged']) ? 'Yes' : 'No';
+				$id          = tmon_admin_arr_get($r, 'id', 0);
+				$unit_id     = tmon_admin_arr_get($r, 'unit_id', '');
+				$machine_id  = tmon_admin_arr_get($r, 'machine_id', '');
+				$name        = tmon_admin_arr_get($r, 'unit_name', '');
+				$plan        = tmon_admin_arr_get($r, 'plan', '');
+				$status      = tmon_admin_arr_get($r, 'status', '');
+				$site_url    = tmon_admin_arr_get($r, 'site_url', '');
+				$staged_raw  = tmon_admin_arr_get($r, 'settings_staged', '');
+				$staged_flag = $staged_raw ? 'Yes' : 'No';
+				$can_bill    = tmon_admin_arr_get($r, 'canBill', 0) ? 'Yes' : 'No';
+				$created_at  = tmon_admin_arr_get($r, 'created_at', '');
+				$updated_at  = tmon_admin_arr_get($r, 'updated_at', '');
 				echo '<tr>';
-				echo '<td>'.intval($r['id']).'</td>';
-				echo '<td>'.esc_html($r['unit_id']).'</td>';
-				echo '<td>'.esc_html($r['machine_id']).'</td>';
+				echo '<td>'.intval($id).'</td>';
+				echo '<td>'.esc_html($unit_id).'</td>';
+				echo '<td>'.esc_html($machine_id).'</td>';
 				echo '<td>'.esc_html($name).'</td>';
-				echo '<td>'.esc_html($r['plan']).'</td>';
-				echo '<td>'.esc_html($r['status']).'</td>';
+				echo '<td>'.esc_html($plan).'</td>';
+				echo '<td>'.esc_html($status).'</td>';
 				echo '<td>'.esc_html(isset($r['site_url']) ? $r['site_url'] : '').'</td>';
-				echo '<td>'.esc_html($staged).'</td>';
-				echo '<td>'.esc_html($canBill).'</td>';
-				echo '<td>'.esc_html($r['created_at']).'</td>';
-				echo '<td>'.esc_html($r['updated_at']).'</td>';
+				echo '<td>'.esc_html($staged_flag).'</td>';
+				echo '<td>'.esc_html($can_bill).'</td>';
+				echo '<td>'.esc_html($created_at).'</td>';
+				echo '<td>'.esc_html($updated_at).'</td>';
 				echo '</tr>';
 			}
 		} else {

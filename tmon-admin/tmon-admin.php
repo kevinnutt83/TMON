@@ -203,7 +203,7 @@ add_action('admin_menu', function(){
 	});
 });
 
-// AJAX: Command logs
+// AJAX: Command logs — fix wpdb::prepare misuse and missing updated_at
 add_action('wp_ajax_tmon_admin_get_command_logs', function(){
 	check_ajax_referer('tmon_admin_ajax');
 	if (!current_user_can('manage_options')) {
@@ -211,16 +211,22 @@ add_action('wp_ajax_tmon_admin_get_command_logs', function(){
 	}
 	global $wpdb;
 	$table = $wpdb->prefix . 'tmon_device_commands';
-	$where = '1=1';
-	$params = array();
+
+	// Build WHERE with placeholders only when filtering
+	$where = [];
+	$params = [];
 
 	$unit_id = isset($_POST['unit_id']) ? sanitize_text_field($_POST['unit_id']) : '';
 	$status  = isset($_POST['status']) ? sanitize_text_field($_POST['status']) : '';
 
-	if ($unit_id !== '') { $where .= ' AND device_id=%s'; $params[] = $unit_id; }
-	if ($status !== '')  { $where .= ' AND status=%s'; $params[] = $status; }
+	if ($unit_id !== '') { $where[] = 'device_id=%s'; $params[] = $unit_id; }
+	if ($status !== '')  { $where[] = 'status=%s';     $params[] = $status; }
 
-	$sql = "SELECT id, device_id AS unit_id, command, params, status, updated_at FROM {$table} WHERE {$where} ORDER BY updated_at DESC LIMIT 200";
+	$where_sql = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
+
+	// Use COALESCE(updated_at, created_at) to avoid missing updated_at column fatal
+	$sql = "SELECT id, device_id AS unit_id, command, params, status, COALESCE(updated_at, created_at) AS updated_at FROM {$table} {$where_sql} ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 200";
+
 	$rows = $params ? $wpdb->get_results($wpdb->prepare($sql, $params), ARRAY_A) : $wpdb->get_results($sql, ARRAY_A);
 	wp_send_json_success($rows ?: array());
 });

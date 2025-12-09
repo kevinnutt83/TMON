@@ -31,7 +31,7 @@ if (!function_exists('tmon_admin_render_groups_hierarchy')) {
 		$groups    = $wpdb->prefix.'tmon_groups';
 		$devices   = $wpdb->prefix.'tmon_devices';
 
-		// Guard: verify tables exist
+		// Verify tables exist (avoid SELECT when missing)
 		$required = [$companies, $sites, $zones, $groups, $devices];
 		foreach ($required as $tbl) {
 			$exists = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $tbl));
@@ -42,6 +42,7 @@ if (!function_exists('tmon_admin_render_groups_hierarchy')) {
 			}
 		}
 
+		// Safe SELECTs only when tables exist
 		echo '<div class="tmon-responsive-table"><table class="wp-list-table widefat striped"><thead><tr><th>Company > Location > Zone > Group</th><th>Devices</th></tr></thead><tbody>';
 
 		$companies_rows = $wpdb->get_results("SELECT id, name FROM {$companies} ORDER BY name ASC", ARRAY_A) ?: [];

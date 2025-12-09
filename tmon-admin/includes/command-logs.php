@@ -23,5 +23,3 @@ add_action('tmon_admin_render_command_logs', function(){
 	echo '<thead><tr><th>ID</th><th>Unit ID</th><th>Command</th><th>Params</th><th>Status</th><th>Updated</th></tr></thead>';
 	echo '<tbody id="tmon-command-rows"><tr><td colspan="6">Loading…</td></tr></tbody></table></div></div>';
 });
-
-// ...existing code...
