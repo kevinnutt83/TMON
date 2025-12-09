@@ -203,7 +203,7 @@ add_action('admin_menu', function(){
 	});
 });
 
-// AJAX: Command logs — fix wpdb::prepare misuse and missing updated_at
+// AJAX: Command logs — fix prepare misuse and missing updated_at
 add_action('wp_ajax_tmon_admin_get_command_logs', function(){
 	check_ajax_referer('tmon_admin_ajax');
 	if (!current_user_can('manage_options')) {
@@ -212,7 +212,6 @@ add_action('wp_ajax_tmon_admin_get_command_logs', function(){
 	global $wpdb;
 	$table = $wpdb->prefix . 'tmon_device_commands';
 
-	// Build WHERE with placeholders only when filtering
 	$where = [];
 	$params = [];
 
@@ -224,7 +223,6 @@ add_action('wp_ajax_tmon_admin_get_command_logs', function(){
 
 	$where_sql = $where ? ('WHERE ' . implode(' AND ', $where)) : '';
 
-	// Use COALESCE(updated_at, created_at) to avoid missing updated_at column fatal
 	$sql = "SELECT id, device_id AS unit_id, command, params, status, COALESCE(updated_at, created_at) AS updated_at FROM {$table} {$where_sql} ORDER BY COALESCE(updated_at, created_at) DESC LIMIT 200";
 
 	$rows = $params ? $wpdb->get_results($wpdb->prepare($sql, $params), ARRAY_A) : $wpdb->get_results($sql, ARRAY_A);
@@ -280,10 +278,10 @@ if (!has_action('admin_menu', 'tmon_admin_menu')) {
 
 // Main menu and pages
 add_action('admin_menu', function(){
-	// Top-level
+	// Single top-level menu (remove any other add_menu_page duplicates elsewhere)
 	add_menu_page('TMON Admin', 'TMON Admin', 'manage_options', 'tmon-admin-dashboard', 'tmon_admin_dashboard_page', 'dashicons-admin-generic', 58);
 
-	// Submenus (single set under TMON Admin)
+	// One set of submenus under TMON Admin
 	add_submenu_page('tmon-admin-dashboard', 'Firmware', 'Firmware', 'manage_options', 'tmon-admin-firmware', function(){
 		if (function_exists('tmon_admin_firmware_page')) tmon_admin_firmware_page(); else echo '<div class="wrap"><h1>TMON Firmware</h1><p>Renderer not loaded.</p></div>';
 	});
@@ -304,9 +302,8 @@ add_action('admin_menu', function(){
 	add_submenu_page('tmon-admin-dashboard', 'Files', 'Files', 'manage_options', 'tmon-admin-files', 'tmon_admin_files_page');
 	add_submenu_page('tmon-admin-dashboard', 'Groups & Hierarchy', 'Groups & Hierarchy', 'manage_options', 'tmon-admin-groups', 'tmon_admin_groups_page');
 
-	// Move Command Logs under TMON Admin and ensure single renderer
+	// Move Command Logs under TMON Admin and render only once via hook
 	add_submenu_page('tmon-admin-dashboard', 'Command Logs', 'Command Logs', 'manage_options', 'tmon-admin-command-logs', function(){
-		// Delegate to centralized renderer hook, avoid duplicate tables by ensuring only one render path
 		do_action('tmon_admin_render_command_logs');
 	});
 });

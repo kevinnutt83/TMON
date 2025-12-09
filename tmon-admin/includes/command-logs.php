@@ -11,7 +11,7 @@ add_action('admin_init', function(){
 	}
 });
 
-// Single renderer hook used by the submenu to prevent duplicates
+// Render via single hook used by submenu to prevent doubles
 add_action('tmon_admin_render_command_logs', function(){
 	echo '<div class="wrap"><h1>Command Logs</h1>';
 	echo '<div class="tmon-filter-form"><form id="tmon-command-filter"><div>';

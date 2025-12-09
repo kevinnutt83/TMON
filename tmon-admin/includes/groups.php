@@ -31,9 +31,8 @@ if (!function_exists('tmon_admin_render_groups_hierarchy')) {
 		$groups    = $wpdb->prefix.'tmon_groups';
 		$devices   = $wpdb->prefix.'tmon_devices';
 
-		// Verify tables exist (avoid SELECT when missing)
-		$required = [$companies, $sites, $zones, $groups, $devices];
-		foreach ($required as $tbl) {
+		// Verify tables exist
+		foreach ([$companies,$sites,$zones,$groups,$devices] as $tbl) {
 			$exists = $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $tbl));
 			if ($exists !== $tbl) {
 				echo '<div class="notice notice-warning"><p>Hierarchy table missing: '.esc_html(basename($tbl)).'.</p></div>';
