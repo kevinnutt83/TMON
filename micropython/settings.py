@@ -260,7 +260,12 @@ OTA_MANIFEST_URLS = [
     'https://rawcdn.githack.com/kevinnutt83/TMON/main/micropython/manifest.json',
     'https://cdn.jsdelivr.net/gh/kevinnutt83/TMON@main/micropython/manifest.json',
 ]
-OTA_HTTP_HEADERS = {'User-Agent': 'TMON-Device/2.02.1', 'Accept': 'application/json'}
+OTA_HTTP_HEADERS = {
+    'User-Agent': 'TMON-Device/2.02.1',
+    'Accept': 'application/json',
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache',
+}
 
 # --- Connectivity ---
 ENABLE_WIFI = True
@@ -693,7 +698,12 @@ OTA_MANIFEST_URLS = [
     'https://rawcdn.githack.com/kevinnutt83/TMON/main/micropython/manifest.json',
     'https://cdn.jsdelivr.net/gh/kevinnutt83/TMON@main/micropython/manifest.json',
 ]
-OTA_HTTP_HEADERS = {'User-Agent': 'TMON-Device/2.02.1', 'Accept': 'application/json'}
+OTA_HTTP_HEADERS = {
+    'User-Agent': 'TMON-Device/2.02.1',
+    'Accept': 'application/json',
+    'Cache-Control': 'no-cache',
+    'Pragma': 'no-cache',
+}
 
 # --- Connectivity ---
 ENABLE_WIFI = True
