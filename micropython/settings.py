@@ -233,7 +233,7 @@ OTA_FIRMWARE_BASE_URL = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main
 OTA_CHECK_INTERVAL_S = 1800              # Restore 30 min check cadence
 OTA_MANIFEST_URL = OTA_FIRMWARE_BASE_URL + 'manifest.json'  # Manifest lists files + hashes
 OTA_HASH_VERIFY = True                   # keep integrity checks enabled
-OTA_APPLY_INTERVAL_S = 600                # Check/apply pending update every 10 minutes
+OTA_APPLY_INTERVAL_S = 5                  # Check/apply pending update every few seconds (was 600)
 OTA_RESTORE_ON_FAIL = True                # Restore backups if any file verification/apply fails
 OTA_MAX_FILE_BYTES = 256*1024             # Safety cap per file download size
 OTA_FILES_ALLOWLIST = [                   # Limit which files can be updated via OTA
@@ -247,6 +247,7 @@ OTA_SKIP_OLDER_VERSION = True            # skip applies when repo version < curr
 OTA_ABORT_ON_HASH_MISMATCH = False       # keep main loop running; do not abort on mismatch
 OTA_RETRY_ON_HASH_MISMATCH = True        # retry download when hash fails
 OTA_MAX_HASH_FAILURES = 3                # bounded retries before giving up
+OTA_HASH_RETRY_INTERVAL_S = 2            # short delay (seconds) before retrying after a hash failure
 
 # OTA fallback mirrors to reduce GitHub 400s during fetch
 OTA_VERSION_URLS = [
@@ -665,7 +666,7 @@ OTA_FIRMWARE_BASE_URL = 'https://raw.githubusercontent.com/kevinnutt83/TMON/main
 OTA_CHECK_INTERVAL_S = 1800              # Restore 30 min check cadence
 OTA_MANIFEST_URL = OTA_FIRMWARE_BASE_URL + 'manifest.json'  # Manifest lists files + hashes
 OTA_HASH_VERIFY = True                   # keep integrity checks enabled
-OTA_APPLY_INTERVAL_S = 600                # Check/apply pending update every 10 minutes
+OTA_APPLY_INTERVAL_S = 5                  # Check/apply pending update every few seconds (was 600)
 OTA_RESTORE_ON_FAIL = True                # Restore backups if any file verification/apply fails
 OTA_MAX_FILE_BYTES = 256*1024             # Safety cap per file download size
 OTA_FILES_ALLOWLIST = [                   # Limit which files can be updated via OTA
@@ -679,6 +680,7 @@ OTA_SKIP_OLDER_VERSION = True            # skip applies when repo version < curr
 OTA_ABORT_ON_HASH_MISMATCH = False       # keep main loop running; do not abort on mismatch
 OTA_RETRY_ON_HASH_MISMATCH = True        # retry download when hash fails
 OTA_MAX_HASH_FAILURES = 3                # bounded retries before giving up
+OTA_HASH_RETRY_INTERVAL_S = 2            # short delay (seconds) before retrying after a hash failure
 
 # OTA fallback mirrors to reduce GitHub 400s during fetch
 OTA_VERSION_URLS = [
