@@ -160,6 +160,26 @@ if (!function_exists('tmon_admin_arr_get')) {
 	}
 }
 
+// Append to provision history (option-backed) with a DB fallback when available
+if (!function_exists('tmon_admin_append_provision_history')) {
+	function tmon_admin_append_provision_history(array $entry) {
+		// Prefer centralized helper if loaded
+		if (function_exists('tmon_admin_record_provision_history')) {
+			return tmon_admin_record_provision_history($entry);
+		}
+		$history = get_option('tmon_admin_provision_history', []);
+		if (!is_array($history)) { $history = []; }
+		$entry['ts'] = current_time('mysql');
+		if (!isset($entry['user'])) {
+			$entry['user'] = (function_exists('wp_get_current_user')) ? wp_get_current_user()->user_login : 'system';
+		}
+		$history[] = $entry;
+		if (count($history) > 500) { $history = array_slice($history, -500); }
+		update_option('tmon_admin_provision_history', $history);
+		return true;
+	}
+}
+
 // Notice renderer
 if (!function_exists('tmon_admin_render_provision_notice')) {
 	function tmon_admin_render_provision_notice() {
@@ -340,7 +360,7 @@ if (!function_exists('tmon_admin_render_provisioning_page')) {
 
 		echo '</div>';
 
-		add_action('admin_footer', function() use ($table_id, $rest_root, $rest_nonce) {
+		add_action('admin_footer', function() use ($table_id, $rest_root, $rest_nonce, $unit_map) {
 			?>
 			<script>
 			jQuery(document).ready(function($) {
