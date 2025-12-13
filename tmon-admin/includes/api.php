@@ -38,6 +38,26 @@ if (!function_exists('tmon_admin_uc_push_request')) {
     }
 }
 
+// Helper: generate a unique unit_id when a device checks in without one
+if (!function_exists('tmon_admin_generate_unique_unit_id')) {
+    function tmon_admin_generate_unique_unit_id($length = 6, $prefix = 'unit-') {
+        global $wpdb;
+        $length = max(4, intval($length));
+        $table  = $wpdb->prefix . 'tmon_devices';
+        $tries  = 0;
+        while ($tries < 8) {
+            $candidate = $prefix . strtolower(wp_generate_password($length, false, false));
+            $exists = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$table} WHERE unit_id = %s", $candidate));
+            if (intval($exists) === 0) {
+                return $candidate;
+            }
+            $tries++;
+        }
+        // Fallback: timestamp-based to avoid hard failure
+        return $prefix . time();
+    }
+}
+
 add_action('rest_api_init', function() {
     register_rest_route('tmon-admin/v1', '/status', [
         'methods' => 'GET',
