@@ -1,5 +1,43 @@
 <?php
 // TMON Admin REST API Endpoints
+
+// Shared helper to push UC install/update payloads (reused by REST + admin page)
+if (!function_exists('tmon_admin_uc_push_request')) {
+    function tmon_admin_uc_push_request($site_url, $package_url, $action = 'install', $auth = '', $sha256 = '') {
+        $site_url = esc_url_raw($site_url);
+        $package_url = esc_url_raw($package_url);
+        $action = $action ? sanitize_text_field($action) : 'install';
+        $sha256 = $sha256 ? sanitize_text_field($sha256) : '';
+        if (!$site_url || !$package_url) {
+            return new WP_Error('missing_params', 'site_url and package_url are required');
+        }
+        // Construct signed payload
+        $secret = defined('TMON_HUB_SHARED_SECRET') ? TMON_HUB_SHARED_SECRET : wp_salt('auth');
+        $payload = [
+            'ts' => time(),
+            'action' => $action,
+            'package_url' => $package_url,
+            'callback' => rest_url('tmon-admin/v1/uc/confirm'),
+        ];
+        if ($sha256) { $payload['sha256'] = $sha256; }
+        $sig = hash_hmac('sha256', wp_json_encode($payload), $secret);
+        $endpoint = rtrim($site_url, '/') . '/wp-json/tmon/v1/uc/pull-install';
+        $resp = wp_remote_post($endpoint, [
+            'timeout' => 20,
+            'headers' => array_filter(['Content-Type'=>'application/json','Authorization' => $auth ? $auth : '']),
+            'body' => wp_json_encode(['payload'=>$payload,'sig'=>$sig]),
+        ]);
+        if (is_wp_error($resp)) return $resp;
+        $code = wp_remote_retrieve_response_code($resp);
+        $body = wp_remote_retrieve_body($resp);
+        return [
+            'success' => in_array($code, [200,201], true),
+            'code' => $code,
+            'body' => $body,
+        ];
+    }
+}
+
 add_action('rest_api_init', function() {
     register_rest_route('tmon-admin/v1', '/status', [
         'methods' => 'GET',
@@ -194,25 +232,15 @@ add_action('rest_api_init', function() {
             $action = sanitize_text_field($request->get_param('action') ?: 'install'); // install|update
             $sha256 = sanitize_text_field($request->get_param('sha256') ?: '');
             $auth = $request->get_param('auth'); // optional Authorization header value for spoke
-            if (!$site_url || !$package_url) return rest_ensure_response(['status'=>'error','message'=>'Missing site_url or package_url']);
-            // Construct signed payload
-            $secret = defined('TMON_HUB_SHARED_SECRET') ? TMON_HUB_SHARED_SECRET : wp_salt('auth');
-            $payload = [
-                'ts' => time(),
-                'action' => $action,
-                'package_url' => $package_url,
-                'callback' => rest_url('tmon-admin/v1/uc/confirm'),
-            ];
-            if ($sha256) { $payload['sha256'] = $sha256; }
-            $sig = hash_hmac('sha256', wp_json_encode($payload), $secret);
-            $endpoint = rtrim($site_url, '/') . '/wp-json/tmon/v1/uc/pull-install';
-            $resp = wp_remote_post($endpoint, [
-                'timeout' => 20,
-                'headers' => array_filter(['Content-Type'=>'application/json','Authorization' => $auth ? $auth : '']),
-                'body' => wp_json_encode(['payload'=>$payload,'sig'=>$sig]),
+            $result = function_exists('tmon_admin_uc_push_request') ? tmon_admin_uc_push_request($site_url, $package_url, $action, $auth, $sha256) : new WP_Error('missing_helper', 'Push helper unavailable');
+            if (is_wp_error($result)) {
+                return new WP_REST_Response(['status'=>'error','message'=>$result->get_error_message()], 400);
+            }
+            return rest_ensure_response([
+                'status' => $result['success'] ? 'ok' : 'error',
+                'code' => $result['code'],
+                'response' => $result['body'],
             ]);
-            $ok = !is_wp_error($resp) && wp_remote_retrieve_response_code($resp) == 200;
-            return rest_ensure_response(['status' => $ok ? 'ok' : 'error', 'response' => is_wp_error($resp) ? $resp->get_error_message() : wp_remote_retrieve_body($resp)]);
         },
         'permission_callback' => '__return_true',
     ]);

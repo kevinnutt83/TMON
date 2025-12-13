@@ -62,6 +62,7 @@ require_once TMON_ADMIN_PATH . 'includes/ai-feedback.php';
 require_once TMON_ADMIN_PATH . 'includes/dashboard-widgets.php';
 require_once TMON_ADMIN_PATH . 'includes/field-data-api.php';
 require_once TMON_ADMIN_PATH . 'admin/location.php';
+require_once TMON_ADMIN_PATH . 'admin/uc-deploy.php';
 require_once TMON_ADMIN_PATH . 'admin/firmware.php';
 
 // Activation ensures schema

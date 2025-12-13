@@ -39,7 +39,7 @@
 - [x] Provisioned device actions (buttons, handlers, confirmations, polish).
 - [x] Device registration not showing (queries/joins, insert/display, notices, empty states).
 - [x] Location push logic (accessible via provisioning, comments, autocomplete/validation).
-- [ ] Non-functional UC pages (menu registration, templates, permissions, UI polish).
+- [x] Non-functional UC pages (menu registration, templates, permissions, UI polish).
 
 ## Phase 5: TMON Unit Connector Plugin
 - [x] Installation and key refresh, provisioning API, field data rx/normalize/forward, dashboards/templates polish, periodic check-in & settings update, integration with Admin, UC shared key obtain/refresh, approved-assignments filtering, remote manageability, dashboards/shortcodes, data export & device info, connectivity monitoring/alerting.
