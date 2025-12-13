@@ -512,6 +512,18 @@ add_action('admin_post_tmon_uc_pair_with_hub', function(){
 	exit;
 });
 
+    // Manual refresh of provisioned devices from Admin hub
+    add_action('admin_post_tmon_uc_refresh_devices', function(){
+        if (!current_user_can('manage_options')) wp_die('Insufficient permissions');
+        check_admin_referer('tmon_uc_refresh_devices');
+        $count = 0;
+        if (function_exists('tmon_uc_backfill_provisioned_from_admin')) {
+            $count = intval(tmon_uc_backfill_provisioned_from_admin());
+        }
+        wp_safe_redirect(add_query_arg(['tmon_refresh'=>1,'fetched'=>$count], wp_get_referer() ?: admin_url('admin.php?page=tmon-settings')));
+        exit;
+    });
+
 // Ensure command table exists (with status column) before any use
 function tmon_uc_ensure_command_table() {
 	global $wpdb;

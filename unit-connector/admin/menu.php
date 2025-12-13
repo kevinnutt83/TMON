@@ -5,6 +5,9 @@
 add_action('admin_menu', function() {
     add_menu_page('TMON Devices', 'TMON Devices', 'manage_options', 'tmon_devices', 'tmon_admin_devices_page');
     add_submenu_page('tmon_devices', 'Provisioned Devices', 'Provisioned Devices', 'manage_options', 'tmon_uc_provisioned', 'tmon_uc_provisioned_page');
+    add_submenu_page('tmon_devices', 'Hub Pairing', 'Hub Pairing', 'manage_options', 'tmon-uc-hub', function(){
+        include __DIR__ . '/../templates/uc-hub.php';
+    });
     add_submenu_page('tmon_devices', 'Settings', 'Settings', 'manage_options', 'tmon-settings', function(){
         include __DIR__ . '/../templates/settings.php';
     });
