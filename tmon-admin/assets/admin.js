@@ -112,6 +112,7 @@
 		const restNonce = localized ? (localized.restNonce || '') : '';
 		const ajaxUrl = localized ? (localized.ajaxUrl || localized.ajaxurl || window.ajaxurl || '/wp-admin/admin-ajax.php') : (window.ajaxurl || '/wp-admin/admin-ajax.php');
 		const ajaxNonce = localized ? (localized.nonce || '') : '';
+		const manifestNonce = localized ? (localized.manifestNonce || '') : '';
 
 		async function fetchManifest(repoParam) {
 			// If REST root is available, try REST endpoint first
@@ -143,7 +144,8 @@
 			// Fallback to admin-ajax
 			try {
 				let adminUrl = `${ajaxUrl}?action=tmon_admin_fetch_github_manifest&repo=${encodeURIComponent(repoParam)}`;
-				if (ajaxNonce) adminUrl += `&nonce=${encodeURIComponent(ajaxNonce)}`;
+				const nonceToSend = manifestNonce || ajaxNonce;
+				if (nonceToSend) adminUrl += `&nonce=${encodeURIComponent(nonceToSend)}`;
 				const res2 = await fetch(adminUrl, { method: 'GET', credentials: 'same-origin' });
 				if (res2.ok) {
 					const json2 = await res2.json();

@@ -513,6 +513,10 @@ add_action('admin_init', function(){
 
 // Ensure firmware metadata transients are set when manifest fetch succeeds
 add_action('wp_ajax_tmon_admin_fetch_github_manifest', function(){
+	if (!current_user_can('manage_options')) {
+		wp_send_json_error(['message' => 'forbidden'], 403);
+	}
+	check_ajax_referer('tmon_admin_manifest', 'nonce');
 	// ...existing fetch code...
 	// On success:
 	// set_transient('tmon_admin_firmware_version', $version, 12 * HOUR_IN_SECONDS);

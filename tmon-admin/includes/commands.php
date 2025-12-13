@@ -35,6 +35,10 @@ add_action('tmon_admin_command_logs_page', function () {
 
 // AJAX handler (if used) should also guard columns
 add_action('wp_ajax_tmon_admin_get_command_logs', function () {
+	if (!current_user_can('manage_options')) {
+		wp_send_json_error(['message' => 'forbidden'], 403);
+	}
+	check_ajax_referer('tmon-admin', 'nonce');
 	global $wpdb;
 	$table = $wpdb->prefix . 'tmon_device_commands';
 	$has_updated = tmon_admin_column_exists($table, 'updated_at');
