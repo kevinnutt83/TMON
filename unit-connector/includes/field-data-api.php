@@ -360,6 +360,20 @@ function tmon_uc_receive_field_data($request) {
             $rec_unit = isset($t['unit_id']) ? sanitize_text_field($t['unit_id']) : $unit_id;
             $rec_machine = isset($t['machine_id']) ? sanitize_text_field($t['machine_id']) : $machine_id;
 
+            // Resolve unit_id from existing mapping via machine_id when missing
+            if (!$rec_unit && $rec_machine) {
+                $row = $wpdb->get_row($wpdb->prepare("SELECT unit_id FROM {$wpdb->prefix}tmon_devices WHERE machine_id=%s", $rec_machine), ARRAY_A);
+                if ($row && !empty($row['unit_id'])) {
+                    $rec_unit = $row['unit_id'];
+                }
+            }
+
+            // If still no unit_id, do not mint a synthetic one; forward for provisioning and skip local insert
+            if (!$rec_unit) {
+                $forward_unknown($rec_unit, $rec_machine, $t);
+                continue;
+            }
+
             // Persist machine_id to unit mapping if both present
             if ($rec_unit && $rec_machine) {
                 $row = $wpdb->get_row($wpdb->prepare("SELECT unit_id, machine_id FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s OR machine_id=%s", $rec_unit, $rec_machine), ARRAY_A);
@@ -368,11 +382,11 @@ function tmon_uc_receive_field_data($request) {
                     $wpdb->update($wpdb->prefix.'tmon_devices', ['machine_id'=>$rec_machine, 'last_seen'=>current_time('mysql')], ['unit_id'=>$row['unit_id']]);
                     $rec_unit = $row['unit_id'];
                 } else {
-                    // Create new mapping row minimally
+                    // Create new mapping row minimally (only when unit_id provided)
                     $wpdb->insert($wpdb->prefix.'tmon_devices', [
-                        'unit_id' => $rec_unit ?: $machine_id,
+                        'unit_id' => $rec_unit,
                         'machine_id' => $rec_machine,
-                        'unit_name' => $rec_unit ?: $rec_machine,
+                        'unit_name' => $rec_unit,
                         'last_seen' => current_time('mysql'),
                         'suspended' => 0,
                     ]);
