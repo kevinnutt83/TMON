@@ -538,9 +538,9 @@ if (!function_exists('tmon_admin_handle_device_check_in')) {
 		$provisioned = !empty($prov_row);
 
 		// NEW: staged + metadata helper
-		$staged_meta = function_exists('tmon_admin_get_staged_meta_for_device')
-			? tmon_admin_get_staged_meta_for_device($machine_id, $unit_id)
-			: ['staged_exists'=>false,'site_url'=>''];
+        $staged_meta = function_exists('tmon_admin_get_staged_meta_for_device')
+            ? (tmon_admin_get_staged_meta_for_device($machine_id, $unit_id) ?: [])
+            : [];
 
 		// Build site URL / wordpress_api_url
 		$wordpress_api_url = $staged_meta['site_url'] ?? '';
@@ -549,16 +549,16 @@ if (!function_exists('tmon_admin_handle_device_check_in')) {
 		}
 
 		// Response extension
-		$response_extra = [
-			'staged_exists'     => (bool) $staged_meta['staged_exists'],
-			'wordpress_api_url' => $wordpress_api_url,
-			'site_url'          => $wordpress_api_url, // alias for clarity
-			'role'              => $staged_meta['role'] ?: ($prov_row['role'] ?? ''),
-			'plan'              => $staged_meta['plan'] ?: ($prov_row['plan'] ?? ''),
-			'firmware'          => $staged_meta['firmware'] ?: ($prov_row['firmware'] ?? ''),
-			'firmware_url'      => $staged_meta['firmware_url'] ?: ($prov_row['firmware_url'] ?? ''),
-			'unit_name'         => $staged_meta['unit_name'] ?: ($prov_row['unit_name'] ?? ''),
-		];
+        $response_extra = [
+            'staged_exists'     => (bool) ($staged_meta['staged_exists'] ?? false),
+            'wordpress_api_url' => $wordpress_api_url,
+            'site_url'          => $wordpress_api_url, // alias for clarity
+            'role'              => $staged_meta['role'] ?? ($prov_row['role'] ?? ''),
+            'plan'              => $staged_meta['plan'] ?? ($prov_row['plan'] ?? ''),
+            'firmware'          => $staged_meta['firmware'] ?? ($prov_row['firmware'] ?? ''),
+            'firmware_url'      => $staged_meta['firmware_url'] ?? ($prov_row['firmware_url'] ?? ''),
+            'unit_name'         => $staged_meta['unit_name'] ?? ($prov_row['unit_name'] ?? ''),
+        ];
 
 		// Merge with existing response
 		return new WP_REST_Response(array_merge([

@@ -350,7 +350,7 @@ if (!function_exists('tmon_admin_render_provisioning_page')) {
 				});
 
 				// Prefill machine/role/plan when unit selected
-				const unitMap = <?php echo wp_json_encode($unit_map); ?>;
+				const unitMap = <?php echo wp_json_encode($unit_map ?: []); ?>;
 				$('#unit_id').on('change', function(){
 					const uid = $(this).val();
 					const meta = unitMap[uid] || {};
@@ -584,7 +584,15 @@ add_action('admin_post_tmon_admin_provision_device', function(){
 	if (!current_user_can('manage_options')) wp_die('Forbidden');
 	check_admin_referer('tmon_admin_provision_device');
 	global $wpdb;
-	tmon_admin_ensure_table();
+	if (!function_exists('tmon_admin_ensure_tables')) {
+		$maybe = dirname(__FILE__) . '/provisioned-devices.php';
+		if (file_exists($maybe)) {
+			require_once $maybe;
+		}
+	}
+	if (function_exists('tmon_admin_ensure_tables')) {
+		tmon_admin_ensure_tables();
+	}
 
 	$unit_id    = sanitize_text_field(isset($_POST['unit_id']) ? $_POST['unit_id'] : '');
 	$machine_id = sanitize_text_field(isset($_POST['machine_id']) ? $_POST['machine_id'] : '');
