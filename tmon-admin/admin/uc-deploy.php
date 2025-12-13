@@ -13,6 +13,41 @@ function tmon_admin_deploy_uc_page(){
     $sites = [];
     if (is_array($pairings)) { foreach ($pairings as $url => $_) { $sites[] = $url; } }
 
+    // Paired Unit Connectors summary (option map + table fallback)
+    echo '<h2>Paired Unit Connectors</h2>';
+    $rows = [];
+    if (function_exists('tmon_admin_ensure_tables')) { tmon_admin_ensure_tables(); }
+    global $wpdb;
+    $uc_table = $wpdb->prefix . 'tmon_uc_sites';
+    if ($wpdb && $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $uc_table))) {
+        $rows = $wpdb->get_results("SELECT normalized_url, hub_key, read_token, COALESCE(last_seen, created_at) AS seen, created_at FROM {$uc_table} ORDER BY COALESCE(last_seen, created_at) DESC LIMIT 200", ARRAY_A);
+    }
+    if (!$rows && is_array($pairings)) {
+        foreach ($pairings as $url => $meta) {
+            $rows[] = [
+                'normalized_url' => $url,
+                'hub_key' => $meta['uc_key'] ?? '',
+                'read_token' => $meta['read_token'] ?? '',
+                'seen' => $meta['paired_at'] ?? '',
+                'created_at' => $meta['paired_at'] ?? '',
+            ];
+        }
+    }
+    echo '<table class="widefat striped"><thead><tr><th>URL</th><th>Hub Key</th><th>Read Token</th><th>Paired/Last Seen</th></tr></thead><tbody>';
+    if ($rows) {
+        foreach ($rows as $r) {
+            echo '<tr>';
+            echo '<td>'.esc_html($r['normalized_url'] ?? '').'</td>';
+            echo '<td><code>'.esc_html($r['hub_key'] ?? '').'</code></td>';
+            echo '<td><code>'.esc_html($r['read_token'] ?? '').'</code></td>';
+            echo '<td>'.esc_html($r['seen'] ?? $r['created_at'] ?? '').'</td>';
+            echo '</tr>';
+        }
+    } else {
+        echo '<tr><td colspan="4"><em>No paired Unit Connectors yet.</em></td></tr>';
+    }
+    echo '</tbody></table>';
+
     if (isset($_POST['tmon_deploy_uc'])) {
         if (!function_exists('tmon_admin_verify_nonce') || !tmon_admin_verify_nonce('tmon_admin_deploy_uc')) {
             echo '<div class="notice notice-error"><p>Security check failed. Please refresh and try again.</p></div>';
