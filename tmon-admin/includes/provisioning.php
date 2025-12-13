@@ -42,6 +42,12 @@ function tmon_admin_maybe_migrate_provisioned_devices() {
     if (empty($have['unit_name'])) {
         $wpdb->query("ALTER TABLE $table ADD COLUMN unit_name VARCHAR(128) DEFAULT ''");
     }
+	if (empty($have['provisioned'])) {
+		$wpdb->query("ALTER TABLE $table ADD COLUMN provisioned TINYINT(1) DEFAULT 0");
+	}
+	if (empty($have['provisioned_at'])) {
+		$wpdb->query("ALTER TABLE $table ADD COLUMN provisioned_at DATETIME DEFAULT NULL");
+	}
     // NEW: firmware metadata
     if (empty($have['firmware'])) {
         $wpdb->query("ALTER TABLE $table ADD COLUMN firmware VARCHAR(128) DEFAULT ''");
