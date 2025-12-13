@@ -86,7 +86,7 @@ Docs/QA
 # TMON Admin — Updated TODO
 
 High-priority
-- [ ] Define missing vars in inline update branch in provisioning page.
+- [x] Define missing vars in inline update branch in provisioning page.
 - [ ] Validate nonce usage across forms/handlers.
 - [ ] Confirm device-side queue consumption and normalized key matching.
 
@@ -535,7 +535,7 @@ Docs/QA
 # TMON Admin — Updated TODO
 
 High-priority
-- [ ] Define missing vars in inline update branch in provisioning page.
+- [x] Define missing vars in inline update branch in provisioning page.
 - [ ] Validate nonce usage across forms/handlers.
 - [ ] Confirm device-side queue consumption and normalized key matching.
 
@@ -984,7 +984,7 @@ Docs/QA
 # TMON Admin — Updated TODO
 
 High-priority
-- [ ] Define missing vars in inline update branch in provisioning page.
+- [x] Define missing vars in inline update branch in provisioning page.
 - [ ] Validate nonce usage across forms/handlers.
 - [ ] Confirm device-side queue consumption and normalized key matching.
 

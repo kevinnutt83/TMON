@@ -395,38 +395,81 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && function_exists('tmon_admin_verify_
     $action = sanitize_text_field($_POST['action'] ?? '');
     $do_provision = isset($_POST['save_provision']);
     $redirect_url = remove_query_arg(['provision'], wp_get_referer() ?: admin_url('admin.php?page=tmon-admin-provisioning'));
+	global $wpdb;
+	$prov_table = isset($wpdb) ? $wpdb->prefix . 'tmon_provisioned_devices' : '';
+	$dev_table  = isset($wpdb) ? $wpdb->prefix . 'tmon_devices' : '';
 
     // --- UPDATE DEVICE ROW (table row form) ---
     if ($action === 'update') {
         $id = intval($_POST['id'] ?? 0);
-        // Load DB row early to provide fallback values for payloads & mirroring
-        $row_tmp = [];
-        if ($id > 0) {
-            $row_tmp = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE id = %d LIMIT 1", $id), ARRAY_A) ?: [];
-        }
-        // Compute normalized or fallback ids for the row
-        $unit_id = sanitize_text_field($_POST['unit_id'] ?? $row_tmp['unit_id'] ?? '');
-        $machine_id = sanitize_text_field($_POST['machine_id'] ?? $row_tmp['machine_id'] ?? '');
-        // Ensure we have a value for unit_name (use posted or fallback to DB row)
-        $unit_name = sanitize_text_field($_POST['unit_name'] ?? $row_tmp['unit_name'] ?? '');
-        $unit_norm = tmon_admin_normalize_key($unit_id);
-        $mac_norm = tmon_admin_normalize_mac($machine_id);
+		// Load DB row early to provide fallback values for payloads & mirroring
+		$row_tmp = [];
+		if ($id > 0 && $prov_table && $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $prov_table))) {
+			$row_tmp = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE id = %d LIMIT 1", $id), ARRAY_A) ?: [];
+		}
+		// Compute normalized or fallback ids for the row
+		$unit_id = sanitize_text_field($_POST['unit_id'] ?? $row_tmp['unit_id'] ?? '');
+		$machine_id = sanitize_text_field($_POST['machine_id'] ?? $row_tmp['machine_id'] ?? '');
+		$unit_name = sanitize_text_field($_POST['unit_name'] ?? $row_tmp['unit_name'] ?? '');
+		$plan = sanitize_text_field($_POST['plan'] ?? $row_tmp['plan'] ?? '');
+		$role = sanitize_text_field($_POST['role'] ?? $row_tmp['role'] ?? '');
+		$status = sanitize_text_field($_POST['status'] ?? $row_tmp['status'] ?? '');
+		$site_url = esc_url_raw($_POST['site_url'] ?? $row_tmp['site_url'] ?? '');
+		$notes = sanitize_textarea_field($_POST['notes'] ?? $row_tmp['notes'] ?? '');
+		$settings_staged_flag = !empty($_POST['settings_staged']) ? 1 : 0;
+		$unit_norm = tmon_admin_normalize_key($unit_id);
+		$mac_norm = tmon_admin_normalize_mac($machine_id);
 
-        // Ensure $exists is defined for this branch (look up by keys)
-        // $exists is computed later and update/insert logic handled below; no direct $data upsert here.
-  
-         // Always set these so later mirror updates have canonical id vars
-         $row_unit_id = $unit_id;
-         $row_machine_id = $machine_id;
-  
-        // Update staged flags using normalized columns
-        if ($do_provision) {
-            if (!empty($mac_norm)) {
-                $wpdb->update($prov_table, ['settings_staged'=>1,'updated_at'=>current_time('mysql')], ['machine_id_norm' => $mac_norm]);
-            } else {
-                $wpdb->update($prov_table, ['settings_staged'=>1,'updated_at'=>current_time('mysql')], ['unit_id_norm' => $unit_norm]);
-            }
-        }
+		// Always set these so later mirror updates have canonical id vars
+		$row_unit_id = $unit_id;
+		$row_machine_id = $machine_id;
+
+		// Update staged flags and core fields
+		if ($prov_table && ($unit_id || $machine_id) && $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $prov_table))) {
+			$where = [];
+			if (!empty($mac_norm)) {
+				$where['machine_id_norm'] = $mac_norm;
+			} elseif (!empty($unit_norm)) {
+				$where['unit_id_norm'] = $unit_norm;
+			}
+			$update_payload = [
+				'unit_id' => $unit_id,
+				'machine_id' => $machine_id,
+				'unit_name' => $unit_name,
+				'plan' => $plan,
+				'role' => $role,
+				'status' => $status ?: ($row_tmp['status'] ?? ''),
+				'site_url' => $site_url,
+				'notes' => $notes,
+				'updated_at' => current_time('mysql'),
+			];
+			if ($do_provision || $settings_staged_flag) {
+				$update_payload['settings_staged'] = 1;
+			}
+			// Update by normalized key or fallback to id if available
+			if ($where) {
+				$wpdb->update($prov_table, $update_payload, $where);
+			} elseif ($id > 0) {
+				$wpdb->update($prov_table, $update_payload, ['id' => $id]);
+			}
+		}
+
+		// Mirror basic fields to device table if present
+		if ($dev_table && $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+			$mirror = [
+				'unit_name' => $unit_name,
+				'plan' => $plan,
+				'role' => $role,
+				'wordpress_api_url' => $site_url,
+				'updated_at' => current_time('mysql'),
+			];
+			if (!empty($unit_id)) {
+				$wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]);
+			}
+			if (!empty($machine_id)) {
+				$wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]);
+			}
+		}
 
         // --- INSERT/UPDATE DEVICE HISTORY RECORD ---
         // Always log provisioning attempts, even for existing devices
