@@ -15,6 +15,9 @@ add_action('rest_api_init', function() {
         'permission_callback' => '__return_true',
     ]);
     register_rest_route('tmon/v1', '/device/data-history', [
+
+            // Flag for upcoming hub sync: lightweight transient
+            set_transient('tmon_uc_devices_dirty', 1, 15 * MINUTE_IN_SECONDS);
         'methods' => 'POST',
         'callback' => 'tmon_uc_receive_data_history',
         'permission_callback' => '__return_true',

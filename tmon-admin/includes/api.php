@@ -142,6 +142,49 @@ add_action('rest_api_init', function() {
             if (is_wp_error($result)) {
                 $code = $result->get_error_code() === 'forbidden' ? 403 : 400;
                 return new WP_REST_Response(['success'=>false,'message'=>$result->get_error_message()], $code);
+
+            // UC sync: accept device mirror payload from Unit Connector (X-TMON-HUB authenticated)
+            register_rest_route('tmon-admin/v1', '/uc/sync-devices', [
+                'methods' => 'POST',
+                'permission_callback' => '__return_true',
+                'callback' => function($request){
+                    $expected = get_option('tmon_admin_uc_key', '');
+                    $provided = '';
+                    if (function_exists('getallheaders')) { $headers = getallheaders(); $provided = $headers['X-TMON-HUB'] ?? ($headers['x-tmon-hub'] ?? ''); }
+                    else { $provided = $_SERVER['HTTP_X_TMON_HUB'] ?? ''; }
+                    if (!$expected || !$provided || !hash_equals((string)$expected, (string)$provided)) {
+                        return new WP_REST_Response(['status'=>'forbidden','message'=>'Invalid hub key'], 403);
+                    }
+
+                    $devices = $request->get_param('devices');
+                    if (!is_array($devices)) {
+                        return new WP_REST_Response(['status'=>'error','message'=>'devices array required'], 400);
+                    }
+                    global $wpdb;
+                    if (function_exists('tmon_admin_ensure_tables')) { tmon_admin_ensure_tables(); }
+                    $prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+                    $count = 0;
+                    foreach ($devices as $d) {
+                        if (!is_array($d)) continue;
+                        $unit_id = sanitize_text_field($d['unit_id'] ?? '');
+                        $machine_id = sanitize_text_field($d['machine_id'] ?? '');
+                        if (!$unit_id && !$machine_id) continue;
+                        $role = sanitize_text_field($d['role'] ?? '');
+                        $name = sanitize_text_field($d['unit_name'] ?? '');
+                        $plan = sanitize_text_field($d['plan'] ?? '');
+                        $status = sanitize_text_field($d['status'] ?? 'active');
+                        $assigned = isset($d['assigned']) ? intval($d['assigned']) : 1;
+                        $wpdb->query($wpdb->prepare(
+                            "INSERT INTO {$prov_table} (unit_id, machine_id, unit_name, role, plan, status, notes, created_at, updated_at)
+                             VALUES (%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
+                             ON DUPLICATE KEY UPDATE machine_id=VALUES(machine_id), unit_name=VALUES(unit_name), role=VALUES(role), plan=VALUES(plan), status=VALUES(status), notes=VALUES(notes), updated_at=NOW()",
+                            $unit_id ?: $machine_id, $machine_id ?: $unit_id, $name ?: ($unit_id ?: $machine_id), $role, $plan, $status, $assigned ? 'synced from UC' : 'unassigned from UC'
+                        ));
+                        $count++;
+                    }
+                    return rest_ensure_response(['status'=>'ok','synced'=>$count]);
+                }
+            ]);
             }
             return rest_ensure_response([
                 'success' => true,

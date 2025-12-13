@@ -121,6 +121,43 @@ function uc_devices_refresh_from_local_mirror() {
 	return $count;
 }
 
+// Schedule periodic sync of UC device mirror to Admin hub
+add_action('init', function(){
+	if (!wp_next_scheduled('tmon_uc_sync_devices_cron')) {
+		wp_schedule_event(time() + 120, 'hourly', 'tmon_uc_sync_devices_cron');
+	}
+});
+
+add_action('tmon_uc_sync_devices_cron', function(){
+	if (!function_exists('tmon_uc_push_devices_to_hub')) return;
+	tmon_uc_push_devices_to_hub();
+});
+
+// Push UC device mirror to Admin hub (used by cron to keep Admin in sync without device double-posts)
+function tmon_uc_push_devices_to_hub($limit = 500) {
+	$hub = trim(get_option('tmon_uc_hub_url', ''));
+	$hub_key = get_option('tmon_uc_hub_shared_key', '');
+	if (!$hub || !$hub_key) return 0;
+	uc_devices_ensure_table();
+	global $wpdb;
+	$table = $wpdb->prefix . 'tmon_uc_devices';
+	$rows = $wpdb->get_results($wpdb->prepare("SELECT unit_id, machine_id, unit_name, role, assigned, updated_at FROM {$table} ORDER BY updated_at DESC LIMIT %d", intval($limit)), ARRAY_A);
+	if (!$rows) return 0;
+	$endpoint = rtrim($hub, '/') . '/wp-json/tmon-admin/v1/uc/sync-devices';
+	$resp = wp_remote_post($endpoint, [
+		'timeout' => 15,
+		'headers' => [
+			'Content-Type' => 'application/json',
+			'X-TMON-HUB' => $hub_key,
+		],
+		'body' => wp_json_encode(['devices' => $rows]),
+	]);
+	if (is_wp_error($resp)) return 0;
+	$code = wp_remote_retrieve_response_code($resp);
+	if ($code !== 200) return 0;
+	return count($rows);
+}
+
 /**
  * Push staged settings to device (reprovision) via Admin hub.
  * UC sends staged settings to Admin which queues and notifies device.
