@@ -26,6 +26,54 @@ add_action('wp_dashboard_setup', function(){
 // Ensure ABSPATH is defined
 defined('ABSPATH') || exit;
 
+// Truthy helper for feature flags
+if (!function_exists('tmon_uc_truthy_flag')) {
+function tmon_uc_truthy_flag($val) {
+    return in_array($val, [true, 1, '1', 'true', 'yes', 'on'], true);
+}}
+
+// Determine if a device supports a given feature based on settings and latest telemetry
+if (!function_exists('tmon_uc_device_supports_feature')) {
+function tmon_uc_device_supports_feature($settings, $latest, $feature) {
+    $flags = [];
+    if (is_array($settings)) $flags = array_merge($flags, $settings);
+    if (is_array($latest)) $flags = array_merge($flags, $latest);
+    $has_sample = tmon_uc_truthy_flag($flags['SAMPLE_TEMP'] ?? null)
+        || tmon_uc_truthy_flag($flags['SAMPLE_HUMID'] ?? null)
+        || tmon_uc_truthy_flag($flags['SAMPLE_BAR'] ?? null)
+        || isset($flags['t_f']) || isset($flags['cur_temp_f']);
+    $has_engine = tmon_uc_truthy_flag($flags['ENGINE_ENABLED'] ?? null)
+        || tmon_uc_truthy_flag($flags['USE_RS485'] ?? null)
+        || isset($flags['engine1_speed_rpm']) || isset($flags['engine2_speed_rpm']);
+    if (in_array($feature, ['engine', 'eng'], true)) return $has_engine;
+    if (in_array($feature, ['sample', 'sampling', 'env', 'environment'], true)) return $has_sample;
+    return $has_sample || $has_engine || empty($feature);
+}}
+
+// Build a list of provisioned devices filtered by feature support
+if (!function_exists('tmon_uc_list_feature_devices')) {
+function tmon_uc_list_feature_devices($feature = 'sample') {
+    global $wpdb;
+    $rows = $wpdb->get_results("SELECT unit_id, unit_name, settings FROM {$wpdb->prefix}tmon_devices ORDER BY unit_name ASC, unit_id ASC", ARRAY_A);
+    if (!$rows) return [];
+    $out = [];
+    foreach ($rows as $r) {
+        $settings = json_decode($r['settings'] ?? '', true);
+        $latest = [];
+        if (!tmon_uc_device_supports_feature($settings, $latest, $feature)) {
+            $fd = $wpdb->get_row($wpdb->prepare("SELECT data FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s ORDER BY created_at DESC LIMIT 1", $r['unit_id']), ARRAY_A);
+            if ($fd && !empty($fd['data'])) {
+                $tmp = json_decode($fd['data'], true);
+                if (is_array($tmp)) $latest = $tmp;
+            }
+        }
+        if (!tmon_uc_device_supports_feature($settings, $latest, $feature)) continue;
+        $label = $r['unit_name'] ? ($r['unit_name'] . ' (' . $r['unit_id'] . ')') : $r['unit_id'];
+        $out[] = ['unit_id' => $r['unit_id'], 'label' => $label];
+    }
+    return $out;
+}}
+
 // [tmon_entity type="company|zone|cluster|device" id="123"]
 add_shortcode('tmon_entity', function($atts) {
     global $wpdb;
@@ -208,53 +256,88 @@ add_shortcode('tmon_device_status', function($atts) {
     return ob_get_clean();
 });
 
-// [tmon_device_history unit_id="123" hours="24"]
+// [tmon_device_history feature="sample|engine" hours="24" unit_id="optional"]
 add_shortcode('tmon_device_history', function($atts) {
-        $a = shortcode_atts(['unit_id' => '', 'hours' => '24'], $atts);
-        $unit_id = esc_attr($a['unit_id']);
-        $hours = intval($a['hours']);
-        if (!$unit_id) return '<em>Missing unit_id.</em>';
-        ob_start();
-        echo '<canvas id="tmon-history-chart" height="120"></canvas>';
-        echo '<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>';
-        echo '<script>(function(){
-                const ctx = document.getElementById("tmon-history-chart").getContext("2d");
-                const base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : (window.location.origin || "") + "/wp-json";
-                const url = `${base}/tmon/v1/device/history?unit_id='. $unit_id .'&hours='. $hours .'`;
-                fetch(url)
-                    .then(r=>r.json())
-                    .then(data=>{
-                        const pts = Array.isArray(data.points) ? data.points : [];
-                        const labels = pts.map(p=>p.t);
-                        const temp = pts.map(p=>p.temp_f);
-                        const humid = pts.map(p=>p.humid);
-                        const bar = pts.map(p=>p.bar);
-                        new Chart(ctx, {
-                            type: "line",
-                            data: {
-                                labels: labels,
-                                datasets: [
-                                    {label: "Temp (F)", data: temp, borderColor: "#e67e22", fill:false, yAxisID: "y1"},
-                                    {label: "Humidity (%)", data: humid, borderColor: "#3498db", fill:false, yAxisID: "y2"},
-                                    {label: "Pressure (hPa)", data: bar, borderColor: "#2ecc71", fill:false, yAxisID: "y3"}
-                                ]
-                            },
-                            options: {
-                                responsive: true,
-                                interaction: { mode: "index", intersect: false },
-                                stacked: false,
-                                plugins: { legend: { position: "top" } },
-                                scales: {
-                                    y1: { type: "linear", position: "left" },
-                                    y2: { type: "linear", position: "right", grid: { drawOnChartArea: false } },
-                                    y3: { type: "linear", position: "right", grid: { drawOnChartArea: false } }
-                                }
-                            }
-                        });
-                    })
-                    .catch(err=>{ console.error("TMON history fetch error", err); });
-        })();</script>';
-        return ob_get_clean();
+    $a = shortcode_atts([
+        'unit_id' => '',
+        'hours' => '24',
+        'feature' => 'sample',
+        'placeholder' => 'Select a device',
+    ], $atts);
+    $hours = max(1, intval($a['hours']));
+    $feature = sanitize_key($a['feature']);
+    $devices = tmon_uc_list_feature_devices($feature);
+    if (empty($devices)) {
+        return '<em>No provisioned devices found for this feature.</em>';
+    }
+
+    $default_unit = sanitize_text_field($a['unit_id']);
+    $unit_ids = wp_list_pluck($devices, 'unit_id');
+    if (!$default_unit || !in_array($default_unit, $unit_ids, true)) {
+        $default_unit = $devices[0]['unit_id'];
+    }
+
+    $select_id = 'tmon-history-select-' . wp_generate_password(6, false, false);
+    $canvas_id = 'tmon-history-chart-' . wp_generate_password(8, false, false);
+    $ajax_root = esc_js(rest_url());
+    ob_start();
+    echo '<div class="tmon-history-widget">';
+    echo '<label class="screen-reader-text" for="'.$select_id.'">Device</label>';
+    echo '<select id="'.$select_id.'" class="tmon-history-select" data-hours="'.$hours.'" data-canvas="'.$canvas_id.'">';
+    foreach ($devices as $d) {
+        $sel = selected($default_unit, $d['unit_id'], false);
+        echo '<option value="'.esc_attr($d['unit_id']).'" '.$sel.'>'.esc_html($d['label']).'</option>';
+    }
+    echo '</select>';
+    echo '<canvas id="'.$canvas_id.'" height="140"></canvas>';
+    echo '<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>';
+    echo '<script>(function(){
+        const select = document.getElementById("'.$select_id.'");
+        const canvas = document.getElementById(select.getAttribute("data-canvas"));
+        if(!select || !canvas) return;
+        const ctx = canvas.getContext("2d");
+        const base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : "'. $ajax_root .'".replace(/\/$/, "");
+        let chart = null;
+        function render(unit){
+            const hrs = select.getAttribute("data-hours") || "'.$hours.'";
+            const url = `${base}/tmon/v1/device/history?unit_id=${encodeURIComponent(unit)}&hours=${encodeURIComponent(hrs)}`;
+            fetch(url).then(r=>r.json()).then(data=>{
+                const pts = Array.isArray(data.points) ? data.points : [];
+                const labels = pts.map(p=>p.t);
+                const temp = pts.map(p=>p.temp_f);
+                const humid = pts.map(p=>p.humid);
+                const bar = pts.map(p=>p.bar);
+                const cfg = {
+                    type: "line",
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            {label: "Temp (F)", data: temp, borderColor: "#e67e22", fill:false, yAxisID: "y1"},
+                            {label: "Humidity (%)", data: humid, borderColor: "#3498db", fill:false, yAxisID: "y2"},
+                            {label: "Pressure (hPa)", data: bar, borderColor: "#2ecc71", fill:false, yAxisID: "y3"}
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        interaction: { mode: "index", intersect: false },
+                        stacked: false,
+                        plugins: { legend: { position: "top" } },
+                        scales: {
+                            y1: { type: "linear", position: "left" },
+                            y2: { type: "linear", position: "right", grid: { drawOnChartArea: false } },
+                            y3: { type: "linear", position: "right", grid: { drawOnChartArea: false } }
+                        }
+                    }
+                };
+                if (chart) { chart.destroy(); }
+                chart = new Chart(ctx, cfg);
+            }).catch(err=>{ console.error("TMON history fetch error", err); });
+        }
+        select.addEventListener("change", function(ev){ render(ev.target.value); });
+        render(select.value);
+    })();</script>';
+    echo '</div>';
+    return ob_get_clean();
 });
 
 // [tmon_devices_history units="123,456" hours="24"]
