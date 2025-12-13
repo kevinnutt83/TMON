@@ -37,7 +37,7 @@
 - [x] Audit page enhancement (verbosity, filter/search, paginate/export, UI polish).
 - [x] Provisioning page redundancy (unified form, tabs/accordions, polish).
 - [x] Provisioned device actions (buttons, handlers, confirmations, polish).
-- [ ] Device registration not showing (queries/joins, insert/display, notices, empty states).
+- [x] Device registration not showing (queries/joins, insert/display, notices, empty states).
 - [ ] Location push logic (accessible via provisioning, comments, autocomplete/validation).
 - [ ] Non-functional UC pages (menu registration, templates, permissions, UI polish).
 

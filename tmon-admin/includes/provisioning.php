@@ -134,13 +134,15 @@ function tmon_admin_get_all_devices() {
     global $wpdb;
     $dev_table = $wpdb->prefix . 'tmon_devices';
     $prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
-    // Include provisioned site_url (fallback to d.wordpress_api_url when missing)
-    $sql = "SELECT d.unit_id, d.machine_id, d.unit_name, p.id as provision_id, p.role, p.company_id, p.plan, p.status, p.notes, p.created_at, p.updated_at, 
-            COALESCE(NULLIF(p.site_url,''), d.wordpress_api_url) AS site_url, d.wordpress_api_url AS original_api_url
-            FROM $dev_table d
-            LEFT JOIN $prov_table p ON d.unit_id = p.unit_id AND d.machine_id = p.machine_id
-            ORDER BY d.unit_id ASC";
-    return $wpdb->get_results($sql, ARRAY_A);
+	// Include provisioned site_url (fallback to d.wordpress_api_url when missing)
+	$sql = "SELECT d.id as device_id, d.unit_id, d.machine_id, d.unit_name, d.role as device_role, d.plan as device_plan, d.last_seen, d.wordpress_api_url,
+		   p.id as provision_id, p.role, p.company_id, p.plan, p.status, p.notes, p.created_at, p.updated_at,
+		   COALESCE(NULLIF(p.site_url,''), d.wordpress_api_url) AS site_url, d.wordpress_api_url AS original_api_url,
+		   p.provisioned, p.provisioned_at
+		   FROM $dev_table d
+		   LEFT JOIN $prov_table p ON d.unit_id = p.unit_id AND d.machine_id = p.machine_id
+		   ORDER BY d.id DESC";
+	return $wpdb->get_results($sql, ARRAY_A);
 }
 
 // Safe getter to avoid undefined index notices
@@ -201,9 +203,10 @@ if (!function_exists('tmon_admin_render_provisioning_page')) {
 		echo '<nav class="tmon-tabs"><a href="#tmon-prov-list">Devices</a> | <a href="#tmon-prov-form">Save & Provision</a> | <a href="#tmon-prov-history">History</a></nav>';
 
 		echo '<h2 id="tmon-prov-list">Devices</h2>';
+		echo '<p class="description">If registrations are missing, ensure devices table exists and mirrors provisioned records. This list includes staged/provisioned flags.</p>';
 		echo '<table class="wp-list-table widefat striped" id="'.esc_attr($table_id).'">';
 		echo '<thead><tr>';
-		echo '<th>ID</th><th>Unit ID</th><th>Machine ID</th><th>Name</th><th>Plan</th><th>Status</th><th>Site</th><th>Staged</th><th>Can Bill</th><th>Created</th><th>Updated</th>';
+		echo '<th>ID</th><th>Unit ID</th><th>Machine ID</th><th>Name</th><th>Plan</th><th>Status</th><th>Site</th><th>Staged</th><th>Provisioned</th><th>Last Seen</th><th>Created</th><th>Updated</th>';
 		echo '</tr></thead><tbody>';
 		if ($has_devices) {
 			foreach ($all_devices as $r) {
@@ -211,12 +214,13 @@ if (!function_exists('tmon_admin_render_provisioning_page')) {
 				$unit_id     = tmon_admin_arr_get($r, 'unit_id', '');
 				$machine_id  = tmon_admin_arr_get($r, 'machine_id', '');
 				$name        = tmon_admin_arr_get($r, 'unit_name', '');
-				$plan        = tmon_admin_arr_get($r, 'plan', '');
+				$plan        = tmon_admin_arr_get($r, 'plan', tmon_admin_arr_get($r, 'device_plan', ''));
 				$status      = tmon_admin_arr_get($r, 'status', '');
 				$site_url    = tmon_admin_arr_get($r, 'site_url', '');
 				$staged_raw  = tmon_admin_arr_get($r, 'settings_staged', '');
 				$staged_flag = $staged_raw ? 'Yes' : 'No';
-				$can_bill    = tmon_admin_arr_get($r, 'canBill', 0) ? 'Yes' : 'No';
+				$prov_flag   = tmon_admin_arr_get($r, 'provisioned', 0) ? 'Yes' : 'No';
+				$last_seen   = tmon_admin_arr_get($r, 'last_seen', '');
 				$created_at  = tmon_admin_arr_get($r, 'created_at', '');
 				$updated_at  = tmon_admin_arr_get($r, 'updated_at', '');
 				echo '<tr>';
@@ -228,7 +232,8 @@ if (!function_exists('tmon_admin_render_provisioning_page')) {
 				echo '<td>'.esc_html($status).'</td>';
 				echo '<td>'.esc_html($site_url).'</td>';
 				echo '<td>'.esc_html($staged_flag).'</td>';
-				echo '<td>'.esc_html($can_bill).'</td>';
+				echo '<td>'.esc_html($prov_flag).'</td>';
+				echo '<td>'.esc_html($last_seen).'</td>';
 				echo '<td>'.esc_html($created_at).'</td>';
 				echo '<td>'.esc_html($updated_at).'</td>';
 				echo '</tr>';
