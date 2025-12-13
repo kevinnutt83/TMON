@@ -38,7 +38,7 @@
 - [x] Provisioning page redundancy (unified form, tabs/accordions, polish).
 - [x] Provisioned device actions (buttons, handlers, confirmations, polish).
 - [x] Device registration not showing (queries/joins, insert/display, notices, empty states).
-- [ ] Location push logic (accessible via provisioning, comments, autocomplete/validation).
+- [x] Location push logic (accessible via provisioning, comments, autocomplete/validation).
 - [ ] Non-functional UC pages (menu registration, templates, permissions, UI polish).
 
 ## Phase 5: TMON Unit Connector Plugin

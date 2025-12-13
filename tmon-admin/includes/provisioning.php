@@ -193,6 +193,21 @@ if (!function_exists('tmon_admin_render_provisioning_page')) {
 	function tmon_admin_render_provisioning_page() {
 		$all_devices = tmon_admin_get_all_devices();
 		$has_devices = !empty($all_devices);
+		$site_options = [];
+		$known_units = [];
+		if ($has_devices) {
+			foreach ($all_devices as $row) {
+				if (!empty($row['site_url'])) $site_options[$row['site_url']] = true;
+				if (!empty($row['original_api_url'])) $site_options[$row['original_api_url']] = true;
+				if (!empty($row['unit_id'])) $known_units[$row['unit_id']] = true;
+			}
+		}
+		$pairings = get_option('tmon_admin_uc_sites', []);
+		if (is_array($pairings)) {
+			foreach ($pairings as $purl => $info) { $site_options[$purl] = true; }
+		}
+		$rest_root = esc_url_raw(rest_url());
+		$rest_nonce = wp_create_nonce('wp_rest');
 		$table_id = 'tmon-provisioning-devices';
 		$form_action = admin_url('admin-post.php');
 		$nonce = wp_create_nonce('tmon_admin_provision_device');
@@ -262,12 +277,34 @@ if (!function_exists('tmon_admin_render_provisioning_page')) {
 		echo '</form>';
 		echo '</details>';
 
+		echo '<h2 id="tmon-location-push">Push Device Location</h2>';
+		echo '<details class="tmon-card"><summary>Send GPS to device via Unit Connector</summary>';
+		echo '<p class="description">Use this when a device needs a manual GPS override. Fields validate locally, and autocomplete uses paired UC sites and known Unit IDs.</p>';
+		echo '<form id="tmon-location-push-form" class="tmon-location-form">';
+		echo '<table class="form-table">';
+		echo '<tr><th scope="row"><label for="loc_site_url">UC Site URL</label></th><td><input name="site_url" id="loc_site_url" type="url" class="regular-text" list="tmon-location-sites" placeholder="https://uc.example.com" required>';
+		echo '<datalist id="tmon-location-sites">';
+		foreach (array_keys($site_options) as $s) { echo '<option value="'.esc_attr($s).'"></option>'; }
+		echo '</datalist><p class="description">Must match a paired UC site; uses UC key or hub key for auth.</p></td></tr>';
+		echo '<tr><th scope="row"><label for="loc_unit_id">Unit ID</label></th><td><input name="unit_id" id="loc_unit_id" type="text" class="regular-text" list="tmon-location-units" placeholder="unit-123" required>';
+		echo '<datalist id="tmon-location-units">';
+		foreach (array_keys($known_units) as $uid) { echo '<option value="'.esc_attr($uid).'"></option>'; }
+		echo '</datalist></td></tr>';
+		echo '<tr><th scope="row"><label for="loc_gps_lat">Latitude</label></th><td><input name="gps_lat" id="loc_gps_lat" type="number" step="any" class="regular-text" required></td></tr>';
+		echo '<tr><th scope="row"><label for="loc_gps_lng">Longitude</label></th><td><input name="gps_lng" id="loc_gps_lng" type="number" step="any" class="regular-text" required></td></tr>';
+		echo '<tr><th scope="row"><label for="loc_gps_alt_m">Altitude (m)</label></th><td><input name="gps_alt_m" id="loc_gps_alt_m" type="number" step="any" class="regular-text"></td></tr>';
+		echo '<tr><th scope="row"><label for="loc_gps_accuracy_m">Accuracy (m)</label></th><td><input name="gps_accuracy_m" id="loc_gps_accuracy_m" type="number" step="any" class="regular-text"></td></tr>';
+		echo '</table>';
+		echo '<p class="submit"><button type="submit" class="button button-primary">Push Location via UC</button> <span id="tmon-location-status" class="tmon-inline-status" style="margin-left:8px;"></span></p>';
+		echo '</form>';
+		echo '</details>';
+
 		echo '<h2 id="tmon-prov-history">Provisioning History</h2>';
 		echo '<p><a href="'.esc_url(admin_url('admin.php?page=tmon-admin-provisioning-history')).'" class="button">View Provisioning History</a></p>';
 
 		echo '</div>';
 
-		add_action('admin_footer', function() use ($table_id) {
+		add_action('admin_footer', function() use ($table_id, $rest_root, $rest_nonce) {
 			?>
 			<script>
 			jQuery(document).ready(function($) {
@@ -276,6 +313,60 @@ if (!function_exists('tmon_admin_render_provisioning_page')) {
 					columnDefs: [{ visible: false, targets: [0] }]
 				});
 			});
+
+			(function(){
+				var form = document.getElementById('tmon-location-push-form');
+				if (!form) return;
+				var statusEl = document.getElementById('tmon-location-status');
+				function setStatus(msg, type){
+					if (!statusEl) return;
+					statusEl.textContent = msg || '';
+					statusEl.style.color = (type === 'error') ? '#d63638' : (type === 'success' ? '#006500' : '#3c434a');
+				}
+				form.addEventListener('submit', async function(e){
+					e.preventDefault();
+					var site = (form.site_url.value || '').trim();
+					var unit = (form.unit_id.value || '').trim();
+					var lat = parseFloat(form.gps_lat.value);
+					var lng = parseFloat(form.gps_lng.value);
+					if (!site || !unit || isNaN(lat) || isNaN(lng)) { setStatus('Site URL, Unit ID, latitude, and longitude are required.', 'error'); return; }
+					if (lat < -90 || lat > 90 || lng < -180 || lng > 180) { setStatus('Latitude must be between -90 and 90, longitude between -180 and 180.', 'error'); return; }
+					var payload = { site_url: site, unit_id: unit, gps_lat: lat, gps_lng: lng };
+					if (form.gps_alt_m.value !== '') {
+						var alt = parseFloat(form.gps_alt_m.value);
+						if (isNaN(alt)) { setStatus('Altitude must be a number.', 'error'); return; }
+						payload.gps_alt_m = alt;
+					}
+					if (form.gps_accuracy_m.value !== '') {
+						var acc = parseFloat(form.gps_accuracy_m.value);
+						if (isNaN(acc)) { setStatus('Accuracy must be a number.', 'error'); return; }
+						payload.gps_accuracy_m = acc;
+					}
+					setStatus('Sending location…', 'info');
+					try {
+						var res = await fetch('<?php echo esc_js(untrailingslashit($rest_root)); ?>/tmon-admin/v1/device/gps-override', {
+							method: 'POST',
+							credentials: 'same-origin',
+							headers: {
+								'Content-Type': 'application/json',
+								'X-WP-Nonce': '<?php echo esc_js($rest_nonce); ?>'
+							},
+							body: JSON.stringify(payload)
+						});
+						var data = null;
+						try { data = await res.json(); } catch(e) {}
+						if (res.ok && data && data.success) {
+							setStatus('Location pushed (HTTP ' + (data.code || res.status) + ').', 'success');
+							form.reset();
+						} else {
+							var msg = (data && data.message) ? data.message : ('Push failed (HTTP ' + res.status + ').');
+							setStatus(msg, 'error');
+						}
+					} catch(err) {
+						setStatus('Push failed: ' + (err && err.message ? err.message : 'Unknown error'), 'error');
+					}
+				});
+			})();
 			</script>
 			<?php
 		});

@@ -65,6 +65,33 @@ add_action('rest_api_init', function() {
             return rest_ensure_response(['rows'=>$all]);
         }
     ]);
+
+    // Push GPS override to a device via UC (used by provisioning/location tools)
+    register_rest_route('tmon-admin/v1', '/device/gps-override', [
+        'methods' => 'POST',
+        'permission_callback' => function(){ return current_user_can('manage_options'); },
+        'callback' => function($request){
+            $site_url = esc_url_raw($request->get_param('site_url'));
+            $unit_id = sanitize_text_field($request->get_param('unit_id'));
+            $lat = $request->get_param('gps_lat');
+            $lng = $request->get_param('gps_lng');
+            $alt = $request->get_param('gps_alt_m');
+            $acc = $request->get_param('gps_accuracy_m');
+            if (!function_exists('tmon_admin_push_location_settings')) {
+                return new WP_REST_Response(['success'=>false,'message'=>'Location helper unavailable'], 500);
+            }
+            $result = tmon_admin_push_location_settings($site_url, $unit_id, $lat, $lng, $alt, $acc);
+            if (is_wp_error($result)) {
+                $code = $result->get_error_code() === 'forbidden' ? 403 : 400;
+                return new WP_REST_Response(['success'=>false,'message'=>$result->get_error_message()], $code);
+            }
+            return rest_ensure_response([
+                'success' => true,
+                'code' => isset($result['code']) ? intval($result['code']) : 200,
+                'body' => $result['body'] ?? '',
+            ]);
+        }
+    ]);
     // Public claim request endpoint (authenticated user recommended)
     register_rest_route('tmon-admin/v1', '/claim', [
         'methods' => 'POST',
