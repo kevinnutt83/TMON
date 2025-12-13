@@ -20,9 +20,7 @@ add_action('admin_init', function() {
         $current = home_url();
         $val = get_option('tmon_uc_hub_url', $current);
         echo '<input type="url" name="tmon_uc_hub_url" class="regular-text" placeholder="'.esc_attr($current).'" value="' . esc_attr($val) . '" />';
-        echo '<p class="description">Defaults to this site URL; set your Admin hub if different.</p>';
-        $pair_url = wp_nonce_url(admin_url('admin-post.php?action=tmon_uc_pair_with_hub'), 'tmon_uc_pair_with_hub');
-        echo '<p><a class="button button-secondary" href="' . esc_url($pair_url) . '">Pair with Hub</a></p>';
+        echo '<p class="description">Defaults to this site URL; set your Admin hub if different. Pairing and diagnostics now live under Hub Pairing.</p>';
     }, 'tmon_uc_settings', 'tmon_uc_main');
 
     // Purge utilities section (rendered on a separate page area to avoid nested forms)
@@ -57,7 +55,7 @@ add_action('admin_post_tmon_uc_generate_key', function(){
         $key = wp_generate_password(48, false, false);
     }
     update_option('tmon_uc_admin_key', $key);
-    wp_safe_redirect(admin_url('admin.php?page=tmon-settings&keygen=1'));
+    wp_safe_redirect(admin_url('admin.php?page=tmon-uc-hub&keygen=1'));
     exit;
 });
 
@@ -187,9 +185,9 @@ add_action('admin_post_tmon_uc_pair_with_hub', function(){
         if (function_exists('tmon_uc_backfill_provisioned_from_admin')) {
             tmon_uc_backfill_provisioned_from_admin();
         }
-        wp_safe_redirect(admin_url('admin.php?page=tmon-settings&paired=1'));
+        wp_safe_redirect(admin_url('admin.php?page=tmon-uc-hub&paired=1'));
     } else {
-        wp_safe_redirect(admin_url('admin.php?page=tmon-settings&paired=0&msg=bad_response'));
+        wp_safe_redirect(admin_url('admin.php?page=tmon-uc-hub&paired=0&msg=bad_response'));
     }
     exit;
 });
@@ -395,9 +393,9 @@ add_action('admin_post_tmon_uc_pair_with_hub', function(){
         if (function_exists('tmon_uc_backfill_provisioned_from_admin')) {
             tmon_uc_backfill_provisioned_from_admin();
         }
-        wp_safe_redirect(admin_url('admin.php?page=tmon-settings&paired=1'));
+        wp_safe_redirect(admin_url('admin.php?page=tmon-uc-hub&paired=1'));
     } else {
-        wp_safe_redirect(admin_url('admin.php?page=tmon-settings&paired=0&msg=bad_response'));
+        wp_safe_redirect(admin_url('admin.php?page=tmon-uc-hub&paired=0&msg=bad_response'));
     }
     exit;
 });
@@ -520,7 +518,7 @@ add_action('admin_post_tmon_uc_pair_with_hub', function(){
         if (function_exists('tmon_uc_backfill_provisioned_from_admin')) {
             $count = intval(tmon_uc_backfill_provisioned_from_admin());
         }
-        wp_safe_redirect(add_query_arg(['tmon_refresh'=>1,'fetched'=>$count], wp_get_referer() ?: admin_url('admin.php?page=tmon-settings')));
+        wp_safe_redirect(add_query_arg(['tmon_refresh'=>1,'fetched'=>$count], wp_get_referer() ?: admin_url('admin.php?page=tmon-uc-hub')));
         exit;
     });
 

@@ -3,21 +3,9 @@
 ?>
 <div class="wrap tmon-admin-page">
     <h1>TMON Unit Connector Settings</h1>
-    <?php if (isset($_GET['keygen'])): ?>
-        <div class="notice notice-success is-dismissible"><p>Shared key generated.</p></div>
-    <?php endif; ?>
-    <?php if (isset($_GET['paired'])): ?>
-        <?php if (intval($_GET['paired']) === 1): ?>
-            <div class="notice notice-success is-dismissible"><p>Paired with Hub successfully.</p></div>
-        <?php else: ?>
-            <div class="notice notice-error is-dismissible"><p>Pairing failed<?php echo isset($_GET['msg']) ? ': ' . esc_html($_GET['msg']) : '.'; ?></p></div>
-        <?php endif; ?>
-    <?php endif; ?>
+    <p class="description">Pairing and connection diagnostics moved to the Hub Pairing page under TMON Devices.</p>
     <?php if (isset($_GET['purge'])): ?>
         <div class="notice notice-warning is-dismissible"><p><?php echo $_GET['purge']==='all' ? 'All Unit Connector data purged.' : 'Unit data purged.'; ?></p></div>
-    <?php endif; ?>
-    <?php if (isset($_GET['tmon_refresh'])): ?>
-        <div class="notice notice-success is-dismissible"><p>Devices refreshed from Admin hub.</p></div>
     <?php endif; ?>
     <?php if (isset($_GET['tmon_cfg'])): ?>
         <?php if ($_GET['tmon_cfg'] === 'staged'): ?>
@@ -61,36 +49,6 @@
         </table>
         <?php submit_button(); ?>
     </form>
-
-    <p>
-        <?php
-        $refresh_url = wp_nonce_url(admin_url('admin-post.php?action=tmon_uc_refresh_devices'), 'tmon_uc_refresh_devices');
-        ?>
-        <a class="button button-secondary" href="<?php echo esc_url($refresh_url); ?>">Refresh Devices from Admin Hub</a>
-    </p>
-
-    <hr>
-    <h2>Pairing Diagnostics</h2>
-    <table class="widefat striped">
-        <thead><tr><th>Hub URL</th><th>Normalized</th><th>Paired At</th><th>Read Token</th></tr></thead>
-        <tbody>
-        <?php
-        $paired = get_option('tmon_uc_paired_sites', []);
-        if (is_array($paired) && !empty($paired)) {
-            foreach ($paired as $norm => $info) {
-                echo '<tr>';
-                echo '<td>'.esc_html($info['site'] ?? '').'</td>';
-                echo '<td><code>'.esc_html($norm).'</code></td>';
-                echo '<td>'.esc_html($info['paired_at'] ?? '').'</td>';
-                echo '<td><code>'.esc_html($info['read_token'] ?? '').'</code></td>';
-                echo '</tr>';
-            }
-        } else {
-            echo '<tr><td colspan="4"><em>No paired hubs recorded yet.</em></td></tr>';
-        }
-        ?>
-        </tbody>
-    </table>
 
     <h2>Device Configuration (Staged Settings)</h2>
     <p class="description">Stage configuration values that devices will fetch and apply on next sync. Typed inputs cover common variables; use the JSON editor for additional settings from firmware.</p>
@@ -147,11 +105,6 @@
             <input type="hidden" name="unit_id" value="" id="tmon_push_unit_id" />
             <button type="submit" class="button">Push Staged Settings to Admin</button>
         </form>
-    </p>
-
-    <p>
-        <?php $refresh_url = wp_nonce_url(admin_url('admin-post.php?action=tmon_uc_refresh_devices'), 'tmon_uc_refresh_devices'); ?>
-        <a class="button button-secondary" href="<?php echo esc_url($refresh_url); ?>">Refresh Devices from Admin Hub</a>
     </p>
 
     <hr>
