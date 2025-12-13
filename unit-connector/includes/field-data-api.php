@@ -9,26 +9,26 @@ function tmon_uc_read_permission($request) {
 }}
 
 add_action('rest_api_init', function() {
-    register_rest_route('tmon/v1', '/device/field-data', [
+    register_rest_route('tmon/v1', '/device/field-data', array(
         'methods' => 'POST',
         'callback' => 'tmon_uc_receive_field_data',
         'permission_callback' => '__return_true',
-    ]);
-    register_rest_route('tmon/v1', '/device/data-history', [
+    ));
+    register_rest_route('tmon/v1', '/device/data-history', array(
         'methods' => 'POST',
         'callback' => 'tmon_uc_receive_data_history',
         'permission_callback' => '__return_true',
-    ]);
-    register_rest_route('tmon/v1', '/device/history', [
+    ));
+    register_rest_route('tmon/v1', '/device/history', array(
         'methods' => 'GET',
         'callback' => 'tmon_uc_get_device_history',
         // Publicly readable so front-end shortcodes can fetch without special headers
         'permission_callback' => '__return_true',
-        'args' => [
-            'unit_id' => ['required' => true],
-            'hours' => ['required' => false],
-        ],
-    ]);
+        'args' => array(
+            'unit_id' => array('required' => true),
+            'hours' => array('required' => false),
+        ),
+    ));
 
     // Token-protected CSV export (normalized fields); optional unit_id/time-window filters and gzip
     register_rest_route('tmon/v1', '/admin/field-data.csv', [
