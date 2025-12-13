@@ -414,6 +414,27 @@ function tmon_uc_receive_field_data($request) {
                 if ($incoming_name) { $update['unit_name'] = $incoming_name; }
                 $wpdb->update($wpdb->prefix.'tmon_devices', $update, ['unit_id' => $rec_unit]);
             }
+
+            // Mirror into UC devices table so Provisioned Devices lists reporters
+            if (function_exists('uc_devices_upsert_row')) {
+                uc_devices_upsert_row([
+                    'unit_id' => $rec_unit,
+                    'machine_id' => $rec_machine,
+                    'unit_name' => $incoming_name ?: $rec_unit,
+                    'role' => $t['role'] ?? '',
+                    'assigned' => 1,
+                ]);
+            } else {
+                // Fallback minimal insert
+                $uc_table = $wpdb->prefix . 'tmon_uc_devices';
+                if (function_exists('uc_devices_ensure_table')) { uc_devices_ensure_table(); }
+                $wpdb->query($wpdb->prepare(
+                    "INSERT INTO {$uc_table} (unit_id, machine_id, unit_name, role, assigned, updated_at)
+                     VALUES (%s,%s,%s,%s,1,NOW())
+                     ON DUPLICATE KEY UPDATE machine_id=VALUES(machine_id), unit_name=VALUES(unit_name), role=VALUES(role), assigned=1, updated_at=NOW()",
+                    $rec_unit, $rec_machine, $incoming_name ?: $rec_unit, isset($t['role']) ? sanitize_text_field($t['role']) : ''
+                ));
+            }
             // Update status JSON with latest GPS if present
             $gps_lat = $t['gps_lat'] ?? ($t['GPS_LAT'] ?? null);
             $gps_lng = $t['gps_lng'] ?? ($t['GPS_LNG'] ?? null);
