@@ -106,6 +106,10 @@ function tmon_admin_install_schema() {
 		'wordpress_api_url' => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN wordpress_api_url VARCHAR(255) DEFAULT ''",
 		'last_seen'         => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN last_seen DATETIME NULL DEFAULT NULL",
 		'canBill'           => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN canBill TINYINT(1) NOT NULL DEFAULT 0",
+		'role'              => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN role VARCHAR(32) DEFAULT 'base'",
+		'plan'              => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN plan VARCHAR(64) DEFAULT 'standard'",
+		'provisioned'       => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN provisioned TINYINT(1) DEFAULT 0",
+		'provisioned_at'    => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN provisioned_at DATETIME DEFAULT NULL",
 	]);
 
 	// Hub shared key

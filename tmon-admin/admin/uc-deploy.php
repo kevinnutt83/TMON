@@ -53,7 +53,14 @@ function tmon_admin_deploy_uc_page(){
     echo '</form>';
     echo '<h2>Recent Activity</h2>';
     global $wpdb;
-    $rows = $wpdb->get_results("SELECT created_at, action, details FROM {$wpdb->prefix}tmon_audit WHERE action='uc_confirm' ORDER BY created_at DESC LIMIT 50", ARRAY_A);
+    if (function_exists('tmon_admin_audit_ensure_tables')) {
+        tmon_admin_audit_ensure_tables();
+    }
+    $audit_table = function_exists('tmon_admin_audit_table_name') ? tmon_admin_audit_table_name() : ($wpdb->prefix . 'tmon_admin_audit');
+    $rows = [];
+    if ($wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $audit_table))) {
+        $rows = $wpdb->get_results($wpdb->prepare("SELECT ts AS created_at, action, COALESCE(context, extra) AS details FROM {$audit_table} WHERE action=%s ORDER BY ts DESC LIMIT 50", 'uc_confirm'), ARRAY_A);
+    }
     echo '<table class="widefat"><thead><tr><th>Time</th><th>Details</th></tr></thead><tbody>';
     foreach ($rows as $r) echo '<tr><td>'.esc_html($r['created_at']).'</td><td><code>'.esc_html($r['details']).'</code></td></tr>';
     if (empty($rows)) echo '<tr><td colspan="2"><em>No confirmations yet.</em></td></tr>';

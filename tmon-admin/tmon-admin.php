@@ -55,6 +55,7 @@ require_once TMON_ADMIN_PATH . 'includes/notifications.php';
 require_once TMON_ADMIN_PATH . 'includes/ota.php';
 require_once TMON_ADMIN_PATH . 'includes/files.php';
 require_once TMON_ADMIN_PATH . 'includes/groups.php';
+require_once TMON_ADMIN_PATH . 'includes/provisioned-devices.php';
 require_once TMON_ADMIN_PATH . 'includes/firmware.php';
 require_once TMON_ADMIN_PATH . 'includes/custom-code.php';
 require_once TMON_ADMIN_PATH . 'includes/export.php';
@@ -94,6 +95,8 @@ $tmon_admin_page_actions = [
 	'tmon_admin_provisioning_page' => 'tmon_admin_provisioning_page',
 	'tmon_admin_provisioning_activity_page' => 'tmon_admin_provisioning_activity_page',
 	'tmon_admin_provisioning_history_page' => 'tmon_admin_provisioning_history_page',
+	'tmon_admin_provisioned_devices_page' => 'tmon_admin_provisioned_devices_page',
+	'tmon_admin_command_logs_page' => 'tmon_admin_command_logs_page',
 ];
 foreach ($tmon_admin_page_actions as $hook => $callback) {
 	if (function_exists($callback) && !has_action($hook, $callback)) {
