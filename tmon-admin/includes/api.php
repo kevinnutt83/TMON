@@ -302,9 +302,10 @@ add_action('rest_api_init', function() {
             if (!$read_token) {
                 try { $read_token = bin2hex(random_bytes(24)); } catch (Exception $e) { $read_token = wp_generate_password(48, false, false); }
             }
+            $paired_at = current_time('mysql');
             $map[$site_url] = [
                 'uc_key' => $uc_key,
-                'paired_at' => current_time('mysql'),
+                'paired_at' => $paired_at,
                 'read_token' => $read_token,
             ];
             update_option('tmon_admin_uc_sites', $map);
@@ -326,11 +327,26 @@ add_action('rest_api_init', function() {
                     'hub_key' => $hub_key,
                     'read_token' => $read_token,
                     'last_seen' => $now,
-                    'created_at' => $now,
+                    'created_at' => $paired_at,
                     'updated_at' => $now,
                 ]);
             }
-            return rest_ensure_response(['status'=>'ok','hub_key'=>$hub_key, 'read_token'=>$read_token]);
+            // Persist last pair info for admin notices
+            update_option('tmon_admin_uc_last_pair', [
+                'site_url' => $site_url,
+                'normalized_url' => $norm_url,
+                'paired_at' => $paired_at,
+                'hub_key' => $hub_key,
+                'read_token' => $read_token,
+            ]);
+            return rest_ensure_response([
+                'status' => 'ok',
+                'hub_key' => $hub_key,
+                'read_token' => $read_token,
+                'normalized_url' => $norm_url,
+                'paired_at' => $paired_at,
+                'message' => 'Paired with admin hub successfully',
+            ]);
         }
     ]);
 

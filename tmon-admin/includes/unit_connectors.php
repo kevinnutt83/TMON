@@ -8,6 +8,15 @@ add_action('tmon_admin_uc_connectors_page', function () {
 	$table = $wpdb->prefix . 'tmon_uc_sites';
 	echo '<div class="wrap"><h1>Unit Connectors</h1>';
 
+	// Show latest pairing notice if available
+	$last_pair = get_option('tmon_admin_uc_last_pair');
+	if (is_array($last_pair) && !empty($last_pair['normalized_url'])) {
+		$ts = esc_html($last_pair['paired_at'] ?? '');
+		$url = esc_html($last_pair['normalized_url']);
+		echo '<div class="notice notice-success"><p>Unit Connector paired: ' . $url . ($ts ? ' at ' . $ts : '') . '</p></div>';
+		delete_option('tmon_admin_uc_last_pair');
+	}
+
 	$rows = [];
 	if (function_exists('tmon_admin_table_exists') && tmon_admin_table_exists($table)) {
 		$rows = $wpdb->get_results("SELECT id, normalized_url, hub_key, read_token, last_seen, created_at FROM $table ORDER BY COALESCE(last_seen, created_at) DESC LIMIT 200");
