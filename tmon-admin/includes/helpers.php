@@ -46,6 +46,12 @@ function tmon_admin_normalize_url($url) {
 	return $scheme . '://' . $host . $path;
 }
 
+// Nonce verifier used by legacy admin pages
+function tmon_admin_verify_nonce($action, $field = '_wpnonce') {
+	if (empty($_REQUEST[$field])) return false;
+	return (bool) wp_verify_nonce(sanitize_text_field(wp_unslash($_REQUEST[$field])), $action);
+}
+
 function tmon_admin_once($key) {
 	static $done = [];
 	if (isset($done[$key])) return false;
