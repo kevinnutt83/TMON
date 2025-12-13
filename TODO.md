@@ -35,7 +35,7 @@
 - [x] Device location page security error (menu removal, move logic, comments, form polish).
 - [x] Move purge data button/function (to includes/settings.php, UI parity, admin notices).
 - [x] Audit page enhancement (verbosity, filter/search, paginate/export, UI polish).
-- [ ] Provisioning page redundancy (unified form, tabs/accordions, polish).
+- [x] Provisioning page redundancy (unified form, tabs/accordions, polish).
 - [ ] Provisioned device actions (buttons, handlers, confirmations, polish).
 - [ ] Device registration not showing (queries/joins, insert/display, notices, empty states).
 - [ ] Location push logic (accessible via provisioning, comments, autocomplete/validation).
