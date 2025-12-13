@@ -46,27 +46,9 @@ async def async_http_request(url, method='GET', headers=None, data=None):
 WORDPRESS_API_URL = settings.WORDPRESS_API_URL
 WORDPRESS_USERNAME = getattr(settings, 'WORDPRESS_USERNAME', None)
 WORDPRESS_PASSWORD = getattr(settings, 'WORDPRESS_PASSWORD', None)
-_jwt_token = None
-
+# Legacy stub: JWT removed; return empty string to avoid errors
 def get_jwt_token():
-    global _jwt_token
-    if _jwt_token:
-        return _jwt_token
-    if not WORDPRESS_USERNAME or not WORDPRESS_PASSWORD:
-        raise Exception('WordPress username/password not set in settings.py')
-    url = WORDPRESS_API_URL + '/wp-json/jwt-auth/v1/token'
-    payload = ujson.dumps({"username": WORDPRESS_USERNAME, "password": WORDPRESS_PASSWORD})
-    headers = {'Content-Type': 'application/json'}
-    try:
-        resp = requests.post(url, headers=headers, data=payload)
-        if resp.status_code == 200:
-            data = resp.json()
-            _jwt_token = data.get('token')
-            return _jwt_token
-        else:
-            raise Exception('Failed to obtain JWT token: %s' % resp.text)
-    except Exception as e:
-        raise Exception('JWT token error: %s' % e)
+    return ''
 
 async def register_with_wp():
     if not WORDPRESS_API_URL:
@@ -84,8 +66,7 @@ async def register_with_wp():
         'node_type': getattr(settings, 'NODE_TYPE', ''),
     }
     try:
-        token = get_jwt_token()
-        headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+        headers = {'Content-Type': 'application/json'}
         payload = ujson.dumps(data)
         response = await async_http_request(
             WORDPRESS_API_URL + '/wp-json/tmon/v1/device/register',
@@ -137,9 +118,7 @@ async def send_data_to_wp():
         }
     }
     try:
-        token = get_jwt_token()
-        headers = {'Authorization': f'Bearer {token}'}
-        resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/data', headers=headers, json=data)
+        resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/data', json=data)
         await debug_print(f'Sent data to WP: {resp.status_code}', 'HTTP')
     except Exception as e:
         await debug_print(f'Failed to send data to WP: {e}', 'ERROR')
@@ -158,9 +137,7 @@ async def send_settings_to_wp():
         'settings': {k: getattr(settings, k) for k in dir(settings) if not k.startswith('__') and not callable(getattr(settings, k))}
     }
     try:
-        token = get_jwt_token()
-        headers = {'Authorization': f'Bearer {token}'}
-        resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/settings', headers=headers, json=data)
+        resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/settings', json=data)
         await debug_print(f'Sent settings to WP: {resp.status_code}', 'HTTP')
     except Exception as e:
         await debug_print(f'Failed to send settings to WP: {e}', 'ERROR')
@@ -170,9 +147,7 @@ async def fetch_settings_from_wp():
         await debug_print('No WordPress API URL set', 'ERROR')
         return
     try:
-        token = get_jwt_token()
-        headers = {'Authorization': f'Bearer {token}'}
-        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/settings/{settings.UNIT_ID}', headers=headers)
+        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/settings/{settings.UNIT_ID}')
         if resp.status_code == 200:
             new_settings = resp.json().get('settings', {})
             for k in ['COMPANY', 'SITE', 'ZONE', 'CLUSTER']:
@@ -192,11 +167,9 @@ async def send_file_to_wp(filepath):
         await debug_print('No WordPress API URL set', 'ERROR')
         return
     try:
-        token = get_jwt_token()
-        headers = {'Authorization': f'Bearer {token}'}
         with open(filepath, 'rb') as f:
             files = {'file': (os.path.basename(filepath), f.read())}
-            resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/file', headers=headers, files=files)
+            resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/file', files=files)
             await debug_print(f'Sent file to WP: {resp.status_code}', 'HTTP')
     except Exception as e:
         await debug_print(f'Failed to send file to WP: {e}', 'ERROR')
@@ -206,9 +179,7 @@ async def request_file_from_wp(filename):
         await debug_print('No WordPress API URL set', 'ERROR')
         return
     try:
-        token = get_jwt_token()
-        headers = {'Authorization': f'Bearer {token}'}
-        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/file/{settings.UNIT_ID}/{filename}', headers=headers)
+        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/file/{settings.UNIT_ID}/{filename}')
         if resp.status_code == 200:
             with open(filename, 'wb') as f:
                 f.write(resp.content)
@@ -222,9 +193,7 @@ async def heartbeat_ping():
     if not WORDPRESS_API_URL:
         return
     try:
-        token = get_jwt_token()
-        headers = {'Authorization': f'Bearer {token}'}
-        requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/ping', headers=headers, json={'unit_id': settings.UNIT_ID})
+        requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/ping', json={'unit_id': settings.UNIT_ID})
     except Exception:
         pass
 
@@ -232,9 +201,7 @@ async def poll_ota_jobs():
     if not WORDPRESS_API_URL:
         return
     try:
-        token = get_jwt_token()
-        headers = {'Authorization': f'Bearer {token}'}
-        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/ota-jobs/{settings.UNIT_ID}', headers=headers)
+        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/ota-jobs/{settings.UNIT_ID}')
         if resp.status_code == 200:
             jobs = resp.json().get('jobs', [])
             for job in jobs:
@@ -339,9 +306,7 @@ async def handle_ota_job(job):
         if filename:
             await request_file_from_wp(filename)
     try:
-        token = get_jwt_token()
-        headers = {'Authorization': f'Bearer {token}'}
-        requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/ota-job-complete', headers=headers, json={'job_id': job_id})
+        requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/ota-job-complete', json={'job_id': job_id})
     except Exception:
         pass
 
@@ -415,11 +380,8 @@ async def handle_device_command(job):
             result = f"unknown command: {cmd}"
         # confirm completion with fallback to /device/ack for older servers
         try:
-            token = get_jwt_token()
-            headers = {'Authorization': f'Bearer {token}'}
             resp = requests.post(
                 WORDPRESS_API_URL + '/wp-json/tmon/v1/device/command-complete',
-                headers=headers,
                 json={'job_id': job_id, 'ok': ok, 'result': result}
             )
             # Fallback if route isn't present or returns error
@@ -427,7 +389,6 @@ async def handle_device_command(job):
                 try:
                     requests.post(
                         WORDPRESS_API_URL + '/wp-json/tmon/v1/device/ack',
-                        headers=headers,
                         json={'command_id': job_id, 'ok': ok, 'result': result}
                     )
                 except Exception:

@@ -166,7 +166,7 @@ async def send_field_data_log():
     if getattr(settings, 'NODE_TYPE', 'base') != 'base':
         return
     # NEW: prefer settings.WORDPRESS_API_URL if wprest variable unset or empty
-    from wprest import WORDPRESS_API_URL as _wp_mod, get_jwt_token
+    from wprest import WORDPRESS_API_URL as _wp_mod
     local_url = getattr(settings, 'WORDPRESS_API_URL', '') or _wp_mod
     if not local_url:
         await debug_print('send_field_data_log: No WORDPRESS_API_URL set', 'ERROR')
@@ -293,8 +293,7 @@ async def send_field_data_log():
                     except Exception:
                         pass
                     try:
-                        token = get_jwt_token()
-                        headers = {'Authorization': f'Bearer {token}', 'Content-Type': 'application/json; charset=utf-8'}
+                        headers = {'Content-Type': 'application/json; charset=utf-8'}
                         # Optional field data HMAC signing
                         try:
                             if getattr(settings, 'FIELD_DATA_HMAC_ENABLED', False):
