@@ -109,6 +109,12 @@ async def send_data_to_wp():
             'wifi_rssi': getattr(sdata, 'wifi_rssi', None),
             'lora_rssi': getattr(sdata, 'lora_SigStr', None),
             'free_mem': getattr(sdata, 'free_mem', None),
+            # Engine metrics
+            'engine1_speed_rpm': getattr(sdata, 'engine1_speed_rpm', None),
+            'engine2_speed_rpm': getattr(sdata, 'engine2_speed_rpm', None),
+            'engine1_batt_v': getattr(sdata, 'engine1_batt_v', None),
+            'engine2_batt_v': getattr(sdata, 'engine2_batt_v', None),
+            'engine_last_poll_ts': getattr(sdata, 'engine_last_poll_ts', None),
             # optional GPS fields
             'gps_lat': getattr(sdata, 'gps_lat', None),
             'gps_lng': getattr(sdata, 'gps_lng', None),

@@ -151,6 +151,25 @@ DEBUG_SAMPLING = True
 DEBUG_DISPLAY = True
 DEBUG_REMOTE = True
 
+# RS485 / Engine controller
+ENGINE_FORCE_DISABLED = True          # Temporary kill switch to disable engine control
+USE_RS485 = False                     # Enable RS485 engine controller
+ENGINE_ENABLED = False                # Enable engine polling/controls
+ENGINE_POLL_INTERVAL_S = 30           # Seconds between polls
+ENGINE_DEV_ADDR = 1                   # Base Modbus address
+ENGINE_DEV_COUNT = 1                  # Number of engines chained
+ENGINE_SAMPLE_RATE = 30               # Heartbeat/sample cadence seconds
+ENGINE_KEEPALIVE = 5                  # Extra keep-alive loops between polls
+ENGINE_PUMP1_COIL = 0                 # Coil address for Pump1
+ENGINE_PUMP2_COIL = 1                 # Coil address for Pump2
+COMM_BAUD = 9600
+COMM_PARITY = None
+COMM_STOP_BITS = 1
+CH1_TX_PIN = 4
+CH1_RX_PIN = 5
+CH2_TX_PIN = 6
+CH2_RX_PIN = 7
+
 ENABLE_RELAY1 = True
 ENABLE_RELAY2 = True
 ENABLE_RELAY3 = False

@@ -493,6 +493,12 @@ def record_field_data():
     _copy(entry, sdata, 'cpu_temp')
     _copy(entry, sdata, 'error_count')
     _copy(entry, sdata, 'last_error')
+    # Engine metrics (only populated when RS485/engine enabled)
+    _copy(entry, sdata, 'engine1_speed_rpm')
+    _copy(entry, sdata, 'engine2_speed_rpm')
+    _copy(entry, sdata, 'engine1_batt_v')
+    _copy(entry, sdata, 'engine2_batt_v')
+    _copy(entry, sdata, 'engine_last_poll_ts')
     # Relay runtime counters (only include if non-zero to reduce payload size)
     for i in range(1,9):
         try:

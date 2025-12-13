@@ -14,6 +14,10 @@ from lora import connectLora, log_error, TMON_AI
 from ota import check_for_update, apply_pending_update
 from oled import update_display
 from settings_apply import load_applied_settings_on_boot, settings_apply_loop
+try:
+    from engine_controller import engine_loop
+except Exception:
+    engine_loop = None
 import ujson as json
 import uos as os
 try:
@@ -546,6 +550,22 @@ async def startup():
         _auc.create_task(periodic_uc_checkin_task())
     except Exception:
         pass
+
+    # RS485 engine polling loop
+    try:
+        if (
+            engine_loop
+            and not bool(getattr(settings, 'ENGINE_FORCE_DISABLED', False))
+            and bool(getattr(settings, 'USE_RS485', False))
+            and bool(getattr(settings, 'ENGINE_ENABLED', False))
+        ):
+            import uasyncio as _ae
+            _ae.create_task(engine_loop())
+            await debug_print('startup: started engine_loop', 'INFO')
+        else:
+            await debug_print('startup: engine_loop disabled', 'INFO')
+    except Exception as e:
+        await debug_print('startup: failed to start engine_loop: %s' % e, 'ERROR')
 
     await tm.run()
 

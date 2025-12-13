@@ -17,6 +17,13 @@ lora_SigStr = 0
 # Added SNR for better signal info
 lora_snr = 0
 
+# Engine controller metrics
+engine1_speed_rpm = 0
+engine2_speed_rpm = 0
+engine1_batt_v = 0
+engine2_batt_v = 0
+engine_last_poll_ts = 0
+
 # Remote Node Data Variables
 cur_temp_c = 0
 cur_temp_f = 0
