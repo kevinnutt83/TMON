@@ -111,7 +111,44 @@ if (!function_exists('tmon_admin_ensure_tables')) {
 			}
 		}
 
-		// 5) Companies hierarchy (lightweight, used by Groups/Hierarchy)
+		// 5) Unit Connector sites table (tracks paired UCs)
+		$ucs = "{$p}tmon_uc_sites";
+		if (!tmon_admin_pe_table_exists($ucs)) {
+			dbDelta("CREATE TABLE $ucs (
+				id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+				normalized_url VARCHAR(255) NOT NULL,
+				uc_key VARCHAR(191) NULL,
+				hub_key VARCHAR(191) NULL,
+				read_token VARCHAR(191) NULL,
+				last_seen DATETIME NULL,
+				created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				updated_at DATETIME NULL,
+				PRIMARY KEY (id),
+				UNIQUE KEY uniq_url (normalized_url),
+				KEY idx_seen (last_seen)
+			) $charset;");
+		} else {
+			if (!tmon_admin_pe_column_exists($ucs, 'uc_key')) {
+				$wpdb->query("ALTER TABLE $ucs ADD COLUMN uc_key VARCHAR(191) NULL AFTER normalized_url");
+			}
+			if (!tmon_admin_pe_column_exists($ucs, 'hub_key')) {
+				$wpdb->query("ALTER TABLE $ucs ADD COLUMN hub_key VARCHAR(191) NULL AFTER uc_key");
+			}
+			if (!tmon_admin_pe_column_exists($ucs, 'read_token')) {
+				$wpdb->query("ALTER TABLE $ucs ADD COLUMN read_token VARCHAR(191) NULL AFTER hub_key");
+			}
+			if (!tmon_admin_pe_column_exists($ucs, 'last_seen')) {
+				$wpdb->query("ALTER TABLE $ucs ADD COLUMN last_seen DATETIME NULL AFTER read_token");
+			}
+			if (!tmon_admin_pe_column_exists($ucs, 'created_at')) {
+				$wpdb->query("ALTER TABLE $ucs ADD COLUMN created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER last_seen");
+			}
+			if (!tmon_admin_pe_column_exists($ucs, 'updated_at')) {
+				$wpdb->query("ALTER TABLE $ucs ADD COLUMN updated_at DATETIME NULL AFTER created_at");
+			}
+		}
+
+		// 6) Companies hierarchy (lightweight, used by Groups/Hierarchy)
 		$companies = "{$p}tmon_companies";
 		if (!tmon_admin_pe_table_exists($companies)) {
 			dbDelta("CREATE TABLE $companies (

@@ -8,12 +8,26 @@ add_action('tmon_admin_uc_connectors_page', function () {
 	$table = $wpdb->prefix . 'tmon_uc_sites';
 	echo '<div class="wrap"><h1>Unit Connectors</h1>';
 
-	if (!tmon_admin_table_exists($table)) {
-		echo '<p>No Unit Connectors found.</p></div>';
-		return;
+	$rows = [];
+	if (function_exists('tmon_admin_table_exists') && tmon_admin_table_exists($table)) {
+		$rows = $wpdb->get_results("SELECT id, normalized_url, hub_key, read_token, last_seen, created_at FROM $table ORDER BY COALESCE(last_seen, created_at) DESC LIMIT 200");
 	}
-
-	$rows = $wpdb->get_results("SELECT id, normalized_url, hub_key, read_token, last_seen, created_at FROM $table ORDER BY COALESCE(last_seen, created_at) DESC LIMIT 200");
+	// Fallback to option map if table is missing
+	if (!$rows) {
+		$map = get_option('tmon_admin_uc_sites', []);
+		if (is_array($map)) {
+			foreach ($map as $url => $meta) {
+				$rows[] = (object) [
+					'id' => 0,
+					'normalized_url' => $url,
+					'hub_key' => $meta['uc_key'] ?? '',
+					'read_token' => $meta['read_token'] ?? '',
+					'last_seen' => $meta['paired_at'] ?? '',
+					'created_at' => $meta['paired_at'] ?? '',
+				];
+			}
+		}
+	}
 	echo '<table class="widefat striped"><thead><tr><th>ID</th><th>URL</th><th>Paired</th><th>Last Seen</th></tr></thead><tbody>';
 	if ($rows) {
 		foreach ($rows as $r) {

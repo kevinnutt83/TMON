@@ -290,14 +290,18 @@ add_action('rest_api_init', function() {
         'permission_callback' => '__return_true',
         'callback' => function($request){
             $site_url = esc_url_raw($request->get_param('site_url'));
+            $norm_url = function_exists('tmon_admin_normalize_url') ? tmon_admin_normalize_url($site_url) : $site_url;
             $uc_key = sanitize_text_field($request->get_param('uc_key'));
             if (!$site_url || !$uc_key) return new WP_REST_Response(['status'=>'error','message'=>'site_url and uc_key required'], 400);
             // Persist mapping in options (simple store)
             $map = get_option('tmon_admin_uc_sites', []);
             if (!is_array($map)) $map = [];
             // Generate a per-UC read token for listing devices securely from hub
-            $read_token = '';
-            try { $read_token = bin2hex(random_bytes(24)); } catch (Exception $e) { $read_token = wp_generate_password(48, false, false); }
+            $existing = isset($map[$site_url]) ? $map[$site_url] : [];
+            $read_token = isset($existing['read_token']) ? $existing['read_token'] : '';
+            if (!$read_token) {
+                try { $read_token = bin2hex(random_bytes(24)); } catch (Exception $e) { $read_token = wp_generate_password(48, false, false); }
+            }
             $map[$site_url] = [
                 'uc_key' => $uc_key,
                 'paired_at' => current_time('mysql'),
@@ -309,6 +313,22 @@ add_action('rest_api_init', function() {
             if (!$hub_key) {
                 try { $hub_key = bin2hex(random_bytes(24)); } catch (Exception $e) { $hub_key = wp_generate_password(48, false, false); }
                 update_option('tmon_admin_uc_key', $hub_key);
+            }
+            // Also persist in tmon_uc_sites table for UI listings
+            if (function_exists('tmon_admin_ensure_tables')) { tmon_admin_ensure_tables(); }
+            global $wpdb;
+            $uc_table = $wpdb->prefix . 'tmon_uc_sites';
+            if ($wpdb && $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $uc_table))) {
+                $now = current_time('mysql');
+                $wpdb->replace($uc_table, [
+                    'normalized_url' => $norm_url,
+                    'uc_key' => $uc_key,
+                    'hub_key' => $hub_key,
+                    'read_token' => $read_token,
+                    'last_seen' => $now,
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ]);
             }
             return rest_ensure_response(['status'=>'ok','hub_key'=>$hub_key, 'read_token'=>$read_token]);
         }
