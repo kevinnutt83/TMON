@@ -916,10 +916,22 @@ async def periodic_provision_check():
             if not hub:
                 await debug_print('periodic_provision_check: TMON_ADMIN_API_URL not set', 'PROVISION')
             else:
+                # Prefer urequests; fall back to any already-imported requests module
                 try:
                     import urequests as _r
                 except Exception:
-                    _r = None
+                    try:
+                        import sys
+                        _r = sys.modules.get('urequests') or sys.modules.get('requests')
+                        if _r is None:
+                            # Last resort: import ota and reuse its requests handle if set
+                            try:
+                                import ota as _ota
+                                _r = getattr(_ota, 'requests', None)
+                            except Exception:
+                                _r = None
+                    except Exception:
+                        _r = None
                 resp = None  # guard for close
                 if _r:
                     # Force a short socket timeout so the event loop is not blocked indefinitely
@@ -1018,7 +1030,7 @@ async def periodic_provision_check():
                                     except Exception:
                                         pass
                     else:
-                        await debug_print('periodic_provision_check: urequests missing; skipping', 'PROVISION')
+                        await debug_print('periodic_provision_check: requests module unavailable; skipping', 'PROVISION')
                     # Safely close response
                     try:
                         if resp:
