@@ -28,7 +28,7 @@
     </script>
 
     <form method="post" action="options.php">
-        <?php settings_fields('tmon_uc_settings'); do_settings_sections('tmon_uc_settings'); ?>
+        <?php settings_fields('tmon_uc_settings'); ?>
         <table class="form-table">
             <tr valign="top">
                 <th scope="row">Remove all plugin data on deactivation</th>
