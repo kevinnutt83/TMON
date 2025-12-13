@@ -97,6 +97,9 @@ add_action('init', function () {
 		command VARCHAR(64) NOT NULL,
 		params LONGTEXT NULL,
 		status VARCHAR(32) DEFAULT 'queued',
+		result LONGTEXT NULL,
+		executed_status VARCHAR(32) NULL,
+		executed_at DATETIME NULL,
 		created_at DATETIME NOT NULL,
 		updated_at DATETIME NULL,
 		PRIMARY KEY (id),
@@ -105,6 +108,19 @@ add_action('init', function () {
 	) {$charset};";
 	require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 	dbDelta($sql);
+
+	// Backfill missing columns on older installs
+	$cols = $wpdb->get_results("SHOW COLUMNS FROM {$table}", ARRAY_A) ?: array();
+	$names = array_map(function($c){ return $c['Field']; }, $cols);
+	if (!in_array('executed_at', $names, true)) {
+		$wpdb->query("ALTER TABLE {$table} ADD COLUMN executed_at DATETIME NULL AFTER updated_at");
+	}
+	if (!in_array('executed_status', $names, true)) {
+		$wpdb->query("ALTER TABLE {$table} ADD COLUMN executed_status VARCHAR(32) NULL AFTER status");
+	}
+	if (!in_array('result', $names, true)) {
+		$wpdb->query("ALTER TABLE {$table} ADD COLUMN result LONGTEXT NULL AFTER params");
+	}
 });
 
 // Enqueue command (from Admin forwarder or local UI)
@@ -137,6 +153,59 @@ add_action('rest_api_init', function () {
 			return rest_ensure_response(array('status' => 'ok', 'id' => (int)$wpdb->insert_id));
 		},
 		'permission_callback' => '__return_true',
+	));
+});
+
+// Compatibility: device polls commands via POST /tmon/v1/device/commands with unit_id
+add_action('rest_api_init', function(){
+	register_rest_route('tmon/v1', '/device/commands', array(
+		'methods' => 'POST',
+		'permission_callback' => '__return_true',
+		'callback' => function($req){
+			global $wpdb;
+			$table = $wpdb->prefix . 'tmon_device_commands';
+			$unit = sanitize_text_field($req->get_param('unit_id') ?: $req->get_param('device_id'));
+			if (!$unit) return rest_ensure_response(array());
+			$rows = $wpdb->get_results($wpdb->prepare(
+				"SELECT id, command, params FROM {$table} WHERE device_id=%s AND (status='queued' OR status='claimed') ORDER BY id ASC LIMIT 20",
+				$unit
+			), ARRAY_A);
+			if ($rows) {
+				$ids = wp_list_pluck($rows, 'id');
+				$wpdb->query("UPDATE {$table} SET status='claimed', updated_at=NOW() WHERE id IN (".implode(',', array_map('intval', $ids)).")");
+			}
+			$cmds = array();
+			foreach ($rows as $r) {
+				$payload = json_decode($r['params'], true);
+				if (!is_array($payload)) { $payload = array(); }
+				$cmds[] = array(
+					'id' => intval($r['id']),
+					'type' => $r['command'],
+					'payload' => $payload,
+				);
+			}
+			return rest_ensure_response($cmds);
+		}
+	));
+	register_rest_route('tmon/v1', '/device/command-result', array(
+		'methods' => 'POST',
+		'permission_callback' => '__return_true',
+		'callback' => function($req){
+			global $wpdb;
+			$table = $wpdb->prefix . 'tmon_device_commands';
+			$id = intval($req->get_param('id') ?: $req->get_param('job_id'));
+			$status = sanitize_text_field($req->get_param('status') ?: 'done');
+			$result = $req->get_param('result');
+			if ($id <= 0) return rest_ensure_response(array('status'=>'error','message'=>'id required'));
+			$wpdb->update($table, array(
+				'status' => $status,
+				'executed_status' => $status,
+				'updated_at' => current_time('mysql'),
+				'executed_at' => current_time('mysql'),
+				'result' => is_scalar($result) ? strval($result) : wp_json_encode($result),
+			), array('id' => $id));
+			return rest_ensure_response(array('status'=>'ok'));
+		}
 	));
 });
 
