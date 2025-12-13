@@ -1,10 +1,10 @@
 {
-  "version": "v2.01.0",
-  "notes": "Minimal manifest for TMON MicroPython firmware used by admin plugin for OTA/manifest checks.",
+  "version": "v2.02.2",
+  "notes": "TMON MicroPython firmware manifest with real file hashes.",
   "files": {
-    "main.py": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-    "utils.py": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-    "settings.py": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-    "ota.py": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    "main.py": "sha256:86a3f09054f9fb3c6672225637664c298790ce24991c38aa63e6cd8d0efca6c0",
+    "utils.py": "sha256:4c711fb45506c99fe6a3ae4c18c23238f9cd4ab7889df965f7c225132e8513ef",
+    "settings.py": "sha256:ec1dca00b53b4fd87e7786ec9682d49dca0aa21b3907c81eb044658eb42da62d",
+    "ota.py": "sha256:ed45a0413828ee35a57617f518bc85df60f7ab59bddfff8b12ad1cd693aa4880"
   }
 }

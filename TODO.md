@@ -31,7 +31,7 @@
 - [x] Installation, schema, device mgmt, data handling, OTA, support, wiki, location hierarchy, APIs, UI polish, versioning, UC shared key, UNIT_ID/MACHINE_ID association, suspend/enable, global monitoring, analytics, firmware/plugin push, wiki sync, dashboards, uptime monitoring, remote settings, support portal, customer hierarchy, secure UC access.
 
 ### Issues to Resolve & Polishing Steps
-- [ ] Firmware page not displaying (submenu, template, permissions, UI polish).
+- [x] Firmware page not displaying (submenu, template, permissions, UI polish).
 - [ ] Device location page security error (menu removal, move logic, comments, form polish).
 - [ ] Move purge data button/function (to includes/settings.php, UI parity, admin notices).
 - [ ] Audit page enhancement (verbosity, filter/search, paginate/export, UI polish).
@@ -160,8 +160,8 @@ Testing
   - Changes: Settings schema + staged configuration UI, REST endpoints for staged/applied settings, pairing diagnostics, Admin push handler, hourly backfill refresh from Admin.
 
 ## OTA / Repository Update Process Enhancements
-- [ ] Ensure OTA manifest.json includes version v2.02.0 and updated file hashes.
-- [ ] Verify version.txt reflects v2.02.0 for lightweight checks.
+- [x] Ensure OTA manifest.json includes version v2.02.2 and updated file hashes.
+- [x] Verify version.txt reflects v2.02.2 for lightweight checks.
 - [ ] Confirm OTA client respects manifest HMAC (optional) and size caps.
 - [ ] Add CI step to validate manifest/version alignment and file integrity before tagging.
 - [ ] Document OTA rollback process in README and CHANGELOG.

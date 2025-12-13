@@ -40,6 +40,7 @@ if (!defined('TMON_ADMIN_MASTER_MENU')) {
 }
 
 // Includes
+require_once TMON_ADMIN_PATH . 'includes/helpers.php';
 require_once TMON_ADMIN_PATH . 'includes/db.php';
 require_once TMON_ADMIN_PATH . 'includes/admin-dashboard.php';
 require_once TMON_ADMIN_PATH . 'includes/settings.php';
@@ -54,6 +55,7 @@ require_once TMON_ADMIN_PATH . 'includes/notifications.php';
 require_once TMON_ADMIN_PATH . 'includes/ota.php';
 require_once TMON_ADMIN_PATH . 'includes/files.php';
 require_once TMON_ADMIN_PATH . 'includes/groups.php';
+require_once TMON_ADMIN_PATH . 'includes/firmware.php';
 require_once TMON_ADMIN_PATH . 'includes/custom-code.php';
 require_once TMON_ADMIN_PATH . 'includes/export.php';
 require_once TMON_ADMIN_PATH . 'includes/ai-feedback.php';
@@ -123,6 +125,9 @@ add_action('admin_menu', function () {
 	});
 	add_submenu_page('tmon-admin', 'Notifications', 'Notifications', 'manage_options', 'tmon-admin-notifications', function () {
 		do_action('tmon_admin_notifications_page');
+	});
+	add_submenu_page('tmon-admin', 'Firmware', 'Firmware', 'manage_options', 'tmon-admin-firmware', function () {
+		do_action('tmon_admin_firmware_page');
 	});
 	add_submenu_page('tmon-admin', 'OTA Jobs', 'OTA Jobs', 'manage_options', 'tmon-admin-ota', function () {
 		do_action('tmon_admin_ota_page');
