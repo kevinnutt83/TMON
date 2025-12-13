@@ -116,10 +116,12 @@ function tmon_admin_install_schema() {
 	do_action('tmon_admin_install_schema_after');
 }
 
-function tmon_admin_column_exists($table, $column) {
-	global $wpdb;
-	if (!$wpdb || empty($wpdb->prefix)) return false;
-	return (bool) $wpdb->get_var($wpdb->prepare("SHOW COLUMNS FROM {$table} LIKE %s", $column));
+if (!function_exists('tmon_admin_column_exists')) {
+	function tmon_admin_column_exists($table, $column) {
+		global $wpdb;
+		if (!$wpdb || empty($wpdb->prefix)) return false;
+		return (bool) $wpdb->get_var($wpdb->prepare("SHOW COLUMNS FROM {$table} LIKE %s", $column));
+	}
 }
 
 function tmon_admin_ensure_columns($table, $columns) {
