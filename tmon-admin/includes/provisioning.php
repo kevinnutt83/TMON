@@ -203,11 +203,24 @@ if (!function_exists('tmon_admin_render_provisioning_page')) {
 		$has_devices = !empty($all_devices);
 		$site_options = [];
 		$known_units = [];
+		$unit_map = [];
+		$plan_options = [];
+		$role_options = [];
 		if ($has_devices) {
 			foreach ($all_devices as $row) {
 				if (!empty($row['site_url'])) $site_options[$row['site_url']] = true;
 				if (!empty($row['original_api_url'])) $site_options[$row['original_api_url']] = true;
 				if (!empty($row['unit_id'])) $known_units[$row['unit_id']] = true;
+				$uid = trim(tmon_admin_arr_get($row, 'unit_id', ''));
+				if ($uid) {
+					$unit_map[$uid] = [
+						'machine_id' => tmon_admin_arr_get($row, 'machine_id', ''),
+						'role' => tmon_admin_arr_get($row, 'role', tmon_admin_arr_get($row, 'device_role', '')),
+						'plan' => tmon_admin_arr_get($row, 'plan', tmon_admin_arr_get($row, 'device_plan', '')),
+					];
+					if (!empty($unit_map[$uid]['plan'])) { $plan_options[$unit_map[$uid]['plan']] = true; }
+					if (!empty($unit_map[$uid]['role'])) { $role_options[$unit_map[$uid]['role']] = true; }
+				}
 			}
 		}
 		$pairings = get_option('tmon_admin_uc_sites', []);
@@ -274,11 +287,19 @@ if (!function_exists('tmon_admin_render_provisioning_page')) {
 		echo '<input type="hidden" name="_wpnonce" value="'.esc_attr($nonce).'">';
 		echo '<input type="hidden" name="id" value="">';
 		echo '<table class="form-table">';
-		echo '<tr><th scope="row"><label for="unit_id">Unit ID</label></th><td><input name="unit_id" type="text" id="unit_id" value="" class="regular-text" required><p class="description">Unique identifier (serial/assigned ID).</p></td></tr>';
-		echo '<tr><th scope="row"><label for="machine_id">Machine ID</label></th><td><input name="machine_id" type="text" id="machine_id" value="" class="regular-text" required><p class="description">MAC or hardware ID.</p></td></tr>';
+		echo '<tr><th scope="row"><label for="unit_id">Unit ID</label></th><td><select name="unit_id" id="unit_id" class="regular-text" required><option value="">Select a unit</option>';
+		foreach ($unit_map as $uid => $meta) { echo '<option value="'.esc_attr($uid).'">'.esc_html($uid).'</option>'; }
+		echo '</select><p class="description">Pick an existing unit to prefill machine/role/plan.</p></td></tr>';
+		echo '<tr><th scope="row"><label for="machine_id">Machine ID</label></th><td><input name="machine_id" type="text" id="machine_id" value="" class="regular-text" required><p class="description">Auto-filled when a unit is selected; can be overridden.</p></td></tr>';
 		echo '<tr><th scope="row"><label for="unit_name">Device Name</label></th><td><input name="unit_name" type="text" id="unit_name" value="" class="regular-text"></td></tr>';
-		echo '<tr><th scope="row"><label for="plan">Plan</label></th><td><input name="plan" type="text" id="plan" value="" class="regular-text" placeholder="standard"></td></tr>';
-		echo '<tr><th scope="row"><label for="role">Role</label></th><td><input name="role" type="text" id="role" value="" class="regular-text" placeholder="base"></td></tr>';
+		echo '<tr><th scope="row"><label for="plan">Plan</label></th><td><select name="plan" id="plan" class="regular-text">';
+		echo '<option value="">Select a plan</option>';
+		foreach (array_keys($plan_options) as $p) { echo '<option value="'.esc_attr($p).'">'.esc_html($p).'</option>'; }
+		echo '</select></td></tr>';
+		echo '<tr><th scope="row"><label for="role">Device Type</label></th><td><select name="role" id="role" class="regular-text">';
+		echo '<option value="">Select a type</option>';
+		foreach (array_keys($role_options) as $p) { echo '<option value="'.esc_attr($p).'">'.esc_html($p).'</option>'; }
+		echo '</select></td></tr>';
 		echo '<tr><th scope="row"><label for="site_url">Site URL</label></th><td><input name="site_url" type="url" id="site_url" value="" class="regular-text" placeholder="https://example.com"></td></tr>';
 		echo '<tr><th scope="row"><label for="settings_staged">Stage settings</label></th><td><label><input name="settings_staged" type="checkbox" id="settings_staged" value="1"> Mark settings as staged for next push</label></td></tr>';
 		echo '</table>';
@@ -326,6 +347,16 @@ if (!function_exists('tmon_admin_render_provisioning_page')) {
 				$('#<?php echo esc_js($table_id); ?>').DataTable({
 					order: [[0, 'desc']],
 					columnDefs: [{ visible: false, targets: [0] }]
+				});
+
+				// Prefill machine/role/plan when unit selected
+				const unitMap = <?php echo wp_json_encode($unit_map); ?>;
+				$('#unit_id').on('change', function(){
+					const uid = $(this).val();
+					const meta = unitMap[uid] || {};
+					$('#machine_id').val(meta.machine_id || '');
+					if (meta.role && !$('#role').val()) { $('#role').val(meta.role); }
+					if (meta.plan && !$('#plan').val()) { $('#plan').val(meta.plan); }
 				});
 			});
 
