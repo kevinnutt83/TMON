@@ -891,6 +891,7 @@ async def periodic_provision_check():
     global _provision_reboot_guard_written
     import uasyncio as _a
     interval = int(getattr(settings, 'PROVISION_CHECK_INTERVAL_S', 25))
+    timeout_s = int(getattr(settings, 'PROVISION_CHECK_TIMEOUT_S', 8))
     hub = getattr(settings, 'TMON_ADMIN_API_URL', '')
     flag_file = getattr(settings, 'PROVISIONED_FLAG_FILE', settings.LOG_DIR + '/provisioned.flag')
     guard_file = getattr(settings, 'PROVISION_REBOOT_GUARD_FILE', settings.LOG_DIR + '/provision_reboot.flag')
@@ -921,11 +922,19 @@ async def periodic_provision_check():
                     _r = None
                 resp = None  # guard for close
                 if _r:
+                    # Force a short socket timeout so the event loop is not blocked indefinitely
+                    try:
+                        import usocket as _sock
+                        _sock.setdefaulttimeout(timeout_s)
+                    except Exception:
+                        pass
                     mid = get_machine_id()
                     uid = getattr(settings, 'UNIT_ID', None)
                     body = {'machine_id': mid}
                     if uid:
                         body['unit_id'] = uid
+                    # Yield before performing blocking HTTP to keep the loop responsive
+                    await _a.sleep(0)
                     try:
                         resp = _r.post(hub.rstrip('/') + '/wp-json/tmon-admin/v1/device/check-in', json=body, timeout=10)
                     except TypeError:
@@ -1008,6 +1017,8 @@ async def periodic_provision_check():
                                         machine.soft_reset()
                                     except Exception:
                                         pass
+                    else:
+                        await debug_print('periodic_provision_check: urequests missing; skipping', 'PROVISION')
                     # Safely close response
                     try:
                         if resp:
@@ -1019,6 +1030,7 @@ async def periodic_provision_check():
                 await debug_print(f'periodic_provision_check: error {e}', 'ERROR')
             except Exception:
                 pass
+        # Always yield and delay to avoid a tight loop in error conditions
         await _a.sleep(interval)
 
 # Lightweight background scheduler to avoid ImportError in main.py

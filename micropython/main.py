@@ -63,17 +63,31 @@ try:
 except Exception:
     pass
 
-# NEW: simple provisioned check (flag existence)
+# NEW: simple provisioned check (flag existence or configured hub URL)
+_provision_warned = False
 def is_provisioned():
+    global _provision_warned
     try:
         flag = getattr(settings, 'PROVISIONED_FLAG_FILE', '/logs/provisioned.flag')
+        wp_url = str(getattr(settings, 'WORDPRESS_API_URL', '')).strip()
+        # If a hub URL is configured, allow tasks to proceed even if the flag is missing
+        if wp_url:
+            return True
         try:
             os.stat(flag)
             return True
         except Exception:
-            return False
+            pass
     except Exception:
-        return False
+        pass
+    if not _provision_warned:
+        # One-time warning so we know tasks are gated
+        try:
+            print('[WARN] Device not marked provisioned (no flag or WORDPRESS_API_URL).')
+        except Exception:
+            pass
+        _provision_warned = True
+    return False
 
 # Load persisted NODE_TYPE if available before starting tasks
 try:
