@@ -65,6 +65,42 @@ require_once TMON_ADMIN_PATH . 'admin/location.php';
 require_once TMON_ADMIN_PATH . 'admin/uc-deploy.php';
 require_once TMON_ADMIN_PATH . 'admin/firmware.php';
 
+// Wire menu actions to page renderers (separate from menu registration)
+if (!function_exists('tmon_admin_dashboard_page_render')) {
+	function tmon_admin_dashboard_page_render() {
+		if (!current_user_can('manage_options')) { wp_die('Forbidden'); }
+		echo '<div class="wrap"><h1>TMON Admin</h1>';
+		echo '<p class="description">Manage provisioning, firmware, notifications, and Unit Connector tooling from this dashboard.</p>';
+		echo '<ul class="tmon-quick-links">';
+		echo '<li><a href="' . esc_url(admin_url('admin.php?page=tmon-admin-provisioning')) . '">Provisioning</a></li>';
+		echo '<li><a href="' . esc_url(admin_url('admin.php?page=tmon-admin-firmware')) . '">Firmware</a></li>';
+		echo '<li><a href="' . esc_url(admin_url('admin.php?page=tmon-admin-ota')) . '">OTA Jobs</a></li>';
+		echo '<li><a href="' . esc_url(admin_url('admin.php?page=tmon-admin-provisioned')) . '">Provisioned Devices</a></li>';
+		echo '<li><a href="' . esc_url(admin_url('admin.php?page=tmon-admin-settings')) . '">Settings</a></li>';
+		echo '</ul>';
+		echo '</div>';
+	}
+}
+
+// Map custom actions used by the menu to their render callbacks
+$tmon_admin_page_actions = [
+	'tmon_admin_dashboard_page' => 'tmon_admin_dashboard_page_render',
+	'tmon_admin_settings_page' => 'tmon_admin_settings_page',
+	'tmon_admin_audit_page' => 'tmon_admin_audit_page',
+	'tmon_admin_notifications_page' => 'tmon_admin_notifications_page',
+	'tmon_admin_ota_page' => 'tmon_admin_ota_page',
+	'tmon_admin_files_page' => 'tmon_admin_files_page',
+	'tmon_admin_groups_page' => 'tmon_admin_groups_page',
+	'tmon_admin_provisioning_page' => 'tmon_admin_provisioning_page',
+	'tmon_admin_provisioning_activity_page' => 'tmon_admin_provisioning_activity_page',
+	'tmon_admin_provisioning_history_page' => 'tmon_admin_provisioning_history_page',
+];
+foreach ($tmon_admin_page_actions as $hook => $callback) {
+	if (function_exists($callback) && !has_action($hook, $callback)) {
+		add_action($hook, $callback);
+	}
+}
+
 // Activation ensures schema
 if (!has_action('activate_' . plugin_basename(__FILE__))) {
 	register_activation_hook(__FILE__, function () {
