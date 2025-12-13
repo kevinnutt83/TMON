@@ -211,6 +211,7 @@ if (!function_exists('tmon_admin_render_provisioning_page')) {
 		$table_id = 'tmon-provisioning-devices';
 		$form_action = admin_url('admin-post.php');
 		$nonce = wp_create_nonce('tmon_admin_provision_device');
+		$export_nonce = wp_create_nonce('tmon_admin_export_provision_history');
 
 		echo '<div class="wrap"><h1>Device Provisioning</h1>';
 		tmon_admin_render_provision_notice();
@@ -300,7 +301,13 @@ if (!function_exists('tmon_admin_render_provisioning_page')) {
 		echo '</details>';
 
 		echo '<h2 id="tmon-prov-history">Provisioning History</h2>';
-		echo '<p><a href="'.esc_url(admin_url('admin.php?page=tmon-admin-provisioning-history')).'" class="button">View Provisioning History</a></p>';
+		$export_url = add_query_arg([
+			'page' => 'tmon-admin-provisioning',
+			'export' => 'provision-history',
+			'export_nonce' => $export_nonce,
+		], admin_url('admin.php'));
+		echo '<p><a href="'.esc_url(admin_url('admin.php?page=tmon-admin-provisioning-history')).'" class="button">View Provisioning History</a> ';
+		echo '<a href="'.esc_url($export_url).'" class="button">Download CSV</a></p>';
 
 		echo '</div>';
 
@@ -498,6 +505,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && function_exists('tmon_admin_verify_
 add_action('admin_init', function(){
 	if (!current_user_can('manage_options')) return;
 	if (isset($_GET['page']) && $_GET['page']==='tmon-admin-provisioning' && isset($_GET['export']) && $_GET['export']==='provision-history') {
+		$nonce = isset($_GET['export_nonce']) ? sanitize_text_field($_GET['export_nonce']) : '';
+		if (!$nonce || !wp_verify_nonce($nonce, 'tmon_admin_export_provision_history')) {
+			wp_die('Invalid export request', 'Error', 403);
+		}
 		global $wpdb;
 		$table = $wpdb->prefix . 'tmon_provision_history';
 		$rows = $wpdb->get_results("SELECT id, unit_id, machine_id, action, user, created_at FROM {$table} ORDER BY id DESC LIMIT 1000", ARRAY_A) ?: array();

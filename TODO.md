@@ -87,7 +87,7 @@ Docs/QA
 
 High-priority
 - [x] Define missing vars in inline update branch in provisioning page.
-- [ ] Validate nonce usage across forms/handlers.
+- [x] Validate nonce usage across forms/handlers.
 - [ ] Confirm device-side queue consumption and normalized key matching.
 
 Medium
