@@ -36,7 +36,7 @@
 - [x] Move purge data button/function (to includes/settings.php, UI parity, admin notices).
 - [x] Audit page enhancement (verbosity, filter/search, paginate/export, UI polish).
 - [x] Provisioning page redundancy (unified form, tabs/accordions, polish).
-- [ ] Provisioned device actions (buttons, handlers, confirmations, polish).
+- [x] Provisioned device actions (buttons, handlers, confirmations, polish).
 - [ ] Device registration not showing (queries/joins, insert/display, notices, empty states).
 - [ ] Location push logic (accessible via provisioning, comments, autocomplete/validation).
 - [ ] Non-functional UC pages (menu registration, templates, permissions, UI polish).

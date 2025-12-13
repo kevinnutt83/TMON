@@ -128,30 +128,52 @@ if (!function_exists('tmon_admin_ensure_tables')) {
 	add_action('admin_init', 'tmon_admin_ensure_tables', 1);
 }
 
-// Existing page renderer remains unchanged below.
+// Provisioned Devices page with action buttons
 add_action('tmon_admin_provisioned_devices_page', function () {
 	static $printed = false; if ($printed) return; $printed = true;
 	global $wpdb;
 
-	echo '<div class="wrap"><h1>Provisioned Devices</h1>';
-
 	$prov = $wpdb->prefix . 'tmon_provisioned_devices';
 	$mirror = $wpdb->prefix . 'tmon_devices';
-
 	$rows = [];
 	if (tmon_admin_pe_table_exists($prov)) {
-		$rows = $wpdb->get_results("SELECT id, unit_id, machine_id, unit_name, provisioned_at FROM $prov ORDER BY provisioned_at DESC LIMIT 200");
+		$rows = $wpdb->get_results("SELECT id, unit_id, machine_id, unit_name, provisioned_at, status, site_url FROM $prov ORDER BY provisioned_at DESC LIMIT 200");
 	} elseif (tmon_admin_pe_table_exists($mirror)) {
-		$rows = $wpdb->get_results("SELECT id, unit_id, machine_id, unit_name, provisioned_at FROM $mirror ORDER BY provisioned_at DESC LIMIT 200");
+		$rows = $wpdb->get_results("SELECT id, unit_id, machine_id, unit_name, provisioned_at, status, wordpress_api_url AS site_url FROM $mirror ORDER BY provisioned_at DESC LIMIT 200");
 	}
 
-	echo '<table class="widefat striped"><thead><tr><th>ID</th><th>UNIT_ID</th><th>MACHINE_ID</th><th>Name</th><th>Provisioned</th></tr></thead><tbody>';
+	echo '<div class="wrap"><h1>Provisioned Devices</h1>';
+	if (isset($_GET['prov_notice'])) {
+		$notice = sanitize_text_field($_GET['prov_notice']);
+		$class = (strpos($notice, 'error:') === 0) ? 'notice-error' : 'notice-success';
+		echo '<div class="notice ' . esc_attr($class) . '"><p>' . esc_html($notice) . '</p></div>';
+	}
+
+	echo '<table class="widefat striped"><thead><tr><th>ID</th><th>UNIT_ID</th><th>MACHINE_ID</th><th>Name</th><th>Status</th><th>Site</th><th>Provisioned</th><th>Actions</th></tr></thead><tbody>';
 	if ($rows) {
 		foreach ($rows as $r) {
-			echo '<tr><td>' . intval($r->id) . '</td><td>' . esc_html($r->unit_id) . '</td><td>' . esc_html($r->machine_id) . '</td><td>' . esc_html($r->unit_name) . '</td><td>' . esc_html($r->provisioned_at) . '</td></tr>';
+			$id = intval($r->id);
+			$unit_id = esc_html($r->unit_id);
+			$machine = esc_html($r->machine_id);
+			$name = esc_html($r->unit_name);
+			$status = esc_html($r->status ?? '');
+			$site = esc_html($r->site_url ?? '');
+			$prov_at = esc_html($r->provisioned_at);
+			$refresh_url = wp_nonce_url(admin_url('admin-post.php?action=tmon_admin_refresh_device&device_id='.$id), 'tmon_admin_refresh_device_'.$id);
+			$reprovision_url = wp_nonce_url(admin_url('admin-post.php?action=tmon_admin_reprovision_device&device_id='.$id), 'tmon_admin_reprovision_device_'.$id);
+			$unprovision_url = wp_nonce_url(admin_url('admin-post.php?action=tmon_admin_unprovision_device&device_id='.$id), 'tmon_admin_unprovision_device_'.$id);
+			echo '<tr>';
+			echo '<td>' . $id . '</td><td>' . $unit_id . '</td><td>' . $machine . '</td><td>' . $name . '</td><td>' . $status . '</td><td>' . $site . '</td><td>' . $prov_at . '</td>';
+			echo '<td>';
+			echo '<a class="button" href="' . esc_url($refresh_url) . '">Refresh</a> ';
+			echo '<a class="button" href="' . esc_url($reprovision_url) . '">Reprovision</a> ';
+			echo '<a class="button button-secondary" href="' . esc_url($unprovision_url) . '" onclick="return confirm(\'Unprovision this device?\');">Unprovision</a>';
+			echo '</td>';
+			echo '</tr>';
 		}
 	} else {
-		echo '<tr><td colspan="5">No provisioned devices found.</td></tr>';
+		echo '<tr><td colspan="8">No provisioned devices found.</td></tr>';
 	}
-	echo '</tbody></table></div>';
+	echo '</tbody></table>';
+	echo '</div>';
 });

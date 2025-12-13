@@ -256,6 +256,78 @@ if (!function_exists('tmon_admin_admin_post_queue_and_notify')) {
 	});
 }
 
+// Admin-post: Refresh device metadata (bump updated_at)
+add_action('admin_post_tmon_admin_refresh_device', function () {
+	if (!current_user_can('manage_options')) wp_die('Forbidden');
+	$device_id = intval($_GET['device_id'] ?? 0);
+	if (!$device_id || !check_admin_referer('tmon_admin_refresh_device_' . $device_id)) wp_die('Invalid request');
+	global $wpdb;
+	$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+	$mirror_table = $wpdb->prefix . 'tmon_devices';
+	$source = tmon_admin_table_exists($prov_table) ? $prov_table : $mirror_table;
+	$exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM {$source} WHERE id = %d", $device_id));
+	if (!$exists) {
+		wp_safe_redirect(add_query_arg('prov_notice', rawurlencode('error: device not found'), wp_get_referer()));
+		exit;
+	}
+	$wpdb->update($source, ['updated_at' => current_time('mysql')], ['id' => $device_id]);
+	wp_safe_redirect(add_query_arg('prov_notice', rawurlencode('Device refreshed.'), wp_get_referer()));
+	exit;
+});
+
+// Admin-post: Reprovision device (stage settings)
+add_action('admin_post_tmon_admin_reprovision_device', function () {
+	if (!current_user_can('manage_options')) wp_die('Forbidden');
+	$device_id = intval($_GET['device_id'] ?? 0);
+	if (!$device_id || !check_admin_referer('tmon_admin_reprovision_device_' . $device_id)) wp_die('Invalid request');
+	global $wpdb;
+	$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+	$mirror_table = $wpdb->prefix . 'tmon_devices';
+	$source = tmon_admin_table_exists($prov_table) ? $prov_table : $mirror_table;
+	$row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$source} WHERE id = %d", $device_id), ARRAY_A);
+	if (!$row) {
+		wp_safe_redirect(add_query_arg('prov_notice', rawurlencode('error: device not found'), wp_get_referer()));
+		exit;
+	}
+	$unit_id = $row['unit_id'] ?? '';
+	$machine_id = $row['machine_id'] ?? '';
+	$wpdb->update($source, ['settings_staged' => 1, 'updated_at' => current_time('mysql')], ['id' => $device_id]);
+	$history = get_option('tmon_admin_provision_history', []);
+	$history[] = [
+		'unit_id' => $unit_id,
+		'machine_id' => $machine_id,
+		'action' => 'reprovision',
+		'ts' => current_time('mysql'),
+	];
+	update_option('tmon_admin_provision_history', $history);
+	wp_safe_redirect(add_query_arg('prov_notice', rawurlencode('Reprovision staged.'), wp_get_referer()));
+	exit;
+});
+
+// Admin-post: Unprovision device (clear provisioned flags)
+add_action('admin_post_tmon_admin_unprovision_device', function () {
+	if (!current_user_can('manage_options')) wp_die('Forbidden');
+	$device_id = intval($_GET['device_id'] ?? 0);
+	if (!$device_id || !check_admin_referer('tmon_admin_unprovision_device_' . $device_id)) wp_die('Invalid request');
+	global $wpdb;
+	$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+	$mirror_table = $wpdb->prefix . 'tmon_devices';
+	$source = tmon_admin_table_exists($prov_table) ? $prov_table : $mirror_table;
+	$row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$source} WHERE id = %d", $device_id), ARRAY_A);
+	if (!$row) {
+		wp_safe_redirect(add_query_arg('prov_notice', rawurlencode('error: device not found'), wp_get_referer()));
+		exit;
+	}
+	$unit_id = $row['unit_id'] ?? '';
+	$machine_id = $row['machine_id'] ?? '';
+	$wpdb->update($source, ['status' => 'unprovisioned', 'provisioned' => 0, 'provisioned_at' => null, 'updated_at' => current_time('mysql')], ['id' => $device_id]);
+	if ($source !== $mirror_table && tmon_admin_table_exists($mirror_table)) {
+		$wpdb->update($mirror_table, ['provisioned' => 0, 'provisioned_at' => null, 'status' => 'unprovisioned'], ['unit_id' => $unit_id, 'machine_id' => $machine_id]);
+	}
+	wp_safe_redirect(add_query_arg('prov_notice', rawurlencode('Device unprovisioned.'), wp_get_referer()));
+	exit;
+});
+
 // AJAX: delete a field log file
 if (!function_exists('tmon_admin_ajax_delete_field_data')) {
 	function tmon_admin_ajax_delete_field_data() {
