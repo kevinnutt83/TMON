@@ -556,6 +556,11 @@ function tmon_uc_ensure_command_table() {
 		KEY device_idx (device_id),
 		KEY status_idx (status)
 	) {$collate}");
+    // Backfill status column if an older table exists without it
+    $col = $wpdb->get_var( $wpdb->prepare("SHOW COLUMNS FROM {$table} LIKE %s", 'status') );
+    if (!$col) {
+        $wpdb->query("ALTER TABLE {$table} ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'staged' AFTER params, ADD KEY status_idx (status)");
+    }
 }
 add_action('init', 'tmon_uc_ensure_command_table');
 

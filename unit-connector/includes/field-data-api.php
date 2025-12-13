@@ -15,9 +15,6 @@ add_action('rest_api_init', function() {
         'permission_callback' => '__return_true',
     ]);
     register_rest_route('tmon/v1', '/device/data-history', [
-
-            // Flag for upcoming hub sync: lightweight transient
-            set_transient('tmon_uc_devices_dirty', 1, 15 * MINUTE_IN_SECONDS);
         'methods' => 'POST',
         'callback' => 'tmon_uc_receive_data_history',
         'permission_callback' => '__return_true',
@@ -472,6 +469,8 @@ function tmon_uc_receive_data_history($request) {
     if ($file && $unit_id) {
         $dest = $log_dir . "/data_history_{$unit_id}_" . time() . ".log";
         move_uploaded_file($file['tmp_name'], $dest);
+        // Flag for hub sync/backfill
+        set_transient('tmon_uc_devices_dirty', 1, 15 * MINUTE_IN_SECONDS);
         return rest_ensure_response(['status' => 'ok', 'received' => true]);
     }
     return rest_ensure_response(['status' => 'error', 'received' => false]);
