@@ -204,14 +204,13 @@ add_shortcode('tmon_device_status', function($atts) {
     $now = time();
     $nonce = wp_create_nonce('tmon_uc_relay');
     foreach ($rows as $r) {
-        // Prefer DB-side UNIX_TIMESTAMP to avoid timezone parsing/offset issues.
-        $device_ts = $wpdb->get_var($wpdb->prepare("SELECT UNIX_TIMESTAMP(last_seen) FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s LIMIT 1", $r['unit_id']));
-        $fd_ts     = $wpdb->get_var($wpdb->prepare("SELECT UNIX_TIMESTAMP(MAX(created_at)) FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s", $r['unit_id']));
-        $device_ts = $device_ts ? intval($device_ts) : 0;
-        $fd_ts     = $fd_ts ? intval($fd_ts) : 0;
-        $last = max($device_ts, $fd_ts);
-        // If never seen, force a large age to classify as red
-        $age = ($last > 0) ? ($now - $last) : PHP_INT_MAX;
+        // Compute age (seconds since last sample) in DB using UTC to avoid timezone mismatches.
+        $age = $wpdb->get_var($wpdb->prepare(
+            "SELECT TIMESTAMPDIFF(SECOND, COALESCE((SELECT MAX(created_at) FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s), (SELECT last_seen FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s)), UTC_TIMESTAMP())",
+            $r['unit_id'], $r['unit_id']
+        ));
+        $age = ($age === null) ? PHP_INT_MAX : intval($age);
+        $last = ($age === PHP_INT_MAX) ? 0 : ($now - $age);
         if (intval($r['suspended'])) {
             $cls = 'tmon-red';
         } else if ($last === 0) {
@@ -223,8 +222,22 @@ add_shortcode('tmon_device_status', function($atts) {
         } else {
             $cls = 'tmon-red';
         }
-        // $last is a GMT/UTC timestamp, pass $gmt = true so date_i18n converts to site timezone
-        $title = ($last > 0) ? ('Last seen: ' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last, true) . ' (' . human_time_diff($last, $now) . ' ago)') : 'Never seen';
+        // Build the displayed "last seen" timestamp from DB (prefer field_data.created_at then devices.last_seen)
+        $last_str = $wpdb->get_var($wpdb->prepare(
+            "SELECT COALESCE((SELECT MAX(created_at) FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s), (SELECT last_seen FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s))",
+            $r['unit_id'], $r['unit_id']
+        ));
+        if ($last_str) {
+            try {
+                $dt = new DateTime($last_str, new DateTimeZone('UTC'));
+                $last_ts = $dt->getTimestamp();
+                $title = 'Last seen: ' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last_ts, true) . ' (' . human_time_diff($last_ts, $now) . ' ago)';
+            } catch (Exception $e) {
+                $title = 'Last seen: ' . esc_html($last_str);
+            }
+        } else {
+            $title = 'Never seen';
+        }
 
         // Enabled relays from device settings, else infer from latest field data payload
         $enabled_relays = [];
