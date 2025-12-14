@@ -287,3 +287,244 @@ add_shortcode('tmon_device_status', function($atts) {
     return ob_get_clean();
 });
 
+// AJAX: relay command (logged-in users only)
+if (!function_exists('tmon_uc_relay_command')) {
+function tmon_uc_relay_command() {
+    if ( empty( $_POST['nonce'] ) || ! wp_verify_nonce( wp_unslash( $_POST['nonce'] ), 'tmon_uc_relay' ) ) {
+        wp_send_json_error( 'Invalid nonce', 403 );
+    }
+    if ( ! ( current_user_can('manage_options') || current_user_can('edit_tmon_units') ) ) {
+        wp_send_json_error( 'Permission denied', 403 );
+    }
+    $unit = isset($_POST['unit_id']) ? sanitize_text_field(wp_unslash($_POST['unit_id'])) : '';
+    $relay = isset($_POST['relay_num']) ? intval($_POST['relay_num']) : 0;
+    $state = isset($_POST['state']) ? sanitize_text_field($_POST['state']) : '';
+    $runtime_min = isset($_POST['runtime_min']) ? intval($_POST['runtime_min']) : 0;
+    $schedule_at = isset($_POST['schedule_at']) ? sanitize_text_field($_POST['schedule_at']) : '';
+    if (empty($unit) || !$relay || !in_array($state, ['on','off'], true)) {
+        wp_send_json_error('Missing parameters', 400);
+    }
+    global $wpdb;
+    $table = $wpdb->prefix . 'tmon_device_commands';
+    $now = current_time('mysql');
+    $data = [
+        'device_id' => $unit,
+        'relay_num' => $relay,
+        'command' => $state,
+        'runtime_min' => $runtime_min,
+        'schedule_at' => $schedule_at ?: null,
+        'created_at' => $now,
+    ];
+    $ok = $wpdb->insert($table, $data, array('%s','%d','%s','%d','%s','%s'));
+    if (!$ok) return wp_send_json_error('DB error', 500);
+    $scheduled = !empty($schedule_at);
+    wp_send_json_success(['queued' => true, 'scheduled' => (bool)$scheduled]);
+}}
+add_action('wp_ajax_tmon_uc_relay_command', 'tmon_uc_relay_command');
+
+// tmon_device_history — allow unit_id="" to fix unit and hide selector
+add_shortcode('tmon_device_history', function($atts) {
+    $a = shortcode_atts([
+        'hours' => '24',
+        'refresh_s' => '60',
+        'unit_id' => '',
+    ], $atts);
+    $hours = max(1, intval($a['hours']));
+    $refresh = max(0, intval($a['refresh_s']));
+    $fixed_unit = sanitize_text_field($a['unit_id']);
+    $feature = 'sample';
+    $devices = tmon_uc_list_feature_devices($feature);
+    if (empty($devices)) return '<em>No provisioned devices found for this feature.</em>';
+    $default_unit = $fixed_unit ?: $devices[0]['unit_id'];
+    $select_id = 'tmon-history-select-' . wp_generate_password(6, false, false);
+    $canvas_id = 'tmon-history-chart-' . wp_generate_password(8, false, false);
+    $ajax_root = esc_js(rest_url());
+    ob_start();
+    echo '<div class="tmon-history-widget">';
+    echo '<label class="screen-reader-text" for="'.$select_id.'">Device</label>';
+    echo '<select id="'.$select_id.'" class="tmon-history-select" data-hours="'.$hours.'" data-canvas="'.$canvas_id.'">';
+    foreach ($devices as $d) {
+        $sel = selected($default_unit, $d['unit_id'], false);
+        echo '<option value="'.esc_attr($d['unit_id']).'" '.$sel.'>'.esc_html($d['label']).'</option>';
+    }
+    echo '</select>';
+    echo '<div id="'.$canvas_id.'" class="tmon-history-canvas" style="height:300px;min-width:400px"></div>';
+    echo '</div>';
+    // inject JS with fixed unit support
+    $script = <<<'JS'
+(function(){
+    const select = document.getElementById("%SELECT_ID%");
+    const fixedUnit = "%UNIT%";
+    const external = document.getElementById("tmon-unit-picker");
+    const canvas = document.getElementById(select.getAttribute("data-canvas"));
+    if(!select || !canvas) return;
+    const ctx = canvas.getContext("2d");
+    const base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : "%AJAX_ROOT%".replace(/\/$/, "");
+    let chart = null;
+    function render(unit){
+        const hrs = select.getAttribute("data-hours") || "%HOURS%";
+        const url = base + "/tmon/v1/device/history?unit_id=" + encodeURIComponent(unit) + "&hours=" + encodeURIComponent(hrs);
+        fetch(url).then(r=>r.json()).then(data=>{
+            if (!data || !data.success) return;
+            const labels = [], series = [], pointStale = [];
+            let minTs = Number.MAX_SAFE_INTEGER, maxTs = 0;
+            (data.data || []).forEach(row=>{
+                const ts = (row.created_at) ? (new Date(row.created_at)).getTime() : 0;
+                if (ts < 1000000000000) return; // sanity
+                if (ts < minTs) minTs = ts;
+                if (ts > maxTs) maxTs = ts;
+                labels.push(new Date(ts));
+                series.push(row.avg || 0);
+                pointStale.push(!!row.stale);
+            });
+            if (chart) {
+                chart.destroy();
+                ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+                chart = null;
+            }
+            if (labels.length < 2) return;
+            const opts = {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Avg. Value',
+                        data: series,
+                        borderColor: '#0073aa',
+                        backgroundColor: 'rgba(0,115,170,0.2)',
+                        fill: true,
+                        pointRadius: (ctx) => { var i = ctx.dataIndex; return (pointStale[i] ? 4 : 2); },
+                        pointBackgroundColor: (ctx) => { var i = ctx.dataIndex; return (pointStale[i] ? '#e74c3c' : '#fff'); },
+                        pointBorderColor: (ctx) => { var i = ctx.dataIndex; return (pointStale[i] ? '#e74c3c' : '#0073aa'); },
+                    }],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                tooltipFormat: 'll HH:mm',
+                                unit: 'hour',
+                                displayFormats: {
+                                    hour: 'MMM D, HH:mm',
+                                },
+                            },
+                            title: {
+                                display: true,
+                                text: 'Time',
+                            },
+                        },
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Value',
+                            },
+                            ticks: {
+                                beginAtZero: true,
+                            },
+                        },
+                    },
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label || '';
+                                    if (label && context.parsed.y !== null) {
+                                        label += ': ' + context.parsed.y.toFixed(2);
+                                    }
+                                    return label;
+                                },
+                            },
+                        },
+                    },
+                },
+            };
+            const Chart = window.Chart;
+            if (Chart && typeof Chart === 'function') {
+                chart = new Chart(ctx, opts);
+            }
+        }).catch(err=>{ console.error("TMON history fetch error", err); });
+    }
+    if (fixedUnit) { select.style.display="none"; render(fixedUnit); return; }
+    if (external) { select.style.display = "none"; }
+    const activeSelect = external || select;
+    activeSelect.addEventListener("change", function(ev){ render(ev.target.value); });
+    render(activeSelect.value);
+    const refreshMs = %REFRESH_MS%;
+    if (refreshMs > 0) { setInterval(function(){ render(activeSelect.value); }, refreshMs); }
+})();
+JS;
+    $script = str_replace(['%SELECT_ID%','%AJAX_ROOT%','%HOURS%','%UNIT%','%REFRESH_MS%'], [$select_id, esc_js(rest_url()), $hours, esc_js($fixed_unit), ($refresh*1000)], $script);
+    echo '<script>'.$script.'</script>';
+    echo '</div>';
+    return ob_get_clean();
+});
+
+// tmon_device_sdata — allow unit_id attribute
+add_shortcode('tmon_device_sdata', function($atts) {
+    $a = shortcode_atts([
+        'refresh_s' => '30',
+        'unit_id' => '',
+    ], $atts);
+    $refresh = max(0, intval($a['refresh_s']));
+    $fixed_unit = sanitize_text_field($a['unit_id']);
+    $devices = tmon_uc_list_feature_devices('sample');
+    if (empty($devices)) return '<em>No provisioned devices found for this feature.</em>';
+    $default_unit = $fixed_unit ?: $devices[0]['unit_id'];
+    $select_id = 'tmon-sdata-select-' . wp_generate_password(6, false, false);
+    $table_id = 'tmon-sdata-table-' . wp_generate_password(6, false, false);
+    $meta_id = 'tmon-sdata-meta-' . wp_generate_password(6, false, false);
+    ob_start();
+    echo '<div class="tmon-sdata-widget">';
+    echo '<label class="screen-reader-text" for="'.$select_id.'">Device</label>';
+    echo '<select id="'.$select_id.'" class="tmon-sdata-select">';
+    foreach ($devices as $d) {
+        $sel = selected($default_unit, $d['unit_id'], false);
+        echo '<option value="'.esc_attr($d['unit_id']).'" '.$sel.'>'.esc_html($d['label']).'</option>';
+    }
+    echo '</select>';
+    echo '<div id="'.$table_id.'" class="tmon-sdata-table"></div>';
+    echo '<div id="'.$meta_id.'" class="tmon-sdata-meta"></div>';
+    echo '</div>';
+    // JS with fixed unit support
+    $sdata_script = <<<'JS'
+(function(){
+    var select = document.getElementById("%SELECT_ID%");
+    var fixedUnit = "%UNIT%";
+    var external = document.getElementById("tmon-unit-picker");
+    var table = document.getElementById("%TABLE_ID%");
+    var meta = document.getElementById("%META_ID%");
+    var base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : "%AJAX_ROOT%".replace(/\/$/, "");
+    function render(unit){
+        var url = base + "/tmon/v1/device/sdata?unit_id=" + encodeURIComponent(unit);
+        fetch(url).then(function(r){ return r.json(); }).then(function(data){
+            if (!data || !data.success) return;
+            var html = '<table class="widefat striped"><thead><tr><th>Parameter</th><th>Value</th></tr></thead><tbody>';
+            var metaHtml = '<h4>Metadata</h4><pre>' + JSON.stringify(data.data.meta || {}, null, 2) + '</pre>';
+            (data.data.values || []).forEach(function(row){
+                html += '<tr><td>' + esc_html(row.param) + '</td><td>' + esc_html(row.value) + '</td></tr>';
+            });
+            html += '</tbody></table>';
+            table.innerHTML = html;
+            meta.innerHTML = metaHtml;
+        }).catch(function(err){
+            console.error('TMON sdata fetch error', err);
+        });
+    }
+    if (fixedUnit) { select.style.display="none"; render(fixedUnit); return; }
+    if (external) { select.style.display = "none"; }
+    var activeSelect = external || select;
+    activeSelect.addEventListener('change', function(ev){ render(ev.target.value); });
+    render(activeSelect.value);
+    var refreshMs = %REFRESH_MS%;
+    if (refreshMs > 0) { setInterval(function(){ render(activeSelect.value); }, refreshMs); }
+})();
+JS;
+    $sdata_script = str_replace(['%SELECT_ID%','%UNIT%','%TABLE_ID%','%META_ID%','%AJAX_ROOT%','%REFRESH_MS%'], [$select_id, esc_js($fixed_unit), $table_id, $meta_id, esc_js(rest_url()), ($refresh*1000)], $sdata_script);
+    echo '<script>'.$sdata_script.'</script>';
+    echo '</div>';
+    return ob_get_clean();
+});
+
