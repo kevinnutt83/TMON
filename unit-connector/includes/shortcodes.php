@@ -204,23 +204,25 @@ add_shortcode('tmon_device_status', function($atts) {
     $now = time();
     $nonce = wp_create_nonce('tmon_uc_relay');
     foreach ($rows as $r) {
-        // Get the last seen timestamp from the database
+        // Get the last seen timestamp from DB (prefer field_data.created_at then devices.last_seen)
         $last_str = $wpdb->get_var($wpdb->prepare(
             "SELECT COALESCE((SELECT MAX(created_at) FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s), (SELECT last_seen FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s))",
             $r['unit_id'], $r['unit_id']
         ));
-
-        // Parse the timestamp directly without timezone adjustments
-        $last = $last_str ? strtotime($last_str) : 0;
-
-        if (!$last) {
+        // Parse DB datetime as UTC to avoid implicit local-time offsets
+        if (empty($last_str)) {
+            $last = 0;
             $age = PHP_INT_MAX;
             $cls = 'tmon-red';
             $title = 'Never seen';
         } else {
+            try {
+                $dt = new DateTimeImmutable($last_str, new DateTimeZone('UTC'));
+                $last = $dt->getTimestamp();
+            } catch (Exception $e) {
+                $last = intval(strtotime($last_str));
+            }
             $age = max(0, $now - $last);
-
-            // Determine the color class based on the age
             if (intval($r['suspended'])) {
                 $cls = 'tmon-red';
             } else if ($age <= 15 * 60) {
@@ -230,34 +232,36 @@ add_shortcode('tmon_device_status', function($atts) {
             } else {
                 $cls = 'tmon-red';
             }
-
-            // Format the tooltip with the last seen time and human-readable difference
-            $title = 'Last seen: ' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last) . ' (' . human_time_diff($last, time()) . ' ago)';
+            // $last is UTC epoch; pass $gmt=true so date_i18n converts to site timezone
+            $title = 'Last seen: ' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last, true) . ' (' . human_time_diff($last, $now) . ' ago)';
         }
 
-        // Enabled relays from device settings, else infer from latest field data payload
+        // Robust relay detection (case-insensitive keys and truthy values)
         $enabled_relays = [];
         $settings = [];
-        if (!empty($r['settings'])) { 
-            $tmp = json_decode($r['settings'], true); 
-            if (is_array($tmp)) $settings = $tmp; 
+        if (!empty($r['settings'])) {
+            $tmp = json_decode($r['settings'], true);
+            if (is_array($tmp)) $settings = $tmp;
         }
-        for ($i=1; $i<=8; $i++) {
-            $k = 'ENABLE_RELAY'.$i;
-            if (isset($settings[$k]) && ($settings[$k] === true || $settings[$k] === 1 || $settings[$k] === '1')) $enabled_relays[] = $i;
+        foreach ($settings as $k => $v) {
+            if (preg_match('/enable[_]?relay(\d+)/i', $k, $m) && isset($m[1]) && tmon_uc_truthy_flag($v)) {
+                $enabled_relays[] = intval($m[1]);
+            }
         }
         if (empty($enabled_relays)) {
             $fd = $wpdb->get_row($wpdb->prepare("SELECT data FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s ORDER BY created_at DESC LIMIT 1", $r['unit_id']), ARRAY_A);
             if ($fd && !empty($fd['data'])) {
                 $d = json_decode($fd['data'], true);
                 if (is_array($d)) {
-                    for ($i=1; $i<=8; $i++) {
-                        $k = 'ENABLE_RELAY'.$i;
-                        if (isset($d[$k]) && ($d[$k] === true || $d[$k] === 1 || $d[$k] === '1')) $enabled_relays[] = $i;
+                    foreach ($d as $k => $v) {
+                        if (preg_match('/enable[_]?relay(\d+)/i', $k, $m) && isset($m[1]) && tmon_uc_truthy_flag($v)) {
+                            $enabled_relays[] = intval($m[1]);
+                        }
                     }
                 }
             }
         }
+        $enabled_relays = array_values(array_unique($enabled_relays));
 
         echo '<tr>';
         echo '<td><span class="tmon-dot '.$cls.'" title="'.esc_attr($title).'" data-last="'.esc_attr($last).'" data-age="'.esc_attr($age).'"></span></td>';
