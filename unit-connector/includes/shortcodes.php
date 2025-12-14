@@ -171,31 +171,37 @@ add_shortcode('tmon_device_status', function($atts) {
     $now = time();
     $nonce = wp_create_nonce('tmon_uc_relay');
     foreach ($rows as $r) {
-        $last = strtotime($r['last_seen'] ?: '1970-01-01 00:00:00');
-        $age = ($last > 0) ? max(0, $now - $last) : PHP_INT_MAX;
-        // Correct thresholds: <=15min green, <=30min yellow, else red
-        if (intval($r['suspended'])) {
+        $last_str = $r['last_seen'] ?? '';
+        $last = $last_str ? intval(strtotime($last_str)) : 0;
+        if (!$last) {
+            $age = PHP_INT_MAX;
             $cls = 'tmon-red';
-        } else if ($age === PHP_INT_MAX) {
-            $cls = 'tmon-red';
-        } else if ($age <= 15 * 60) {
-            $cls = 'tmon-green';
-        } else if ($age <= 30 * 60) {
-            $cls = 'tmon-yellow';
+            $title = 'Never seen';
         } else {
-            $cls = 'tmon-red';
+            $age = max(0, $now - $last);
+            if (intval($r['suspended'])) {
+                $cls = 'tmon-red';
+            } else if ($age <= 15 * 60) {
+                $cls = 'tmon-green';
+            } else if ($age <= 30 * 60) {
+                $cls = 'tmon-yellow';
+            } else {
+                $cls = 'tmon-red';
+            }
+            $title = 'Last seen: ' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last) . ' (' . human_time_diff($last, $now) . ' ago)';
         }
 
-        // Enabled relays: check explicit ENABLE_RELAYn keys and case-insensitive fallbacks; use tmon_uc_truthy_flag()
+        // Detect enabled relays: explicit ENABLE_RELAYn, case-insensitive keys, then field-data fallback
         $enabled_relays = [];
         $settings = [];
         if (!empty($r['settings'])) { $tmp = json_decode($r['settings'], true); if (is_array($tmp)) $settings = $tmp; }
         for ($i = 1; $i <= 8; $i++) {
             $k = 'ENABLE_RELAY' . $i;
-            if (isset($settings[$k]) && tmon_uc_truthy_flag($settings[$k])) { $enabled_relays[] = $i; continue; }
-            // case-insensitive key check
+            if (array_key_exists($k, $settings) && tmon_uc_truthy_flag($settings[$k])) { $enabled_relays[] = $i; continue; }
+            // case-insensitive exact match fallback
+            $lower = strtolower($k);
             foreach ($settings as $sk => $sv) {
-                if (strtolower($sk) === strtolower($k) && tmon_uc_truthy_flag($sv)) { $enabled_relays[] = $i; break; }
+                if (strtolower($sk) === $lower && tmon_uc_truthy_flag($sv)) { $enabled_relays[] = $i; break; }
             }
         }
         if (empty($enabled_relays)) {
@@ -629,37 +635,4 @@ JS;
     echo '</div>';
     return ob_get_clean();
 });
-
-// AJAX handler for relay commands
-if (!function_exists('tmon_uc_relay_command')) {
-function tmon_uc_relay_command() {
-	if ( empty( $_POST['nonce'] ) || ! wp_verify_nonce( wp_unslash( $_POST['nonce'] ), 'tmon_uc_relay' ) ) {
-		wp_send_json_error( 'Invalid nonce', 403 );
-	}
-	if ( ! ( current_user_can('manage_options') || current_user_can('edit_tmon_units') ) ) {
-		wp_send_json_error( 'Permission denied', 403 );
-	}
-	$unit = isset($_POST['unit_id']) ? sanitize_text_field(wp_unslash($_POST['unit_id'])) : '';
-	$relay = isset($_POST['relay_num']) ? intval($_POST['relay_num']) : 0;
-	$state = isset($_POST['state']) ? sanitize_text_field(wp_unslash($_POST['state'])) : '';
-	$runtime_min = isset($_POST['runtime_min']) ? intval($_POST['runtime_min']) : 0;
-	$schedule_at = isset($_POST['schedule_at']) ? sanitize_text_field(wp_unslash($_POST['schedule_at'])) : '';
-	if (!$unit || !$relay || !in_array($state, ['on','off'], true)) {
-		wp_send_json_error('Missing or invalid parameters', 400);
-	}
-	global $wpdb;
-	$table = $wpdb->prefix . 'tmon_device_commands';
-	$now = current_time('mysql');
-	$ok = $wpdb->insert($table, [
-		'device_id' => $unit,
-		'relay_num' => $relay,
-		'command' => $state,
-		'runtime_min' => $runtime_min,
-		'schedule_at' => $schedule_at ?: null,
-		'created_at' => $now,
-	], ['%s','%d','%s','%d','%s','%s']);
-	if (!$ok) wp_send_json_error('DB error', 500);
-	wp_send_json_success(['queued' => true, 'scheduled' => (bool) $schedule_at]);
-}}
-add_action('wp_ajax_tmon_uc_relay_command', 'tmon_uc_relay_command');
 
