@@ -204,24 +204,21 @@ add_shortcode('tmon_device_status', function($atts) {
     $now = time();
     $nonce = wp_create_nonce('tmon_uc_relay');
     foreach ($rows as $r) {
-        // Compute age in seconds on DB side (NOW() - latest sample) to avoid timezone shifts
-        $age = $wpdb->get_var($wpdb->prepare(
-            "SELECT TIMESTAMPDIFF(SECOND, COALESCE((SELECT MAX(created_at) FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s),(SELECT last_seen FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s)), NOW())",
-            $r['unit_id'], $r['unit_id']
-        ));
-        $age = ($age === null) ? PHP_INT_MAX : intval($age);
-        // Read the DB-provided timestamp string for display (matches table cell)
+        // Get the DB timestamp string (prefer field_data.created_at then devices.last_seen)
         $last_str = $wpdb->get_var($wpdb->prepare(
-            "SELECT COALESCE((SELECT MAX(created_at) FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s),(SELECT last_seen FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s))",
+            "SELECT COALESCE((SELECT MAX(created_at) FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s), (SELECT last_seen FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s))",
             $r['unit_id'], $r['unit_id']
         ));
-        if ($age === PHP_INT_MAX || $age < 0 || empty($last_str)) {
+        // Parse DB timestamp directly (no timezone conversion/offset)
+        $parsed = $last_str ? strtotime($last_str) : false;
+        if ($parsed === false || $parsed === null) {
             $last = 0;
+            $age = PHP_INT_MAX;
             $cls = 'tmon-red';
             $title = 'Never seen';
         } else {
-            // Derive PHP epoch from server time minus DB age so coloring matches DB's NOW()
-            $last = max(0, $now - $age);
+            $last = intval($parsed);
+            $age = max(0, $now - $last);
             if (intval($r['suspended'])) {
                 $cls = 'tmon-red';
             } else if ($age <= 15 * 60) {
@@ -231,16 +228,43 @@ add_shortcode('tmon_device_status', function($atts) {
             } else {
                 $cls = 'tmon-red';
             }
-            $title = 'Last seen: ' . esc_html($last_str) . ' (' . human_time_diff($last, $now) . ' ago)';
+            $title = 'Last seen: ' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last) . ' (' . human_time_diff($last, $now) . ' ago)';
         }
 
-        // Detect enabled relays robustly using tmon_uc_truthy_flag
+        // Enabled relays from device settings, else infer from latest field data payload
         $enabled_relays = [];
-        $settings = !empty($r['settings']) ? json_decode($r['settings'], true) : [];
-        if (!is_array($settings)) $settings = [];
-        for ($i = 1; $i <= 8; $i++) {
+        $settings = [];
+        if (!empty($r['settings'])) { $tmp = json_decode($r['settings'], true); if (is_array($tmp)) $settings = $tmp; }
+        for ($i=1; $i<=8; $i++) {
             $k = 'ENABLE_RELAY'.$i;
-            if (isset($settings[$k]) && tmon_uc_truthy_flag($settings[$k])) { $enabled_relays[] = $i; continue; }
-            foreach ($settings as $sk => $sv) {
-                if (preg_match('/^enable[_]?relay'.$i.'$/i', $sk) && tmon_uc_truthy_flag($sv)) { $enabled_relays[] = $i; break;
+            if (isset($settings[$k]) && ($settings[$k] === true || $settings[$k] === 1 || $settings[$k] === '1')) $enabled_relays[] = $i;
+        }
+        if (empty($enabled_relays)) {
+            $fd = $wpdb->get_row($wpdb->prepare("SELECT data FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s ORDER BY created_at DESC LIMIT 1", $r['unit_id']), ARRAY_A);
+            if ($fd && !empty($fd['data'])) {
+                $d = json_decode($fd['data'], true);
+                if (is_array($d)) {
+                    for ($i=1; $i<=8; $i++) {
+                        $k = 'ENABLE_RELAY'.$i;
+                        if (isset($d[$k]) && ($d[$k] === true || $d[$k] === 1 || $d[$k] === '1')) $enabled_relays[] = $i;
+                    }
+                }
+            }
+        }
+        $enabled_relays = array_values(array_unique($enabled_relays));
+
+        // Status dot
+        echo '<tr>';
+        echo '<td><span class="tmon-dot ' . esc_attr($cls) . '" title="' . esc_attr($title) . '"></span></td>';
+        echo '<td>' . esc_html($r['unit_id']) . '</td>';
+        echo '<td>' . esc_html($r['unit_name'] ?: '-') . '</td>';
+        echo '<td>' . esc_html($last_str) . '</td>';
+        echo '<td class="tmon-relay-ctl" data-unit-id="' . esc_attr($r['unit_id']) . '">';
+        if ($can_control) {
+            // Relay controls (1-8)
+            for ($i = 1; $i <= 8; $i++) {
+                $k = 'ENABLE_RELAY'.$i;
+                $checked = in_array($i, $enabled_relays) ? ' checked' : '';
+                echo '<div class="tmon-relay-row">';
+                echo '<input type="checkbox" class="tmon-relay-toggle" id="relay-'.$i.'-unit-'.$r['unit_id'].'" data-relay="'.$i.'"'.
 
