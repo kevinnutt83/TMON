@@ -1,12 +1,48 @@
 <?php
-// Shortcode to display pending command count for a unit: [tmon_pending_commands unit="170170"]
+// Shortcode to display pending command count for a unit: [tmon_pending_commands]
 add_shortcode('tmon_pending_commands', function($atts){
-    $atts = shortcode_atts(['unit' => ''], $atts);
-    $unit = sanitize_text_field($atts['unit']);
-    if (!$unit) return '';
-    global $wpdb;
-    $cnt = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$wpdb->prefix}tmon_device_commands WHERE device_id = %s AND executed_at IS NULL", $unit));
-    return '<span class="tmon-pending-commands" data-unit="'.esc_attr($unit).'">'.intval($cnt).'</span>';
+    // Use dropdown logic as in device history/data
+    $devices = tmon_uc_list_feature_devices('sample');
+    if (empty($devices)) {
+        return '<em>No provisioned devices found.</em>';
+    }
+    $default_unit = $devices[0]['unit_id'];
+    $select_id = 'tmon-pending-select-' . wp_generate_password(6, false, false);
+    $span_id = 'tmon-pending-count-' . wp_generate_password(6, false, false);
+    $ajax_root = esc_js(rest_url());
+    ob_start();
+    echo '<div class="tmon-pending-widget">';
+    echo '<label class="screen-reader-text" for="'.$select_id.'">Device</label>';
+    echo '<select id="'.$select_id.'" class="tmon-pending-select">';
+    foreach ($devices as $d) {
+        $sel = selected($default_unit, $d['unit_id'], false);
+        echo '<option value="'.esc_attr($d['unit_id']).'" '.$sel.'>'.esc_html($d['label']).'</option>';
+    }
+    echo '</select> ';
+    echo '<span id="'.$span_id.'" class="tmon-pending-commands"></span>';
+    $pending_script = <<<'JS'
+(function(){
+    var select = document.getElementById("%SELECT_ID%");
+    var span = document.getElementById("%SPAN_ID%");
+    var base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : "%AJAX_ROOT%".replace(/\/$/, "");
+    function render(unit){
+        var url = base + "/tmon/v1/device/pending_commands?unit_id=" + encodeURIComponent(unit);
+        fetch(url).then(function(r){ return r.json(); }).then(function(data){
+            span.textContent = (typeof data.count !== "undefined") ? data.count : "0";
+        }).catch(function(){ span.textContent = "?"; });
+    }
+    select.addEventListener('change', function(ev){ render(ev.target.value); });
+    render(select.value);
+})();
+JS;
+    $pending_script = str_replace(
+        ['%SELECT_ID%', '%SPAN_ID%', '%AJAX_ROOT%'],
+        [esc_js($select_id), esc_js($span_id), esc_js(rest_url())],
+        $pending_script
+    );
+    echo '<script>'.$pending_script.'</script>';
+    echo '</div>';
+    return ob_get_clean();
 });
 
 // Dashboard widget to summarize pending commands
