@@ -204,22 +204,23 @@ add_shortcode('tmon_device_status', function($atts) {
     $now = time();
     $nonce = wp_create_nonce('tmon_uc_relay');
     foreach ($rows as $r) {
-        // Get the most recent timestamp as a UNIX epoch (DB-side) to avoid timezone/parsing issues.
-        $last_ts = intval( $wpdb->get_var( $wpdb->prepare(
-            "SELECT GREATEST(
-                IFNULL(UNIX_TIMESTAMP((SELECT last_seen FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s LIMIT 1)),0),
-                IFNULL(UNIX_TIMESTAMP((SELECT MAX(created_at) FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s)),0)
-            )",
+        // Compute age (seconds since last sample) using DB TIMESTAMPDIFF and NOW() so DB timezone interpretation is consistent.
+        $age = $wpdb->get_var($wpdb->prepare(
+            "SELECT TIMESTAMPDIFF(SECOND, COALESCE((SELECT MAX(created_at) FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s), (SELECT last_seen FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s)), NOW())",
             $r['unit_id'], $r['unit_id']
-        ) ) );
-        if ($last_ts <= 0) {
-            $age = PHP_INT_MAX;
+        ));
+        $age = ($age === null) ? PHP_INT_MAX : intval($age);
+        if ($age === PHP_INT_MAX || $age < 0) {
             $last = 0;
             $cls = 'tmon-red';
             $title = 'Never seen';
         } else {
-            $last = $last_ts;
-            $age = max(0, $now - $last_ts);
+            // Derive local timestamp using the DB-provided datetime string for display (matches the table cell)
+            $last_str = $wpdb->get_var($wpdb->prepare(
+                "SELECT COALESCE((SELECT MAX(created_at) FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s), (SELECT last_seen FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s))",
+                $r['unit_id'], $r['unit_id']
+            ));
+            $last = $last_str ? intval(strtotime($last_str)) : 0;
             if (intval($r['suspended'])) {
                 $cls = 'tmon-red';
             } else if ($age <= 15*60) {
@@ -229,8 +230,7 @@ add_shortcode('tmon_device_status', function($atts) {
             } else {
                 $cls = 'tmon-red';
             }
-            // Format the time in site timezone from the UTC epoch
-            $title = 'Last seen: ' . date_i18n( get_option('date_format') . ' ' . get_option('time_format'), $last_ts, true ) . ' (' . human_time_diff( $last_ts, $now ) . ' ago)';
+            $title = $last ? ('Last seen: ' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last) . ' (' . human_time_diff($last, $now) . ' ago)') : 'Last seen: ' . esc_html($last_str);
         }
 
         // Enabled relays from device settings, else infer from latest field data payload
