@@ -264,10 +264,14 @@ add_shortcode('tmon_device_history', function($atts) {
         'feature' => 'sample',
         'placeholder' => 'Select a device',
         'refresh_s' => '0',
+        'unit_select_id' => '',
+        'hide_internal_select' => 'false',
     ], $atts);
     $hours = max(1, intval($a['hours']));
     $feature = sanitize_key($a['feature']);
     $refresh = max(0, intval($a['refresh_s']));
+    $external_select_id = sanitize_text_field($a['unit_select_id']);
+    $hide_internal = in_array(strtolower($a['hide_internal_select']), ['1','true','yes','on'], true);
     $devices = tmon_uc_list_feature_devices($feature);
     if (empty($devices)) {
         return '<em>No provisioned devices found for this feature.</em>';
@@ -288,8 +292,9 @@ add_shortcode('tmon_device_history', function($atts) {
     $y4max = ($voltage_max !== '') ? floatval($voltage_max) : 'null';
     ob_start();
     echo '<div class="tmon-history-widget">';
+    $internal_style = ($external_select_id && $hide_internal) ? ' style="display:none"' : '';
     echo '<label class="screen-reader-text" for="'.$select_id.'">Device</label>';
-    echo '<select id="'.$select_id.'" class="tmon-history-select" data-hours="'.$hours.'" data-canvas="'.$canvas_id.'">';
+    echo '<select id="'.$select_id.'" class="tmon-history-select" data-hours="'.$hours.'" data-canvas="'.$canvas_id.'"'.$internal_style.'>';
     foreach ($devices as $d) {
         $sel = selected($default_unit, $d['unit_id'], false);
         echo '<option value="'.esc_attr($d['unit_id']).'" '.$sel.'>'.esc_html($d['label']).'</option>';
@@ -299,6 +304,8 @@ add_shortcode('tmon_device_history', function($atts) {
     echo '<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>';
     echo '<script>(function(){
         const select = document.getElementById("'.$select_id.'");
+        const externalId = "'.esc_js($external_select_id).'";
+        const external = externalId ? document.getElementById(externalId) : null;
         const canvas = document.getElementById(select.getAttribute("data-canvas"));
         if(!select || !canvas) return;
         const ctx = canvas.getContext("2d");
@@ -342,8 +349,9 @@ add_shortcode('tmon_device_history', function($atts) {
                 chart = new Chart(ctx, cfg);
             }).catch(err=>{ console.error("TMON history fetch error", err); });
         }
-        select.addEventListener("change", function(ev){ render(ev.target.value); });
-        render(select.value);
+        const activeSelect = external || select;
+        activeSelect.addEventListener("change", function(ev){ render(ev.target.value); });
+        render(activeSelect.value);
         const refreshMs = '.($refresh*1000).';
         if (refreshMs > 0) {
             setInterval(function(){ render(select.value); }, refreshMs);
