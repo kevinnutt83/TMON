@@ -560,7 +560,7 @@ add_shortcode('tmon_device_sdata', function($atts) {
         const meta = document.getElementById("'.$meta_id.'");
         const base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : "'. $ajax_root .'".replace(/\/$/, "");
         function render(unit){
-            const url = base + '/tmon/v1/device/sdata?unit_id=' + encodeURIComponent(unit);
+            const url = base + "/tmon/v1/device/sdata?unit_id=" + encodeURIComponent(unit);
             fetch(url).then(r=>r.json()).then(data=>{
                 if (!data || !data.data) {
                     table.innerHTML = '<tr><td><em>No data for this unit.</em></td></tr>';
