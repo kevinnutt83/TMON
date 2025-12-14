@@ -564,42 +564,50 @@ add_shortcode('tmon_device_sdata', function($atts) {
     echo '</select>';
     echo '<div id="'.$meta_id.'" class="tmon-sdata-meta"></div>';
     echo '<table class="wp-list-table widefat"><tbody id="'.$table_id.'"><tr><td><em>Loading...</em></td></tr></tbody></table>';
-    echo '<script>(function(){
-        const select = document.getElementById("'.$select_id.'");
-        const external = document.getElementById("tmon-unit-picker");
-        if (external) { select.style.display = "none"; }
-        const activeSelect = external || select;
-        const table = document.getElementById("'.$table_id.'");
-        const meta = document.getElementById("'.$meta_id.'");
-        const base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : "'. $ajax_root .'".replace(/\/$/, "");
-        function render(unit){
-            const url = base + "/tmon/v1/device/sdata?unit_id=" + encodeURIComponent(unit);
-            fetch(url).then(r=>r.json()).then(data=>{
-                if (!data || !data.data) {
-                    table.innerHTML = '<tr><td><em>No data for this unit.</em></td></tr>';
-                    meta.textContent = '';
-                    return;
-                }
-                const friendly = data.friendly || {};
-                const rows = [];
-                Object.keys(friendly).forEach(function(k){
-                    const v = friendly[k];
-                    if (v === null || v === undefined || v === '') return;
-                    rows.push('<tr><th>' + k + '</th><td>' + v + '</td></tr>');
-                });
-                table.innerHTML = rows.length ? rows.join('') : '<tr><td><em>No fields reported.</em></td></tr>';
-                meta.textContent = data.created_at ? ('Last sample: ' + data.created_at) : '';
-            }).catch(err=>{
-                console.error('TMON sdata fetch error', err);
-                table.innerHTML = '<tr><td><em>Error loading data.</em></td></tr>';
+    $sdata_script = <<<'JS'
+(function(){
+    var select = document.getElementById("%SELECT_ID%");
+    var external = document.getElementById("tmon-unit-picker");
+    if (external) { select.style.display = "none"; }
+    var activeSelect = external || select;
+    var table = document.getElementById("%TABLE_ID%");
+    var meta = document.getElementById("%META_ID%");
+    var base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : "%AJAX_ROOT%".replace(/\/$/, "");
+    function render(unit){
+        var url = base + "/tmon/v1/device/sdata?unit_id=" + encodeURIComponent(unit);
+        fetch(url).then(function(r){ return r.json(); }).then(function(data){
+            if (!data || !data.data) {
+                table.innerHTML = '<tr><td><em>No data for this unit.</em></td></tr>';
                 meta.textContent = '';
+                return;
+            }
+            var friendly = data.friendly || {};
+            var rows = [];
+            Object.keys(friendly).forEach(function(k){
+                var v = friendly[k];
+                if (v === null || v === undefined || v === '') return;
+                rows.push('<tr><th>' + k + '</th><td>' + v + '</td></tr>');
             });
-        }
-        activeSelect.addEventListener('change', function(ev){ render(ev.target.value); });
-        render(activeSelect.value);
-        const refreshMs = '.($refresh*1000).';
-        if (refreshMs > 0) { setInterval(function(){ render(activeSelect.value); }, refreshMs); }
-    })();</script>';
+            table.innerHTML = rows.length ? rows.join('') : '<tr><td><em>No fields reported.</em></td></tr>';
+            meta.textContent = data.created_at ? ('Last sample: ' + data.created_at) : '';
+        }).catch(function(err){
+            console.error('TMON sdata fetch error', err);
+            table.innerHTML = '<tr><td><em>Error loading data.</em></td></tr>';
+            meta.textContent = '';
+        });
+    }
+    activeSelect.addEventListener('change', function(ev){ render(ev.target.value); });
+    render(activeSelect.value);
+    var refreshMs = %REFRESH_MS%;
+    if (refreshMs > 0) { setInterval(function(){ render(activeSelect.value); }, refreshMs); }
+})();
+JS;
+    $sdata_script = str_replace(
+        ['%SELECT_ID%', '%TABLE_ID%', '%META_ID%', '%AJAX_ROOT%', '%REFRESH_MS%'],
+        [esc_js($select_id), esc_js($table_id), esc_js($meta_id), esc_js(rest_url()), ($refresh*1000)],
+        $sdata_script
+    );
+    echo '<script>'.$sdata_script.'</script>';
     echo '</div>';
     return ob_get_clean();
 });
