@@ -204,10 +204,22 @@ add_shortcode('tmon_device_status', function($atts) {
     $now = time();
     $nonce = wp_create_nonce('tmon_uc_relay');
     foreach ($rows as $r) {
-        $last = strtotime($r['last_seen'] ?: '1970-01-01 00:00:00');
-        $age = $now - $last;
-        // New thresholds: <=15min = green, >15 && <=30 = yellow, >30 = red
+        // Prefer the most recent timestamp: device.last_seen or latest field_data.created_at
+        $last = 0;
+        if (!empty($r['last_seen'])) {
+            $ts = strtotime($r['last_seen']);
+            if ($ts !== false) $last = $ts;
+        }
+        $fd_last = $wpdb->get_var($wpdb->prepare("SELECT created_at FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s ORDER BY created_at DESC LIMIT 1", $r['unit_id']));
+        if (!empty($fd_last)) {
+            $ts2 = strtotime($fd_last);
+            if ($ts2 !== false && $ts2 > $last) $last = $ts2;
+        }
+        // If never seen, force a large age to classify as red
+        $age = ($last > 0) ? ($now - $last) : PHP_INT_MAX;
         if (intval($r['suspended'])) {
+            $cls = 'tmon-red';
+        } else if ($last === 0) {
             $cls = 'tmon-red';
         } else if ($age <= 15*60) {
             $cls = 'tmon-green';
@@ -216,7 +228,7 @@ add_shortcode('tmon_device_status', function($atts) {
         } else {
             $cls = 'tmon-red';
         }
-        $title = $r['last_seen'] ? ('Last seen: ' . $r['last_seen'] . ' (' . human_time_diff($last, $now) . ' ago)') : 'Never seen';
+        $title = ($last > 0) ? ('Last seen: ' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last) . ' (' . human_time_diff($last, $now) . ' ago)') : 'Never seen';
 
         // Enabled relays from device settings, else infer from latest field data payload
         $enabled_relays = [];
@@ -240,7 +252,7 @@ add_shortcode('tmon_device_status', function($atts) {
         }
 
         echo '<tr>';
-        echo '<td><span class="tmon-dot '.$cls.'" title="'.esc_attr($title).'"></span></td>';
+        echo '<td><span class="tmon-dot '.$cls.'" title="'.esc_attr($title).'" data-last="'.esc_attr($last).'" data-age="'.esc_attr($age).'"></span></td>';
         echo '<td>'.esc_html($r['unit_id']).'</td>';
         echo '<td>'.esc_html($r['unit_name']).'</td>';
         echo '<td>'.esc_html($r['last_seen']).'</td>';
