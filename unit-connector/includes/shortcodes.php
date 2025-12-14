@@ -204,33 +204,33 @@ add_shortcode('tmon_device_status', function($atts) {
     $now = time();
     $nonce = wp_create_nonce('tmon_uc_relay');
     foreach ($rows as $r) {
-        // Compute age (seconds since last sample) in DB using UNIX_TIMESTAMP arithmetic to avoid timezone mismatches.
-        $age = $wpdb->get_var($wpdb->prepare(
-            "SELECT (UNIX_TIMESTAMP(UTC_TIMESTAMP()) - UNIX_TIMESTAMP(COALESCE((SELECT MAX(created_at) FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s), (SELECT last_seen FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s))))",
+        // Get the most recent timestamp as a UNIX epoch (DB-side) to avoid timezone/parsing issues.
+        $last_ts = intval( $wpdb->get_var( $wpdb->prepare(
+            "SELECT GREATEST(
+                IFNULL(UNIX_TIMESTAMP((SELECT last_seen FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s LIMIT 1)),0),
+                IFNULL(UNIX_TIMESTAMP((SELECT MAX(created_at) FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s)),0)
+            )",
             $r['unit_id'], $r['unit_id']
-        ));
-        $age = ($age === null) ? PHP_INT_MAX : intval($age);
-        $last = ($age === PHP_INT_MAX) ? 0 : ($now - $age);
-        if (intval($r['suspended'])) {
+        ) ) );
+        if ($last_ts <= 0) {
+            $age = PHP_INT_MAX;
+            $last = 0;
             $cls = 'tmon-red';
-        } else if ($last === 0) {
-            $cls = 'tmon-red';
-        } else if ($age <= 15*60) {
-            $cls = 'tmon-green';
-        } else if ($age <= 30*60) {
-            $cls = 'tmon-yellow';
-        } else {
-            $cls = 'tmon-red';
-        }
-        // Use the DB-provided timestamp string (matches the table) and compute relative text from $last (derived from age)
-        if ($last === 0) {
             $title = 'Never seen';
         } else {
-            $last_str = $r['last_seen'] ?: $wpdb->get_var($wpdb->prepare(
-                "SELECT COALESCE((SELECT MAX(created_at) FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s), (SELECT last_seen FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s))",
-                $r['unit_id'], $r['unit_id']
-            ));
-            $title = 'Last seen: ' . esc_html($last_str) . ' (' . human_time_diff($last, $now) . ' ago)';
+            $last = $last_ts;
+            $age = max(0, $now - $last_ts);
+            if (intval($r['suspended'])) {
+                $cls = 'tmon-red';
+            } else if ($age <= 15*60) {
+                $cls = 'tmon-green';
+            } else if ($age <= 30*60) {
+                $cls = 'tmon-yellow';
+            } else {
+                $cls = 'tmon-red';
+            }
+            // Format the time in site timezone from the UTC epoch
+            $title = 'Last seen: ' . date_i18n( get_option('date_format') . ' ' . get_option('time_format'), $last_ts, true ) . ' (' . human_time_diff( $last_ts, $now ) . ' ago)';
         }
 
         // Enabled relays from device settings, else infer from latest field data payload
