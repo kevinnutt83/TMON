@@ -205,14 +205,15 @@ add_shortcode('tmon_device_status', function($atts) {
     $nonce = wp_create_nonce('tmon_uc_relay');
     foreach ($rows as $r) {
         // Prefer the most recent timestamp: device.last_seen or latest field_data.created_at
+        // Parse DB datetime strings as UTC to avoid implicit local-time offsets.
         $last = 0;
         if (!empty($r['last_seen'])) {
-            $ts = strtotime($r['last_seen']);
+            $ts = strtotime($r['last_seen'] . ' UTC');
             if ($ts !== false) $last = $ts;
         }
         $fd_last = $wpdb->get_var($wpdb->prepare("SELECT created_at FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s ORDER BY created_at DESC LIMIT 1", $r['unit_id']));
         if (!empty($fd_last)) {
-            $ts2 = strtotime($fd_last);
+            $ts2 = strtotime($fd_last . ' UTC');
             if ($ts2 !== false && $ts2 > $last) $last = $ts2;
         }
         // If never seen, force a large age to classify as red
@@ -228,7 +229,8 @@ add_shortcode('tmon_device_status', function($atts) {
         } else {
             $cls = 'tmon-red';
         }
-        $title = ($last > 0) ? ('Last seen: ' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last) . ' (' . human_time_diff($last, $now) . ' ago)') : 'Never seen';
+        // $last is a GMT/UTC timestamp, pass $gmt = true so date_i18n converts to site timezone
+        $title = ($last > 0) ? ('Last seen: ' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last, true) . ' (' . human_time_diff($last, $now) . ' ago)') : 'Never seen';
 
         // Enabled relays from device settings, else infer from latest field data payload
         $enabled_relays = [];
