@@ -1,12 +1,40 @@
 <?php
 // Shortcode to display pending command count for a unit: [tmon_pending_commands unit="170170"]
 add_shortcode('tmon_pending_commands', function($atts){
-    $atts = shortcode_atts(['unit' => ''], $atts);
-    $unit = sanitize_text_field($atts['unit']);
-    if (!$unit) return '';
     global $wpdb;
+    $rows = $wpdb->get_results("SELECT unit_id, unit_name FROM {$wpdb->prefix}tmon_devices ORDER BY unit_name ASC, unit_id ASC", ARRAY_A);
+    if (!$rows) return '<em>No devices available.</em>';
+    $select_id = 'tmon-pending-select-' . wp_generate_password(6, false, false);
+    $count_id = 'tmon-pending-count-' . wp_generate_password(6, false, false);
+    $ajax_url = esc_js(admin_url('admin-ajax.php'));
+    ob_start();
+    echo '<label class="screen-reader-text" for="'.$select_id.'">Device</label>';
+    echo '<select id="'.$select_id.'" class="tmon-pending-select">';
+    foreach ($rows as $r) {
+        $label = $r['unit_name'] ? ($r['unit_name'].' ('.$r['unit_id'].')') : $r['unit_id'];
+        echo '<option value="'.esc_attr($r['unit_id']).'">'.esc_html($label).'</option>';
+    }
+    echo '</select> ';
+    echo '<span id="'.$count_id.'" class="tmon-pending-count">Loading…</span>';
+    // Inline JS to fetch count via admin-ajax
+    echo '<script>(function(){var sel=document.getElementById("'.$select_id.'");var external=document.getElementById("tmon-unit-picker"); if(external) sel.style.display="none"; var active=external||sel; var out=document.getElementById("'.$count_id.'"); function fetchCnt(unit){ out.textContent="…"; fetch("'.$ajax_url.'?action=tmon_pending_commands_count&unit_id="+encodeURIComponent(unit)).then(r=>r.json()).then(function(res){ if(res && res.success){ out.textContent = String(res.data.count||0); } else { out.textContent="Err"; } }).catch(function(){ out.textContent="Err"; }); } active.addEventListener("change", function(e){ fetchCnt(e.target.value); }); fetchCnt(active.value); })();</script>';
+    return ob_get_clean();
+});
+
+// AJAX handler for pending command count
+add_action('wp_ajax_tmon_pending_commands_count', function(){
+    global $wpdb;
+    $unit = isset($_REQUEST['unit_id']) ? sanitize_text_field($_REQUEST['unit_id']) : '';
+    if (!$unit) wp_send_json_error('Missing unit_id');
     $cnt = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$wpdb->prefix}tmon_device_commands WHERE device_id = %s AND executed_at IS NULL", $unit));
-    return '<span class="tmon-pending-commands" data-unit="'.esc_attr($unit).'">'.intval($cnt).'</span>';
+    wp_send_json_success(['count' => intval($cnt)]);
+});
+add_action('wp_ajax_nopriv_tmon_pending_commands_count', function(){ // allow public read
+    global $wpdb;
+    $unit = isset($_REQUEST['unit_id']) ? sanitize_text_field($_REQUEST['unit_id']) : '';
+    if (!$unit) wp_send_json_error('Missing unit_id');
+    $cnt = $wpdb->get_var($wpdb->prepare("SELECT COUNT(*) FROM {$wpdb->prefix}tmon_device_commands WHERE device_id = %s AND executed_at IS NULL", $unit));
+    wp_send_json_success(['count' => intval($cnt)]);
 });
 
 // Dashboard widget to summarize pending commands
@@ -171,39 +199,28 @@ add_shortcode('tmon_device_status', function($atts) {
     $now = time();
     $nonce = wp_create_nonce('tmon_uc_relay');
     foreach ($rows as $r) {
-        $last = strtotime($r['last_seen'] ?: '1970-01-01 00:00:00');
-        $age = $now - $last;
-        $cls = $age <= 10*60 ? 'tmon-green' : ($age <= 60*60 ? 'tmon-yellow' : 'tmon-red');
-        if (intval($r['suspended'])) $cls = 'tmon-red';
+        $last_ts = $r['last_seen'] ? strtotime($r['last_seen']) : 0;
+        $age = $now - $last_ts;
+        // New thresholds: green <=15min, yellow <=30min, red >30min or suspended
+        if (intval($r['suspended'])) {
+            $cls = 'tmon-red';
+        } else if ($age <= 15*60) {
+            $cls = 'tmon-green';
+        } else if ($age <= 30*60) {
+            $cls = 'tmon-yellow';
+        } else {
+            $cls = 'tmon-red';
+        }
 
-        // Enabled relays from device settings, else infer from latest field data payload
-        $enabled_relays = [];
-        $settings = [];
-        if (!empty($r['settings'])) { $tmp = json_decode($r['settings'], true); if (is_array($tmp)) $settings = $tmp; }
-        for ($i=1; $i<=8; $i++) {
-            $k = 'ENABLE_RELAY'.$i;
-            if (isset($settings[$k]) && ($settings[$k] === true || $settings[$k] === 1 || $settings[$k] === '1')) $enabled_relays[] = $i;
-        }
-        if (empty($enabled_relays)) {
-            $fd = $wpdb->get_row($wpdb->prepare("SELECT data FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s ORDER BY created_at DESC LIMIT 1", $r['unit_id']), ARRAY_A);
-            if ($fd && !empty($fd['data'])) {
-                $d = json_decode($fd['data'], true);
-                if (is_array($d)) {
-                    for ($i=1; $i<=8; $i++) {
-                        $k = 'ENABLE_RELAY'.$i;
-                        if (isset($d[$k]) && ($d[$k] === true || $d[$k] === 1 || $d[$k] === '1')) $enabled_relays[] = $i;
-                    }
-                }
-            }
-        }
+        $last_iso = $last_ts ? gmdate('c', $last_ts) : gmdate('c', 0);
 
         echo '<tr>';
-        echo '<td><span class="tmon-dot '.$cls.'"></span></td>';
+        echo '<td><span class="tmon-dot '.$cls.'" data-last="'.esc_attr($last_iso).'" data-suspended="'.intval($r['suspended']).'"></span></td>';
         echo '<td>'.esc_html($r['unit_id']).'</td>';
         echo '<td>'.esc_html($r['unit_name']).'</td>';
         echo '<td>'.esc_html($r['last_seen']).'</td>';
         echo '<td>';
-        if ($can_control && !empty($enabled_relays)) {
+        if ($can_control) {
             echo '<div class="tmon-relay-ctl" data-unit="'.esc_attr($r['unit_id']).'" data-nonce="'.esc_attr($nonce).'">';
             echo '<label class="tmon-text-muted">Run (min)</label><input type="number" min="0" max="1440" step="1" class="tmon-runtime-min" title="Runtime minutes (0 = no auto-off)" value="0">';
             echo '<label class="tmon-text-muted">At</label><input type="datetime-local" class="tmon-schedule-at" title="Optional schedule time">';
@@ -215,8 +232,6 @@ add_shortcode('tmon_device_status', function($atts) {
                     .'</div>';
             }
             echo '</div>';
-        } else if (empty($enabled_relays)) {
-            echo '<span class="tmon-text-muted">No relays enabled</span>';
         } else {
             echo '<span class="tmon-text-muted">No control permission</span>';
         }
@@ -225,9 +240,11 @@ add_shortcode('tmon_device_status', function($atts) {
     }
     echo '</tbody></table>';
     echo '<a class="button" href="' . wp_nonce_url(admin_url('admin-post.php?action=tmon_export_devices'), 'tmon_export_devices') . '">Export CSV</a>';
-    // Inline JS to handle relay control clicks
+
+    // Inline JS: relay handlers (existing) + dot updater
     $ajax_url = admin_url('admin-ajax.php');
     echo '<script>(function(){
+        // Relay control logic (existing)
         function toTs(dtVal){ if(!dtVal) return 0; var t = Date.parse(dtVal); return isNaN(t)?0:Math.floor(t/1000); }
         function post(url, data){ return fetch(url, {method: "POST", headers: {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}, body: new URLSearchParams(data)}).then(r=>r.json()); }
         document.addEventListener("click", function(ev){
@@ -252,7 +269,27 @@ add_shortcode('tmon_device_status', function($atts) {
                 var d = res.data || {}; var msg = d.scheduled ? "Scheduled" : "Queued"; alert(msg+" relay "+relay+" "+state+ (runtime_min? (" for "+runtime_min+" min"): "") );
             }).catch(function(){ btn.textContent = old; btn.disabled=false; alert("Network error"); });
         });
+
+        // Dot updater: recalculates colors client-side so dots update over time
+        function updateDots(){
+            document.querySelectorAll(".tmon-dot[data-last]").forEach(function(el){
+                var suspended = el.getAttribute("data-suspended") === "1";
+                var last = Date.parse(el.getAttribute("data-last"));
+                var age = Math.floor((Date.now() - last) / 1000);
+                var cls = "tmon-red";
+                if (suspended) { cls = "tmon-red"; }
+                else if (age <= 15*60) { cls = "tmon-green"; }
+                else if (age <= 30*60) { cls = "tmon-yellow"; }
+                else { cls = "tmon-red"; }
+                el.classList.remove("tmon-green","tmon-yellow","tmon-red");
+                el.classList.add(cls);
+            });
+        }
+        // Run on load and every minute
+        updateDots();
+        setInterval(updateDots, 60*1000);
     })();</script>';
+
     return ob_get_clean();
 });
 
