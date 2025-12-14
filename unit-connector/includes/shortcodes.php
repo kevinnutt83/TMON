@@ -1,15 +1,14 @@
 <?php
-// Shortcode to display pending command count for a unit: [tmon_pending_commands]
+// Shortcode to display pending command list for a unit: [tmon_pending_commands]
 add_shortcode('tmon_pending_commands', function($atts){
-    // Use dropdown logic as in device history/data
     $devices = tmon_uc_list_feature_devices('sample');
     if (empty($devices)) {
         return '<em>No provisioned devices found.</em>';
     }
     $default_unit = $devices[0]['unit_id'];
     $select_id = 'tmon-pending-select-' . wp_generate_password(6, false, false);
-    $span_id = 'tmon-pending-count-' . wp_generate_password(6, false, false);
-    $ajax_root = esc_js(rest_url());
+    $table_id = 'tmon-pending-table-' . wp_generate_password(6, false, false);
+    $ajax_nonce = wp_create_nonce('tmon_pending_cmds');
     ob_start();
     echo '<div class="tmon-pending-widget">';
     echo '<label class="screen-reader-text" for="'.$select_id.'">Device</label>';
@@ -18,45 +17,63 @@ add_shortcode('tmon_pending_commands', function($atts){
         $sel = selected($default_unit, $d['unit_id'], false);
         echo '<option value="'.esc_attr($d['unit_id']).'" '.$sel.'>'.esc_html($d['label']).'</option>';
     }
-    echo '</select> ';
-    echo '<span id="'.$span_id.'" class="tmon-pending-commands"></span>';
-    $pending_script = <<<'JS'
-(function(){
-    var select = document.getElementById("%SELECT_ID%");
-    var span = document.getElementById("%SPAN_ID%");
-    var base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : "%AJAX_ROOT%".replace(/\/$/, "");
-    function render(unit){
-        var url = base + "/tmon/v1/device/pending_commands?unit_id=" + encodeURIComponent(unit);
-        fetch(url).then(function(r){ return r.json(); }).then(function(data){
-            if (typeof data.count !== "undefined") {
-                span.textContent = data.count;
-            } else {
-                // fallback to AJAX if REST endpoint is missing
-                fetch(ajaxurl + "?action=tmon_pending_commands_count&unit_id=" + encodeURIComponent(unit))
-                  .then(function(r){ return r.json(); })
-                  .then(function(data2){ span.textContent = (typeof data2.count !== "undefined") ? data2.count : "0"; })
-                  .catch(function(){ span.textContent = "?"; });
-            }
-        }).catch(function(){
-            // fallback to AJAX if REST endpoint fails
-            fetch(ajaxurl + "?action=tmon_pending_commands_count&unit_id=" + encodeURIComponent(unit))
-              .then(function(r){ return r.json(); })
-              .then(function(data2){ span.textContent = (typeof data2.count !== "undefined") ? data2.count : "0"; })
-              .catch(function(){ span.textContent = "?"; });
+    echo '</select>';
+    echo '<table id="'.$table_id.'" class="wp-list-table widefat" style="margin-top:10px;"><thead><tr><th>ID</th><th>Command</th><th>Created</th><th>Actions</th></tr></thead><tbody><tr><td colspan="4"><em>Loading...</em></td></tr></tbody></table>';
+    ?>
+    <script>
+    (function(){
+        var select = document.getElementById("<?php echo esc_js($select_id); ?>");
+        var table = document.getElementById("<?php echo esc_js($table_id); ?>").getElementsByTagName('tbody')[0];
+        var ajaxurl = window.ajaxurl || "<?php echo admin_url('admin-ajax.php'); ?>";
+        var nonce = "<?php echo esc_js($ajax_nonce); ?>";
+        function render(unit){
+            table.innerHTML = '<tr><td colspan="4"><em>Loading...</em></td></tr>';
+            fetch(ajaxurl + "?action=tmon_pending_commands_list&unit_id=" + encodeURIComponent(unit) + "&_wpnonce=" + nonce)
+            .then(r=>r.json()).then(function(data){
+                if (!data.success || !Array.isArray(data.commands) || !data.commands.length) {
+                    table.innerHTML = '<tr><td colspan="4"><em>No pending commands.</em></td></tr>';
+                    return;
+                }
+                table.innerHTML = data.commands.map(function(cmd){
+                    return '<tr>'
+                        + '<td>' + cmd.id + '</td>'
+                        + '<td><pre style="margin:0;font-size:13px;">' + (typeof cmd.command === "string" ? cmd.command : JSON.stringify(cmd.command)) + '</pre></td>'
+                        + '<td>' + cmd.created_at + '</td>'
+                        + '<td><button class="button button-small tmon-cmd-del" data-id="' + cmd.id + '">Delete</button></td>'
+                        + '</tr>';
+                }).join('');
+            }).catch(function(){
+                table.innerHTML = '<tr><td colspan="4"><em>Error loading commands.</em></td></tr>';
+            });
+        }
+        select.addEventListener('change', function(){ render(select.value); });
+        render(select.value);
+
+        table.addEventListener('click', function(ev){
+            var btn = ev.target.closest('.tmon-cmd-del');
+            if (!btn) return;
+            var id = btn.getAttribute('data-id');
+            if (!id || !confirm('Delete this command?')) return;
+            btn.disabled = true;
+            fetch(ajaxurl + "?action=tmon_pending_commands_delete", {
+                method: "POST",
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: "id=" + encodeURIComponent(id) + "&_wpnonce=" + nonce
+            }).then(r=>r.json()).then(function(res){
+                if (res && res.success) {
+                    render(select.value);
+                } else {
+                    alert('Delete failed');
+                    btn.disabled = false;
+                }
+            }).catch(function(){
+                alert('Delete failed');
+                btn.disabled = false;
+            });
         });
-    }
-    select.addEventListener('change', function(ev){ render(ev.target.value); });
-    render(select.value);
-})();
-JS;
-    $pending_script = str_replace(
-        ['%SELECT_ID%', '%SPAN_ID%', '%AJAX_ROOT%'],
-        [esc_js($select_id), esc_js($span_id), esc_js(rest_url())],
-        $pending_script
-    );
-    // Add wp_localize_script for ajaxurl if not already present
-    echo '<script>var ajaxurl = window.ajaxurl || "'.admin_url('admin-ajax.php').'";</script>';
-    echo '<script>'.$pending_script.'</script>';
+    })();
+    </script>
+    <?php
     echo '</div>';
     return ob_get_clean();
 });
@@ -749,5 +766,42 @@ add_action('wp_ajax_tmon_uc_stage_settings', function() {
         'updated_at' => current_time('mysql', 1)
     ]);
     wp_send_json_success();
+});
+
+// AJAX: List pending commands for a unit
+add_action('wp_ajax_tmon_pending_commands_list', function() {
+    check_ajax_referer('tmon_pending_cmds');
+    if (!isset($_GET['unit_id'])) wp_send_json_error(['commands'=>[]]);
+    global $wpdb;
+    $unit = sanitize_text_field($_GET['unit_id']);
+    $rows = $wpdb->get_results($wpdb->prepare(
+        "SELECT id, command, created_at FROM {$wpdb->prefix}tmon_device_commands WHERE device_id = %s AND executed_at IS NULL ORDER BY created_at ASC",
+        $unit
+    ), ARRAY_A);
+    $out = [];
+    foreach ($rows as $r) {
+        $out[] = [
+            'id' => $r['id'],
+            'command' => is_string($r['command']) ? $r['command'] : json_encode($r['command']),
+            'created_at' => $r['created_at']
+        ];
+    }
+    wp_send_json_success(['commands' => $out]);
+});
+add_action('wp_ajax_nopriv_tmon_pending_commands_list', function() {
+    wp_send_json_error(['commands'=>[]]);
+});
+
+// AJAX: Delete a pending command by id
+add_action('wp_ajax_tmon_pending_commands_delete', function() {
+    check_ajax_referer('tmon_pending_cmds');
+    if (!isset($_POST['id'])) wp_send_json_error();
+    global $wpdb;
+    $id = intval($_POST['id']);
+    $wpdb->delete($wpdb->prefix.'tmon_device_commands', ['id'=>$id, 'executed_at'=>null]);
+    wp_send_json_success();
+});
+add_action('wp_ajax_nopriv_tmon_pending_commands_delete', function() {
+    wp_send_json_error();
 });
 
