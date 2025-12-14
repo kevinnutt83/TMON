@@ -204,28 +204,35 @@ add_shortcode('tmon_device_status', function($atts) {
     $now = time();
     $nonce = wp_create_nonce('tmon_uc_relay');
     foreach ($rows as $r) {
-        // Simple system-time comparison: parse DB timestamp with strtotime() and compare to time()
+        // Get the last seen timestamp from the database
         $last_str = $wpdb->get_var($wpdb->prepare(
             "SELECT COALESCE((SELECT MAX(created_at) FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s), (SELECT last_seen FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s))",
             $r['unit_id'], $r['unit_id']
         ));
-        $last = $last_str ? intval( strtotime( $last_str ) ) : 0;
-        if (! $last) {
+
+        // Parse the timestamp directly without timezone adjustments
+        $last = $last_str ? strtotime($last_str) : 0;
+
+        if (!$last) {
             $age = PHP_INT_MAX;
             $cls = 'tmon-red';
             $title = 'Never seen';
         } else {
             $age = max(0, $now - $last);
-            if ( intval($r['suspended']) ) {
+
+            // Determine the color class based on the age
+            if (intval($r['suspended'])) {
                 $cls = 'tmon-red';
-            } else if ( $age <= 15 * 60 ) {
+            } else if ($age <= 15 * 60) {
                 $cls = 'tmon-green';
-            } else if ( $age <= 30 * 60 ) {
+            } else if ($age <= 30 * 60) {
                 $cls = 'tmon-yellow';
             } else {
                 $cls = 'tmon-red';
             }
-            $title = 'Last seen: ' . date_i18n( get_option('date_format') . ' ' . get_option('time_format'), $last ) . ' (' . human_time_diff( $last, $now ) . ' ago)';
+
+            // Format the tooltip with the last seen time and human-readable difference
+            $title = 'Last seen: ' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last) . ' (' . human_time_diff($last, time()) . ' ago)';
         }
 
         // Enabled relays from device settings, else infer from latest field data payload
