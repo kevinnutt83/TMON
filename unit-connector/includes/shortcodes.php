@@ -238,7 +238,10 @@ add_shortcode('tmon_device_status', function($atts) {
         // Enabled relays from device settings, else infer from latest field data payload
         $enabled_relays = [];
         $settings = [];
-        if (!empty($r['settings'])) { $tmp = json_decode($r['settings'], true); if (is_array($tmp)) $settings = $tmp; }
+        if (!empty($r['settings'])) { 
+            $tmp = json_decode($r['settings'], true); 
+            if (is_array($tmp)) $settings = $tmp; 
+        }
         for ($i=1; $i<=8; $i++) {
             $k = 'ENABLE_RELAY'.$i;
             if (isset($settings[$k]) && ($settings[$k] === true || $settings[$k] === 1 || $settings[$k] === '1')) $enabled_relays[] = $i;
@@ -284,34 +287,6 @@ add_shortcode('tmon_device_status', function($atts) {
     }
     echo '</tbody></table>';
     echo '<a class="button" href="' . wp_nonce_url(admin_url('admin-post.php?action=tmon_export_devices'), 'tmon_export_devices') . '">Export CSV</a>';
-    // Inline JS to handle relay control clicks
-    $ajax_url = admin_url('admin-ajax.php');
-    echo '<script>(function(){
-        function toTs(dtVal){ if(!dtVal) return 0; var t = Date.parse(dtVal); return isNaN(t)?0:Math.floor(t/1000); }
-        function post(url, data){ return fetch(url, {method: "POST", headers: {"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"}, body: new URLSearchParams(data)}).then(r=>r.json()); }
-        document.addEventListener("click", function(ev){
-            var btn = ev.target.closest(".tmon-relay-btn");
-            if(!btn) return;
-            var wrap = btn.closest(".tmon-relay-ctl");
-            if(!wrap) return;
-            var unit = wrap.getAttribute("data-unit");
-            var nonce = wrap.getAttribute("data-nonce");
-            var relay = btn.getAttribute("data-relay");
-            var state = btn.getAttribute("data-state");
-            var rtMinEl = wrap.querySelector(".tmon-runtime-min");
-            var schEl = wrap.querySelector(".tmon-schedule-at");
-            var runtime_min = rtMinEl && rtMinEl.value ? parseInt(rtMinEl.value,10) : 0;
-            if(isNaN(runtime_min) || runtime_min<0) runtime_min = 0;
-            var schedule_at = schEl ? schEl.value : "";
-            var payload = { action: "tmon_uc_relay_command", nonce: nonce, unit_id: unit, relay_num: relay, state: state, runtime_min: String(runtime_min), schedule_at: schedule_at };
-            btn.disabled = true; var old = btn.textContent; btn.textContent = state+"...";
-            post("'.esc_js($ajax_url).'", payload).then(function(res){
-                btn.textContent = old; btn.disabled = false;
-                if(!res || !res.success){ alert((res && res.data) ? (res.data.message||res.data) : "Command failed"); return; }
-                var d = res.data || {}; var msg = d.scheduled ? "Scheduled" : "Queued"; alert(msg+" relay "+relay+" "+state+ (runtime_min? (" for "+runtime_min+" min"): "") );
-            }).catch(function(){ btn.textContent = old; btn.disabled=false; alert("Network error"); });
-        });
-    })();</script>';
     return ob_get_clean();
 });
 
