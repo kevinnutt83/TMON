@@ -711,7 +711,8 @@ add_action('wp_ajax_nopriv_tmon_pending_commands_count', function() {
     wp_send_json(['count' => intval($cnt)]);
 });
 
-// AJAX: Update unit nameadd_action('wp_ajax_tmon_uc_update_unit_name', function() {
+// AJAX: Update unit name
+add_action('wp_ajax_tmon_uc_update_unit_name', function() {
     check_admin_referer('tmon_uc_device_data');
     if (!current_user_can('manage_options')) wp_send_json_error();
     $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
