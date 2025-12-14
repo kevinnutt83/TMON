@@ -256,32 +256,22 @@ add_shortcode('tmon_device_status', function($atts) {
     return ob_get_clean();
 });
 
-// [tmon_device_history feature="sample|engine" hours="24" unit_id="optional"]
+// [tmon_device_history hours="24" refresh_s="60"]
+// Unit ID is sourced from a page-level dropdown with id "tmon-unit-picker" when present; otherwise a local dropdown is shown.
 add_shortcode('tmon_device_history', function($atts) {
     $a = shortcode_atts([
-        'unit_id' => '',
         'hours' => '24',
-        'feature' => 'sample',
-        'placeholder' => 'Select a device',
-        'refresh_s' => '0',
-        'unit_select_id' => '',
-        'hide_internal_select' => 'false',
+        'refresh_s' => '60',
     ], $atts);
     $hours = max(1, intval($a['hours']));
-    $feature = sanitize_key($a['feature']);
     $refresh = max(0, intval($a['refresh_s']));
-    $external_select_id = sanitize_text_field($a['unit_select_id']);
-    $hide_internal = in_array(strtolower($a['hide_internal_select']), ['1','true','yes','on'], true);
+    $feature = 'sample';
     $devices = tmon_uc_list_feature_devices($feature);
     if (empty($devices)) {
         return '<em>No provisioned devices found for this feature.</em>';
     }
 
-    $default_unit = sanitize_text_field($a['unit_id']);
-    $unit_ids = wp_list_pluck($devices, 'unit_id');
-    if (!$default_unit || !in_array($default_unit, $unit_ids, true)) {
-        $default_unit = $devices[0]['unit_id'];
-    }
+    $default_unit = $devices[0]['unit_id'];
 
     $select_id = 'tmon-history-select-' . wp_generate_password(6, false, false);
     $canvas_id = 'tmon-history-chart-' . wp_generate_password(8, false, false);
@@ -292,9 +282,8 @@ add_shortcode('tmon_device_history', function($atts) {
     $y4max = ($voltage_max !== '') ? floatval($voltage_max) : 'null';
     ob_start();
     echo '<div class="tmon-history-widget">';
-    $internal_style = ($external_select_id && $hide_internal) ? ' style="display:none"' : '';
     echo '<label class="screen-reader-text" for="'.$select_id.'">Device</label>';
-    echo '<select id="'.$select_id.'" class="tmon-history-select" data-hours="'.$hours.'" data-canvas="'.$canvas_id.'"'.$internal_style.'>';
+    echo '<select id="'.$select_id.'" class="tmon-history-select" data-hours="'.$hours.'" data-canvas="'.$canvas_id.'">';
     foreach ($devices as $d) {
         $sel = selected($default_unit, $d['unit_id'], false);
         echo '<option value="'.esc_attr($d['unit_id']).'" '.$sel.'>'.esc_html($d['label']).'</option>';
@@ -304,8 +293,7 @@ add_shortcode('tmon_device_history', function($atts) {
     echo '<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>';
     echo '<script>(function(){
         const select = document.getElementById("'.$select_id.'");
-        const externalId = "'.esc_js($external_select_id).'";
-        const external = externalId ? document.getElementById(externalId) : null;
+        const external = document.getElementById("tmon-unit-picker");
         const canvas = document.getElementById(select.getAttribute("data-canvas"));
         if(!select || !canvas) return;
         const ctx = canvas.getContext("2d");
@@ -354,7 +342,7 @@ add_shortcode('tmon_device_history', function($atts) {
         render(activeSelect.value);
         const refreshMs = '.($refresh*1000).';
         if (refreshMs > 0) {
-            setInterval(function(){ render(select.value); }, refreshMs);
+            setInterval(function(){ render(activeSelect.value); }, refreshMs);
         }
     })();</script>';
     echo '</div>';
