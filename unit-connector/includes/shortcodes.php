@@ -204,18 +204,12 @@ add_shortcode('tmon_device_status', function($atts) {
     $now = time();
     $nonce = wp_create_nonce('tmon_uc_relay');
     foreach ($rows as $r) {
-        // Prefer the most recent timestamp: device.last_seen or latest field_data.created_at
-        // Parse DB datetime strings as UTC to avoid implicit local-time offsets.
-        $last = 0;
-        if (!empty($r['last_seen'])) {
-            $ts = strtotime($r['last_seen'] . ' UTC');
-            if ($ts !== false) $last = $ts;
-        }
-        $fd_last = $wpdb->get_var($wpdb->prepare("SELECT created_at FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s ORDER BY created_at DESC LIMIT 1", $r['unit_id']));
-        if (!empty($fd_last)) {
-            $ts2 = strtotime($fd_last . ' UTC');
-            if ($ts2 !== false && $ts2 > $last) $last = $ts2;
-        }
+        // Prefer DB-side UNIX_TIMESTAMP to avoid timezone parsing/offset issues.
+        $device_ts = $wpdb->get_var($wpdb->prepare("SELECT UNIX_TIMESTAMP(last_seen) FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s LIMIT 1", $r['unit_id']));
+        $fd_ts     = $wpdb->get_var($wpdb->prepare("SELECT UNIX_TIMESTAMP(MAX(created_at)) FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s", $r['unit_id']));
+        $device_ts = $device_ts ? intval($device_ts) : 0;
+        $fd_ts     = $fd_ts ? intval($fd_ts) : 0;
+        $last = max($device_ts, $fd_ts);
         // If never seen, force a large age to classify as red
         $age = ($last > 0) ? ($now - $last) : PHP_INT_MAX;
         if (intval($r['suspended'])) {
