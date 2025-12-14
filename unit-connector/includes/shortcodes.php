@@ -261,29 +261,29 @@ add_shortcode('tmon_device_status', function($atts) {
         echo '<td>' . esc_html($last_str) . '</td>';
         echo '<td>';
         if ($can_control) {
-            // Relay controls (1-8) — show checkbox state and actionable buttons for enabled relays
-            for ($i = 1; $i <= 8; $i++) {
-                $checked = in_array($i, $enabled_relays) ? ' checked' : '';
+            echo '<div class="tmon-relay-ctl" data-unit="'.esc_attr($r['unit_id']).'" data-nonce="'.esc_attr($nonce).'">';
+            echo '<label class="tmon-text-muted">Run (min)</label><input type="number" min="0" max="1440" step="1" class="tmon-runtime-min" title="Runtime minutes (0 = no auto-off)" value="0"> ';
+            echo '<label class="tmon-text-muted">At</label><input type="datetime-local" class="tmon-schedule-at" title="Optional schedule time"> ';
+            foreach ($enabled_relays as $n) {
                 echo '<div class="tmon-relay-row">';
-                // Checkbox shows configured/enabled state (disabled to avoid accidental toggles)
-                echo '<input type="checkbox" class="tmon-relay-toggle" id="relay-'.$i.'-unit-'.esc_attr($r['unit_id']).'" data-relay="'.esc_attr($i).'"'.$checked.' disabled> ';
-                echo '<label for="relay-'.$i.'-unit-'.esc_attr($r['unit_id']).'">R'.esc_html($i).'</label> ';
-                // Only show On/Off buttons if this relay is enabled
-                if (in_array($i, $enabled_relays, true)) {
-                    echo '<button type="button" class="button button-small tmon-relay-btn" data-relay="'.esc_attr($i).'" data-state="on">On</button> ';
-                    echo '<button type="button" class="button button-small tmon-relay-btn" data-relay="'.esc_attr($i).'" data-state="off">Off</button>';
-                }
+                echo '<span class="tmon-text-muted">R'.esc_html($n).'</span> ';
+                echo '<button type="button" class="button button-small tmon-relay-btn" data-relay="'.esc_attr($n).'" data-state="on">On</button> ';
+                echo '<button type="button" class="button button-small tmon-relay-btn" data-relay="'.esc_attr($n).'" data-state="off">Off</button>';
                 echo '</div>';
-             }
+            }
+            echo '</div>';
         } else if (empty($enabled_relays)) {
             echo '<span class="tmon-text-muted">No relays enabled</span>';
         } else {
             echo '<span class="tmon-text-muted">No control permission</span>';
         }
-         echo '</td>';
-         echo '</tr>';
+        echo '</td>';
+        echo '</tr>';
     }
     echo '</tbody></table>';
+    // Inline JS to handle relay control clicks (delegated)
+    $ajax_url = esc_js(admin_url('admin-ajax.php'));
+    echo '<script>(function(){ function post(url,data){ return fetch(url,{method:"POST", headers: {"Content-Type":"application/x-www-form-urlencoded; charset=UTF-8"}, body: new URLSearchParams(data)}).then(r=>r.json()); } document.addEventListener("click", function(ev){ var btn = ev.target.closest(".tmon-relay-btn"); if(!btn) return; var wrap = btn.closest(".tmon-relay-ctl"); if(!wrap) return; var unit = wrap.getAttribute("data-unit"); var nonce = wrap.getAttribute("data-nonce"); var relay = btn.getAttribute("data-relay"); var state = btn.getAttribute("data-state"); var rtMinEl = wrap.querySelector(".tmon-runtime-min"); var schEl = wrap.querySelector(".tmon-schedule-at"); var runtime_min = rtMinEl && rtMinEl.value ? parseInt(rtMinEl.value,10) : 0; if(isNaN(runtime_min)||runtime_min<0) runtime_min=0; var schedule_at = schEl ? schEl.value : ""; var payload = { action: "tmon_uc_relay_command", nonce: nonce, unit_id: unit, relay_num: relay, state: state, runtime_min: String(runtime_min), schedule_at: schedule_at }; btn.disabled=true; var old = btn.textContent; btn.textContent = state+"..."; post("'.$ajax_url.'", payload).then(function(res){ btn.textContent = old; btn.disabled=false; if(!res || !res.success){ alert((res && res.data) ? (res.data.message||res.data) : "Command failed"); return; } var d=res.data||{}; var msg = d.scheduled ? "Scheduled" : "Queued"; alert(msg+" relay "+relay+" "+state + (runtime_min?(" for "+runtime_min+" min"):"")); }).catch(function(){ btn.textContent = old; btn.disabled=false; alert("Network error"); }); }); })();</script>';
     return ob_get_clean();
 });
 
