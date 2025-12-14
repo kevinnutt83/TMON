@@ -209,15 +209,16 @@ add_shortcode('tmon_device_status', function($atts) {
             "SELECT COALESCE((SELECT MAX(created_at) FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s), (SELECT last_seen FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s))",
             $r['unit_id'], $r['unit_id']
         ));
-        // Parse DB datetime as UTC to avoid implicit local-time offsets
+        // Parse DB datetime using the site's timezone (no extra UTC/+offset adjustment)
         if (empty($last_str)) {
             $last = 0;
             $age = PHP_INT_MAX;
             $cls = 'tmon-red';
             $title = 'Never seen';
         } else {
+            $tz = get_option('timezone_string') ?: date_default_timezone_get();
             try {
-                $dt = new DateTimeImmutable($last_str, new DateTimeZone('UTC'));
+                $dt = new DateTimeImmutable($last_str, new DateTimeZone($tz));
                 $last = $dt->getTimestamp();
             } catch (Exception $e) {
                 $last = intval(strtotime($last_str));
@@ -232,8 +233,8 @@ add_shortcode('tmon_device_status', function($atts) {
             } else {
                 $cls = 'tmon-red';
             }
-            // $last is UTC epoch; pass $gmt=true so date_i18n converts to site timezone
-            $title = 'Last seen: ' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last, true) . ' (' . human_time_diff($last, $now) . ' ago)';
+            // Format the tooltip using the parsed epoch (site timezone already accounted for)
+            $title = 'Last seen: ' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last) . ' (' . human_time_diff($last, $now) . ' ago)';
         }
 
         // Robust relay detection (case-insensitive keys and truthy values)
@@ -269,22 +270,22 @@ add_shortcode('tmon_device_status', function($atts) {
         echo '<td>'.esc_html($r['unit_name']).'</td>';
         echo '<td>'.esc_html($r['last_seen']).'</td>';
         echo '<td>';
-        if ($can_control && !empty($enabled_relays)) {
+        if (!empty($enabled_relays)) {
+            // Show controls even if user lacks permission; disable when not allowed
+            $disabled = $can_control ? '' : ' disabled aria-disabled="true" title="No control permission"';
             echo '<div class="tmon-relay-ctl" data-unit="'.esc_attr($r['unit_id']).'" data-nonce="'.esc_attr($nonce).'">';
-            echo '<label class="tmon-text-muted">Run (min)</label><input type="number" min="0" max="1440" step="1" class="tmon-runtime-min" title="Runtime minutes (0 = no auto-off)" value="0">';
-            echo '<label class="tmon-text-muted">At</label><input type="datetime-local" class="tmon-schedule-at" title="Optional schedule time">';
+            echo '<label class="tmon-text-muted">Run (min)</label><input type="number" min="0" max="1440" step="1" class="tmon-runtime-min" title="Runtime minutes (0 = no auto-off)" value="0"'.$disabled.'>';
+            echo '<label class="tmon-text-muted">At</label><input type="datetime-local" class="tmon-schedule-at" title="Optional schedule time"'.$disabled.'>';
             foreach ($enabled_relays as $n) {
                 echo '<div class="tmon-relay-row">'
                     .'<span class="tmon-text-muted">R'.$n.'</span> '
-                    .'<button type="button" class="button button-small tmon-relay-btn" data-relay="'.$n.'" data-state="on">On</button> '
-                    .'<button type="button" class="button button-small tmon-relay-btn" data-relay="'.$n.'" data-state="off">Off</button>'
+                    .'<button type="button" class="button button-small tmon-relay-btn" data-relay="'.$n.'" data-state="on"'.$disabled.'>On</button> '
+                    .'<button type="button" class="button button-small tmon-relay-btn" data-relay="'.$n.'" data-state="off"'.$disabled.'>Off</button>'
                     .'</div>';
             }
             echo '</div>';
-        } else if (empty($enabled_relays)) {
-            echo '<span class="tmon-text-muted">No relays enabled</span>';
         } else {
-            echo '<span class="tmon-text-muted">No control permission</span>';
+            echo '<span class="tmon-text-muted">No relays enabled</span>';
         }
         echo '</td>';
         echo '</tr>';
