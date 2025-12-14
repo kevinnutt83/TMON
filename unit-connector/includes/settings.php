@@ -5,6 +5,8 @@ add_action('admin_init', function() {
     register_setting('tmon_uc_settings', 'tmon_uc_hub_url');
     register_setting('tmon_uc_settings', 'tmon_uc_remove_data_on_deactivate');
     register_setting('tmon_uc_settings', 'tmon_uc_auto_update');
+    register_setting('tmon_uc_settings', 'tmon_uc_history_voltage_min');
+    register_setting('tmon_uc_settings', 'tmon_uc_history_voltage_max');
     add_settings_section('tmon_uc_main', 'Admin Integration', function(){
         echo '<p>Configure cross-site integration with TMON Admin.</p>';
     }, 'tmon_uc_settings');
@@ -22,6 +24,20 @@ add_action('admin_init', function() {
         echo '<input type="url" name="tmon_uc_hub_url" class="regular-text" placeholder="'.esc_attr($current).'" value="' . esc_attr($val) . '" />';
         echo '<p class="description">Defaults to this site URL; set your Admin hub if different. Pairing and diagnostics now live under Hub Pairing.</p>';
     }, 'tmon_uc_settings', 'tmon_uc_main');
+
+    add_settings_section('tmon_uc_chart', 'Chart Display', function(){
+        echo '<p>Configure history chart bounds for voltage (applied to device history shortcode).</p>';
+    }, 'tmon_uc_settings');
+    add_settings_field('tmon_uc_history_voltage_min', 'Voltage Y-Min', function(){
+        $val = get_option('tmon_uc_history_voltage_min', '');
+        echo '<input type="number" step="0.1" name="tmon_uc_history_voltage_min" value="'.esc_attr($val).'" class="small-text" />';
+        echo '<p class="description">Optional lower bound for voltage axis (leave blank for auto).</p>';
+    }, 'tmon_uc_settings', 'tmon_uc_chart');
+    add_settings_field('tmon_uc_history_voltage_max', 'Voltage Y-Max', function(){
+        $val = get_option('tmon_uc_history_voltage_max', '');
+        echo '<input type="number" step="0.1" name="tmon_uc_history_voltage_max" value="'.esc_attr($val).'" class="small-text" />';
+        echo '<p class="description">Optional upper bound for voltage axis (leave blank for auto).</p>';
+    }, 'tmon_uc_settings', 'tmon_uc_chart');
 
     // Purge utilities section (rendered on a separate page area to avoid nested forms)
     add_settings_section('tmon_uc_purge', 'Data Maintenance', function(){

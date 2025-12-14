@@ -505,6 +505,7 @@ function tmon_uc_get_device_history($request) {
             'temp_f' => $d['t_f'] ?? ($d['cur_temp_f'] ?? null),
             'humid' => $d['hum'] ?? ($d['cur_humid'] ?? null),
             'bar' => $d['bar'] ?? ($d['cur_bar_pres'] ?? null),
+            'volt' => $d['v'] ?? ($d['sys_voltage'] ?? null),
         ];
     }
     return rest_ensure_response(['status' => 'ok', 'unit_id' => $unit_id, 'hours' => $hours, 'points' => $points]);

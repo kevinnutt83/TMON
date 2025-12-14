@@ -263,9 +263,11 @@ add_shortcode('tmon_device_history', function($atts) {
         'hours' => '24',
         'feature' => 'sample',
         'placeholder' => 'Select a device',
+        'refresh_s' => '0',
     ], $atts);
     $hours = max(1, intval($a['hours']));
     $feature = sanitize_key($a['feature']);
+    $refresh = max(0, intval($a['refresh_s']));
     $devices = tmon_uc_list_feature_devices($feature);
     if (empty($devices)) {
         return '<em>No provisioned devices found for this feature.</em>';
@@ -280,6 +282,10 @@ add_shortcode('tmon_device_history', function($atts) {
     $select_id = 'tmon-history-select-' . wp_generate_password(6, false, false);
     $canvas_id = 'tmon-history-chart-' . wp_generate_password(8, false, false);
     $ajax_root = esc_js(rest_url());
+    $voltage_min = get_option('tmon_uc_history_voltage_min', '');
+    $voltage_max = get_option('tmon_uc_history_voltage_max', '');
+    $y4min = ($voltage_min !== '') ? floatval($voltage_min) : 'null';
+    $y4max = ($voltage_max !== '') ? floatval($voltage_max) : 'null';
     ob_start();
     echo '<div class="tmon-history-widget">';
     echo '<label class="screen-reader-text" for="'.$select_id.'">Device</label>';
@@ -307,6 +313,7 @@ add_shortcode('tmon_device_history', function($atts) {
                 const temp = pts.map(p=>p.temp_f);
                 const humid = pts.map(p=>p.humid);
                 const bar = pts.map(p=>p.bar);
+                const volt = pts.map(p=>p.volt);
                 const cfg = {
                     type: "line",
                     data: {
@@ -314,7 +321,8 @@ add_shortcode('tmon_device_history', function($atts) {
                         datasets: [
                             {label: "Temp (F)", data: temp, borderColor: "#e67e22", fill:false, yAxisID: "y1"},
                             {label: "Humidity (%)", data: humid, borderColor: "#3498db", fill:false, yAxisID: "y2"},
-                            {label: "Pressure (hPa)", data: bar, borderColor: "#2ecc71", fill:false, yAxisID: "y3"}
+                            {label: "Pressure (hPa)", data: bar, borderColor: "#2ecc71", fill:false, yAxisID: "y3"},
+                            {label: "Voltage (V)", data: volt, borderColor: "#9b59b6", fill:false, yAxisID: "y4"}
                         ]
                     },
                     options: {
@@ -325,7 +333,8 @@ add_shortcode('tmon_device_history', function($atts) {
                         scales: {
                             y1: { type: "linear", position: "left" },
                             y2: { type: "linear", position: "right", grid: { drawOnChartArea: false } },
-                            y3: { type: "linear", position: "right", grid: { drawOnChartArea: false } }
+                            y3: { type: "linear", position: "right", grid: { drawOnChartArea: false } },
+                            y4: { type: "linear", position: "left", grid: { drawOnChartArea: false }, suggestedMin: '. $y4min .', suggestedMax: '. $y4max .' }
                         }
                     }
                 };
@@ -335,6 +344,10 @@ add_shortcode('tmon_device_history', function($atts) {
         }
         select.addEventListener("change", function(ev){ render(ev.target.value); });
         render(select.value);
+        const refreshMs = '.($refresh*1000).';
+        if (refreshMs > 0) {
+            setInterval(function(){ render(select.value); }, refreshMs);
+        }
     })();</script>';
     echo '</div>';
     return ob_get_clean();
