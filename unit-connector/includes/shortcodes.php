@@ -259,12 +259,31 @@ add_shortcode('tmon_device_status', function($atts) {
         echo '<td>' . esc_html($r['unit_id']) . '</td>';
         echo '<td>' . esc_html($r['unit_name'] ?: '-') . '</td>';
         echo '<td>' . esc_html($last_str) . '</td>';
-        echo '<td class="tmon-relay-ctl" data-unit-id="' . esc_attr($r['unit_id']) . '">';
+        echo '<td>';
         if ($can_control) {
-            // Relay controls (1-8)
+            // Relay controls (1-8) — show checkbox state and actionable buttons for enabled relays
             for ($i = 1; $i <= 8; $i++) {
-                $k = 'ENABLE_RELAY'.$i;
                 $checked = in_array($i, $enabled_relays) ? ' checked' : '';
                 echo '<div class="tmon-relay-row">';
-                echo '<input type="checkbox" class="tmon-relay-toggle" id="relay-'.$i.'-unit-'.$r['unit_id'].'" data-relay="'.$i.'"'.
+                // Checkbox shows configured/enabled state (disabled to avoid accidental toggles)
+                echo '<input type="checkbox" class="tmon-relay-toggle" id="relay-'.$i.'-unit-'.esc_attr($r['unit_id']).'" data-relay="'.esc_attr($i).'"'.$checked.' disabled> ';
+                echo '<label for="relay-'.$i.'-unit-'.esc_attr($r['unit_id']).'">R'.esc_html($i).'</label> ';
+                // Only show On/Off buttons if this relay is enabled
+                if (in_array($i, $enabled_relays, true)) {
+                    echo '<button type="button" class="button button-small tmon-relay-btn" data-relay="'.esc_attr($i).'" data-state="on">On</button> ';
+                    echo '<button type="button" class="button button-small tmon-relay-btn" data-relay="'.esc_attr($i).'" data-state="off">Off</button>';
+                }
+                echo '</div>';
+             }
+        } else if (empty($enabled_relays)) {
+            echo '<span class="tmon-text-muted">No relays enabled</span>';
+        } else {
+            echo '<span class="tmon-text-muted">No control permission</span>';
+        }
+         echo '</td>';
+         echo '</tr>';
+    }
+    echo '</tbody></table>';
+    return ob_get_clean();
+});
 
