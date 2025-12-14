@@ -204,33 +204,37 @@ add_shortcode('tmon_device_status', function($atts) {
     $now = time();
     $nonce = wp_create_nonce('tmon_uc_relay');
     foreach ($rows as $r) {
-        // Compute age (seconds since last sample) using DB TIMESTAMPDIFF and NOW() so DB timezone interpretation is consistent.
-        $age = $wpdb->get_var($wpdb->prepare(
-            "SELECT TIMESTAMPDIFF(SECOND, COALESCE((SELECT MAX(created_at) FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s), (SELECT last_seen FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s)), NOW())",
+        // Get the DB timestamp string (prefer field_data.created_at then devices.last_seen)
+        $last_str = $wpdb->get_var($wpdb->prepare(
+            "SELECT COALESCE((SELECT MAX(created_at) FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s), (SELECT last_seen FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s))",
             $r['unit_id'], $r['unit_id']
         ));
-        $age = ($age === null) ? PHP_INT_MAX : intval($age);
-        if ($age === PHP_INT_MAX || $age < 0) {
+        if (empty($last_str)) {
             $last = 0;
+            $age = PHP_INT_MAX;
             $cls = 'tmon-red';
             $title = 'Never seen';
         } else {
-            // Derive local timestamp using the DB-provided datetime string for display (matches the table cell)
-            $last_str = $wpdb->get_var($wpdb->prepare(
-                "SELECT COALESCE((SELECT MAX(created_at) FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s), (SELECT last_seen FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s))",
-                $r['unit_id'], $r['unit_id']
-            ));
-            $last = $last_str ? intval(strtotime($last_str)) : 0;
+            // Parse the DB datetime as UTC to avoid implicit server-local offsets
+            try {
+                $dt = new DateTimeImmutable($last_str, new DateTimeZone('UTC'));
+                $last = $dt->getTimestamp();
+            } catch (Exception $e) {
+                // fallback to strtotime if parsing fails
+                $last = intval(strtotime($last_str));
+            }
+            $age = max(0, $now - $last);
             if (intval($r['suspended'])) {
                 $cls = 'tmon-red';
-            } else if ($age <= 15*60) {
+            } else if ($age <= 15 * 60) {
                 $cls = 'tmon-green';
-            } else if ($age <= 30*60) {
+            } else if ($age <= 30 * 60) {
                 $cls = 'tmon-yellow';
             } else {
                 $cls = 'tmon-red';
             }
-            $title = $last ? ('Last seen: ' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last) . ' (' . human_time_diff($last, $now) . ' ago)') : 'Last seen: ' . esc_html($last_str);
+            // display time converted from UTC epoch to site timezone
+            $title = 'Last seen: ' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last, true) . ' (' . human_time_diff($last, $now) . ' ago)';
         }
 
         // Enabled relays from device settings, else infer from latest field data payload
