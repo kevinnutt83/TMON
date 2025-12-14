@@ -209,30 +209,25 @@ add_shortcode('tmon_device_status', function($atts) {
             "SELECT COALESCE((SELECT MAX(created_at) FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s), (SELECT last_seen FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s))",
             $r['unit_id'], $r['unit_id']
         ));
-        // Parse DB timestamp as UTC to avoid server-local timezone interpretation
-        try {
-            $dt = new DateTimeImmutable($last_str, new DateTimeZone('UTC'));
-            $last = $dt->getTimestamp();
-        } catch (Exception $e) {
-            $last = intval(strtotime($last_str));
-        }
+        // Parse the DB timestamp using server/local interpretation (no timezone offset adjustments)
+        $last = $last_str ? intval( strtotime( $last_str ) ) : 0;
         if (!$last) {
             $age = PHP_INT_MAX;
             $cls = 'tmon-red';
-            $title = 'Last seen: ' . esc_html($last_str);
+            $title = 'Never seen';
         } else {
             $age = max(0, $now - $last);
             if (intval($r['suspended'])) {
                 $cls = 'tmon-red';
-            } else if ($age <= 2 * 60) {
+            } else if ($age <= 15 * 60) {
                 $cls = 'tmon-green';
-            } else if ($age <= 5 * 60) {
+            } else if ($age <= 30 * 60) {
                 $cls = 'tmon-yellow';
             } else {
                 $cls = 'tmon-red';
             }
-            // Use $gmt = true because $last is UTC epoch
-            $title = 'Last seen: ' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last, true) . ' (' . human_time_diff($last, $now) . ' ago)';
+            // Display the DB time as interpreted by the server (no extra GMT adjustment)
+            $title = 'Last seen: ' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last) . ' (' . human_time_diff($last, $now) . ' ago)';
         }
 
         // Enabled relays from device settings, else infer from latest field data payload
