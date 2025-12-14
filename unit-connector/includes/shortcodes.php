@@ -48,7 +48,7 @@ add_action('wp_dashboard_setup', function(){
         global $wpdb;
         $rows = $wpdb->get_results("SELECT device_id, COUNT(*) as pending FROM {$wpdb->prefix}tmon_device_commands WHERE executed_at IS NULL GROUP BY device_id ORDER BY pending DESC LIMIT 10", ARRAY_A);
         echo '<table class="widefat"><thead><tr><th>Unit</th><th>Pending</th></tr></thead><tbody>';
-        foreach ($rows as $r) {
+        foreach ((array) $rows as $r) {
             echo '<tr><td>'.esc_html($r['device_id']).'</td><td>'.intval($r['pending']).'</td></tr>';
         }
         if (empty($rows)) echo '<tr><td colspan="2"><em>No pending commands</em></td></tr>';
@@ -175,7 +175,7 @@ add_shortcode('tmon_device_status', function($atts) {
     // Base registry rows
     $devices = $wpdb->get_results("SELECT unit_id, unit_name, last_seen, suspended, settings FROM {$wpdb->prefix}tmon_devices ORDER BY last_seen DESC", ARRAY_A);
     $index = [];
-    foreach ($devices as $r) { $index[$r['unit_id']] = $r; }
+    foreach ((array) $devices as $r) { $index[$r['unit_id']] = $r; }
 
     // Also include units that only appear in field data (typically remotes)
     $fd_units = $wpdb->get_col("SELECT DISTINCT unit_id FROM {$wpdb->prefix}tmon_field_data");
