@@ -171,8 +171,9 @@ add_shortcode('tmon_device_status', function($atts) {
     $now = time();
     $nonce = wp_create_nonce('tmon_uc_relay');
     foreach ($rows as $r) {
-        // --- STATUS DOT LOGIC ---
-        $last = $r['last_seen'] ? strtotime($r['last_seen']) : 0;
+        // Parse DB timestamp as-is (no timezone correction) and compute age
+        $last = $r['last_seen'] ? intval(strtotime($r['last_seen'])) : 0;
+        // No timezone correction here!
         if (!$last) {
             $age = PHP_INT_MAX;
             $cls = 'tmon-red';
@@ -191,37 +192,32 @@ add_shortcode('tmon_device_status', function($atts) {
             $title = 'Last seen: ' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last) . ' (' . human_time_diff($last, $now) . ' ago)';
         }
 
-        // --- RELAY ENABLE DETECTION ---
-        $enabled_relays = [];
-        $settings = [];
-        if (!empty($r['settings'])) {
-            $tmp = json_decode($r['settings'], true);
-            if (is_array($tmp)) $settings = $tmp;
-        }
-        // Accept keys like ENABLE_RELAY1, enable_relay_1, etc, case-insensitive, and any truthy value
-        foreach ($settings as $k => $v) {
-            if (preg_match('/^enable[_]?relay[_]?(\d+)$/i', $k, $m) && isset($m[1])) {
-                $n = intval($m[1]);
-                if ($n >= 1 && $n <= 8 && tmon_uc_truthy_flag($v)) $enabled_relays[] = $n;
+        // Robust relay detection (scan keys like ENABLE_RELAY1, ENABLE_RELAY_1, enable_relay1, etc)
+        // Always enable relays 1 and 2 by default
+        $enabled_relays = [1, 2];
+        $settings = !empty($r['settings']) ? json_decode($r['settings'], true) : [];
+        if (is_array($settings)) {
+            foreach ($settings as $k => $v) {
+                if (preg_match('/^enable[_]?relay[_]?(\d+)$/i', $k, $m) && isset($m[1])) {
+                    $n = intval($m[1]);
+                    if ($n >= 1 && $n <= 8 && tmon_uc_truthy_flag($v)) $enabled_relays[] = $n;
+                }
             }
         }
-        // Fallback to latest field data if no relays found in settings
-        if (empty($enabled_relays)) {
-            $fd = $wpdb->get_row($wpdb->prepare("SELECT data FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s ORDER BY created_at DESC LIMIT 1", $r['unit_id']), ARRAY_A);
-            $fddata = $fd['data'] ?? '';
-            $d = $fddata ? json_decode($fddata, true) : [];
-            if (is_array($d)) {
-                foreach ($d as $k => $v) {
-                    if (preg_match('/^enable[_]?relay[_]?(\d+)$/i', $k, $m) && isset($m[1])) {
-                        $n = intval($m[1]);
-                        if ($n >= 1 && $n <= 8 && tmon_uc_truthy_flag($v)) $enabled_relays[] = $n;
-                    }
+        // Also check field data for relay enablement
+        $fd = $wpdb->get_row($wpdb->prepare("SELECT data FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s ORDER BY created_at DESC LIMIT 1", $r['unit_id']), ARRAY_A);
+        $fddata = $fd['data'] ?? '';
+        $d = $fddata ? json_decode($fddata, true) : [];
+        if (is_array($d)) {
+            foreach ($d as $k => $v) {
+                if (preg_match('/^enable[_]?relay[_]?(\d+)$/i', $k, $m) && isset($m[1])) {
+                    $n = intval($m[1]);
+                    if ($n >= 1 && $n <= 8 && tmon_uc_truthy_flag($v)) $enabled_relays[] = $n;
                 }
             }
         }
         $enabled_relays = array_values(array_unique($enabled_relays));
 
-        // --- OUTPUT ROW ---
         echo '<tr>';
         echo '<td><span class="tmon-dot '.$cls.'" title="'.esc_attr($title).'"></span></td>';
         echo '<td>'.esc_html($r['unit_id']).'</td>';
