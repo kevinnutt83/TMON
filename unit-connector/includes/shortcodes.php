@@ -224,9 +224,9 @@ add_shortcode('tmon_device_status', function($atts) {
             $age = max(0, $now - $last);
             if (intval($r['suspended'])) {
                 $cls = 'tmon-red';
-            } else if ($age <= 15 * 60) {
+            } else if ($age <= 2 * 60) {
                 $cls = 'tmon-green';
-            } else if ($age <= 30 * 60) {
+            } else if ($age <= 5 * 60) {
                 $cls = 'tmon-yellow';
             } else {
                 $cls = 'tmon-red';
