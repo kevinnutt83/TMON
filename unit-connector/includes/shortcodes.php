@@ -293,7 +293,7 @@ add_shortcode('tmon_device_history', function($atts) {
     echo '<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>';
     $script = <<<'JS'
 (function(){
-    const select = document.getElementById("%SELECT_ID%);
+    const select = document.getElementById("%SELECT_ID%");
     const external = document.getElementById("tmon-unit-picker");
     const canvas = document.getElementById(select.getAttribute("data-canvas"));
     if(!select || !canvas) return;
@@ -312,22 +312,19 @@ add_shortcode('tmon_device_history', function($atts) {
             const volt = pts.map(p=>p.volt);
             const enabledRelays = Array.isArray(data.enabled_relays) ? data.enabled_relays : [];
             const relayColors = ["#6c757d", "#95a5a6", "#34495e", "#7f8c8d", "#95a5a6", "#2d3436", "#636e72", "#99a3ad"];
-            const relayDatasets = enabledRelays.map((num, idx) => {
+            const relayDatasets = enabledRelays.map(function(num, idx){
                 const key = "relay" + num + "_on";
-                const values = pts.map(p => (p.relay && Object.prototype.hasOwnProperty.call(p.relay, key)) ? Number(p.relay[key]) : null);
+                const values = pts.map(function(p){ return (p.relay && Object.prototype.hasOwnProperty.call(p.relay, key)) ? Number(p.relay[key]) : null; });
                 return {label: "Relay " + num, data: values, borderColor: relayColors[idx % relayColors.length], borderDash: [6,3], fill:false, yAxisID: "relay", stepped:true};
             });
             const cfg = {
                 type: "line",
                 data: {
                     labels: labels,
-                    datasets: [
-                        {label: "Temp (F)", data: temp, borderColor: "#e67e22", fill:false, yAxisID: "y1"},
+                    datasets: [{label: "Temp (F)", data: temp, borderColor: "#e67e22", fill:false, yAxisID: "y1"},
                         {label: "Humidity (%)", data: humid, borderColor: "#3498db", fill:false, yAxisID: "y2"},
                         {label: "Pressure (hPa)", data: bar, borderColor: "#2ecc71", fill:false, yAxisID: "y3"},
-                        {label: "Voltage (V)", data: volt, borderColor: "#9b59b6", fill:false, yAxisID: "y4"},
-                        ...relayDatasets
-                    ]
+                        {label: "Voltage (V)", data: volt, borderColor: "#9b59b6", fill:false, yAxisID: "y4"}].concat(relayDatasets)
                 },
                 options: {
                     responsive: true,
@@ -394,14 +391,14 @@ add_shortcode('tmon_devices_history', function($atts){
     const ctx = document.getElementById("%CANVAS_ID%").getContext("2d");
     const units = %UNITS_ARR%;
     const base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : (window.location.origin || "") + "/wp-json";
-    Promise.all(units.map(u => fetch(base + "/tmon/v1/device/history?unit_id=" + encodeURIComponent(u) + "&hours=%HOURS%" ).then(r=>r.json()).catch(()=>({points:[], unit_id:u}))))
-        .then(results=>{
-            const labels = (results[0] && Array.isArray(results[0].points)) ? results[0].points.map(p=>p.t) : [];
+    Promise.all(units.map(function(u){ return fetch(base + "/tmon/v1/device/history?unit_id=" + encodeURIComponent(u) + "&hours=%HOURS%" ).then(function(r){ return r.json(); }).catch(function(){ return {points:[], unit_id:u}; }); }))
+        .then(function(results){
+            const labels = (results[0] && Array.isArray(results[0].points)) ? results[0].points.map(function(p){ return p.t; }) : [];
             const colors = ["#e67e22", "#3498db", "#2ecc71", "#9b59b6", "#e74c3c", "#16a085", "#34495e"]; 
-            const ds = results.map((res, idx) => ({label: (res.unit_id||units[idx]), data: (Array.isArray(res.points)?res.points:[]).map(p=>p.temp_f), borderColor: colors[idx%colors.length], fill:false}));
+            const ds = results.map(function(res, idx){ return {label: (res.unit_id||units[idx]), data: (Array.isArray(res.points)?res.points:[]).map(function(p){ return p.temp_f; }), borderColor: colors[idx%colors.length], fill:false}; });
             new Chart(ctx, { type:"line", data: { labels: labels, datasets: ds }, options: { responsive:true, plugins: { legend:{position:"top"} } } });
         })
-        .catch(err=>{ console.error("TMON multi-history fetch error", err); });
+        .catch(function(err){ console.error("TMON multi-history fetch error", err); });
 })();
 JS;
     $multi_script = str_replace(
