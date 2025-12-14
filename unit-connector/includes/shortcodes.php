@@ -560,7 +560,7 @@ add_shortcode('tmon_device_sdata', function($atts) {
         const meta = document.getElementById("'.$meta_id.'");
         const base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : "'. $ajax_root .'".replace(/\/$/, "");
         function render(unit){
-            const url = `${base}/tmon/v1/device/sdata?unit_id=${encodeURIComponent(unit)}`;
+            const url = base + '/tmon/v1/device/sdata?unit_id=' + encodeURIComponent(unit);
             fetch(url).then(r=>r.json()).then(data=>{
                 if (!data || !data.data) {
                     table.innerHTML = '<tr><td><em>No data for this unit.</em></td></tr>';
@@ -572,10 +572,10 @@ add_shortcode('tmon_device_sdata', function($atts) {
                 Object.keys(friendly).forEach(function(k){
                     const v = friendly[k];
                     if (v === null || v === undefined || v === '') return;
-                    rows.push(`<tr><th>${k}</th><td>${v}</td></tr>`);
+                    rows.push('<tr><th>' + k + '</th><td>' + v + '</td></tr>');
                 });
                 table.innerHTML = rows.length ? rows.join('') : '<tr><td><em>No fields reported.</em></td></tr>';
-                meta.textContent = data.created_at ? `Last sample: ${data.created_at}` : '';
+                meta.textContent = data.created_at ? ('Last sample: ' + data.created_at) : '';
             }).catch(err=>{
                 console.error('TMON sdata fetch error', err);
                 table.innerHTML = '<tr><td><em>Error loading data.</em></td></tr>';
