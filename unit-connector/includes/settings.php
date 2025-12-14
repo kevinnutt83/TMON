@@ -590,8 +590,8 @@ add_action('tmon_uc_command_requeue_cron', function(){
 	global $wpdb;
 	tmon_uc_ensure_command_table();
 	$table = $wpdb->prefix . 'tmon_device_commands';
-	// Status column ensured above; run requeue safely
-	$wpdb->query("UPDATE {$table} SET status='queued' WHERE status='claimed' AND updated_at < (NOW() - INTERVAL 5 MINUTE)");
+    $col = $wpdb->get_var($wpdb->prepare("SHOW COLUMNS FROM {$table} LIKE %s", 'updated_at')) ? 'updated_at' : 'created_at';
+    $wpdb->query("UPDATE {$table} SET status='queued' WHERE status='claimed' AND {$col} < (NOW() - INTERVAL 5 MINUTE)");
 });
 
 // First device check-in: claim flow (UC receives device, calls Admin to confirm and backfills local record)

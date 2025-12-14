@@ -357,7 +357,7 @@ add_shortcode('tmon_device_history', function($atts) {
                 chart = new Chart(ctx, cfg);
             }).catch(err=>{ console.error("TMON history fetch error", err); });
         }
-        if (external) { select.style.display = 'none'; }
+        if (external) { select.style.display = "none"; }
         const activeSelect = external || select;
         activeSelect.addEventListener("change", function(ev){ render(ev.target.value); });
         render(activeSelect.value);

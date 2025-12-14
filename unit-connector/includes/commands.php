@@ -376,7 +376,8 @@ if (!wp_next_scheduled('tmon_uc_command_requeue_cron')) {
 add_action('tmon_uc_command_requeue_cron', function () {
 	global $wpdb;
 	$table = $wpdb->prefix . 'tmon_device_commands';
-	$wpdb->query("UPDATE {$table} SET status='queued' WHERE status='claimed' AND updated_at < (NOW() - INTERVAL 5 MINUTE)");
+	$col = $wpdb->get_var($wpdb->prepare("SHOW COLUMNS FROM {$table} LIKE %s", 'updated_at')) ? 'updated_at' : 'created_at';
+	$wpdb->query("UPDATE {$table} SET status='queued' WHERE status='claimed' AND {$col} < (NOW() - INTERVAL 5 MINUTE)");
 });
 
 // Ensure shortcode or UI button uses the forwarder with consistent payload
