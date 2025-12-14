@@ -215,14 +215,18 @@ add_shortcode('tmon_device_status', function($atts) {
             $cls = 'tmon-red';
             $title = 'Never seen';
         } else {
-            // Parse the DB datetime as UTC to avoid implicit server-local offsets
+            // DB interpretation of the datetime (epoch as DB sees it)
+            $db_epoch = intval( $wpdb->get_var( $wpdb->prepare( "SELECT UNIX_TIMESTAMP(%s)", $last_str ) ) );
+            // PHP parse as UTC epoch
             try {
                 $dt = new DateTimeImmutable($last_str, new DateTimeZone('UTC'));
-                $last = $dt->getTimestamp();
+                $php_epoch_utc = $dt->getTimestamp();
             } catch (Exception $e) {
-                // fallback to strtotime if parsing fails
-                $last = intval(strtotime($last_str));
+                $php_epoch_utc = intval(strtotime($last_str));
             }
+            // offset to align PHP epoch with DB interpretation (fixes +6h etc.)
+            $offset = $db_epoch ? ($db_epoch - $php_epoch_utc) : 0;
+            $last = $php_epoch_utc + $offset;
             $age = max(0, $now - $last);
             if (intval($r['suspended'])) {
                 $cls = 'tmon-red';
@@ -233,7 +237,7 @@ add_shortcode('tmon_device_status', function($atts) {
             } else {
                 $cls = 'tmon-red';
             }
-            // display time converted from UTC epoch to site timezone
+            // $last is UTC epoch; pass $gmt = true so date_i18n converts correctly to site timezone
             $title = 'Last seen: ' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last, true) . ' (' . human_time_diff($last, $now) . ' ago)';
         }
 
