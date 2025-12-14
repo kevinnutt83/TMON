@@ -215,30 +215,28 @@ add_shortcode('tmon_device_status', function($atts) {
             $cls = 'tmon-red';
             $title = 'Never seen';
         } else {
-            // DB interpretation of the datetime (epoch as DB sees it)
-            $db_epoch = intval( $wpdb->get_var( $wpdb->prepare( "SELECT UNIX_TIMESTAMP(%s)", $last_str ) ) );
-            // PHP parse as UTC epoch
-            try {
-                $dt = new DateTimeImmutable($last_str, new DateTimeZone('UTC'));
-                $php_epoch_utc = $dt->getTimestamp();
-            } catch (Exception $e) {
-                $php_epoch_utc = intval(strtotime($last_str));
-            }
-            // offset to align PHP epoch with DB interpretation (fixes +6h etc.)
-            $offset = $db_epoch ? ($db_epoch - $php_epoch_utc) : 0;
-            $last = $php_epoch_utc + $offset;
-            $age = max(0, $now - $last);
-            if (intval($r['suspended'])) {
+            // Parse DB timestamp directly (no timezone offset adjustments)
+            $parsed = strtotime($last_str);
+            if ($parsed === false) {
+                $last = 0;
+                $age = PHP_INT_MAX;
                 $cls = 'tmon-red';
-            } else if ($age <= 15 * 60) {
-                $cls = 'tmon-green';
-            } else if ($age <= 30 * 60) {
-                $cls = 'tmon-yellow';
+                $title = 'Last seen: ' . esc_html($last_str);
             } else {
-                $cls = 'tmon-red';
+                $last = intval($parsed);
+                $age = max(0, $now - $last);
+                if (intval($r['suspended'])) {
+                    $cls = 'tmon-red';
+                } else if ($age <= 15 * 60) {
+                    $cls = 'tmon-green';
+                } else if ($age <= 30 * 60) {
+                    $cls = 'tmon-yellow';
+                } else {
+                    $cls = 'tmon-red';
+                }
+                // show tooltip using site timezone conversion from the parsed epoch
+                $title = 'Last seen: ' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last) . ' (' . human_time_diff($last, $now) . ' ago)';
             }
-            // $last is UTC epoch; pass $gmt = true so date_i18n converts correctly to site timezone
-            $title = 'Last seen: ' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last, true) . ' (' . human_time_diff($last, $now) . ' ago)';
         }
 
         // Enabled relays from device settings, else infer from latest field data payload
