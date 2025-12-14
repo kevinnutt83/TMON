@@ -204,35 +204,28 @@ add_shortcode('tmon_device_status', function($atts) {
     $now = time();
     $nonce = wp_create_nonce('tmon_uc_relay');
     foreach ($rows as $r) {
-        // Compute age (seconds since last sample) using DB NOW() and the latest timestamp (field_data or devices).
-        // This avoids PHP-side timezone parsing differences (no manual +6h adjustments).
-        $age = $wpdb->get_var($wpdb->prepare(
-            "SELECT (UNIX_TIMESTAMP(NOW()) - UNIX_TIMESTAMP(COALESCE((SELECT MAX(created_at) FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s), (SELECT last_seen FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s))))",
-            $r['unit_id'], $r['unit_id']
-        ));
-        $age = ($age === null) ? PHP_INT_MAX : intval($age);
+        // Simple system-time comparison: parse DB timestamp with strtotime() and compare to time()
         $last_str = $wpdb->get_var($wpdb->prepare(
             "SELECT COALESCE((SELECT MAX(created_at) FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s), (SELECT last_seen FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s))",
             $r['unit_id'], $r['unit_id']
         ));
-        if ($age === PHP_INT_MAX || $age < 0 || empty($last_str)) {
-            $last = 0;
+        $last = $last_str ? intval( strtotime( $last_str ) ) : 0;
+        if (! $last) {
+            $age = PHP_INT_MAX;
             $cls = 'tmon-red';
             $title = 'Never seen';
         } else {
-            // Derive epoch from current time minus DB-reported age so we match DB's notion of "now"
-            $last = max(0, $now - $age);
-            if (intval($r['suspended'])) {
+            $age = max(0, $now - $last);
+            if ( intval($r['suspended']) ) {
                 $cls = 'tmon-red';
-            } else if ($age <= 15 * 60) {
+            } else if ( $age <= 15 * 60 ) {
                 $cls = 'tmon-green';
-            } else if ($age <= 30 * 60) {
+            } else if ( $age <= 30 * 60 ) {
                 $cls = 'tmon-yellow';
             } else {
                 $cls = 'tmon-red';
             }
-            // Show the DB-provided timestamp string and a human interval computed from DB age
-            $title = 'Last seen: ' . esc_html($last_str) . ' (' . human_time_diff($last, $now) . ' ago)';
+            $title = 'Last seen: ' . date_i18n( get_option('date_format') . ' ' . get_option('time_format'), $last ) . ' (' . human_time_diff( $last, $now ) . ' ago)';
         }
 
         // Enabled relays from device settings, else infer from latest field data payload
