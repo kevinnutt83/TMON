@@ -774,16 +774,23 @@ add_action('wp_ajax_tmon_pending_commands_list', function() {
     if (!isset($_GET['unit_id'])) wp_send_json_error(['commands'=>[]]);
     global $wpdb;
     $unit = sanitize_text_field($_GET['unit_id']);
+    // Fetch ALL staged commands, including those with NULL or empty executed_at
     $rows = $wpdb->get_results($wpdb->prepare(
-        "SELECT id, command, created_at FROM {$wpdb->prefix}tmon_device_commands WHERE device_id = %s AND executed_at IS NULL ORDER BY created_at ASC",
+        "SELECT id, command, created_at, executed_at FROM {$wpdb->prefix}tmon_device_commands WHERE device_id = %s AND (executed_at IS NULL OR executed_at = '' OR executed_at = '0000-00-00 00:00:00') ORDER BY created_at ASC",
         $unit
     ), ARRAY_A);
     $out = [];
     foreach ($rows as $r) {
+        $cmd = $r['command'];
+        // Try to pretty-print JSON if possible
+        if (is_string($cmd) && ($decoded = json_decode($cmd, true)) && json_last_error() === JSON_ERROR_NONE) {
+            $cmd = json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        }
         $out[] = [
             'id' => $r['id'],
-            'command' => is_string($r['command']) ? $r['command'] : json_encode($r['command']),
-            'created_at' => $r['created_at']
+            'command' => $cmd,
+            'created_at' => $r['created_at'],
+            'executed_at' => $r['executed_at']
         ];
     }
     wp_send_json_success(['commands' => $out]);
