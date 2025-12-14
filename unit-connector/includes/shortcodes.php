@@ -209,13 +209,14 @@ add_shortcode('tmon_device_status', function($atts) {
             "SELECT COALESCE((SELECT MAX(created_at) FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s), (SELECT last_seen FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s))",
             $r['unit_id'], $r['unit_id']
         ));
-        // Parse timestamp using server interpretation (no extra timezone shifts)
-        $last = $last_str ? intval(strtotime($last_str)) : 0;
-        if (!$last) {
+        // Parse the DB timestamp using strtotime() (no UTC forcing / no +6h offset)
+        if (empty($last_str)) {
+            $last = 0;
             $age = PHP_INT_MAX;
             $cls = 'tmon-red';
             $title = 'Never seen';
         } else {
+            $last = intval(strtotime($last_str));
             $age = max(0, $now - $last);
             if (intval($r['suspended'])) {
                 $cls = 'tmon-red';
@@ -226,20 +227,23 @@ add_shortcode('tmon_device_status', function($atts) {
             } else {
                 $cls = 'tmon-red';
             }
-            // Format with site timezone using the parsed epoch
+            // Format tooltip using the parsed epoch (site timezone applied by date_i18n)
             $title = 'Last seen: ' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last) . ' (' . human_time_diff($last, $now) . ' ago)';
         }
 
-        // Robust relay detection (case-insensitive keys and truthy values)
+        // Detect enabled relays: prefer explicit ENABLE_RELAY<N> keys, fallback to case-insensitive matches in settings or latest field data
         $enabled_relays = [];
         $settings = [];
         if (!empty($r['settings'])) {
             $tmp = json_decode($r['settings'], true);
             if (is_array($tmp)) $settings = $tmp;
         }
-        foreach ($settings as $k => $v) {
-            if (preg_match('/enable[_]?relay(\d+)/i', $k, $m) && isset($m[1]) && tmon_uc_truthy_flag($v)) {
-                $enabled_relays[] = intval($m[1]);
+        for ($i = 1; $i <= 8; $i++) {
+            $k = 'ENABLE_RELAY'.$i;
+            if (isset($settings[$k]) && tmon_uc_truthy_flag($settings[$k])) { $enabled_relays[] = $i; continue; }
+            // case-insensitive fallback
+            foreach ($settings as $sk => $sv) {
+                if (preg_match('/^enable[_]?relay'.$i.'$/i', $sk) && tmon_uc_truthy_flag($sv)) { $enabled_relays[] = $i; break; }
             }
         }
         if (empty($enabled_relays)) {
@@ -247,9 +251,10 @@ add_shortcode('tmon_device_status', function($atts) {
             if ($fd && !empty($fd['data'])) {
                 $d = json_decode($fd['data'], true);
                 if (is_array($d)) {
-                    foreach ($d as $k => $v) {
-                        if (preg_match('/enable[_]?relay(\d+)/i', $k, $m) && isset($m[1]) && tmon_uc_truthy_flag($v)) {
-                            $enabled_relays[] = intval($m[1]);
+                    for ($i = 1; $i <= 8; $i++) {
+                        if (isset($d['ENABLE_RELAY'.$i]) && tmon_uc_truthy_flag($d['ENABLE_RELAY'.$i])) { $enabled_relays[] = $i; continue; }
+                        foreach ($d as $dk => $dv) {
+                            if (preg_match('/^enable[_]?relay'.$i.'$/i', $dk) && tmon_uc_truthy_flag($dv)) { $enabled_relays[] = $i; break; }
                         }
                     }
                 }
@@ -263,23 +268,22 @@ add_shortcode('tmon_device_status', function($atts) {
         echo '<td>'.esc_html($r['unit_name']).'</td>';
         echo '<td>'.esc_html($r['last_seen']).'</td>';
         echo '<td>';
-        // Always render controls if relays exist; disable buttons when user lacks permission so they remain visible
-        if (!empty($enabled_relays)) {
-            $disabled_attr = $can_control ? '' : ' disabled';
+        if ($can_control && !empty($enabled_relays)) {
             echo '<div class="tmon-relay-ctl" data-unit="'.esc_attr($r['unit_id']).'" data-nonce="'.esc_attr($nonce).'">';
             echo '<label class="tmon-text-muted">Run (min)</label><input type="number" min="0" max="1440" step="1" class="tmon-runtime-min" title="Runtime minutes (0 = no auto-off)" value="0">';
             echo '<label class="tmon-text-muted">At</label><input type="datetime-local" class="tmon-schedule-at" title="Optional schedule time">';
             foreach ($enabled_relays as $n) {
                 echo '<div class="tmon-relay-row">'
                     .'<span class="tmon-text-muted">R'.$n.'</span> '
-                    .'<button type="button" class="button button-small tmon-relay-btn" data-relay="'.$n.'" data-state="on"'.$disabled_attr.'>On</button> '
-                    .'<button type="button" class="button button-small tmon-relay-btn" data-relay="'.$n.'" data-state="off"'.$disabled_attr.'>Off</button>'
+                    .'<button type="button" class="button button-small tmon-relay-btn" data-relay="'.$n.'" data-state="on">On</button> '
+                    .'<button type="button" class="button button-small tmon-relay-btn" data-relay="'.$n.'" data-state="off">Off</button>'
                     .'</div>';
             }
-            if (!$can_control) echo '<span class="tmon-text-muted"> No control permission</span>';
             echo '</div>';
-        } else {
+        } else if (empty($enabled_relays)) {
             echo '<span class="tmon-text-muted">No relays enabled</span>';
+        } else {
+            echo '<span class="tmon-text-muted">No control permission</span>';
         }
         echo '</td>';
         echo '</tr>';
