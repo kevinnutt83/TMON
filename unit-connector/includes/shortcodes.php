@@ -28,8 +28,22 @@ add_shortcode('tmon_pending_commands', function($atts){
     function render(unit){
         var url = base + "/tmon/v1/device/pending_commands?unit_id=" + encodeURIComponent(unit);
         fetch(url).then(function(r){ return r.json(); }).then(function(data){
-            span.textContent = (typeof data.count !== "undefined") ? data.count : "0";
-        }).catch(function(){ span.textContent = "?"; });
+            if (typeof data.count !== "undefined") {
+                span.textContent = data.count;
+            } else {
+                // fallback to AJAX if REST endpoint is missing
+                fetch(ajaxurl + "?action=tmon_pending_commands_count&unit_id=" + encodeURIComponent(unit))
+                  .then(function(r){ return r.json(); })
+                  .then(function(data2){ span.textContent = (typeof data2.count !== "undefined") ? data2.count : "0"; })
+                  .catch(function(){ span.textContent = "?"; });
+            }
+        }).catch(function(){
+            // fallback to AJAX if REST endpoint fails
+            fetch(ajaxurl + "?action=tmon_pending_commands_count&unit_id=" + encodeURIComponent(unit))
+              .then(function(r){ return r.json(); })
+              .then(function(data2){ span.textContent = (typeof data2.count !== "undefined") ? data2.count : "0"; })
+              .catch(function(){ span.textContent = "?"; });
+        });
     }
     select.addEventListener('change', function(ev){ render(ev.target.value); });
     render(select.value);
@@ -40,6 +54,8 @@ JS;
         [esc_js($select_id), esc_js($span_id), esc_js(rest_url())],
         $pending_script
     );
+    // Add wp_localize_script for ajaxurl if not already present
+    echo '<script>var ajaxurl = window.ajaxurl || "'.admin_url('admin-ajax.php').'";</script>';
     echo '<script>'.$pending_script.'</script>';
     echo '</div>';
     return ob_get_clean();
@@ -204,12 +220,11 @@ add_shortcode('tmon_device_status', function($atts) {
         .tmon-text-muted{color:#777;font-style:italic}
     </style>';
     echo '<table class="wp-list-table widefat"><thead><tr><th>Status</th><th>Unit ID</th><th>Name</th><th>Last Seen</th><th>Controls</th></tr></thead><tbody>';
-    $now = time();
+    $now = current_time('timestamp', 1); // Always UTC
     $nonce = wp_create_nonce('tmon_uc_relay');
     foreach ($rows as $r) {
-        // Parse DB timestamp as-is (no timezone correction) and compute age
-        $last = $r['last_seen'] ? intval(strtotime($r['last_seen'])) : 0;
-        // No timezone correction here!
+        // Parse DB timestamp as UTC and compute age
+        $last = $r['last_seen'] ? strtotime($r['last_seen'] . ' UTC') : 0;
         if (!$last) {
             $age = PHP_INT_MAX;
             $cls = 'tmon-red';
@@ -667,5 +682,71 @@ JS;
     echo '<script>'.$sdata_script.'</script>';
     echo '</div>';
     return ob_get_clean();
+});
+
+// Fallback AJAX handler for pending commands count (if REST endpoint is not present)
+add_action('wp_ajax_tmon_pending_commands_count', function() {
+    if (!isset($_GET['unit_id'])) {
+        wp_send_json(['count' => 0]);
+    }
+    global $wpdb;
+    $unit = sanitize_text_field($_GET['unit_id']);
+    $cnt = $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM {$wpdb->prefix}tmon_device_commands WHERE device_id = %s AND executed_at IS NULL",
+        $unit
+    ));
+    wp_send_json(['count' => intval($cnt)]);
+});
+add_action('wp_ajax_nopriv_tmon_pending_commands_count', function() {
+    // Optionally allow non-logged-in users
+    if (!isset($_GET['unit_id'])) {
+        wp_send_json(['count' => 0]);
+    }
+    global $wpdb;
+    $unit = sanitize_text_field($_GET['unit_id']);
+    $cnt = $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM {$wpdb->prefix}tmon_device_commands WHERE device_id = %s AND executed_at IS NULL",
+        $unit
+    ));
+    wp_send_json(['count' => intval($cnt)]);
+});
+
+// AJAX: Update unit nameadd_action('wp_ajax_tmon_uc_update_unit_name', function() {
+    check_admin_referer('tmon_uc_device_data');
+    if (!current_user_can('manage_options')) wp_send_json_error();
+    $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
+    $unit_name = sanitize_text_field($_POST['unit_name'] ?? '');
+    global $wpdb;
+    $wpdb->update($wpdb->prefix.'tmon_devices', ['unit_name'=>$unit_name], ['unit_id'=>$unit_id]);
+    wp_send_json_success();
+});
+
+// AJAX: Get settings (applied/staged)
+add_action('wp_ajax_tmon_uc_get_settings', function() {
+    if (!current_user_can('manage_options')) wp_send_json_error();
+    global $wpdb;
+    $unit_id = sanitize_text_field($_GET['unit_id'] ?? '');
+    $applied = [];
+    $staged = [];
+    $row = $wpdb->get_row($wpdb->prepare("SELECT settings FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s", $unit_id), ARRAY_A);
+    if ($row && !empty($row['settings'])) $applied = json_decode($row['settings'], true);
+    $row2 = $wpdb->get_row($wpdb->prepare("SELECT settings FROM {$wpdb->prefix}tmon_staged_settings WHERE unit_id=%s", $unit_id), ARRAY_A);
+    if ($row2 && !empty($row2['settings'])) $staged = json_decode($row2['settings'], true);
+    wp_send_json(['success'=>true, 'applied'=>$applied, 'staged'=>$staged]);
+});
+
+// AJAX: Stage settings
+add_action('wp_ajax_tmon_uc_stage_settings', function() {
+    check_admin_referer('tmon_uc_device_data');
+    if (!current_user_can('manage_options')) wp_send_json_error();
+    global $wpdb;
+    $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
+    $settings = $_POST['settings'] ?? '';
+    $wpdb->replace($wpdb->prefix.'tmon_staged_settings', [
+        'unit_id' => $unit_id,
+        'settings' => $settings,
+        'updated_at' => current_time('mysql', 1)
+    ]);
+    wp_send_json_success();
 });
 
