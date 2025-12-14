@@ -33,10 +33,9 @@ add_action('admin_post_tmon_create_starter_page', function(){
     $content .= "<h3>Known IDs</h3>\n";
     $content .= "[tmon_known_ids]\n\n";
     $content .= "\n<h2>Device Details</h2>\n";
-    $content .= "<!-- Replace UNIT123 with your actual unit_id -->\n";
-    $content .= "[tmon_device_sdata unit_id=\"UNIT123\"]\n\n";
-    $content .= "[tmon_device_history unit_id=\"UNIT123\" hours=\"24\"]\n";
-    $content .= "<p><em>Hint: On the Admin Field Data page, you can filter the table to a time window and see a mini chart of upcoming remote syncs.</em></p>\n\n";
+    $content .= "[tmon_device_sdata refresh_s=\"45\"]\n\n";
+    $content .= "[tmon_device_history hours=\"24\" refresh_s=\"60\"]\n";
+    $content .= "<p><em>Use the dropdown to switch units. Both widgets share the same picker when you have an element with id tmon-unit-picker on the page.</em></p>\n\n";
     $content .= "\n<h2>Claim a Device</h2>\n";
     $content .= "[tmon_claim_device]\n";
 

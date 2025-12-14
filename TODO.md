@@ -62,7 +62,7 @@ Admin
 - [ ] Add audit hooks across provisioning save/queue paths.
 
 Unit Connector
-- [ ] Widgets/graphs for device data; relay controls; shortcodes polish.
+- [x] Widgets/graphs for device data; relay controls; shortcodes polish.
 
 Docs/QA
 - [ ] Add data flow graphics/screenshots.
@@ -80,7 +80,7 @@ Docs/QA
 # TODO
 - [ ] Add per-device HMAC confirmation or device-specific key to confirm endpoint.
 - [ ] Add email notifications for provisioning events (optional).
-- [ ] Add per-device staging preview and direct push tools in UI.
+- [x] Add per-device staging preview and direct push tools in UI.
 - [ ] Add tests to verify full provisioning lifecycle.
 
 # TMON Admin — Updated TODO

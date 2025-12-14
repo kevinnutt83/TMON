@@ -309,6 +309,13 @@ add_shortcode('tmon_device_history', function($atts) {
                 const humid = pts.map(p=>p.humid);
                 const bar = pts.map(p=>p.bar);
                 const volt = pts.map(p=>p.volt);
+                const enabledRelays = Array.isArray(data.enabled_relays) ? data.enabled_relays : [];
+                const relayColors = ["#6c757d", "#95a5a6", "#34495e", "#7f8c8d", "#95a5a6", "#2d3436", "#636e72", "#99a3ad"];
+                const relayDatasets = enabledRelays.map((num, idx) => {
+                    const key = `relay${num}_on`;
+                    const values = pts.map(p => (p.relay && Object.prototype.hasOwnProperty.call(p.relay, key)) ? Number(p.relay[key]) : null);
+                    return {label: `Relay ${num}`, data: values, borderColor: relayColors[idx % relayColors.length], borderDash: [6,3], fill:false, yAxisID: "relay", stepped:true};
+                });
                 const cfg = {
                     type: "line",
                     data: {
@@ -317,19 +324,32 @@ add_shortcode('tmon_device_history', function($atts) {
                             {label: "Temp (F)", data: temp, borderColor: "#e67e22", fill:false, yAxisID: "y1"},
                             {label: "Humidity (%)", data: humid, borderColor: "#3498db", fill:false, yAxisID: "y2"},
                             {label: "Pressure (hPa)", data: bar, borderColor: "#2ecc71", fill:false, yAxisID: "y3"},
-                            {label: "Voltage (V)", data: volt, borderColor: "#9b59b6", fill:false, yAxisID: "y4"}
+                            {label: "Voltage (V)", data: volt, borderColor: "#9b59b6", fill:false, yAxisID: "y4"},
+                            ...relayDatasets
                         ]
                     },
                     options: {
                         responsive: true,
                         interaction: { mode: "index", intersect: false },
                         stacked: false,
-                        plugins: { legend: { position: "top" } },
+                        plugins: {
+                            legend: {
+                                position: "top",
+                                onClick: (evt, item, legend) => {
+                                    const ci = legend.chart;
+                                    const index = item.datasetIndex;
+                                    const visible = ci.isDatasetVisible(index);
+                                    ci.setDatasetVisibility(index, !visible);
+                                    ci.update();
+                                }
+                            }
+                        },
                         scales: {
                             y1: { type: "linear", position: "left" },
                             y2: { type: "linear", position: "right", grid: { drawOnChartArea: false } },
                             y3: { type: "linear", position: "right", grid: { drawOnChartArea: false } },
-                            y4: { type: "linear", position: "left", grid: { drawOnChartArea: false }, suggestedMin: '. $y4min .', suggestedMax: '. $y4max .' }
+                            y4: { type: "linear", position: "left", grid: { drawOnChartArea: false }, suggestedMin: '. $y4min .', suggestedMax: '. $y4max .' },
+                            relay: { type: "linear", position: "right", min: -0.1, max: 1.1, grid: { drawOnChartArea: false }, ticks: { stepSize: 1, callback: v => v ? "On" : "Off" } }
                         }
                     }
                 };
@@ -337,6 +357,7 @@ add_shortcode('tmon_device_history', function($atts) {
                 chart = new Chart(ctx, cfg);
             }).catch(err=>{ console.error("TMON history fetch error", err); });
         }
+        if (external) { select.style.display = 'none'; }
         const activeSelect = external || select;
         activeSelect.addEventListener("change", function(ev){ render(ev.target.value); });
         render(activeSelect.value);
@@ -502,34 +523,71 @@ add_shortcode('tmon_known_ids', function($atts){
     return $out;
 });
 
-// [tmon_device_sdata unit_id="123"]
-// Renders latest sdata payload in a user-friendly table, works for remotes and bases alike.
+// [tmon_device_sdata refresh_s="30"]
+// Renders latest sdata payload; unit is selected from the shared picker (#tmon-unit-picker) or a local dropdown fallback.
 add_shortcode('tmon_device_sdata', function($atts) {
-    global $wpdb;
-    $a = shortcode_atts(['unit_id' => ''], $atts);
-    $unit_id = sanitize_text_field($a['unit_id']);
-    if (!$unit_id) return '<em>Missing unit_id.</em>';
-    $row = $wpdb->get_row($wpdb->prepare("SELECT data, created_at FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s ORDER BY created_at DESC LIMIT 1", $unit_id), ARRAY_A);
-    if (!$row) return '<em>No data for this unit.</em>';
-    $data = json_decode($row['data'], true);
-    if (!is_array($data)) return '<em>Invalid data.</em>';
-    // If record came from a base with embedded remote, still treated the same as we saved per-unit rows
-    $friendly = [
-        'Timestamp' => isset($data['timestamp']) ? esc_html($data['timestamp']) : esc_html($row['created_at']),
-        'Temperature (F)' => isset($data['t_f']) ? esc_html($data['t_f']) : (isset($data['cur_temp_f']) ? esc_html($data['cur_temp_f']) : ''),
-        'Temperature (C)' => isset($data['t_c']) ? esc_html($data['t_c']) : (isset($data['cur_temp_c']) ? esc_html($data['cur_temp_c']) : ''),
-        'Humidity (%)' => isset($data['hum']) ? esc_html($data['hum']) : (isset($data['cur_humid']) ? esc_html($data['cur_humid']) : ''),
-        'Pressure (hPa)' => isset($data['bar']) ? esc_html($data['bar']) : (isset($data['cur_bar_pres']) ? esc_html($data['cur_bar_pres']) : ''),
-        'Voltage (V)' => isset($data['v']) ? esc_html($data['v']) : (isset($data['sys_voltage']) ? esc_html($data['sys_voltage']) : ''),
-        'Free Mem (bytes)' => isset($data['fm']) ? esc_html($data['fm']) : (isset($data['free_mem']) ? esc_html($data['free_mem']) : ''),
-        'Device Name' => isset($data['name']) ? esc_html($data['name']) : '',
-    ];
-    $out = '<table class="wp-list-table widefat"><tbody>';
-    foreach ($friendly as $k => $v) {
-        if ($v === '') continue;
-        $out .= '<tr><th>'.esc_html($k).'</th><td>'.$v.'</td></tr>';
+    $a = shortcode_atts([
+        'refresh_s' => '30',
+    ], $atts);
+    $refresh = max(0, intval($a['refresh_s']));
+    $devices = tmon_uc_list_feature_devices('sample');
+    if (empty($devices)) {
+        return '<em>No provisioned devices found for this feature.</em>';
     }
-    $out .= '</tbody></table>';
-    return $out;
+
+    $default_unit = $devices[0]['unit_id'];
+    $select_id = 'tmon-sdata-select-' . wp_generate_password(6, false, false);
+    $table_id = 'tmon-sdata-table-' . wp_generate_password(6, false, false);
+    $meta_id = 'tmon-sdata-meta-' . wp_generate_password(6, false, false);
+    $ajax_root = esc_js(rest_url());
+    ob_start();
+    echo '<div class="tmon-sdata-widget">';
+    echo '<label class="screen-reader-text" for="'.$select_id.'">Device</label>';
+    echo '<select id="'.$select_id.'" class="tmon-sdata-select">';
+    foreach ($devices as $d) {
+        $sel = selected($default_unit, $d['unit_id'], false);
+        echo '<option value="'.esc_attr($d['unit_id']).'" '.$sel.'>'.esc_html($d['label']).'</option>';
+    }
+    echo '</select>';
+    echo '<div id="'.$meta_id.'" class="tmon-sdata-meta"></div>';
+    echo '<table class="wp-list-table widefat"><tbody id="'.$table_id.'"><tr><td><em>Loading...</em></td></tr></tbody></table>';
+    echo '<script>(function(){
+        const select = document.getElementById("'.$select_id.'");
+        const external = document.getElementById("tmon-unit-picker");
+        if (external) { select.style.display = "none"; }
+        const activeSelect = external || select;
+        const table = document.getElementById("'.$table_id.'");
+        const meta = document.getElementById("'.$meta_id.'");
+        const base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : "'. $ajax_root .'".replace(/\/$/, "");
+        function render(unit){
+            const url = `${base}/tmon/v1/device/sdata?unit_id=${encodeURIComponent(unit)}`;
+            fetch(url).then(r=>r.json()).then(data=>{
+                if (!data || !data.data) {
+                    table.innerHTML = '<tr><td><em>No data for this unit.</em></td></tr>';
+                    meta.textContent = '';
+                    return;
+                }
+                const friendly = data.friendly || {};
+                const rows = [];
+                Object.keys(friendly).forEach(function(k){
+                    const v = friendly[k];
+                    if (v === null || v === undefined || v === '') return;
+                    rows.push(`<tr><th>${k}</th><td>${v}</td></tr>`);
+                });
+                table.innerHTML = rows.length ? rows.join('') : '<tr><td><em>No fields reported.</em></td></tr>';
+                meta.textContent = data.created_at ? `Last sample: ${data.created_at}` : '';
+            }).catch(err=>{
+                console.error('TMON sdata fetch error', err);
+                table.innerHTML = '<tr><td><em>Error loading data.</em></td></tr>';
+                meta.textContent = '';
+            });
+        }
+        activeSelect.addEventListener('change', function(ev){ render(ev.target.value); });
+        render(activeSelect.value);
+        const refreshMs = '.($refresh*1000).';
+        if (refreshMs > 0) { setInterval(function(){ render(activeSelect.value); }, refreshMs); }
+    })();</script>';
+    echo '</div>';
+    return ob_get_clean();
 });
 

@@ -66,4 +66,62 @@ jQuery(document).ready(function($){
         refreshDeviceStatus();
         setInterval(refreshDeviceStatus, 30000);
     }
+
+    // Device Data admin page: settings load/stage/push
+    const dataPage = $('#tmon-settings-card');
+    if (dataPage.length) {
+        const picker = $('#tmon-unit-picker');
+        const statusEl = $('#tmon-settings-status');
+        const appliedEl = $('#tmon-settings-applied');
+        const stagedEl = $('#tmon-settings-staged');
+        const editorEl = $('#tmon-settings-editor');
+        const machineEl = $('#tmon-device-machine');
+        const updatedEl = $('#tmon-device-updated');
+        const nonce = dataPage.data('nonce');
+
+        function setStatus(msg, cls) {
+            statusEl.removeClass('tmon-status-ok tmon-status-err tmon-status-info');
+            if (cls === 'ok') statusEl.addClass('tmon-status-ok');
+            if (cls === 'err') statusEl.addClass('tmon-status-err');
+            if (cls === 'info') statusEl.addClass('tmon-status-info');
+            statusEl.text(msg || '');
+        }
+
+        function loadBundle(unit) {
+            if (!unit) { setStatus('Select a device first.', 'info'); return; }
+            setStatus('Loading...', 'info');
+            $.post(ajaxurl || window.tmon_uc_ajaxurl, {action:'tmon_uc_device_bundle', nonce: nonce, unit_id: unit}, function(resp){
+                if (!resp || !resp.success) { setStatus((resp && resp.data && resp.data.message) || 'Load failed.', 'err'); return; }
+                const data = resp.data || {};
+                machineEl.text(data.machine_id || '');
+                updatedEl.text(data.last_seen || '');
+                appliedEl.text(JSON.stringify(data.settings || {}, null, 2));
+                stagedEl.text(JSON.stringify(data.staged || {}, null, 2));
+                const seed = (data.staged && Object.keys(data.staged).length) ? data.staged : (data.settings || {});
+                editorEl.val(JSON.stringify(seed, null, 2));
+                setStatus('Loaded.', 'ok');
+            }).fail(function(){ setStatus('Network error loading device.', 'err'); });
+        }
+
+        function pushSettings(unit) {
+            if (!unit) { setStatus('Select a device first.', 'info'); return; }
+            let parsed;
+            const raw = editorEl.val() || '';
+            if (raw.trim() === '') { parsed = {}; }
+            else {
+                try { parsed = JSON.parse(raw); }
+                catch (e) { setStatus('Invalid JSON: ' + e.message, 'err'); return; }
+            }
+            setStatus('Staging & pushing...', 'info');
+            $.post(ajaxurl || window.tmon_uc_ajaxurl, {action:'tmon_uc_stage_settings', nonce: nonce, unit_id: unit, settings_json: JSON.stringify(parsed)}, function(resp){
+                if (!resp || !resp.success) { setStatus((resp && resp.data && resp.data.message) || 'Push failed.', 'err'); return; }
+                setStatus(resp.data && resp.data.message ? resp.data.message : 'Staged and pushed.', 'ok');
+                loadBundle(unit);
+            }).fail(function(){ setStatus('Network error pushing settings.', 'err'); });
+        }
+
+        $('#tmon-settings-load').on('click', function(e){ e.preventDefault(); loadBundle(picker.val()); });
+        $('#tmon-settings-push').on('click', function(e){ e.preventDefault(); pushSettings(picker.val()); });
+        if (picker.length) { picker.on('change', function(){ loadBundle(picker.val()); }); loadBundle(picker.val()); }
+    }
 });

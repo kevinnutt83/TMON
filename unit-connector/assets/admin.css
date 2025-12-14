@@ -69,3 +69,7 @@
 @media (max-width: 782px) {
     .tmon-uc input[type="text"], .tmon-uc select, .tmon-uc textarea { width: 100%; }
 }
+
+.tmon-status-ok { color: #2ecc71; }
+.tmon-status-err { color: #e74c3c; }
+.tmon-status-info { color: #6b7280; }

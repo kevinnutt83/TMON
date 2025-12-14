@@ -30,6 +30,15 @@ add_action('rest_api_init', function() {
         ),
     ));
 
+    register_rest_route('tmon/v1', '/device/sdata', array(
+        'methods' => 'GET',
+        'callback' => 'tmon_uc_get_device_sdata',
+        'permission_callback' => '__return_true',
+        'args' => array(
+            'unit_id' => array('required' => true),
+        ),
+    ));
+
     // Token-protected CSV export (normalized fields); optional unit_id/time-window filters and gzip
     register_rest_route('tmon/v1', '/admin/field-data.csv', [
         'methods' => 'GET',
@@ -95,6 +104,11 @@ function tmon_uc_fd_verify_sig($data) {
     // Accept truncated signatures (prefix match)
     $len = min(strlen($sig), strlen($digest));
     return hash_equals(substr($digest, 0, $len), substr($sig, 0, $len));
+}
+
+// Truthy helper reused for relay and feature detection
+function tmon_uc_truthy($val) {
+    return in_array($val, [true, 1, '1', 'true', 'yes', 'on'], true);
 }
 
 function tmon_uc_rest_list_field_data($request) {
@@ -495,18 +509,76 @@ function tmon_uc_get_device_history($request) {
     $unit_id = sanitize_text_field($request->get_param('unit_id'));
     $hours = intval($request->get_param('hours')) ?: 24;
     $since = gmdate('Y-m-d H:i:s', time() - $hours * 3600);
+    $enabled_relays = [];
+    // Seed enabled relays from stored settings if present
+    $device_row = $wpdb->get_row($wpdb->prepare("SELECT settings FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s", $unit_id), ARRAY_A);
+    if ($device_row && !empty($device_row['settings'])) {
+        $settings = json_decode($device_row['settings'], true);
+        if (is_array($settings)) {
+            for ($i = 1; $i <= 8; $i++) {
+                $k = 'ENABLE_RELAY' . $i;
+                if (array_key_exists($k, $settings) && tmon_uc_truthy($settings[$k])) {
+                    $enabled_relays[] = $i;
+                }
+            }
+        }
+    }
     $rows = $wpdb->get_results($wpdb->prepare("SELECT data, created_at FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s AND created_at >= %s ORDER BY created_at ASC", $unit_id, $since), ARRAY_A);
     $points = [];
     foreach ($rows as $r) {
         $d = json_decode($r['data'], true);
         if (!is_array($d)) continue;
+        $relay_states = [];
+        for ($i = 1; $i <= 8; $i++) {
+            $enable_key = 'ENABLE_RELAY' . $i;
+            $state_key = 'relay' . $i . '_on';
+            if (array_key_exists($enable_key, $d) && tmon_uc_truthy($d[$enable_key]) && !in_array($i, $enabled_relays, true)) {
+                $enabled_relays[] = $i;
+            }
+            if (array_key_exists($state_key, $d)) {
+                if (!in_array($i, $enabled_relays, true)) {
+                    $enabled_relays[] = $i;
+                }
+                $relay_states[$state_key] = tmon_uc_truthy($d[$state_key]) ? 1 : 0;
+            }
+        }
         $points[] = [
             't' => $r['created_at'],
             'temp_f' => $d['t_f'] ?? ($d['cur_temp_f'] ?? null),
             'humid' => $d['hum'] ?? ($d['cur_humid'] ?? null),
             'bar' => $d['bar'] ?? ($d['cur_bar_pres'] ?? null),
             'volt' => $d['v'] ?? ($d['sys_voltage'] ?? null),
+            'relay' => $relay_states,
         ];
     }
-    return rest_ensure_response(['status' => 'ok', 'unit_id' => $unit_id, 'hours' => $hours, 'points' => $points]);
+    sort($enabled_relays);
+    $enabled_relays = array_values(array_unique($enabled_relays));
+    return rest_ensure_response(['status' => 'ok', 'unit_id' => $unit_id, 'hours' => $hours, 'enabled_relays' => $enabled_relays, 'points' => $points]);
+}
+
+function tmon_uc_get_device_sdata($request) {
+    global $wpdb;
+    $unit_id = sanitize_text_field($request->get_param('unit_id'));
+    if (!$unit_id) return rest_ensure_response(['status' => 'error', 'message' => 'unit_id required']);
+    $row = $wpdb->get_row($wpdb->prepare("SELECT data, created_at FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s ORDER BY created_at DESC LIMIT 1", $unit_id), ARRAY_A);
+    if (!$row) return rest_ensure_response(['status' => 'ok', 'unit_id' => $unit_id, 'data' => [], 'created_at' => null]);
+    $data = json_decode($row['data'], true);
+    if (!is_array($data)) $data = [];
+    $friendly = [
+        'Timestamp' => isset($data['timestamp']) ? $data['timestamp'] : $row['created_at'],
+        'Temperature (F)' => $data['t_f'] ?? ($data['cur_temp_f'] ?? null),
+        'Temperature (C)' => $data['t_c'] ?? ($data['cur_temp_c'] ?? null),
+        'Humidity (%)' => $data['hum'] ?? ($data['cur_humid'] ?? null),
+        'Pressure (hPa)' => $data['bar'] ?? ($data['cur_bar_pres'] ?? null),
+        'Voltage (V)' => $data['v'] ?? ($data['sys_voltage'] ?? null),
+        'Free Mem (bytes)' => $data['fm'] ?? ($data['free_mem'] ?? null),
+        'Device Name' => $data['name'] ?? '',
+    ];
+    return rest_ensure_response([
+        'status' => 'ok',
+        'unit_id' => $unit_id,
+        'created_at' => $row['created_at'],
+        'data' => $data,
+        'friendly' => $friendly,
+    ]);
 }
