@@ -812,3 +812,24 @@ add_action('wp_ajax_nopriv_tmon_pending_commands_delete', function() {
     wp_send_json_error();
 });
 
+// Utility: Ensure tmon_staged_settings table exists (auto-create if missing)
+function tmon_uc_ensure_staged_settings_table() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'tmon_staged_settings';
+    $charset_collate = $wpdb->get_charset_collate();
+    $sql = "CREATE TABLE IF NOT EXISTS `$table` (
+        `unit_id` varchar(64) NOT NULL,
+        `settings` longtext NOT NULL,
+        `updated_at` datetime DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (`unit_id`)
+    ) $charset_collate;";
+    require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
+    dbDelta($sql);
+}
+
+// Ensure table exists on plugin load and before any staged settings access
+add_action('init', 'tmon_uc_ensure_staged_settings_table');
+add_action('admin_init', 'tmon_uc_ensure_staged_settings_table');
+add_action('wp_ajax_tmon_uc_get_settings', 'tmon_uc_ensure_staged_settings_table', 0);
+add_action('wp_ajax_tmon_uc_stage_settings', 'tmon_uc_ensure_staged_settings_table', 0);
+
