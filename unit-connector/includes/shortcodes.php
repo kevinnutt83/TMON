@@ -301,7 +301,7 @@ add_shortcode('tmon_device_history', function($atts) {
         let chart = null;
         function render(unit){
             const hrs = select.getAttribute("data-hours") || "'.$hours.'";
-            const url = `${base}/tmon/v1/device/history?unit_id=${encodeURIComponent(unit)}&hours=${encodeURIComponent(hrs)}`;
+            const url = base + "/tmon/v1/device/history?unit_id=" + encodeURIComponent(unit) + "&hours=" + encodeURIComponent(hrs);
             fetch(url).then(r=>r.json()).then(data=>{
                 const pts = Array.isArray(data.points) ? data.points : [];
                 const labels = pts.map(p=>p.t);
@@ -312,9 +312,9 @@ add_shortcode('tmon_device_history', function($atts) {
                 const enabledRelays = Array.isArray(data.enabled_relays) ? data.enabled_relays : [];
                 const relayColors = ["#6c757d", "#95a5a6", "#34495e", "#7f8c8d", "#95a5a6", "#2d3436", "#636e72", "#99a3ad"];
                 const relayDatasets = enabledRelays.map((num, idx) => {
-                    const key = `relay${num}_on`;
+                    const key = 'relay' + num + '_on';
                     const values = pts.map(p => (p.relay && Object.prototype.hasOwnProperty.call(p.relay, key)) ? Number(p.relay[key]) : null);
-                    return {label: `Relay ${num}`, data: values, borderColor: relayColors[idx % relayColors.length], borderDash: [6,3], fill:false, yAxisID: "relay", stepped:true};
+                    return {label: 'Relay ' + num, data: values, borderColor: relayColors[idx % relayColors.length], borderDash: [6,3], fill:false, yAxisID: "relay", stepped:true};
                 });
                 const cfg = {
                     type: "line",
@@ -385,7 +385,7 @@ add_shortcode('tmon_devices_history', function($atts){
         const ctx = document.getElementById("'.$canvas_id.'").getContext("2d");
         const units = '.json_encode($units).';
         const base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : (window.location.origin || "") + "/wp-json";
-        Promise.all(units.map(u => fetch(`${base}/tmon/v1/device/history?unit_id=${encodeURIComponent(u)}&hours='.$hours.'`).then(r=>r.json()).catch(()=>({points:[], unit_id:u}))))
+        Promise.all(units.map(u => fetch(base + "/tmon/v1/device/history?unit_id=" + encodeURIComponent(u) + "&hours='.$hours.'").then(r=>r.json()).catch(()=>({points:[], unit_id:u}))))
             .then(results=>{
                 const labels = (results[0] && Array.isArray(results[0].points)) ? results[0].points.map(p=>p.t) : [];
                 const colors = ["#e67e22", "#3498db", "#2ecc71", "#9b59b6", "#e74c3c", "#16a085", "#34495e"]; 
