@@ -1,5 +1,5 @@
 <?php
-// Shortcode to display pending command count for a unit: [tmon_pending_commands unit="170170"]
+// Shortcode to display pending command count for a unit: [tmon_pending_commands]
 add_shortcode('tmon_pending_commands', function($atts){
     $a = shortcode_atts(['unit' => ''], $atts);
     $preselect = sanitize_text_field($a['unit']);
