@@ -117,13 +117,22 @@ add_shortcode('tmon_pending_commands', function($atts){
                 headers: {'Content-Type': 'application/x-www-form-urlencoded'},
                 body: "id=" + encodeURIComponent(id) + "&_wpnonce=" + nonce
             }).then(r=>r.json()).then(function(res){
-                // Fix: Check for res.success and res.command (not res.command.command)
+                // Fix: handle whitespace, JSON, and fallback for command
                 if (res && res.success && typeof res.command !== "undefined") {
                     var unit_id = res.device_id || unit;
+                    var cmd = res.command;
+                    // If command is an object, stringify it
+                    if (typeof cmd === "object") {
+                        cmd = JSON.stringify(cmd);
+                    }
+                    // If command is a string, trim whitespace
+                    if (typeof cmd === "string") {
+                        cmd = cmd.trim();
+                    }
                     fetch(ajaxurl + "?action=tmon_pending_commands_requeue", {
                         method: "POST",
                         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                        body: "unit_id=" + encodeURIComponent(unit_id) + "&command=" + encodeURIComponent(res.command) + "&_wpnonce=" + nonce
+                        body: "unit_id=" + encodeURIComponent(unit_id) + "&command=" + encodeURIComponent(cmd) + "&_wpnonce=" + nonce
                     }).then(r2=>r2.json()).then(function(res2){
                         if (res2 && res2.success) {
                             alert('Command re-queued.');
@@ -320,12 +329,11 @@ add_shortcode('tmon_device_status', function($atts) {
         .tmon-text-muted{color:#777;font-style:italic}
     </style>';
     echo '<table class="wp-list-table widefat"><thead><tr><th>Status</th><th>Unit ID</th><th>Name</th><th>Last Seen</th><th>Controls</th></tr></thead><tbody>';
-    // Use UTC for both now and last_seen
-    $now = current_time('timestamp', 1); // Always UTC
+    // Fix: Use gmdate for now and last_seen, compare as UTC
+    $now = time(); // PHP time() is always UTC
     $nonce = wp_create_nonce('tmon_uc_relay');
     foreach ($rows as $r) {
-        // Use DB timestamp as UTC, no conversion
-        $last = $r['last_seen'] ? strtotime($r['last_seen']) : 0;
+        $last = $r['last_seen'] ? strtotime($r['last_seen'] . ' UTC') : 0;
         if (!$last) {
             $age = PHP_INT_MAX;
             $cls = 'tmon-red';
@@ -341,7 +349,7 @@ add_shortcode('tmon_device_status', function($atts) {
             } else {
                 $cls = 'tmon-red';
             }
-            $title = 'Last seen: ' . date_i18n(get_option('date_format') . ' ' . get_option('time_format'), $last) . ' (' . human_time_diff($last, $now) . ' ago)';
+            $title = 'Last seen: ' . gmdate(get_option('date_format') . ' ' . get_option('time_format'), $last) . ' (' . human_time_diff($last, $now) . ' ago)';
         }
 
         // Robust relay detection (scan keys like ENABLE_RELAY1, ENABLE_RELAY_1, enable_relay1, etc)
