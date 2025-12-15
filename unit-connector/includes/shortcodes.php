@@ -112,16 +112,13 @@ add_shortcode('tmon_pending_commands', function($atts){
             var unit = btn.getAttribute('data-unit');
             if (!id || !unit) return;
             btn.disabled = true;
-            var row = btn.closest('tr');
-            var cmdCell = row.querySelector('td:nth-child(3)');
-            var cmdText = cmdCell ? cmdCell.textContent : '';
             fetch(ajaxurl + "?action=tmon_pending_commands_get", {
                 method: "POST",
                 headers: {'Content-Type': 'application/x-www-form-urlencoded'},
                 body: "id=" + encodeURIComponent(id) + "&_wpnonce=" + nonce
             }).then(r=>r.json()).then(function(res){
-                if (res && res.success && res.command) {
-                    // Use device_id from server if present
+                // Fix: Check for res.success and res.command (not res.command.command)
+                if (res && res.success && typeof res.command !== "undefined") {
                     var unit_id = res.device_id || unit;
                     fetch(ajaxurl + "?action=tmon_pending_commands_requeue", {
                         method: "POST",
