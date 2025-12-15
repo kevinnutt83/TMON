@@ -21,6 +21,9 @@ add_shortcode('tmon_pending_commands', function($atts){
         return '<em>No pending commands found.</em>';
     }
 
+    // Permission check (same as relay controls)
+    $can_control = current_user_can('manage_options') || current_user_can('edit_tmon_units');
+
     $ajax_nonce = wp_create_nonce('tmon_pending_cmds');
     $table_id = 'tmon-pending-table-' . wp_generate_password(6, false, false);
     $select_id = 'tmon-pending-unit-select-' . wp_generate_password(6, false, false);
@@ -50,8 +53,14 @@ add_shortcode('tmon_pending_commands', function($atts){
             .'<td>'.esc_html($r['unit_name']).'</td>'
             .'<td>'.$cmd.'</td>'
             .'<td>'.esc_html($r['created_at']).'</td>'
-            .'<td><button class="button button-small tmon-cmd-del" data-id="'.intval($r['id']).'">Delete</button></td>'
-            .'</tr>';
+            .'<td>';
+        if ($can_control) {
+            echo '<button class="button button-small tmon-cmd-del" data-id="'.intval($r['id']).'">Delete</button> ';
+            echo '<button class="button button-small tmon-cmd-requeue" data-id="'.intval($r['id']).'" data-unit="'.esc_attr($r['device_id']).'">Re-Queue</button>';
+        } else {
+            echo '<span class="tmon-text-muted">No control permission</span>';
+        }
+        echo '</td></tr>';
     }
     echo '</tbody></table>';
     ?>
@@ -92,6 +101,50 @@ add_shortcode('tmon_pending_commands', function($atts){
                 }
             }).catch(function(){
                 alert('Delete failed');
+                btn.disabled = false;
+            });
+        });
+        // Re-queue logic
+        table.addEventListener('click', function(ev){
+            var btn = ev.target.closest('.tmon-cmd-requeue');
+            if (!btn) return;
+            var id = btn.getAttribute('data-id');
+            var unit = btn.getAttribute('data-unit');
+            if (!id || !unit) return;
+            btn.disabled = true;
+            // Fetch the command data from the row
+            var row = btn.closest('tr');
+            var cmdCell = row.querySelector('td:nth-child(3)');
+            var cmdText = cmdCell ? cmdCell.textContent : '';
+            // Use AJAX to get the original command from the server for safety
+            fetch(ajaxurl + "?action=tmon_pending_commands_get", {
+                method: "POST",
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: "id=" + encodeURIComponent(id) + "&_wpnonce=" + nonce
+            }).then(r=>r.json()).then(function(res){
+                if (res && res.success && res.command) {
+                    // Now re-insert as a new pending command
+                    fetch(ajaxurl + "?action=tmon_pending_commands_requeue", {
+                        method: "POST",
+                        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                        body: "unit_id=" + encodeURIComponent(unit) + "&command=" + encodeURIComponent(res.command) + "&_wpnonce=" + nonce
+                    }).then(r2=>r2.json()).then(function(res2){
+                        if (res2 && res2.success) {
+                            alert('Command re-queued.');
+                        } else {
+                            alert('Re-queue failed');
+                        }
+                        btn.disabled = false;
+                    }).catch(function(){
+                        alert('Re-queue failed');
+                        btn.disabled = false;
+                    });
+                } else {
+                    alert('Could not fetch command for re-queue.');
+                    btn.disabled = false;
+                }
+            }).catch(function(){
+                alert('Could not fetch command for re-queue.');
                 btn.disabled = false;
             });
         });
@@ -249,8 +302,6 @@ add_shortcode('tmon_device_status', function($atts) {
     $devices = $wpdb->get_results("SELECT unit_id, unit_name, last_seen, suspended, settings FROM {$wpdb->prefix}tmon_devices ORDER BY last_seen DESC", ARRAY_A);
     $index = [];
     foreach ($devices as $r) { $index[$r['unit_id']] = $r; }
-
-    // Also include units that only appear in field data (typically remotes)
     $fd_units = $wpdb->get_col("SELECT DISTINCT unit_id FROM {$wpdb->prefix}tmon_field_data");
     if ($fd_units) {
         foreach ($fd_units as $uid) {
@@ -260,7 +311,6 @@ add_shortcode('tmon_device_status', function($atts) {
             }
         }
     }
-
     $rows = array_values($index);
     $can_control = current_user_can('manage_options') || current_user_can('edit_tmon_units');
 
@@ -274,10 +324,11 @@ add_shortcode('tmon_device_status', function($atts) {
         .tmon-text-muted{color:#777;font-style:italic}
     </style>';
     echo '<table class="wp-list-table widefat"><thead><tr><th>Status</th><th>Unit ID</th><th>Name</th><th>Last Seen</th><th>Controls</th></tr></thead><tbody>';
+    // Use UTC for both now and last_seen
     $now = current_time('timestamp', 1); // Always UTC
     $nonce = wp_create_nonce('tmon_uc_relay');
     foreach ($rows as $r) {
-        // FIX: Use DB timestamp as-is (assume UTC), do not append ' UTC'
+        // Use DB timestamp as UTC, no conversion
         $last = $r['last_seen'] ? strtotime($r['last_seen']) : 0;
         if (!$last) {
             $age = PHP_INT_MAX;
@@ -446,6 +497,15 @@ add_shortcode('tmon_device_history', function($atts) {
         const base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : "<?php echo $ajax_root; ?>".replace(/\/$/, "");
         let chart = null;
         let lastData = null;
+        function relayStateValue(p, num) {
+            // Accept relay1_on, relay_1_on, etc.
+            if (!p.relay) return null;
+            var k1 = "relay" + num + "_on";
+            var k2 = "relay_" + num + "_on";
+            if (Object.prototype.hasOwnProperty.call(p.relay, k1)) return Number(p.relay[k1]);
+            if (Object.prototype.hasOwnProperty.call(p.relay, k2)) return Number(p.relay[k2]);
+            return null;
+        }
         function render(unit, hours){
             let url;
             if (hours === 'yoy') {
@@ -465,8 +525,10 @@ add_shortcode('tmon_device_history', function($atts) {
                 const enabledRelays = Array.isArray(data.enabled_relays) ? data.enabled_relays : [];
                 const relayColors = ["#6c757d", "#95a5a6", "#34495e", "#7f8c8d", "#95a5a6", "#2d3436", "#636e72", "#99a3ad"];
                 const relayDatasets = enabledRelays.map(function(num, idx){
-                    const key = "relay" + num + "_on";
-                    const values = pts.map(function(p){ return (p.relay && Object.prototype.hasOwnProperty.call(p.relay, key)) ? Number(p.relay[key]) : null; });
+                    const values = pts.map(function(p){ 
+                        var v = relayStateValue(p, num);
+                        return (v === null || v === undefined) ? null : v;
+                    });
                     return {label: "Relay " + num, data: values, borderColor: relayColors[idx % relayColors.length], borderDash: [6,3], fill:false, yAxisID: "relay", stepped:true, hidden:false};
                 });
                 const cfg = {
@@ -896,6 +958,36 @@ add_action('wp_ajax_tmon_pending_commands_delete', function() {
 });
 add_action('wp_ajax_nopriv_tmon_pending_commands_delete', function() {
     wp_send_json_error();
+});
+
+// AJAX: Get command by id for re-queue
+add_action('wp_ajax_tmon_pending_commands_get', function() {
+    check_ajax_referer('tmon_pending_cmds');
+    if (!isset($_POST['id'])) wp_send_json_error();
+    global $wpdb;
+    $id = intval($_POST['id']);
+    $row = $wpdb->get_row($wpdb->prepare("SELECT command FROM {$wpdb->prefix}tmon_device_commands WHERE id=%d", $id), ARRAY_A);
+    if ($row && isset($row['command'])) {
+        wp_send_json_success(['command' => $row['command']]);
+    }
+    wp_send_json_error();
+});
+
+// AJAX: Re-queue a pending command (insert as new pending command)
+add_action('wp_ajax_tmon_pending_commands_requeue', function() {
+    check_ajax_referer('tmon_pending_cmds');
+    if (!current_user_can('manage_options') && !current_user_can('edit_tmon_units')) wp_send_json_error();
+    global $wpdb;
+    $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
+    $command = $_POST['command'] ?? '';
+    if (!$unit_id || !$command) wp_send_json_error();
+    $wpdb->insert($wpdb->prefix.'tmon_device_commands', [
+        'device_id' => $unit_id,
+        'command' => $command,
+        'created_at' => current_time('mysql', 1),
+        'executed_at' => null
+    ]);
+    wp_send_json_success();
 });
 
 // Utility: Ensure tmon_staged_settings table exists (auto-create if missing)
