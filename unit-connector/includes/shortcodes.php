@@ -112,22 +112,21 @@ add_shortcode('tmon_pending_commands', function($atts){
             var unit = btn.getAttribute('data-unit');
             if (!id || !unit) return;
             btn.disabled = true;
-            // Fetch the command data from the row
             var row = btn.closest('tr');
             var cmdCell = row.querySelector('td:nth-child(3)');
             var cmdText = cmdCell ? cmdCell.textContent : '';
-            // Use AJAX to get the original command from the server for safety
             fetch(ajaxurl + "?action=tmon_pending_commands_get", {
                 method: "POST",
                 headers: {'Content-Type': 'application/x-www-form-urlencoded'},
                 body: "id=" + encodeURIComponent(id) + "&_wpnonce=" + nonce
             }).then(r=>r.json()).then(function(res){
                 if (res && res.success && res.command) {
-                    // Now re-insert as a new pending command
+                    // Use device_id from server if present
+                    var unit_id = res.device_id || unit;
                     fetch(ajaxurl + "?action=tmon_pending_commands_requeue", {
                         method: "POST",
                         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                        body: "unit_id=" + encodeURIComponent(unit) + "&command=" + encodeURIComponent(res.command) + "&_wpnonce=" + nonce
+                        body: "unit_id=" + encodeURIComponent(unit_id) + "&command=" + encodeURIComponent(res.command) + "&_wpnonce=" + nonce
                     }).then(r2=>r2.json()).then(function(res2){
                         if (res2 && res2.success) {
                             alert('Command re-queued.');
@@ -140,7 +139,7 @@ add_shortcode('tmon_pending_commands', function($atts){
                         btn.disabled = false;
                     });
                 } else {
-                    alert('Could not fetch command for re-queue.');
+                    alert((res && res.message) ? res.message : 'Could not fetch command for re-queue.');
                     btn.disabled = false;
                 }
             }).catch(function(){
@@ -966,11 +965,13 @@ add_action('wp_ajax_tmon_pending_commands_get', function() {
     if (!isset($_POST['id'])) wp_send_json_error();
     global $wpdb;
     $id = intval($_POST['id']);
-    $row = $wpdb->get_row($wpdb->prepare("SELECT command FROM {$wpdb->prefix}tmon_device_commands WHERE id=%d", $id), ARRAY_A);
+    // Fix: Also select device_id for permission check
+    $row = $wpdb->get_row($wpdb->prepare("SELECT command, device_id FROM {$wpdb->prefix}tmon_device_commands WHERE id=%d", $id), ARRAY_A);
     if ($row && isset($row['command'])) {
-        wp_send_json_success(['command' => $row['command']]);
+        // Optionally: check user permission for this device here if needed
+        wp_send_json_success(['command' => $row['command'], 'device_id' => $row['device_id']]);
     }
-    wp_send_json_error();
+    wp_send_json_error(['message' => 'Command not found']);
 });
 
 // AJAX: Re-queue a pending command (insert as new pending command)
