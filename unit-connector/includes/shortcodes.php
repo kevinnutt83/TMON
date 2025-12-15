@@ -1,54 +1,48 @@
 <?php
 // Shortcode to display pending command list for a unit: [tmon_pending_commands]
 add_shortcode('tmon_pending_commands', function($atts){
-    $devices = tmon_uc_list_feature_devices('sample');
-    if (empty($devices)) {
-        return '<em>No provisioned devices found.</em>';
+    global $wpdb;
+    // Get pending commands with unit info
+    $rows = $wpdb->get_results(
+        "SELECT c.id, c.device_id, d.unit_name, c.command, c.created_at
+         FROM {$wpdb->prefix}tmon_device_commands c
+         LEFT JOIN {$wpdb->prefix}tmon_devices d ON c.device_id = d.unit_id
+         WHERE c.executed_at IS NULL
+         ORDER BY c.created_at ASC
+         LIMIT 100", ARRAY_A);
+
+    if (empty($rows)) {
+        return '<em>No pending commands found.</em>';
     }
-    $default_unit = $devices[0]['unit_id'];
-    $select_id = 'tmon-pending-select-' . wp_generate_password(6, false, false);
-    $table_id = 'tmon-pending-table-' . wp_generate_password(6, false, false);
+
     $ajax_nonce = wp_create_nonce('tmon_pending_cmds');
+    $table_id = 'tmon-pending-table-' . wp_generate_password(6, false, false);
+
     ob_start();
-    echo '<div class="tmon-pending-widget">';
-    echo '<label class="screen-reader-text" for="'.$select_id.'">Device</label>';
-    echo '<select id="'.$select_id.'" class="tmon-pending-select">';
-    foreach ($devices as $d) {
-        $sel = selected($default_unit, $d['unit_id'], false);
-        echo '<option value="'.esc_attr($d['unit_id']).'" '.$sel.'>'.esc_html($d['label']).'</option>';
+    echo '<table id="'.$table_id.'" class="wp-list-table widefat" style="margin-top:10px;">';
+    echo '<thead><tr><th>Unit ID</th><th>Name</th><th>Command</th><th>Created</th><th>Actions</th></tr></thead><tbody>';
+    foreach ($rows as $r) {
+        $cmd = $r['command'];
+        if (is_string($cmd) && ($decoded = json_decode($cmd, true)) && json_last_error() === JSON_ERROR_NONE) {
+            $cmd = '<pre style="margin:0;font-size:13px;">'.esc_html(json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)).'</pre>';
+        } else {
+            $cmd = '<pre style="margin:0;font-size:13px;">'.esc_html($cmd).'</pre>';
+        }
+        echo '<tr>'
+            .'<td>'.esc_html($r['device_id']).'</td>'
+            .'<td>'.esc_html($r['unit_name']).'</td>'
+            .'<td>'.$cmd.'</td>'
+            .'<td>'.esc_html($r['created_at']).'</td>'
+            .'<td><button class="button button-small tmon-cmd-del" data-id="'.intval($r['id']).'">Delete</button></td>'
+            .'</tr>';
     }
-    echo '</select>';
-    echo '<table id="'.$table_id.'" class="wp-list-table widefat" style="margin-top:10px;"><thead><tr><th>ID</th><th>Command</th><th>Created</th><th>Actions</th></tr></thead><tbody><tr><td colspan="4"><em>Loading...</em></td></tr></tbody></table>';
+    echo '</tbody></table>';
     ?>
     <script>
     (function(){
-        var select = document.getElementById("<?php echo esc_js($select_id); ?>");
-        var table = document.getElementById("<?php echo esc_js($table_id); ?>").getElementsByTagName('tbody')[0];
+        var table = document.getElementById("<?php echo esc_js($table_id); ?>");
         var ajaxurl = window.ajaxurl || "<?php echo admin_url('admin-ajax.php'); ?>";
         var nonce = "<?php echo esc_js($ajax_nonce); ?>";
-        function render(unit){
-            table.innerHTML = '<tr><td colspan="4"><em>Loading...</em></td></tr>';
-            fetch(ajaxurl + "?action=tmon_pending_commands_list&unit_id=" + encodeURIComponent(unit) + "&_wpnonce=" + nonce)
-            .then(r=>r.json()).then(function(data){
-                if (!data.success || !Array.isArray(data.commands) || !data.commands.length) {
-                    table.innerHTML = '<tr><td colspan="4"><em>No pending commands.</em></td></tr>';
-                    return;
-                }
-                table.innerHTML = data.commands.map(function(cmd){
-                    return '<tr>'
-                        + '<td>' + cmd.id + '</td>'
-                        + '<td><pre style="margin:0;font-size:13px;">' + (typeof cmd.command === "string" ? cmd.command : JSON.stringify(cmd.command)) + '</pre></td>'
-                        + '<td>' + cmd.created_at + '</td>'
-                        + '<td><button class="button button-small tmon-cmd-del" data-id="' + cmd.id + '">Delete</button></td>'
-                        + '</tr>';
-                }).join('');
-            }).catch(function(){
-                table.innerHTML = '<tr><td colspan="4"><em>Error loading commands.</em></td></tr>';
-            });
-        }
-        select.addEventListener('change', function(){ render(select.value); });
-        render(select.value);
-
         table.addEventListener('click', function(ev){
             var btn = ev.target.closest('.tmon-cmd-del');
             if (!btn) return;
@@ -61,7 +55,7 @@ add_shortcode('tmon_pending_commands', function($atts){
                 body: "id=" + encodeURIComponent(id) + "&_wpnonce=" + nonce
             }).then(r=>r.json()).then(function(res){
                 if (res && res.success) {
-                    render(select.value);
+                    btn.closest('tr').remove();
                 } else {
                     alert('Delete failed');
                     btn.disabled = false;
@@ -74,7 +68,6 @@ add_shortcode('tmon_pending_commands', function($atts){
     })();
     </script>
     <?php
-    echo '</div>';
     return ob_get_clean();
 });
 
@@ -90,6 +83,20 @@ add_action('wp_dashboard_setup', function(){
         if (empty($rows)) echo '<tr><td colspan="2"><em>No pending commands</em></td></tr>';
         echo '</tbody></table>';
     });
+});
+
+// [tmon_pending_commands_summary]
+// Outputs a table summarizing pending commands per device, similar to the dashboard widget
+add_shortcode('tmon_pending_commands_summary', function($atts){
+    global $wpdb;
+    $rows = $wpdb->get_results("SELECT device_id, COUNT(*) as pending FROM {$wpdb->prefix}tmon_device_commands WHERE executed_at IS NULL GROUP BY device_id ORDER BY pending DESC LIMIT 10", ARRAY_A);
+    $out = '<table class="widefat"><thead><tr><th>Unit</th><th>Pending</th></tr></thead><tbody>';
+    foreach ($rows as $r) {
+        $out .= '<tr><td>'.esc_html($r['device_id']).'</td><td>'.intval($r['pending']).'</td></tr>';
+    }
+    if (empty($rows)) $out .= '<tr><td colspan="2"><em>No pending commands</em></td></tr>';
+    $out .= '</tbody></table>';
+    return $out;
 });
 
 // Ensure ABSPATH is defined
