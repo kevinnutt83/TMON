@@ -2,6 +2,12 @@
 // Shortcode to display pending command list for a unit: [tmon_pending_commands]
 add_shortcode('tmon_pending_commands', function($atts){
     global $wpdb;
+    // Get all units for dropdown
+    $units = $wpdb->get_results("SELECT unit_id, unit_name FROM {$wpdb->prefix}tmon_devices ORDER BY unit_name ASC, unit_id ASC", ARRAY_A);
+    $unit_map = [];
+    foreach ($units as $u) {
+        $unit_map[$u['unit_id']] = $u['unit_name'];
+    }
     // Get pending commands with unit info
     $rows = $wpdb->get_results(
         "SELECT c.id, c.device_id, d.unit_name, c.command, c.created_at
@@ -17,8 +23,19 @@ add_shortcode('tmon_pending_commands', function($atts){
 
     $ajax_nonce = wp_create_nonce('tmon_pending_cmds');
     $table_id = 'tmon-pending-table-' . wp_generate_password(6, false, false);
+    $select_id = 'tmon-pending-unit-select-' . wp_generate_password(6, false, false);
 
     ob_start();
+    // Dropdown filter
+    echo '<label for="'.$select_id.'" style="margin-right:8px;">Unit:</label>';
+    echo '<select id="'.$select_id.'" style="margin-bottom:10px;">';
+    echo '<option value="">View All</option>';
+    foreach ($unit_map as $uid => $uname) {
+        $label = $uname ? ($uname . ' (' . $uid . ')') : $uid;
+        echo '<option value="'.esc_attr($uid).'">'.esc_html($label).'</option>';
+    }
+    echo '</select>';
+
     echo '<table id="'.$table_id.'" class="wp-list-table widefat" style="margin-top:10px;">';
     echo '<thead><tr><th>Unit ID</th><th>Name</th><th>Command</th><th>Created</th><th>Actions</th></tr></thead><tbody>';
     foreach ($rows as $r) {
@@ -28,7 +45,7 @@ add_shortcode('tmon_pending_commands', function($atts){
         } else {
             $cmd = '<pre style="margin:0;font-size:13px;">'.esc_html($cmd).'</pre>';
         }
-        echo '<tr>'
+        echo '<tr data-unit="'.esc_attr($r['device_id']).'">'
             .'<td>'.esc_html($r['device_id']).'</td>'
             .'<td>'.esc_html($r['unit_name']).'</td>'
             .'<td>'.$cmd.'</td>'
@@ -41,8 +58,21 @@ add_shortcode('tmon_pending_commands', function($atts){
     <script>
     (function(){
         var table = document.getElementById("<?php echo esc_js($table_id); ?>");
+        var select = document.getElementById("<?php echo esc_js($select_id); ?>");
         var ajaxurl = window.ajaxurl || "<?php echo admin_url('admin-ajax.php'); ?>";
         var nonce = "<?php echo esc_js($ajax_nonce); ?>";
+        // Filtering logic
+        select.addEventListener('change', function(){
+            var val = select.value;
+            Array.from(table.tBodies[0].rows).forEach(function(row){
+                if (!val || row.getAttribute('data-unit') === val) {
+                    row.style.display = '';
+                } else {
+                    row.style.display = 'none';
+                }
+            });
+        });
+        // Delete logic
         table.addEventListener('click', function(ev){
             var btn = ev.target.closest('.tmon-cmd-del');
             if (!btn) return;
@@ -247,8 +277,8 @@ add_shortcode('tmon_device_status', function($atts) {
     $now = current_time('timestamp', 1); // Always UTC
     $nonce = wp_create_nonce('tmon_uc_relay');
     foreach ($rows as $r) {
-        // Parse DB timestamp as UTC and compute age
-        $last = $r['last_seen'] ? strtotime($r['last_seen'] . ' UTC') : 0;
+        // FIX: Use DB timestamp as-is (assume UTC), do not append ' UTC'
+        $last = $r['last_seen'] ? strtotime($r['last_seen']) : 0;
         if (!$last) {
             $age = PHP_INT_MAX;
             $cls = 'tmon-red';
@@ -366,107 +396,156 @@ add_shortcode('tmon_device_history', function($atts) {
     if (empty($devices)) {
         return '<em>No provisioned devices found for this feature.</em>';
     }
-
     $default_unit = $devices[0]['unit_id'];
-
     $select_id = 'tmon-history-select-' . wp_generate_password(6, false, false);
     $canvas_id = 'tmon-history-chart-' . wp_generate_password(8, false, false);
+    $hours_id = 'tmon-history-hours-' . wp_generate_password(6, false, false);
+    $csv_btn_id = 'tmon-history-csv-' . wp_generate_password(6, false, false);
     $ajax_root = esc_js(rest_url());
     $voltage_min = get_option('tmon_uc_history_voltage_min', '');
     $voltage_max = get_option('tmon_uc_history_voltage_max', '');
     $y4min = ($voltage_min !== '') ? floatval($voltage_min) : 'null';
     $y4max = ($voltage_max !== '') ? floatval($voltage_max) : 'null';
+
+    // Hours filter options
+    $hour_opts = [
+        1=>'1h',4=>'4h',8=>'8h',12=>'12h',24=>'24h',48=>'48h',72=>'72h',96=>'96h',
+        168=>'7d',336=>'14d',504=>'21d',720=>'1mo',2160=>'3mo',4320=>'6mo',8640=>'12mo','yoy'=>'YoY'
+    ];
+
     ob_start();
     echo '<div class="tmon-history-widget">';
     echo '<label class="screen-reader-text" for="'.$select_id.'">Device</label>';
-    echo '<select id="'.$select_id.'" class="tmon-history-select" data-hours="'.$hours.'" data-canvas="'.$canvas_id.'">';
+    echo '<select id="'.$select_id.'" class="tmon-history-select" data-canvas="'.$canvas_id.'">';
     foreach ($devices as $d) {
         $sel = selected($default_unit, $d['unit_id'], false);
         echo '<option value="'.esc_attr($d['unit_id']).'" '.$sel.'>'.esc_html($d['label']).'</option>';
     }
-    echo '</select>';
+    echo '</select> ';
+    // Hours filter dropdown
+    echo '<label for="'.$hours_id.'" style="margin-left:8px;">Period:</label>';
+    echo '<select id="'.$hours_id.'" style="margin-bottom:10px;">';
+    foreach ($hour_opts as $hval => $hlabel) {
+        $sel = ($hval == $hours) ? 'selected' : '';
+        echo '<option value="'.esc_attr($hval).'" '.$sel.'>'.esc_html($hlabel).'</option>';
+    }
+    echo '</select> ';
+    // Export CSV button
+    echo '<button id="'.$csv_btn_id.'" type="button" class="button" style="margin-left:8px;">Export CSV</button>';
     echo '<canvas id="'.$canvas_id.'" height="140"></canvas>';
     echo '<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>';
-    $script = <<<'JS'
-(function(){
-    const select = document.getElementById("%SELECT_ID%");
-    const external = document.getElementById("tmon-unit-picker");
-    const canvas = document.getElementById(select.getAttribute("data-canvas"));
-    if(!select || !canvas) return;
-    const ctx = canvas.getContext("2d");
-    const base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : "%AJAX_ROOT%".replace(/\/$/, "");
-    let chart = null;
-    function render(unit){
-        const hrs = select.getAttribute("data-hours") || "%HOURS%";
-        const url = base + "/tmon/v1/device/history?unit_id=" + encodeURIComponent(unit) + "&hours=" + encodeURIComponent(hrs);
-        fetch(url).then(r=>r.json()).then(data=>{
-            const pts = Array.isArray(data.points) ? data.points : [];
-            const labels = pts.map(p=>p.t);
-            const temp = pts.map(p=>p.temp_f);
-            const humid = pts.map(p=>p.humid);
-            const bar = pts.map(p=>p.bar);
-            const volt = pts.map(p=>p.volt);
-            const enabledRelays = Array.isArray(data.enabled_relays) ? data.enabled_relays : [];
-            const relayColors = ["#6c757d", "#95a5a6", "#34495e", "#7f8c8d", "#95a5a6", "#2d3436", "#636e72", "#99a3ad"];
-            const relayDatasets = enabledRelays.map(function(num, idx){
-                const key = "relay" + num + "_on";
-                const values = pts.map(function(p){ return (p.relay && Object.prototype.hasOwnProperty.call(p.relay, key)) ? Number(p.relay[key]) : null; });
-                return {label: "Relay " + num, data: values, borderColor: relayColors[idx % relayColors.length], borderDash: [6,3], fill:false, yAxisID: "relay", stepped:true};
-            });
-            const cfg = {
-                type: "line",
-                data: {
-                    labels: labels,
-                    datasets: [{label: "Temp (F)", data: temp, borderColor: "#e67e22", fill:false, yAxisID: "y1"},
-                        {label: "Humidity (%)", data: humid, borderColor: "#3498db", fill:false, yAxisID: "y2"},
-                        {label: "Pressure (hPa)", data: bar, borderColor: "#2ecc71", fill:false, yAxisID: "y3"},
-                        {label: "Voltage (V)", data: volt, borderColor: "#9b59b6", fill:false, yAxisID: "y4"}].concat(relayDatasets)
-                },
-                options: {
-                    responsive: true,
-                    interaction: { mode: "index", intersect: false },
-                    stacked: false,
-                    plugins: {
-                        legend: {
-                            position: "top",
-                            onClick: (evt, item, legend) => {
-                                const ci = legend.chart;
-                                const index = item.datasetIndex;
-                                const visible = ci.isDatasetVisible(index);
-                                ci.setDatasetVisibility(index, !visible);
-                                ci.update();
-                            }
-                        }
+    ?>
+    <script>
+    (function(){
+        const select = document.getElementById("<?php echo esc_js($select_id); ?>");
+        const hoursSel = document.getElementById("<?php echo esc_js($hours_id); ?>");
+        const csvBtn = document.getElementById("<?php echo esc_js($csv_btn_id); ?>");
+        const canvas = document.getElementById(select.getAttribute("data-canvas"));
+        if(!select || !canvas) return;
+        const ctx = canvas.getContext("2d");
+        const base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : "<?php echo $ajax_root; ?>".replace(/\/$/, "");
+        let chart = null;
+        let lastData = null;
+        function render(unit, hours){
+            let url;
+            if (hours === 'yoy') {
+                url = base + "/tmon/v1/device/history-yoy?unit_id=" + encodeURIComponent(unit);
+            } else {
+                url = base + "/tmon/v1/device/history?unit_id=" + encodeURIComponent(unit) + "&hours=" + encodeURIComponent(hours);
+            }
+            fetch(url).then(r=>r.json()).then(data=>{
+                lastData = data;
+                const pts = Array.isArray(data.points) ? data.points : [];
+                const labels = pts.map(p=>p.t);
+                const temp = pts.map(p=>p.temp_f);
+                const humid = pts.map(p=>p.humid);
+                const bar = pts.map(p=>p.bar);
+                const volt = pts.map(p=>p.volt);
+                // Relay state data
+                const enabledRelays = Array.isArray(data.enabled_relays) ? data.enabled_relays : [];
+                const relayColors = ["#6c757d", "#95a5a6", "#34495e", "#7f8c8d", "#95a5a6", "#2d3436", "#636e72", "#99a3ad"];
+                const relayDatasets = enabledRelays.map(function(num, idx){
+                    const key = "relay" + num + "_on";
+                    const values = pts.map(function(p){ return (p.relay && Object.prototype.hasOwnProperty.call(p.relay, key)) ? Number(p.relay[key]) : null; });
+                    return {label: "Relay " + num, data: values, borderColor: relayColors[idx % relayColors.length], borderDash: [6,3], fill:false, yAxisID: "relay", stepped:true, hidden:false};
+                });
+                const cfg = {
+                    type: "line",
+                    data: {
+                        labels: labels,
+                        datasets: [
+                            {label: "Temp (F)", data: temp, borderColor: "#e67e22", fill:false, yAxisID: "y1"},
+                            {label: "Humidity (%)", data: humid, borderColor: "#3498db", fill:false, yAxisID: "y2"},
+                            {label: "Pressure (hPa)", data: bar, borderColor: "#2ecc71", fill:false, yAxisID: "y3"},
+                            {label: "Voltage (V)", data: volt, borderColor: "#9b59b6", fill:false, yAxisID: "y4"}
+                        ].concat(relayDatasets)
                     },
-                    scales: {
-                        y1: { type: "linear", position: "left" },
-                        y2: { type: "linear", position: "right", grid: { drawOnChartArea: false } },
-                        y3: { type: "linear", position: "right", grid: { drawOnChartArea: false } },
-                        y4: { type: "linear", position: "left", grid: { drawOnChartArea: false }, suggestedMin: %Y4MIN%, suggestedMax: %Y4MAX% },
-                        relay: { type: "linear", position: "right", min: -0.1, max: 1.1, grid: { drawOnChartArea: false }, ticks: { stepSize: 1, callback: v => v ? "On" : "Off" } }
+                    options: {
+                        responsive: true,
+                        interaction: { mode: "index", intersect: false },
+                        stacked: false,
+                        plugins: {
+                            legend: {
+                                position: "top",
+                                onClick: (evt, item, legend) => {
+                                    const ci = legend.chart;
+                                    const index = item.datasetIndex;
+                                    const visible = ci.isDatasetVisible(index);
+                                    ci.setDatasetVisibility(index, !visible);
+                                    ci.update();
+                                }
+                            }
+                        },
+                        scales: {
+                            y1: { type: "linear", position: "left" },
+                            y2: { type: "linear", position: "right", grid: { drawOnChartArea: false } },
+                            y3: { type: "linear", position: "right", grid: { drawOnChartArea: false } },
+                            y4: { type: "linear", position: "left", grid: { drawOnChartArea: false }, suggestedMin: <?php echo $y4min; ?>, suggestedMax: <?php echo $y4max; ?> },
+                            relay: { type: "linear", position: "right", min: -0.1, max: 1.1, grid: { drawOnChartArea: false }, ticks: { stepSize: 1, callback: v => v ? "On" : "Off" } }
+                        }
                     }
-                }
-            };
-            if (chart) { chart.destroy(); }
-            chart = new Chart(ctx, cfg);
-        }).catch(err=>{ console.error("TMON history fetch error", err); });
-    }
-    if (external) { select.style.display = "none"; }
-    const activeSelect = external || select;
-    activeSelect.addEventListener("change", function(ev){ render(ev.target.value); });
-    render(activeSelect.value);
-    const refreshMs = %REFRESH_MS%;
-    if (refreshMs > 0) {
-        setInterval(function(){ render(activeSelect.value); }, refreshMs);
-    }
-})();
-JS;
-    $script = str_replace(
-        ['%SELECT_ID%', '%AJAX_ROOT%', '%HOURS%', '%Y4MIN%', '%Y4MAX%', '%REFRESH_MS%'],
-        [esc_js($select_id), esc_js(rest_url()), $hours, $y4min, $y4max, ($refresh*1000)],
-        $script
-    );
-    echo '<script>'.$script.'</script>';
+                };
+                if (chart) { chart.destroy(); }
+                chart = new Chart(ctx, cfg);
+            }).catch(err=>{ console.error("TMON history fetch error", err); });
+        }
+        function getCurrentUnit() { return select.value; }
+        function getCurrentHours() { return hoursSel.value; }
+        select.addEventListener("change", function(){ render(getCurrentUnit(), getCurrentHours()); });
+        hoursSel.addEventListener("change", function(){ render(getCurrentUnit(), getCurrentHours()); });
+        render(getCurrentUnit(), getCurrentHours());
+        // CSV export
+        csvBtn.addEventListener('click', function(){
+            if (!lastData || !Array.isArray(lastData.points) || !lastData.points.length) {
+                alert('No data to export.');
+                return;
+            }
+            const pts = lastData.points;
+            // Collect all keys
+            let keys = new Set();
+            pts.forEach(p => Object.keys(p).forEach(k => keys.add(k)));
+            keys = Array.from(keys);
+            let csv = keys.join(',') + '\n';
+            pts.forEach(p => {
+                csv += keys.map(k => (p[k] !== undefined ? JSON.stringify(p[k]) : '')).join(',') + '\n';
+            });
+            const blob = new Blob([csv], {type: 'text/csv'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'tmon_history_' + getCurrentUnit() + '_' + getCurrentHours() + '.csv';
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(()=>{ document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+        });
+        // Optional: auto-refresh
+        const refreshMs = <?php echo ($refresh*1000); ?>;
+        if (refreshMs > 0) {
+            setInterval(function(){ render(getCurrentUnit(), getCurrentHours()); }, refreshMs);
+        }
+    })();
+    </script>
+    <?php
     echo '</div>';
     return ob_get_clean();
 });
