@@ -25,19 +25,23 @@ add_action('admin_post_tmon_create_starter_page', function(){
     if (!current_user_can('manage_options')) { wp_die('Insufficient permissions'); }
     check_admin_referer('tmon_create_starter_page');
 
-    $content = '';
-    $content .= "\n<h2>Device Overview</h2>\n";
-    $content .= "[tmon_active_units]\n\n";
-    $content .= "[tmon_device_status]\n";
-    $content .= "<p><em>Tip: If relays are enabled on a unit (via firmware settings), you'll see per-relay controls here. You can turn them on/off immediately or schedule with a runtime in minutes.</em></p>\n\n";
-    $content .= "<h3>Known IDs</h3>\n";
-    $content .= "[tmon_known_ids]\n\n";
-    $content .= "\n<h2>Device Details</h2>\n";
-    $content .= "[tmon_device_sdata refresh_s=\"45\"]\n\n";
-    $content .= "[tmon_device_history hours=\"24\" refresh_s=\"60\"]\n";
-    $content .= "<p><em>Use the dropdown to switch units. Both widgets share the same picker when you have an element with id tmon-unit-picker on the page.</em></p>\n\n";
-    $content .= "\n<h2>Claim a Device</h2>\n";
-    $content .= "[tmon_claim_device]\n";
+    // Dynamically get all TMON shortcodes from shortcodes.php
+    $shortcodes = array();
+    global $shortcode_tags;
+    foreach ($shortcode_tags as $tag => $func) {
+        if (strpos($tag, 'tmon_') === 0) {
+            $shortcodes[] = $tag;
+        }
+    }
+    // Remove duplicates, just in case
+    $shortcodes = array_unique($shortcodes);
+
+    $content = "<h2>TMON Shortcodes Overview</h2>\n";
+    $content .= "<p>This page lists all available TMON shortcodes currently registered in the system.</p>\n";
+    foreach ($shortcodes as $shortcode) {
+        // $content .= "<h3><strong>[$shortcode]</strong></h3>\n";
+        $content .= "[$shortcode]\n\n";
+    }
 
     $starter_id = intval(get_option('tmon_starter_page_id', 0));
     $postarr = array(
