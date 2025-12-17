@@ -1,4 +1,4 @@
-# Firmware Version: v2.00j
+# Firmware Version: v2.03.0
 import ujson
 import uasyncio as asyncio
 import os

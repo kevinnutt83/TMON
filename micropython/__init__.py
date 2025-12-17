@@ -1,5 +1,5 @@
 __all__ = ['provision', 'firmware_updater', 'settings']
-__version__ = "0.1.0"
+__version__ = "0.2.3"
 
 # Provide convenience import aliases (useful in host Python tests)
 from . import provision as provision

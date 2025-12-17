@@ -1,5 +1,5 @@
 """Relay control with safety caps and runtime telemetry.
-Firmware Version: v2.00j
+Firmware Version: v2.03.0
 """
 import uasyncio as asyncio
 import machine

@@ -1,4 +1,4 @@
-# Firmware Version: 2.0.0h
+# Firmware Version: v2.03.0
 from utils import debug_print
 
 async def frostwatchCheck():
