@@ -922,15 +922,28 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
         $log_dir = WP_CONTENT_DIR . '/tmon-field-logs';
         if (is_dir($log_dir) && is_readable($log_dir)) {
             $safe_unit = preg_replace('/[^A-Za-z0-9._-]/', '', $unit_id);
-            $files = glob($log_dir . '/*' . $safe_unit . '*');
-            if (!empty($files)) {
-                // prefer .txt files first (case-insensitive), then newest-first among equal preference
-                usort($files, function($a, $b) {
-                    $aTxt = preg_match('/\.txt$/i', $a) ? 0 : 1;
-                    $bTxt = preg_match('/\.txt$/i', $b) ? 0 : 1;
-                    if ($aTxt !== $bTxt) return $aTxt - $bTxt;
-                    return filemtime($b) - filemtime($a);
-                });
+            $files = [];
+            // Prefer files named "field_data_unit-<unit>*" first (e.g. field_data_unit-3pd8sj.txt),
+            // then append any other files that contain the unit id.
+            $prefixPattern = $log_dir . '/field_data_unit-' . $safe_unit . '*';
+            $prefFiles = glob($prefixPattern);
+            if (!empty($prefFiles)) {
+                $files = array_merge($files, $prefFiles);
+            }
+            $general = glob($log_dir . '/*' . $safe_unit . '*');
+            if (!empty($general)) {
+                foreach ($general as $f) {
+                    if (!in_array($f, $files)) $files[] = $f;
+                }
+            }
+             if (!empty($files)) {
+                 // prefer .txt files first (case-insensitive), then newest-first among equal preference
+                 usort($files, function($a, $b) {
+                     $aTxt = preg_match('/\.txt$/i', $a) ? 0 : 1;
+                     $bTxt = preg_match('/\.txt$/i', $b) ? 0 : 1;
+                     if ($aTxt !== $bTxt) return $aTxt - $bTxt;
+                     return filemtime($b) - filemtime($a);
+                 });
 
                 // helper parser for .txt content: try JSON, embedded JSON, then key=value/key: value lines
                 $parse_text_settings = function($content) {
