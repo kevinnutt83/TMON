@@ -924,54 +924,125 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
             $safe_unit = preg_replace('/[^A-Za-z0-9._-]/', '', $unit_id);
             $files = glob($log_dir . '/*' . $safe_unit . '*');
             if (!empty($files)) {
-                usort($files, function($a, $b) { return filemtime($b) - filemtime($a); });
-                foreach ($files as $f) {
-                    $lines = @file($f, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-                    if (!$lines) {
-                        // If file() failed, try whole-file decode/regex
-                        $content = @file_get_contents($f);
-                        if ($content === false) continue;
-                        $tmp = json_decode($content, true);
-                        if (json_last_error() === JSON_ERROR_NONE && is_array($tmp)) { $staged = $tmp; break; }
-                        // extract last JSON object in file
-                        if (preg_match_all('/\{[\s\S]*?\}/', $content, $matches)) {
-                            foreach (array_reverse($matches[0]) as $part) {
-                                $tmp2 = json_decode($part, true);
-                                if (json_last_error() === JSON_ERROR_NONE && is_array($tmp2)) {
-                                    // Prefer explicit settings key
-                                    if (isset($tmp2['settings']) && is_array($tmp2['settings'])) {
-                                        $staged = $tmp2['settings']; break 3;
-                                    }
-                                    $staged = $tmp2; break 3;
+                // prefer .txt files first (case-insensitive), then newest-first among equal preference
+                usort($files, function($a, $b) {
+                    $aTxt = preg_match('/\.txt$/i', $a) ? 0 : 1;
+                    $bTxt = preg_match('/\.txt$/i', $b) ? 0 : 1;
+                    if ($aTxt !== $bTxt) return $aTxt - $bTxt;
+                    return filemtime($b) - filemtime($a);
+                });
+
+                // helper parser for .txt content: try JSON, embedded JSON, then key=value/key: value lines
+                $parse_text_settings = function($content) {
+                    // try whole-file JSON
+                    $tmp = json_decode($content, true);
+                    if (json_last_error() === JSON_ERROR_NONE && is_array($tmp)) return $tmp;
+
+                    // extract last JSON object in file (if present)
+                    if (preg_match_all('/\{[\s\S]*?\}/', $content, $matches)) {
+                        foreach (array_reverse($matches[0]) as $part) {
+                            $tmp2 = json_decode($part, true);
+                            if (json_last_error() === JSON_ERROR_NONE && is_array($tmp2)) return $tmp2;
+                        }
+                    }
+
+                    // fallback: parse simple key=value or key: value lines into associative array
+                    $lines = preg_split('/\r\n|\r|\n/', $content);
+                    $kv = [];
+                    foreach ($lines as $ln) {
+                        $ln = trim($ln);
+                        if ($ln === '' || strpos($ln, '#') === 0) continue;
+                        if (preg_match('/^\s*([A-Za-z0-9_.-]+)\s*[:=]\s*(.+)$/', $ln, $m)) {
+                            $k = $m[1];
+                            $v = trim($m[2]);
+                            // strip surrounding quotes
+                            if ((substr($v,0,1) === '"' && substr($v,-1) === '"') || (substr($v,0,1) === "'" && substr($v,-1) === "'")) {
+                                $v = substr($v,1,-1);
+                            }
+                            // cast numbers and booleans where obvious
+                            if (is_numeric($v)) {
+                                $v = $v + 0;
+                            } else {
+                                $lv = strtolower($v);
+                                if (in_array($lv, ['true','false','on','off','yes','no','1','0'], true)) {
+                                    if (in_array($lv, ['true','on','yes','1'], true)) $v = true;
+                                    else $v = false;
                                 }
+                            }
+                            $kv[$k] = $v;
+                        }
+                    }
+                    return !empty($kv) ? $kv : null;
+                };
+
+                foreach ($files as $f) {
+                    // prefer to use .txt files (we already sorted such that .txt come first)
+                    $ext = pathinfo($f, PATHINFO_EXTENSION);
+
+                    // try to read file lines (preferred) otherwise whole content
+                    $lines = @file($f, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+                    if ($lines) {
+                        // iterate lines in reverse (newest-first)
+                        for ($i = count($lines) - 1; $i >= 0; $i--) {
+                            $ln = trim($lines[$i]);
+                            if ($ln === '') continue;
+
+                            // If this line is JSON, decode it
+                            $obj = null;
+                            if (strpos($ln, '{') !== false) {
+                                $obj = json_decode($ln, true);
+                                if (json_last_error() !== JSON_ERROR_NONE) {
+                                    if (preg_match('/\{[\s\S]*\}/', $ln, $m)) {
+                                        $obj = json_decode($m[0], true);
+                                        if (json_last_error() !== JSON_ERROR_NONE) $obj = null;
+                                    } else {
+                                        $obj = null;
+                                    }
+                                }
+                            }
+
+                            if (is_array($obj)) {
+                                if (isset($obj['settings']) && is_array($obj['settings'])) {
+                                    $staged = $obj['settings']; break 3;
+                                }
+                                // top-level object that looks like settings
+                                $scalar_count = 0;
+                                foreach ($obj as $k=>$v) { if (!is_array($v) && !is_object($v)) $scalar_count++; }
+                                if ($scalar_count >= 1 && count($obj) <= 200) { $staged = $obj; break 3; }
+                                continue;
+                            }
+
+                            // If file is .txt, attempt to parse key/value lines
+                            if (strcasecmp($ext, 'txt') === 0 || preg_match('/\.txt$/i', $f)) {
+                                $parsed = $parse_text_settings($ln);
+                                if (is_array($parsed)) { $staged = $parsed; break 3; }
                             }
                         }
                         continue;
                     }
-                    // iterate lines in reverse (newest first)
-                    for ($i = count($lines) - 1; $i >= 0; $i--) {
-                        $ln = trim($lines[$i]);
-                        if ($ln === '') continue;
-                        $obj = json_decode($ln, true);
-                        if (json_last_error() !== JSON_ERROR_NONE) {
-                            // try to extract json object from line
-                            if (preg_match('/\{[\s\S]*\}/', $ln, $m)) {
-                                $obj = json_decode($m[0], true);
-                                if (json_last_error() !== JSON_ERROR_NONE) continue;
-                            } else {
-                                continue;
+
+                    // If file() failed, fall back to whole-file content handling
+                    $content = @file_get_contents($f);
+                    if ($content === false) continue;
+
+                    // Give .txt parser first crack
+                    if (preg_match('/\.txt$/i', $f)) {
+                        $parsed = $parse_text_settings($content);
+                        if (is_array($parsed)) { $staged = $parsed; break; }
+                    }
+
+                    // existing heuristic: whole-file JSON or embedded JSON
+                    $tmp = json_decode($content, true);
+                    if (json_last_error() === JSON_ERROR_NONE && is_array($tmp)) { $staged = $tmp; break; }
+                    if (preg_match_all('/\{[\s\S]*?\}/', $content, $matches)) {
+                        foreach (array_reverse($matches[0]) as $part) {
+                            $tmp2 = json_decode($part, true);
+                            if (json_last_error() === JSON_ERROR_NONE && is_array($tmp2)) {
+                                if (isset($tmp2['settings']) && is_array($tmp2['settings'])) {
+                                    $staged = $tmp2['settings']; break 3;
+                                }
+                                $staged = $tmp2; break 3;
                             }
-                        }
-                        if (!is_array($obj)) continue;
-                        // If this envelope contains 'settings' object, prefer it
-                        if (isset($obj['settings']) && is_array($obj['settings'])) {
-                            $staged = $obj['settings']; break 3;
-                        }
-                        // If top-level object looks like settings (many scalar keys), accept it
-                        $scalar_count = 0;
-                        foreach ($obj as $k=>$v) { if (!is_array($v) && !is_object($v)) $scalar_count++; }
-                        if ($scalar_count >= 1 && count($obj) <= 200) { // heuristic
-                            $staged = $obj; break 3;
                         }
                     }
                 }
