@@ -210,3 +210,71 @@ add_action('tmon_uc_command_requeue_cron', function(){
 		$wpdb->query("UPDATE {$t} SET status='queued' WHERE status='claimed' AND updated_at < (NOW() - INTERVAL 5 MINUTE)");
 	}
 });
+
+// Device-facing: staged/applied settings + pending commands for a unit (used by MicroPython devices)
+add_action('rest_api_init', function() {
+	register_rest_route('tmon/v1', '/device/staged-settings', [
+		'methods' => 'GET',
+		'permission_callback' => '__return_true',
+		'callback' => function(WP_REST_Request $req) {
+			global $wpdb;
+			$unit = sanitize_text_field($req->get_param('unit_id') ?? $req->get_param('unit') ?? '');
+			if (!$unit) return rest_ensure_response(['status'=>'error','message'=>'unit_id required'], 400);
+
+			// Applied settings: try uc mirror, then devices table
+			$applied = [];
+			$staged = [];
+			$row = $wpdb->get_row($wpdb->prepare("SELECT settings FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s", $unit), ARRAY_A);
+			if ($row && !empty($row['settings'])) {
+				$tmp = json_decode($row['settings'], true);
+				if (json_last_error() === JSON_ERROR_NONE && is_array($tmp)) $applied = $tmp;
+			}
+			// UC-staged store (if present)
+			$store = get_option('tmon_uc_device_settings', []);
+			if (is_array($store) && isset($store[$unit]) && !empty($store[$unit]['settings'])) {
+				$maybe = $store[$unit]['settings'];
+				if (is_string($maybe)) {
+					$tmp = json_decode($maybe, true);
+					if (json_last_error() === JSON_ERROR_NONE && is_array($tmp)) $staged = $tmp;
+				} elseif (is_array($maybe)) {
+					$staged = $maybe;
+				}
+			}
+			// Fallback: staged in UC mirror table (tmon_uc_devices)
+			$uc_table = $wpdb->prefix.'tmon_uc_devices';
+			if (empty($staged) && $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $uc_table))) {
+				$row2 = $wpdb->get_row($wpdb->prepare("SELECT staged_settings FROM {$uc_table} WHERE unit_id=%s LIMIT 1", $unit), ARRAY_A);
+				if ($row2 && !empty($row2['staged_settings'])) {
+					$tmp = json_decode($row2['staged_settings'], true);
+					if (json_last_error() === JSON_ERROR_NONE && is_array($tmp)) $staged = $tmp;
+				}
+			}
+
+			// Pending commands for device
+			$cmds = [];
+			$rows = $wpdb->get_results($wpdb->prepare(
+				"SELECT id, command, params, created_at FROM {$wpdb->prefix}tmon_device_commands WHERE device_id = %s AND (executed_at IS NULL OR executed_at = '' OR executed_at = '0000-00-00 00:00:00') ORDER BY created_at ASC",
+				$unit
+			), ARRAY_A);
+			if (is_array($rows)) {
+				foreach ($rows as $r) {
+					$params = $r['params'] ?? '';
+					$dec = $params;
+					if (is_string($params)) {
+						$try = json_decode($params, true);
+						if (json_last_error() === JSON_ERROR_NONE) $dec = $try;
+					}
+					$cmds[] = ['id'=>$r['id'],'command'=>$r['command'],'params'=>$dec,'created_at'=>$r['created_at']];
+				}
+			}
+
+			return rest_ensure_response([
+				'status'=>'ok',
+				'unit_id'=>$unit,
+				'applied'=>$applied,
+				'staged'=>$staged,
+				'commands'=>$cmds
+			]);
+		}
+	]);
+});

@@ -54,6 +54,16 @@ async def register_with_wp():
     if not WORDPRESS_API_URL:
         await debug_print('No WordPress API URL set', 'ERROR')
         return
+    # Build settings snapshot (persistent settings only)
+    settings_snapshot = {}
+    try:
+        import settings as _s
+        for k in dir(_s):
+            if k.startswith('__') or callable(getattr(_s, k)) or k in ('LOG_DIR',):
+                continue
+            settings_snapshot[k] = getattr(_s, k)
+    except Exception:
+        settings_snapshot = {}
     data = {
         'unit_id': settings.UNIT_ID,
         'unit_name': settings.UNIT_Name,
@@ -64,6 +74,7 @@ async def register_with_wp():
         'machine_id': get_machine_id() or '',
         'firmware_version': getattr(settings, 'FIRMWARE_VERSION', ''),
         'node_type': getattr(settings, 'NODE_TYPE', ''),
+        'settings_snapshot': settings_snapshot  # NEW: send persistent settings on check-in
     }
     try:
         headers = {'Content-Type': 'application/json'}
@@ -73,7 +84,6 @@ async def register_with_wp():
             method='POST', headers=headers, data=payload
         )
         if response:
-            # Try to parse JSON cleanly
             try:
                 import ujson as _j
                 resp_obj = _j.loads(response)
@@ -94,10 +104,23 @@ async def register_with_wp():
 async def send_data_to_wp():
     if not WORDPRESS_API_URL:
         return
+    # Build sdata full snapshot (keep separate from persistent settings)
+    try:
+        import sdata as _sd
+        sdata_snapshot = {}
+        for k in dir(_sd):
+            if k.startswith('__') or callable(getattr(_sd, k)):
+                continue
+            sdata_snapshot[k] = getattr(_sd, k)
+    except Exception:
+        sdata_snapshot = {}
+
     data = {
         'unit_id': settings.UNIT_ID,
         'firmware_version': getattr(settings, 'FIRMWARE_VERSION', ''),
         'node_type': getattr(settings, 'NODE_TYPE', ''),
+        'sdata': sdata_snapshot,  # NEW: full sdata snapshot separate
+        # Backwards-compatible 'data' block for minimal consumers
         'data': {
             'runtime': getattr(sdata, 'loop_runtime', 0),
             'script_runtime': getattr(sdata, 'script_runtime', 0),
@@ -109,23 +132,11 @@ async def send_data_to_wp():
             'wifi_rssi': getattr(sdata, 'wifi_rssi', None),
             'lora_rssi': getattr(sdata, 'lora_SigStr', None),
             'free_mem': getattr(sdata, 'free_mem', None),
-            # Engine metrics
-            'engine1_speed_rpm': getattr(sdata, 'engine1_speed_rpm', None),
-            'engine2_speed_rpm': getattr(sdata, 'engine2_speed_rpm', None),
-            'engine1_batt_v': getattr(sdata, 'engine1_batt_v', None),
-            'engine2_batt_v': getattr(sdata, 'engine2_batt_v', None),
-            'engine_last_poll_ts': getattr(sdata, 'engine_last_poll_ts', None),
-            # optional GPS fields
-            'gps_lat': getattr(sdata, 'gps_lat', None),
-            'gps_lng': getattr(sdata, 'gps_lng', None),
-            'gps_alt_m': getattr(sdata, 'gps_alt_m', None),
-            'gps_accuracy_m': getattr(sdata, 'gps_accuracy_m', None),
-            'gps_last_fix_ts': getattr(sdata, 'gps_last_fix_ts', None),
         }
     }
     try:
         resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/data', json=data)
-        await debug_print(f'Sent data to WP: {resp.status_code}', 'HTTP')
+        await debug_print(f'Sent data to WP: {getattr(resp,"status_code",None)}', 'HTTP')
     except Exception as e:
         await debug_print(f'Failed to send data to WP: {e}', 'ERROR')
 
@@ -403,3 +414,36 @@ async def handle_device_command(job):
             pass
     except Exception as e:
         await debug_print(f'Command error: {e}', 'ERROR')
+
+async def fetch_staged_settings():
+    """Fetch staged/applied settings and pending commands for this unit; save staged settings to disk."""
+    if not WORDPRESS_API_URL:
+        await debug_print('fetch_staged_settings: No WORDPRESS_API_URL set', 'ERROR')
+        return False
+    try:
+        url = WORDPRESS_API_URL.rstrip('/') + f'/wp-json/tmon/v1/device/staged-settings?unit_id={settings.UNIT_ID}'
+        # reuse sync requests for simplicity
+        resp = requests.get(url, timeout=10)
+        if getattr(resp, 'status_code', 0) != 200:
+            await debug_print(f'fetch_staged_settings: non-200 {getattr(resp,"status_code",None)}', 'DEBUG')
+            return False
+        data = resp.json() or {}
+        # Save staged settings to file if present
+        staged = data.get('staged') or data.get('settings') or {}
+        if isinstance(staged, dict) and staged:
+            fname = getattr(settings, 'LOG_DIR', '/logs') + '/device_settings-' + str(settings.UNIT_ID) + '.json'
+            try:
+                with open(fname, 'w') as f:
+                    ujson.dump(staged, f)
+                await debug_print(f'Fetched staged settings saved to {fname}', 'HTTP')
+            except Exception as e:
+                await debug_print(f'Failed to write staged settings file: {e}', 'ERROR')
+        # If there are commands, return them so caller can process
+        cmds = data.get('commands', [])
+        if cmds:
+            await debug_print(f'Fetched {len(cmds)} staged command(s) for this unit', 'HTTP')
+            # Let caller decide to process via normal poll flow; but optionally return them
+        return {'staged': staged, 'commands': cmds}
+    except Exception as e:
+        await debug_print(f'fetch_staged_settings exception: {e}', 'ERROR')
+        return False

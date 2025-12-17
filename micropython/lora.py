@@ -39,7 +39,7 @@ except ImportError:
         import requests
     except ImportError:
         requests = None
-from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run, led_status_flash, write_lora_log
+from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run, led_status_flash, write_lora_log, persist_unit_id
 from relay import toggle_relay
 try:
     from encryption import chacha20_encrypt, derive_nonce

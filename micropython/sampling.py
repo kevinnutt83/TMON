@@ -6,7 +6,6 @@ from utils import free_pins
 import uasyncio as asyncio
 from utils import debug_print
 from tmon import frostwatchCheck, heatwatchCheck, beginFrostOperations, beginHeatOperations, endFrostOperations, endHeatOperations
-    # ...existing code...
 from BME280 import BME280
 
 
@@ -70,33 +69,66 @@ async def sampleBME280():
                 sensor.i2c = None
         # Optionally, re-initialize LoRa here if needed for next operation
 
-async def findLowestTemp(compareTemp):
-    if compareTemp < sdata.lowest_temp_f:
-        sdata.lowest_temp_f = compareTemp
-        await frostwatchCheck()
+async def findLowestTemp(compareTemp, source='local'):
+    try:
+        if compareTemp is None:
+            return
+        if sdata.lowest_temp_f == 0 or compareTemp < sdata.lowest_temp_f:
+            sdata.lowest_temp_f = compareTemp
+            await frostwatchCheck()
+    except Exception:
+        pass
 
-async def findLowestBar(compareBar):
-    if compareBar < sdata.lowest_bar:
-        sdata.lowest_bar = compareBar
+async def findLowestBar(compareBar, source='local'):
+    try:
+        if compareBar is None:
+            return
+        if sdata.lowest_bar == 0 or compareBar < sdata.lowest_bar:
+            sdata.lowest_bar = compareBar
+    except Exception:
+        pass
 
-async def findLowestHumid(compareHumid):
-    if compareHumid < sdata.lowest_humid:
-        sdata.lowest_humid = compareHumid
+async def findLowestHumid(compareHumid, source='local'):
+    try:
+        if compareHumid is None:
+            return
+        if sdata.lowest_humid == 0 or compareHumid < sdata.lowest_humid:
+            sdata.lowest_humid = compareHumid
+    except Exception:
+        pass
 
-async def findHighestTemp(compareTemp):
-    if compareTemp > sdata.highest_temp_f:
-        sdata.highest_temp_f = compareTemp
-        await heatwatchCheck()
+async def findHighestTemp(compareTemp, source='local'):
+    try:
+        if compareTemp is None:
+            return
+        if compareTemp > sdata.highest_temp_f:
+            sdata.highest_temp_f = compareTemp
+            await heatwatchCheck()
+    except Exception:
+        pass
 
-async def findHighestBar(compareBar):
-    if compareBar > sdata.highest_bar:
-        sdata.highest_bar = compareBar
+async def findHighestBar(compareBar, source='local'):
+    try:
+        if compareBar is None:
+            return
+        if compareBar > sdata.highest_bar:
+            sdata.highest_bar = compareBar
+    except Exception:
+        pass
 
-async def findHighestHumid(compareHumid):
-    if compareHumid > sdata.highest_humid:
-        sdata.highest_humid = compareHumid
+async def findHighestHumid(compareHumid, source='local'):
+    try:
+        if compareHumid is None:
+            return
+        if compareHumid > sdata.highest_humid:
+            sdata.highest_humid = compareHumid
+    except Exception:
+        pass
 
 async def beginFrostOperations():
+    # Implement frost operations (e.g., engage relays or notify)
+    await debug_print("beginFrostOperations: executing frost response", "FROSTWATCH")
+    # ...existing code or hardware actions...
     pass
 
 async def frost_and_heat_watch():
