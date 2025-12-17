@@ -1102,7 +1102,15 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
     $applied_json = (empty($applied) ? '' : json_encode($applied, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
     $staged_json = (empty($staged) ? '' : json_encode($staged, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 
-    wp_send_json(['success'=>true, 'applied'=>$applied, 'staged'=>$staged]);
+    wp_send_json([
+        'success' => true,
+        'applied' => $applied,
+        'staged' => $staged,
+        'applied_json' => $applied_json,
+        'staged_json' => $staged_json,
+        'applied_source' => $applied_source,
+        'staged_source' => $staged_source,
+    ]);
 });
 // Note: we intentionally keep compatibility with existing consumers while also returning
 // useful JSON strings and source info for front-end usage elsewhere (see comment above).
