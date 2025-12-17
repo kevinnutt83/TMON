@@ -898,6 +898,8 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
     $unit_id = sanitize_text_field($_GET['unit_id'] ?? '');
     $applied = [];
     $staged = [];
+    $applied_source = 'none';
+    $staged_source = 'none';
 
     // Applied from devices.settings (validate JSON)
     $row = $wpdb->get_row($wpdb->prepare("SELECT settings FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s", $unit_id), ARRAY_A);
@@ -905,6 +907,7 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
         $tmp = json_decode($row['settings'], true);
         if (json_last_error() === JSON_ERROR_NONE && is_array($tmp)) {
             $applied = $tmp;
+            $applied_source = 'devices';
         }
     }
 
@@ -914,6 +917,7 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
         $tmp = json_decode($row2['settings'], true);
         if (json_last_error() === JSON_ERROR_NONE && is_array($tmp)) {
             $staged = $tmp;
+            $staged_source = 'staged_table';
         }
     }
 
@@ -936,14 +940,14 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
                     if (!in_array($f, $files)) $files[] = $f;
                 }
             }
-             if (!empty($files)) {
-                 // prefer .txt files first (case-insensitive), then newest-first among equal preference
-                 usort($files, function($a, $b) {
-                     $aTxt = preg_match('/\.txt$/i', $a) ? 0 : 1;
-                     $bTxt = preg_match('/\.txt$/i', $b) ? 0 : 1;
-                     if ($aTxt !== $bTxt) return $aTxt - $bTxt;
-                     return filemtime($b) - filemtime($a);
-                 });
+            if (!empty($files)) {
+                // prefer .txt files first (case-insensitive), then newest-first among equal preference
+                usort($files, function($a, $b) {
+                    $aTxt = preg_match('/\.txt$/i', $a) ? 0 : 1;
+                    $bTxt = preg_match('/\.txt$/i', $b) ? 0 : 1;
+                    if ($aTxt !== $bTxt) return $aTxt - $bTxt;
+                    return filemtime($b) - filemtime($a);
+                });
 
                 // helper parser for .txt content: try JSON, embedded JSON, then key=value/key: value lines
                 $parse_text_settings = function($content) {
@@ -1016,19 +1020,31 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
 
                             if (is_array($obj)) {
                                 if (isset($obj['settings']) && is_array($obj['settings'])) {
-                                    $staged = $obj['settings']; break 2;
+                                    $staged = $obj['settings'];
+                                    $staged_source = 'field_log';
+                                    // If applied missing, use this as the applied settings as well.
+                                    if (empty($applied)) { $applied = $staged; $applied_source = 'field_log'; }
+                                    break 2;
                                 }
                                 // top-level object that looks like settings
                                 $scalar_count = 0;
                                 foreach ($obj as $k=>$v) { if (!is_array($v) && !is_object($v)) $scalar_count++; }
-                                if ($scalar_count >= 1 && count($obj) <= 200) { $staged = $obj; break 2; }
+                                if ($scalar_count >= 1 && count($obj) <= 200) { $staged = $obj;
+                                    $staged_source = 'field_log';
+                                    if (empty($applied)) { $applied = $staged; $applied_source = 'field_log'; }
+                                    break 2; }
                                 continue;
                             }
 
                             // If file is .txt, attempt to parse key/value lines
                             if (strcasecmp($ext, 'txt') === 0 || preg_match('/\.txt$/i', $f)) {
                                 $parsed = $parse_text_settings($ln);
-                                if (is_array($parsed)) { $staged = $parsed; break 2; }
+                                if (is_array($parsed)) {
+                                    $staged = $parsed;
+                                    $staged_source = 'field_log';
+                                    if (empty($applied)) { $applied = $staged; $applied_source = 'field_log'; }
+                                    break 2;
+                                }
                             }
                         }
                         continue;
@@ -1041,21 +1057,33 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
                     // Give .txt parser first crack
                     if (preg_match('/\.txt$/i', $f)) {
                         $parsed = $parse_text_settings($content);
-                        if (is_array($parsed)) { $staged = $parsed; break; }
+                        if (is_array($parsed)) {
+                            $staged = $parsed;
+                            $staged_source = 'field_log';
+                            if (empty($applied)) { $applied = $staged; $applied_source = 'field_log'; }
+                            break;
+                        }
                     }
 
                     // existing heuristic: whole-file JSON or embedded JSON
                     $tmp = json_decode($content, true);
-                    if (json_last_error() === JSON_ERROR_NONE && is_array($tmp)) { $staged = $tmp; break; }
+                    if (json_last_error() === JSON_ERROR_NONE && is_array($tmp)) { $staged = $tmp;
+                        $staged_source = 'field_log';
+                        if (empty($applied)) { $applied = $staged; $applied_source = 'field_log'; }
+                        break; }
                     if (preg_match_all('/\{[\s\S]*?\}/', $content, $matches)) {
                         foreach (array_reverse($matches[0]) as $part) {
                             $tmp2 = json_decode($part, true);
                             if (json_last_error() === JSON_ERROR_NONE && is_array($tmp2)) {
                                 // Prefer explicit settings key
                                 if (isset($tmp2['settings']) && is_array($tmp2['settings'])) {
-                                    $staged = $tmp2['settings']; break 2;
+                                    $staged = $tmp2['settings']; $staged_source = 'field_log';
+                                    if (empty($applied)) { $applied = $staged; $applied_source = 'field_log'; }
+                                    break 2;
                                 }
-                                $staged = $tmp2; break 2;
+                                $staged = $tmp2; $staged_source = 'field_log';
+                                if (empty($applied)) { $applied = $staged; $applied_source = 'field_log'; }
+                                break 2;
                             }
                         }
                     }
@@ -1064,8 +1092,20 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
         }
     }
 
+    // If there was no explicit staged entry, expose the applied settings for editing (so user can edit current)
+    if (empty($staged) && !empty($applied)) {
+        $staged = $applied;
+        $staged_source = $staged_source === 'none' ? 'derived_from_applied' : $staged_source;
+    }
+
+    // Provide pretty JSON for front-end editable textbox convenience
+    $applied_json = (empty($applied) ? '' : json_encode($applied, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+    $staged_json = (empty($staged) ? '' : json_encode($staged, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+
     wp_send_json(['success'=>true, 'applied'=>$applied, 'staged'=>$staged]);
 });
+// Note: we intentionally keep compatibility with existing consumers while also returning
+// useful JSON strings and source info for front-end usage elsewhere (see comment above).
 
 // AJAX: Stage settings
 add_action('wp_ajax_tmon_uc_stage_settings', function() {
