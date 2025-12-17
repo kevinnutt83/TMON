@@ -113,6 +113,7 @@ $nonce = wp_create_nonce('tmon_uc_device_data');
         settingsStatus.textContent = '';
         fetch(ajaxurl + '?action=tmon_uc_get_settings&unit_id=' + encodeURIComponent(unit))
         .then(r=>r.json()).then(function(res){
+            console.log('Settings AJAX response:', res); // <-- Add this line for debugging
             if(res && res.success){
                 settingsApplied.textContent = JSON.stringify(res.applied, null, 2);
                 settingsStaged.textContent = JSON.stringify(res.staged, null, 2);

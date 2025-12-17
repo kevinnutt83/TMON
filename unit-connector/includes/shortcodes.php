@@ -898,10 +898,87 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
     $unit_id = sanitize_text_field($_GET['unit_id'] ?? '');
     $applied = [];
     $staged = [];
+
+    // Applied from devices.settings (validate JSON)
     $row = $wpdb->get_row($wpdb->prepare("SELECT settings FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s", $unit_id), ARRAY_A);
-    if ($row && !empty($row['settings'])) $applied = json_decode($row['settings'], true);
+    if ($row && !empty($row['settings'])) {
+        $tmp = json_decode($row['settings'], true);
+        if (json_last_error() === JSON_ERROR_NONE && is_array($tmp)) {
+            $applied = $tmp;
+        }
+    }
+
+    // First attempt: staged table (validate JSON)
     $row2 = $wpdb->get_row($wpdb->prepare("SELECT settings FROM {$wpdb->prefix}tmon_staged_settings WHERE unit_id=%s", $unit_id), ARRAY_A);
-    if ($row2 && !empty($row2['settings'])) $staged = json_decode($row2['settings'], true);
+    if ($row2 && !empty($row2['settings'])) {
+        $tmp = json_decode($row2['settings'], true);
+        if (json_last_error() === JSON_ERROR_NONE && is_array($tmp)) {
+            $staged = $tmp;
+        }
+    }
+
+    // Fallback: try to read tmon-field-logs files for this unit (newest first)
+    if (empty($staged)) {
+        $log_dir = WP_CONTENT_DIR . '/tmon-field-logs';
+        if (is_dir($log_dir) && is_readable($log_dir)) {
+            $safe_unit = preg_replace('/[^A-Za-z0-9._-]/', '', $unit_id);
+            $files = glob($log_dir . '/*' . $safe_unit . '*');
+            if (!empty($files)) {
+                usort($files, function($a, $b) { return filemtime($b) - filemtime($a); });
+                foreach ($files as $f) {
+                    $lines = @file($f, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+                    if (!$lines) {
+                        // If file() failed, try whole-file decode/regex
+                        $content = @file_get_contents($f);
+                        if ($content === false) continue;
+                        $tmp = json_decode($content, true);
+                        if (json_last_error() === JSON_ERROR_NONE && is_array($tmp)) { $staged = $tmp; break; }
+                        // extract last JSON object in file
+                        if (preg_match_all('/\{[\s\S]*?\}/', $content, $matches)) {
+                            foreach (array_reverse($matches[0]) as $part) {
+                                $tmp2 = json_decode($part, true);
+                                if (json_last_error() === JSON_ERROR_NONE && is_array($tmp2)) {
+                                    // Prefer explicit settings key
+                                    if (isset($tmp2['settings']) && is_array($tmp2['settings'])) {
+                                        $staged = $tmp2['settings']; break 3;
+                                    }
+                                    $staged = $tmp2; break 3;
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    // iterate lines in reverse (newest first)
+                    for ($i = count($lines) - 1; $i >= 0; $i--) {
+                        $ln = trim($lines[$i]);
+                        if ($ln === '') continue;
+                        $obj = json_decode($ln, true);
+                        if (json_last_error() !== JSON_ERROR_NONE) {
+                            // try to extract json object from line
+                            if (preg_match('/\{[\s\S]*\}/', $ln, $m)) {
+                                $obj = json_decode($m[0], true);
+                                if (json_last_error() !== JSON_ERROR_NONE) continue;
+                            } else {
+                                continue;
+                            }
+                        }
+                        if (!is_array($obj)) continue;
+                        // If this envelope contains 'settings' object, prefer it
+                        if (isset($obj['settings']) && is_array($obj['settings'])) {
+                            $staged = $obj['settings']; break 3;
+                        }
+                        // If top-level object looks like settings (many scalar keys), accept it
+                        $scalar_count = 0;
+                        foreach ($obj as $k=>$v) { if (!is_array($v) && !is_object($v)) $scalar_count++; }
+                        if ($scalar_count >= 1 && count($obj) <= 200) { // heuristic
+                            $staged = $obj; break 3;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     wp_send_json(['success'=>true, 'applied'=>$applied, 'staged'=>$staged]);
 });
 
