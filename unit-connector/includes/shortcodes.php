@@ -939,7 +939,7 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
                     if (json_last_error() === JSON_ERROR_NONE && is_array($tmp)) return $tmp;
 
                     // extract last JSON object in file (if present)
-                    if (preg_match_all('/\{[\s\S]*?\}/', $content, $matches)) {
+                    if (preg_match_all('/\{[\s\S]*\}/', $content, $matches)) {
                         foreach (array_reverse($matches[0]) as $part) {
                             $tmp2 = json_decode($part, true);
                             if (json_last_error() === JSON_ERROR_NONE && is_array($tmp2)) return $tmp2;
@@ -1003,19 +1003,19 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
 
                             if (is_array($obj)) {
                                 if (isset($obj['settings']) && is_array($obj['settings'])) {
-                                    $staged = $obj['settings']; break 3;
+                                    $staged = $obj['settings']; break 2;
                                 }
                                 // top-level object that looks like settings
                                 $scalar_count = 0;
                                 foreach ($obj as $k=>$v) { if (!is_array($v) && !is_object($v)) $scalar_count++; }
-                                if ($scalar_count >= 1 && count($obj) <= 200) { $staged = $obj; break 3; }
+                                if ($scalar_count >= 1 && count($obj) <= 200) { $staged = $obj; break 2; }
                                 continue;
                             }
 
                             // If file is .txt, attempt to parse key/value lines
                             if (strcasecmp($ext, 'txt') === 0 || preg_match('/\.txt$/i', $f)) {
                                 $parsed = $parse_text_settings($ln);
-                                if (is_array($parsed)) { $staged = $parsed; break 3; }
+                                if (is_array($parsed)) { $staged = $parsed; break 2; }
                             }
                         }
                         continue;
@@ -1038,10 +1038,11 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
                         foreach (array_reverse($matches[0]) as $part) {
                             $tmp2 = json_decode($part, true);
                             if (json_last_error() === JSON_ERROR_NONE && is_array($tmp2)) {
+                                // Prefer explicit settings key
                                 if (isset($tmp2['settings']) && is_array($tmp2['settings'])) {
-                                    $staged = $tmp2['settings']; break 3;
+                                    $staged = $tmp2['settings']; break 2;
                                 }
-                                $staged = $tmp2; break 3;
+                                $staged = $tmp2; break 2;
                             }
                         }
                     }
