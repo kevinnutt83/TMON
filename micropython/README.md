@@ -57,3 +57,37 @@
 - Persisted: UNIT_ID, WORDPRESS_API_URL (wordpress_api_url.txt), UNIT_Name, NODE_TYPE, PLAN, FIRMWARE_VERSION.
 - Guard flag prevents reboot loop; single soft reset after first metadata persistence.
 - Field data uploader prefers settings.WORDPRESS_API_URL (falls back to wprest) eliminating "No WORDPRESS_API_URL set" errors.
+
+# TMON MicroPython Agent — Integration Notes
+
+Node types
+- base: hosts LoRa network, connects to WordPress/Unit Connector via WiFi, backhauls remote telemetry and settings.
+- wifi: a WiFi-only node (no LoRa). Uses WiFi for telemetry, commands, and OTA.
+- remote: LoRa-only device that uses LoRa to reach a base; does not send HTTP to the Unit Connector.
+
+Staged settings & persistence
+- Devices fetch staged settings using:
+  GET /wp-json/tmon/v1/device/staged-settings?unit_id=<UNIT_ID>
+- Staged settings are saved to:
+  `<LOG_DIR>/device_settings-<UNIT_ID>.json`
+- The settings_apply module will look for this per-unit file and move it to the canonical staged file path before applying:
+  `/logs/remote_settings.staged.json` -> the apply loop persists `/logs/remote_settings.applied.json` snapshot.
+
+Telemetry (sdata) vs persistent settings
+- Telemetry snapshot is sent under `sdata` (full runtime snapshot) and a minimal `data` block for legacy compatibility.
+- Persistent settings are delivered separately via staged settings and must not be mixed with telemetry streams.
+
+Commands
+- Devices poll for queued commands (base & wifi) via `/wp-json/tmon/v1/device/commands` and apply them.
+- On receipt, devices should call the appropriate handler (implemented in wprest.handle_device_command).
+- After completion devices report via `/wp-json/tmon/v1/device/command-complete`.
+
+Base behavior for LoRa remotes
+- Base writes each remote payload as an independent JSON line to its `field_data.log` including `unit_id`.
+- If remote payload includes a `settings` object, the base writes `<LOG_DIR>/device_settings-<REMOTE_UNIT_ID>.json` for that remote; Admin/UC can then read or push those staged settings to the remote (via base → Admin).
+- Base calls sampling compare helpers using the remote values so alarms (frost/heat) can trigger from remote samples.
+
+Notes for integrators
+- The device will apply staged settings automatically (configurable with `APPLY_STAGED_SETTINGS_ON_SYNC`).
+- Command and staged-settings endpoints are the canonical device sources; devices write staged settings to the per-unit file for auditing and fallback.
+- For more, see root `COMMANDS.md` and Unit Connector READMEs.

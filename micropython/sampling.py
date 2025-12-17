@@ -46,6 +46,18 @@ async def sampleBME280():
             sdata.cur_temp_f = (sdata.cur_temp_c * 9/5) + 32
             sdata.cur_humid = data[2]
             sdata.cur_bar_pres = data[0]
+
+            # NEW: evaluate local sample against historical min/max for frost/heat logic
+            try:
+                await findLowestTemp(sdata.cur_temp_f, source='local')
+                await findHighestTemp(sdata.cur_temp_f, source='local')
+                await findLowestBar(sdata.cur_bar_pres, source='local')
+                await findHighestBar(sdata.cur_bar_pres, source='local')
+                await findLowestHumid(sdata.cur_humid, source='local')
+                await findHighestHumid(sdata.cur_humid, source='local')
+            except Exception:
+                pass
+
             if settings.DEBUG and settings.DEBUG_TEMP:
                 await debug_print(
                     "SAMPLE - BME280 | pressure : %7.2f hPa, temp : %-6.2f ℃, hum : %6.2f ％" % (data[0], data[1], data[2]),

@@ -82,6 +82,31 @@ Add these shortcodes to any Page or Post:
  - Ensure TMON Admin is active and tables are created on activation.
  - Normalized CSV export is available for admins at: `admin-post.php?action=tmon_export_field_data_csv&_wpnonce=...` (optional unit_id parameter). This CSV uses consistent columns and resolves prior parsing issues.
  - To relay unknown devices to central provisioning, define `TMON_ADMIN_HUB_URL` in wp-config.php to your central TMON Admin base URL.
+
+# Unit Connector — Staged Settings & Command Flow
+
+This module exposes REST endpoints and admin UIs to manage field devices (base, wifi, remote). Key behavior:
+
+- Device endpoints
+  - GET /wp-json/tmon/v1/device/staged-settings?unit_id=<unit_id>
+    - Returns applied settings, staged settings, and any pending commands for the unit in one payload.
+  - POST /wp-json/tmon/v1/device/commands
+    - Device polls for queued commands (used for older remote nodes or for base/wifi nodes).
+  - POST /wp-json/tmon/v1/device/command-complete
+    - Device posts completion/acknowledgement of a command.
+
+- Admin endpoints & UI
+  - Administrators can stage settings via the UC UI or API; staged settings appear in the staged table and are available via the staged-settings endpoint.
+  - Commands are queued to the `tmon_device_commands` table and are visible via the pending-commands shortcodes.
+
+File layout & logs
+- On the server (WP): field logs are stored under `wp-content/tmon-field-logs` (managed by UC).
+- On devices: staged settings are saved as `<LOG_DIR>/device_settings-<UNIT_ID>.json` (e.g., `/logs/device_settings-12345.json`) and may be applied by the device firmware.
+
+Notes for operators
+- The `staged-settings` endpoint is device-oriented; it contains both the `staged` payload and an optional list of `commands`.
+- Use the admin UI shortcodes (e.g., `[tmon_pending_commands]`, `[tmon_device_status]`) to view and manage commands and per-device settings.
+
 ## Troubleshooting
 - Check device connectivity and power.
 - Review audit logs and notifications.

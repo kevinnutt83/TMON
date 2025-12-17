@@ -234,6 +234,9 @@ async def poll_device_commands():
         import urequests as requests
     except Exception:
         return
+    # Remotes don't poll UC directly
+    if str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'remote':
+        return
     url = WORDPRESS_API_URL.rstrip('/') + '/wp-json/tmon/v1/device/commands'
     payload = {
         'unit_id': settings.UNIT_ID,
@@ -259,54 +262,28 @@ async def poll_device_commands():
         resp.close()
     except Exception:
         pass
-    # Apply commands
+
+    # Normalize and process each command via the unified handler (handle_device_command)
     for c in cmds:
         try:
-            ctype = c.get('type')
-            data = c.get('payload') or {}
-            if ctype == 'set_var':
-                k = str(data.get('key') or '')
-                v = data.get('value')
-                if k:
-                    try:
-                        setattr(settings, k, v)
-                        await debug_print('set_var applied: %s=%s' % (k, v), 'CMD')
-                    except Exception:
-                        pass
-            elif ctype == 'run_func':
-                name = str(data.get('name') or '')
-                args = data.get('args')
-                if name:
-                    try:
-                        import tmon as _t
-                        fn = getattr(_t, name, None)
-                        if fn:
-                            # If function is async-like
-                            res = fn(args) if args is not None else fn()
-                            await debug_print('run_func executed: %s' % name, 'CMD')
-                        else:
-                            await debug_print('run_func not found: %s' % name, 'CMD')
-                    except Exception as e:
-                        await debug_print('run_func error: %s' % e, 'ERROR')
-            elif ctype == 'firmware_update':
+            # Support both formats:
+            # - new: { id, command, params }
+            # - legacy: { id, type, payload }
+            job_id = c.get('id') or c.get('command_id') or c.get('job_id') or None
+            cmd_name = c.get('command') or c.get('type') or c.get('name') or None
+            params = c.get('params') or c.get('payload') or c.get('payload', {}) or {}
+            # If params is JSON string, try decode
+            if isinstance(params, str):
                 try:
-                    from ota import check_for_update, apply_pending_update
-                    await check_for_update()
-                    await apply_pending_update()
+                    import ujson as _j
+                    params = _j.loads(params)
                 except Exception:
-                    pass
-            elif ctype == 'relay_ctrl':
-                try:
-                    ridx = int(data.get('relay') or 0)
-                    state = str(data.get('state') or '')
-                    import sdata
-                    if 1 <= ridx <= 8:
-                        setattr(sdata, f'relay{ridx}_on', 1 if state == 'on' else 0)
-                        await debug_print('relay_ctrl applied: #%d %s' % (ridx, state), 'CMD')
-                except Exception:
-                    pass
+                    params = params
+            job = {'id': job_id, 'command': cmd_name, 'params': params}
+            # Reuse existing handler which will POST completion
+            await handle_device_command(job)
         except Exception as e:
-            await debug_print('command apply error: %s' % e, 'ERROR')
+            await debug_print(f'command apply error (poll): {e}', 'ERROR')
     await asyncio.sleep(0)
 
 async def handle_ota_job(job):
@@ -422,13 +399,12 @@ async def fetch_staged_settings():
         return False
     try:
         url = WORDPRESS_API_URL.rstrip('/') + f'/wp-json/tmon/v1/device/staged-settings?unit_id={settings.UNIT_ID}'
-        # reuse sync requests for simplicity
         resp = requests.get(url, timeout=10)
         if getattr(resp, 'status_code', 0) != 200:
             await debug_print(f'fetch_staged_settings: non-200 {getattr(resp,"status_code",None)}', 'DEBUG')
             return False
         data = resp.json() or {}
-        # Save staged settings to file if present
+        # Save staged settings to per-device file if present
         staged = data.get('staged') or data.get('settings') or {}
         if isinstance(staged, dict) and staged:
             fname = getattr(settings, 'LOG_DIR', '/logs') + '/device_settings-' + str(settings.UNIT_ID) + '.json'
@@ -438,11 +414,43 @@ async def fetch_staged_settings():
                 await debug_print(f'Fetched staged settings saved to {fname}', 'HTTP')
             except Exception as e:
                 await debug_print(f'Failed to write staged settings file: {e}', 'ERROR')
-        # If there are commands, return them so caller can process
-        cmds = data.get('commands', [])
+            # Also write to global staged file path so settings_apply can find it
+            try:
+                gpath = getattr(settings, 'REMOTE_SETTINGS_STAGED_FILE', settings.LOG_DIR + '/remote_settings.staged.json')
+                with open(gpath, 'w') as gf:
+                    ujson.dump(staged, gf)
+            except Exception:
+                pass
+            # Optionally apply staged settings immediately (best-effort)
+            try:
+                if getattr(settings, 'APPLY_STAGED_SETTINGS_ON_SYNC', True):
+                    try:
+                        import settings_apply as _sa
+                        await _sa.apply_staged_settings_once()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        # If there are commands, process them (base & wifi nodes handle direct commands here)
+        cmds = data.get('commands', []) or []
         if cmds:
             await debug_print(f'Fetched {len(cmds)} staged command(s) for this unit', 'HTTP')
-            # Let caller decide to process via normal poll flow; but optionally return them
+            # Process commands inline for base & wifi nodes (remote nodes get commands via LoRa)
+            node_role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
+            if node_role in ('base', 'wifi'):
+                for c in cmds:
+                    try:
+                        # Normalize shape to what handle_device_command expects (id, command, params)
+                        job = {
+                            'id': c.get('id') or c.get('command_id') or c.get('job_id'),
+                            'command': c.get('command') or c.get('type') or c.get('type_name'),
+                            'params': c.get('params') or c.get('payload') or c.get('payload', {}),
+                        }
+                        # reuse existing command handler
+                        await handle_device_command(job)
+                    except Exception as e:
+                        await debug_print(f'Error processing staged command: {e}', 'ERROR')
         return {'staged': staged, 'commands': cmds}
     except Exception as e:
         await debug_print(f'fetch_staged_settings exception: {e}', 'ERROR')

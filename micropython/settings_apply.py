@@ -120,8 +120,26 @@ async def apply_staged_settings_once():
     staged_path = getattr(settings, 'REMOTE_SETTINGS_STAGED_FILE', '/logs/remote_settings.staged.json')
     applied_path = getattr(settings, 'REMOTE_SETTINGS_APPLIED_FILE', '/logs/remote_settings.applied.json')
     try:
-        # Load staged
-        staged = read_json(staged_path, None)
+        # If no global staged file, check per-unit staged file written by UC/base
+        unit_staged = getattr(settings, 'LOG_DIR', '/logs') + '/device_settings-' + str(getattr(settings, 'UNIT_ID', '')) + '.json'
+        staged = None
+        try:
+            staged = read_json(staged_path, None)
+        except Exception:
+            staged = None
+        if not isinstance(staged, dict):
+            # Try unit-specific file
+            try:
+                staged_unit = read_json(unit_staged, None)
+                if isinstance(staged_unit, dict):
+                    # persist to canonical staged file to keep behavior consistent
+                    try:
+                        write_json(staged_path, staged_unit)
+                    except Exception:
+                        pass
+                    staged = staged_unit
+            except Exception:
+                staged = None
         if not isinstance(staged, dict):
             return False
         # Load previous applied snapshot for diffing (optional)

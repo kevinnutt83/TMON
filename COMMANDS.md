@@ -1,39 +1,49 @@
-# TMON Device Commands
+# TMON Device Commands & Staged Settings (Reference)
 
-List of commands the Unit Connector / Admin may stage for devices and how devices handle them:
+Supported commands (staged by Admin/UC and consumed by devices):
 
 - set_var
-  - payload: { "key": "<SETTING_KEY>", "value": <value> }
-  - Action: Sets a runtime setting on the device (if present in allowlist) and persists if appropriate.
+  - Payload: { "key": "<SETTING_KEY>", "value": <value> }
+  - Action: Sets a runtime setting on the device (subject to firmware allowlist/policy).
 
 - run_func
-  - payload: { "name": "<function_name>", "args": <optional args> }
-  - Action: Calls a device-side function (if present). Device should guard and log missing functions.
+  - Payload: { "name": "<function_name>", "args": <optional args> }
+  - Action: Calls a device-side function (if present); device must guard missing functions.
 
 - firmware_update
-  - payload: { "version": "<version>", "manifest": <optional> }
-  - Action: Device will schedule/check OTA update and fetch/apply via OTA logic.
+  - Payload: { "version": "<version>", "manifest": <optional> }
+  - Action: Device schedules/checks OTA and applies via OTA flow.
 
 - relay_ctrl / toggle_relay
-  - payload: { "relay": <1-8>, "state": "on"|"off", "runtime": "<minutes>" }
-  - Action: Toggle a named relay with safety caps enforced by firmware.
+  - Payload: { "relay": <1-8>, "state": "on"|"off", "runtime": "<seconds/minutes>" }
+  - Action: Toggle a relay with firmware safety caps enforced.
 
-- settings_update
-  - payload: a settings dict
-  - Action: Device applies allowed settings and stores staged settings file.
+- settings_update / settings_change
+  - Payload: full or partial settings dictionary
+  - Action: Device writes staged settings file and may apply them per allowlist.
 
-- set_oled_message
-  - payload: { "message": "<text>", "duration": <seconds> }
-  - Action: Displays an on-device message.
+- set_oled_message / set_oled_banner / clear_oled
+  - Payload: message & timing controls
+  - Action: Display or clear messages on the device OLED.
 
-- set_oled_banner
-  - payload: { "message": "<text>", "duration": <seconds>, "persist": <bool> }
-  - Action: Set banner on the OLED.
+Command endpoints for devices (Unit Connector):
+- POST /wp-json/tmon/v1/device/commands
+  - Body: { "unit_id": "<unit>", "machine_id": "<machine>" }
+  - Returns: list of queued commands for device.
 
-- clear_oled
-  - payload: {}
-  - Action: Clear any OLED messages/banners.
+- POST /wp-json/tmon/v1/device/command-complete
+  - Body: { "job_id": <id>, "ok": true/false, "result": <string> }
+  - Marks the queued command done/failed.
 
-Notes:
-- Devices poll `/wp-json/tmon/v1/device/commands` (or fetch staged commands via check-in endpoints) and apply commands using local handlers.
-- The Unit Connector exposes staged commands via the device-oriented endpoint `/tmon/v1/device/staged-settings` (returns settings + pending commands).
+Device check-in (settings & staged commands):
+- GET /wp-json/tmon/v1/device/staged-settings?unit_id=<unit_id>
+  - Returns: { applied: {...}, staged: {...}, commands: [...] }
+
+File naming & storage conventions (device-side):
+- Staged settings fetched by the device are saved to:
+  - device side: `<LOG_DIR>/device_settings-<UNIT_ID>.json` (example: `/logs/device_settings-12345.json`)
+- Base slices remote telemetry by appending JSON lines to `field_data.log` (each line contains its `unit_id`).
+
+Notes
+- Telemetry (sdata) and persistent settings are kept separate: device POSTs include a `sdata` snapshot and an optional minimal `data` block.
+- Base nodes persist remote device readings into `field_data.log`, and will also write per-remote `device_settings-<unit_id>.json` if remote sends settings.

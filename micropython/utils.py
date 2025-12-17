@@ -163,7 +163,8 @@ async def send_field_data_log():
             _w.WORDPRESS_API_URL = settings.WORDPRESS_API_URL
     except Exception:
         pass
-    if getattr(settings, 'NODE_TYPE', 'base') != 'base':
+    # Allow base and wifi nodes to send field data; remotes should not send directly over HTTP
+    if getattr(settings, 'NODE_TYPE', 'base') == 'remote':
         return
     # NEW: prefer settings.WORDPRESS_API_URL if wprest variable unset or empty
     from wprest import WORDPRESS_API_URL as _wp_mod
@@ -463,9 +464,7 @@ def get_unix_time():
         return int(time.time())
 
 def record_field_data():
-    """Append a minimal telemetry record for the base node.
-    Prior approach dumped all settings/sdata which was too heavy for flash and bandwidth.
-    """
+    """Append a minimal telemetry record for the device."""
     import sdata, settings, ujson, os, utime as time
     entry = {'timestamp': int(get_unix_time())}
     try:
@@ -520,8 +519,8 @@ def record_field_data():
     entry['unit_id'] = getattr(settings, 'UNIT_ID', '')
     entry['firmware_version'] = getattr(settings, 'FIRMWARE_VERSION', '')
     entry['NODE_TYPE'] = getattr(settings, 'NODE_TYPE', '')
-    # Only persist on base node to avoid filling flash on remotes
-    if getattr(settings, 'NODE_TYPE', 'base') != 'base':
+    # Only persist on base and wifi nodes (remote-lora-only devices should not flood server logs)
+    if getattr(settings, 'NODE_TYPE', 'base') == 'remote':
         return
     checkLogDirectory()
     try:

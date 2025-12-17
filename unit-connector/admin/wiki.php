@@ -43,3 +43,19 @@ add_action('admin_menu', function(){
         echo '</div>';
     });
 });
+
+// Minimal Wiki / Help page linking to command reference
+add_action('admin_menu', function() {
+    add_submenu_page('tmon_devices', 'UC Wiki', 'UC Wiki', 'read', 'tmon-uc-wiki', function(){
+        if (!current_user_can('read')) { wp_die('Insufficient permissions'); }
+        echo '<div class="wrap"><h1>Unit Connector — Quick Reference</h1>';
+        echo '<p>Documentation and command reference for device integrators:</p>';
+        // Link to our repository file (raw GitHub)
+        echo '<ul>';
+        echo '<li><a href="https://github.com/kevinnutt83/TMON/blob/main/COMMANDS.md" target="_blank">Device Commands & Staged Settings (COMMANDS.md)</a></li>';
+        echo '<li><a href="' . esc_url( plugins_url('README-field-logs.md', __DIR__ ) ) . '" target="_blank">Field Logs: filenames & formats</a></li>';
+        echo '</ul>';
+        echo '<p>Use the staging pages under <strong>TMON → Devices</strong> to stage settings and view pending commands.</p>';
+        echo '</div>';
+    });
+});
