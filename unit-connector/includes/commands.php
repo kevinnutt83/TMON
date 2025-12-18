@@ -376,8 +376,27 @@ if (!wp_next_scheduled('tmon_uc_command_requeue_cron')) {
 add_action('tmon_uc_command_requeue_cron', function () {
 	global $wpdb;
 	$table = $wpdb->prefix . 'tmon_device_commands';
-	$col = $wpdb->get_var($wpdb->prepare("SHOW COLUMNS FROM {$table} LIKE %s", 'updated_at')) ? 'updated_at' : 'created_at';
-	$wpdb->query("UPDATE {$table} SET status='queued' WHERE status='claimed' AND {$col} < (NOW() - INTERVAL 5 MINUTE)");
+
+	// Determine which timestamp column exists and use it safely.
+	$cols = $wpdb->get_results("SHOW COLUMNS FROM {$table}", ARRAY_A);
+	$names = array_map(function($c){ return $c['Field']; }, $cols ?: []);
+	$ts_col = null;
+	if (in_array('updated_at', $names, true)) {
+		$ts_col = 'updated_at';
+	} elseif (in_array('created_at', $names, true)) {
+		$ts_col = 'created_at';
+	}
+
+	// Only run the requeue if we have a suitable timestamp column.
+	if ($ts_col) {
+		$wpdb->query(
+			$wpdb->prepare(
+				"UPDATE {$table} SET status=%s WHERE status=%s AND {$ts_col} < (NOW() - INTERVAL 5 MINUTE)",
+				'queued',
+				'claimed'
+			)
+		);
+	}
 });
 
 // Ensure shortcode or UI button uses the forwarder with consistent payload

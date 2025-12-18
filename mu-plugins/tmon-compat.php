@@ -5,8 +5,13 @@ if (!defined('TMON_COMPAT_MU_LOADED')) {
 	define('TMON_COMPAT_MU_LOADED', true);
 
 	// Ensure common login globals exist so wp-login.php won't emit "Undefined variable" warnings.
+	// (wp-login.php can run very early; mu-plugins load before regular plugins.)
 	if (!isset($GLOBALS['user_login'])) $GLOBALS['user_login'] = '';
 	if (!isset($GLOBALS['user_pass']))  $GLOBALS['user_pass']  = '';
+
+	// Also ensure short-named globals so legacy code using $user_login / $user_pass directly won't warn.
+	if (!isset($user_login)) $user_login = $GLOBALS['user_login'];
+	if (!isset($user_pass))  $user_pass  = $GLOBALS['user_pass'];
 
 	// If some other code set a broken current_user object (missing exists()), clear it so WP can construct WP_User as normal.
 	$clear_if_broken = function() {
