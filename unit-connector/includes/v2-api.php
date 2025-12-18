@@ -28,6 +28,17 @@ if (!function_exists('tmon_uc_perm_edit_hierarchy')) {
 	}
 }
 
+// Compatibility: ensure determine_current_user never returns a TMON_Fallback_User object
+// (some environments create a fallback user class that lacks WP_User::exists()).
+add_filter('determine_current_user', function($user) {
+	if (is_object($user) && is_a($user, 'TMON_Fallback_User')) {
+		// Return 0 to indicate no user; WP will create a standard WP_User(0) object
+		// which implements exists() and avoids the fatal in is_user_logged_in().
+		return 0;
+	}
+	return $user;
+}, 20);
+
 // Guard pull-install function registration
 add_action('rest_api_init', function(){
 	static $tmon_uc_rest_registered = false;
