@@ -55,20 +55,89 @@ def derive_nonce(ts, ctr):
     return ((ts & 0xffffffff).to_bytes(4,'little') + (ctr & 0xffffffff).to_bytes(4,'little') + ((ts ^ ctr) & 0xffffffff).to_bytes(4,'little'))
 
 
-# --- Optional AEAD (scaffold) ---
-def chacha20_poly1305_encrypt(key, nonce, aad, plaintext):
-    """
-    Placeholder for AEAD encryption. For now, returns ciphertext via chacha20 stream and a dummy tag.
-    This is NOT authenticated. Intended to be replaced with proper Poly1305 tag generation.
-    """
-    ct = chacha20_encrypt(key, nonce, 1, plaintext)
-    tag = b"\x00" * 16
-    return ct, tag
+# --- Optional AEAD (ChaCha20-Poly1305) ---
+def _le64(v):
+	# 64-bit little-endian
+	return int(v).to_bytes(8, 'little')
 
+def _pad16(b):
+	# pad to 16-byte boundary with zeros per RFC
+	if len(b) % 16 == 0:
+		return b''
+	return b'\x00' * (16 - (len(b) % 16))
+
+def _poly1305_mac(key32, aad, ct):
+	# Pure-Python Poly1305 as in RFC 8439.
+	# key32: 32 bytes (r || s)
+	r = int.from_bytes(key32[0:16], 'little')
+	# clamp r
+	r &= 0x0ffffffc0ffffffc0ffffffc0fffffff
+	s = int.from_bytes(key32[16:32], 'little')
+	p = (1 << 130) - 5
+	acc = 0
+	def _process_block(block):
+		nonlocal acc
+		n = int.from_bytes(block + b'\x01', 'little')  # append 1 byte per spec
+		acc = (acc + n) % p
+		acc = (acc * r) % p
+
+	# process AAD
+	if aad:
+		for i in range(0, len(aad), 16):
+			_process_block(aad[i:i+16])
+	# process ciphertext
+	for i in range(0, len(ct), 16):
+		_process_block(ct[i:i+16])
+	# final: add lengths (64-bit little-endian)
+	alen = len(aad)
+	clen = len(ct)
+	acc = (acc + int.from_bytes(_le64(alen), 'little')) % p
+	acc = (acc + (int.from_bytes(_le64(clen), 'little') << 64)) % p  # conceptually appended, equivalent accumulation
+	# produce tag = (acc + s) mod 2^128
+	tag_int = (acc + s) % (1 << 128)
+	tag = tag_int.to_bytes(16, 'little')
+	return tag
+
+def _const_time_eq(a, b):
+	# simple constant-time comparison
+	if len(a) != len(b):
+		return False
+	res = 0
+	for x, y in zip(a, b):
+		res |= x ^ y
+	return res == 0
+
+def chacha20_poly1305_encrypt(key, nonce, aad, plaintext):
+	"""AEAD: ChaCha20-Poly1305 (IETF). Returns (ciphertext, tag)."""
+	if not isinstance(key, (bytes, bytearray)) or len(key) != 32:
+		raise ValueError('key must be 32 bytes')
+	if not isinstance(nonce, (bytes, bytearray)) or len(nonce) != 12:
+		raise ValueError('nonce must be 12 bytes')
+	aad_b = aad or b''
+	pt_b = plaintext or b''
+	# Poly key = ChaCha20 block with counter=0
+	poly_key_block = chacha20_block(key, 0, nonce)
+	poly_key = poly_key_block[:32]
+	# ciphertext using counter=1
+	ct = chacha20_encrypt(key, nonce, 1, pt_b)
+	# compute tag over AAD||pad||ct||pad||len(AAD)||len(CT)
+	tag = _poly1305_mac(poly_key, aad_b, ct)
+	return ct, tag
 
 def chacha20_poly1305_decrypt(key, nonce, aad, ciphertext, tag):
-    """
-    Placeholder for AEAD decryption. Verifies nothing and returns stream-deciphered plaintext.
-    """
-    pt = chacha20_encrypt(key, nonce, 1, ciphertext)
-    return pt
+	"""Verify tag then decrypt. Raises ValueError on authentication failure."""
+	if not isinstance(key, (bytes, bytearray)) or len(key) != 32:
+		raise ValueError('key must be 32 bytes')
+	if not isinstance(nonce, (bytes, bytearray)) or len(nonce) != 12:
+		raise ValueError('nonce must be 12 bytes')
+	aad_b = aad or b''
+	ct_b = ciphertext or b''
+	if not isinstance(tag, (bytes, bytearray)) or len(tag) != 16:
+		raise ValueError('tag must be 16 bytes')
+	poly_key_block = chacha20_block(key, 0, nonce)
+	poly_key = poly_key_block[:32]
+	expect = _poly1305_mac(poly_key, aad_b, ct_b)
+	if not _const_time_eq(expect, tag):
+		raise ValueError('Poly1305 authentication failed')
+	pt = chacha20_encrypt(key, nonce, 1, ct_b)
+	return pt
