@@ -415,6 +415,32 @@ add_action('admin_init', function(){
     }
 });
 
+// Early compatibility: if a TMON_Fallback_User instance exists but lacks exists(),
+// replace it with an anonymous subclass instance that preserves properties and adds exists()
+// to avoid fatal errors when WP calls is_user_logged_in().
+if (isset($GLOBALS['current_user']) && is_object($GLOBALS['current_user']) && is_a($GLOBALS['current_user'], 'TMON_Fallback_User') && !method_exists($GLOBALS['current_user'], 'exists')) {
+	$orig = $GLOBALS['current_user'];
+	$GLOBALS['current_user'] = new class($orig) extends TMON_Fallback_User {
+		public function __construct($orig) { foreach (get_object_vars($orig) as $k => $v) { $this->$k = $v; } }
+		public function exists() { return false; }
+	};
+}
+
+if (!function_exists('tmon_fix_fallback_user')) {
+	function tmon_fix_fallback_user() {
+		if (isset($GLOBALS['current_user']) && is_object($GLOBALS['current_user']) && is_a($GLOBALS['current_user'], 'TMON_Fallback_User') && !method_exists($GLOBALS['current_user'], 'exists')) {
+			$orig = $GLOBALS['current_user'];
+			$GLOBALS['current_user'] = new class($orig) extends TMON_Fallback_User {
+				public function __construct($orig) { foreach (get_object_vars($orig) as $k => $v) { $this->$k = $v; } }
+				public function exists() { return false; }
+			};
+		}
+	}
+	add_action('plugins_loaded', 'tmon_fix_fallback_user', 0);
+	add_action('init', 'tmon_fix_fallback_user', 0);
+	add_action('admin_init', 'tmon_fix_fallback_user', 0);
+}
+
 // Ensure default Admin API URL shown in settings template comes from home_url()
 // (The templates/settings.php already renders WORDPRESS_API_URL and we now default it there via schema)
 add_filter('tmon_uc_default_options', function($defaults) {
