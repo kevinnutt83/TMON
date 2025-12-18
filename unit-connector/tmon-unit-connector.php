@@ -20,17 +20,34 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 // Defensive fallback: if WP pluggable user functions are not yet defined (some hosts/plugins can trigger REST early),
 // provide a minimal stub so current_user_can() and related checks do not fatal during early bootstrap.
 if ( ! function_exists( 'wp_get_current_user' ) ) {
-	class TMON_Fallback_User {
-		public $ID = 0;
-		public $roles = [];
-		public function has_cap( $cap ) { return false; }
+	// Minimal WP_User-like stub used only until WP finishes loading pluggables.
+	if ( ! class_exists( 'TMON_Fallback_User' ) ) {
+		class TMON_Fallback_User {
+			public $ID = 0;
+			public $roles = [];
+			public $locale = '';
+			public $user_login = '';
+			public $user_email = '';
+			public function has_cap( $cap ) { return false; }
+			// graceful property access
+			public function __get( $name ) { return null; }
+		}
 	}
 	function wp_get_current_user() {
 		static $u = null;
 		if ( $u === null ) $u = new TMON_Fallback_User();
 		return $u;
 	}
-	function get_current_user_id() { return 0; }
+}
+// Only define get_current_user_id() if it doesn't already exist (avoid redeclare).
+if ( ! function_exists( 'get_current_user_id' ) ) {
+	function get_current_user_id() {
+		if ( function_exists( 'wp_get_current_user' ) ) {
+			$user = wp_get_current_user();
+			return isset( $user->ID ) ? intval( $user->ID ) : 0;
+		}
+		return 0;
+	}
 }
 
 // --- Plugin bootstrap/load order notes ---
