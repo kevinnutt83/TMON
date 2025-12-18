@@ -45,10 +45,10 @@ if (!function_exists('tmon_uc_remove_all_data')) {
 			'tmon_device_data',
 			'tmon_staged_settings',
 			'tmon_uc_devices',
-			'tmon_device_data', // duplicate-safe
-			'tmon_device_commands', // duplicate-safe
-			'tmon_ota_jobs',
 		]);
+
+		// Disable foreign key checks (MySQL) to avoid constraint failures while dropping
+		$wpdb->query("SET FOREIGN_KEY_CHECKS = 0");
 
 		foreach ($tables as $t) {
 			$table_name = $wpdb->prefix . $t;
@@ -59,6 +59,9 @@ if (!function_exists('tmon_uc_remove_all_data')) {
 				$ok = false;
 			}
 		}
+
+		// Re-enable foreign key checks
+		$wpdb->query("SET FOREIGN_KEY_CHECKS = 1");
 
 		// Delete options by prefix and a set of known option keys
 		try {

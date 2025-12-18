@@ -82,51 +82,87 @@ function tmon_uc_pair_with_hub_core() {
 
     $hub = trim(get_option('tmon_uc_hub_url', home_url()));
     if (stripos($hub, 'http') !== 0) { $hub = 'https://' . ltrim($hub, '/'); }
+
+    // Ensure local key exists and persist it immediately (so UI can show it even on partial failures)
     $local_key = get_option('tmon_uc_admin_key', '');
     if (!$local_key) {
         try { $local_key = bin2hex(random_bytes(24)); } catch (Exception $e) { $local_key = wp_generate_password(48, false, false); }
         update_option('tmon_uc_admin_key', $local_key);
     }
+
     $endpoint = rtrim($hub, '/') . '/wp-json/tmon-admin/v1/uc/pair';
-    $resp = wp_remote_post($endpoint, [
-        'timeout' => 15,
-        'headers' => ['Content-Type' => 'application/json', 'Accept'=>'application/json', 'User-Agent'=>'TMON-UC/1.0'],
-        'body' => wp_json_encode([
-            'site_url' => home_url(),
-            'uc_key'   => $local_key,
-        ]),
-    ]);
-    if (is_wp_error($resp)) {
-        return $result = ['status'=>'error','message'=>$resp->get_error_message(), 'paired'=>false];
-    }
-    $code = wp_remote_retrieve_response_code($resp);
-    $body = json_decode(wp_remote_retrieve_body($resp), true);
-    if ($code === 200 && is_array($body) && !empty($body['hub_key'])) {
-        update_option('tmon_uc_hub_shared_key', sanitize_text_field($body['hub_key']));
-        if (!empty($body['read_token'])) update_option('tmon_uc_hub_read_token', sanitize_text_field($body['read_token']));
-        // Track normalized pairing
-        $paired = get_option('tmon_uc_paired_sites', []);
-        if (!is_array($paired)) $paired = [];
-        $norm = tmon_uc_normalize_url($hub);
-        $paired[$norm] = [
-            'site'      => $hub,
-            'paired_at' => current_time('mysql'),
-            'read_token'=> isset($body['read_token']) ? sanitize_text_field($body['read_token']) : '',
-        ];
-        update_option('tmon_uc_paired_sites', $paired, false);
-        // Backfill devices
-        if (function_exists('tmon_uc_backfill_provisioned_from_admin')) {
-            tmon_uc_backfill_provisioned_from_admin();
+
+    // Try several common payload field names if needed; start with canonical payload
+    $payload_candidates = [
+        ['site_url' => home_url(), 'uc_key' => $local_key],
+        ['site_url' => home_url(), 'uc_key' => $local_key, 'uc_key_name' => 'uc_key'],
+        ['site_url' => home_url(), 'admin_key' => $local_key],
+    ];
+
+    $last_err = null;
+    foreach ($payload_candidates as $payload) {
+        $resp = wp_remote_post($endpoint, [
+            'timeout' => 15,
+            'headers' => ['Content-Type' => 'application/json', 'Accept'=>'application/json', 'User-Agent'=>'TMON-UC/1.0'],
+            'body' => wp_json_encode($payload),
+        ]);
+
+        if (is_wp_error($resp)) {
+            $last_err = ['error' => $resp->get_error_message()];
+            error_log('tmon-uc: pairing request error: ' . $resp->get_error_message());
+            continue;
         }
-        return $result = [
-            'status' => 'ok',
-            'paired' => true,
-            'hub_key' => sanitize_text_field($body['hub_key']),
-            'read_token' => isset($body['read_token']) ? sanitize_text_field($body['read_token']) : '',
-            'paired_sites' => $paired,
-        ];
+
+        $code = intval(wp_remote_retrieve_response_code($resp));
+        $body_raw = wp_remote_retrieve_body($resp);
+        $body = json_decode($body_raw, true);
+
+        // Accept several possible hub key field names
+        $hub_key = $body['hub_key'] ?? $body['shared_key'] ?? $body['hub_shared_key'] ?? $body['key'] ?? null;
+        $read_token = $body['read_token'] ?? $body['readToken'] ?? $body['token'] ?? null;
+
+        if ($code >= 200 && $code < 300 && $hub_key) {
+            update_option('tmon_uc_hub_shared_key', sanitize_text_field($hub_key));
+            if ($read_token) update_option('tmon_uc_hub_read_token', sanitize_text_field($read_token));
+
+            // Track normalized pairing
+            $paired = get_option('tmon_uc_paired_sites', []);
+            if (!is_array($paired)) $paired = [];
+            $norm = tmon_uc_normalize_url($hub);
+            $paired[$norm] = [
+                'site'      => $hub,
+                'paired_at' => current_time('mysql'),
+                'read_token'=> $read_token ? sanitize_text_field($read_token) : '',
+            ];
+            update_option('tmon_uc_paired_sites', $paired, false);
+
+            // Backfill devices if available
+            if (function_exists('tmon_uc_backfill_provisioned_from_admin')) {
+                tmon_uc_backfill_provisioned_from_admin();
+            }
+
+            return $result = [
+                'status' => 'ok',
+                'paired' => true,
+                'hub_key' => sanitize_text_field($hub_key),
+                'read_token' => $read_token ? sanitize_text_field($read_token) : '',
+                'uc_key' => $local_key, // ensure UI can show the generated local key
+                'paired_sites' => $paired,
+            ];
+        }
+
+        // keep last response info for debugging if loop ends without success
+        $last_err = ['http_code' => $code, 'body' => substr($body_raw, 0, 2000)];
+        error_log('tmon-uc: pairing bad_response http=' . $code . ' body=' . substr($body_raw,0,1000));
     }
-    return $result = ['status'=>'error','message'=>'bad_response','paired'=>false,'body'=>$body];
+
+    // If we get here, all payload attempts failed
+    return $result = [
+        'status' => 'error',
+        'message' => 'bad_response',
+        'paired' => false,
+        'error' => $last_err,
+    ];
 }
 
 // Admin-post: Purge ALL UC data
