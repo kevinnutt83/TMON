@@ -65,25 +65,29 @@ define( 'TMON_UNIT_CONNECTOR_VERSION', '0.2.0' );
 define( 'TMON_UNIT_CONNECTOR_PATH', plugin_dir_path( __FILE__ ) );
 define( 'TMON_UNIT_CONNECTOR_URL', plugin_dir_url( __FILE__ ) );
 
-// Autoload includes
-foreach ( glob( __DIR__ . '/includes/*.php' ) as $file ) {
-    require_once $file;
-}
+// Defer loading of includes and admin pages until plugins_loaded so REST handlers and
+// other initialization only run after WP and other plugins (e.g., Elementor) finish setup.
+add_action('plugins_loaded', function() {
+	// Load all include files (idempotent via require_once)
+	foreach ( glob( __DIR__ . '/includes/*.php' ) as $file ) {
+		require_once $file;
+	}
+
+	// Admin pages and helpers (load only in admin context)
+	if ( is_admin() ) {
+		foreach ( glob( __DIR__ . '/admin/*.php' ) as $file ) {
+			require_once $file;
+		}
+		require_once __DIR__ . '/admin/starter-page.php';
+		require_once __DIR__ . '/admin/public-docs-page.php';
+		require_once __DIR__ . '/admin/location.php';
+	}
+}, 20); // run after most plugins initialize
 
 // Load v2 API routes once
 if (!defined('TMON_UC_V2_API_LOADED')) {
 	require_once __DIR__ . '/includes/v2-api.php';
 }
-
-// Admin
-if ( is_admin() ) {
-    foreach ( glob( __DIR__ . '/admin/*.php' ) as $file ) {
-        require_once $file;
-    }
-}
- require_once __DIR__ . '/admin/starter-page.php';
- require_once __DIR__ . '/admin/public-docs-page.php';
- require_once __DIR__ . '/admin/location.php';
 
 // Assets
 
