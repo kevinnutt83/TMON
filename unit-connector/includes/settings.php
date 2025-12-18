@@ -133,16 +133,21 @@ function tmon_uc_pair_with_hub_core() {
 add_action('admin_post_tmon_uc_purge_all', function(){
     if (!current_user_can('manage_options')) wp_die('Insufficient permissions');
     check_admin_referer('tmon_uc_purge_all');
-    global $wpdb;
-    // Delete DB rows
-    $wpdb->query("DELETE FROM {$wpdb->prefix}tmon_field_data");
-    $wpdb->query("DELETE FROM {$wpdb->prefix}tmon_device_commands");
-    $wpdb->query("DELETE FROM {$wpdb->prefix}tmon_ota_jobs");
-    $wpdb->query("DELETE FROM {$wpdb->prefix}tmon_devices");
-    // Delete files
-    $dir = WP_CONTENT_DIR . '/tmon-field-logs';
-    if (is_dir($dir)) {
-        foreach (glob($dir . '/*') as $f) { @unlink($f); }
+
+    // Prefer centralized cleanup routine if available
+    if (function_exists('tmon_uc_remove_all_data')) {
+        tmon_uc_remove_all_data();
+    } else {
+        // Fallback legacy purge (best-effort)
+        global $wpdb;
+        $wpdb->query("DELETE FROM {$wpdb->prefix}tmon_field_data");
+        $wpdb->query("DELETE FROM {$wpdb->prefix}tmon_device_commands");
+        $wpdb->query("DELETE FROM {$wpdb->prefix}tmon_ota_jobs");
+        $wpdb->query("DELETE FROM {$wpdb->prefix}tmon_devices");
+        $dir = WP_CONTENT_DIR . '/tmon-field-logs';
+        if (is_dir($dir)) {
+            foreach (glob($dir . '/*') as $f) { @unlink($f); }
+        }
     }
     wp_safe_redirect(admin_url('admin.php?page=tmon-settings&purge=all'));
     exit;
