@@ -10,10 +10,11 @@
 
 /*
 Plugin Name: TMON Unit Connector
-Description: Site-side connector for TMON devices; receives data and manages provisioning.
-Version: 0.2.0
-Author: TMON DevOps
+Description: Unit Connector for TMON devices (backhaul, commands, staged settings).
+Version: 2.03.0
+Author: TMON
 */
+if (!defined('TMON_UC_VERSION')) define('TMON_UC_VERSION', '2.03.0');
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 

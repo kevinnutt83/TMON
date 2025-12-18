@@ -89,3 +89,9 @@ Known issues:
 - Firmware: WiFi node role now runs field-data and command polling tasks similar to base nodes.
 - Firmware: OLED operations gated by ENABLE_OLED to avoid unnecessary work when disabled.
 - Docs: TODO updated to align with original project scope and prioritized next actions.
+
+## v2.03.0 - YYYY-MM-DD
+- Firmware bumped to v2.03.0 (MicroPython) and manifest updated.
+- Device endpoint improvements: device/staged-settings endpoint, command lifecycle and staging flow.
+- LoRa base: remote telemetry persisted to field logs and per-device settings files; remote samples are evaluated for frost/heat comparisons.
+- Devices: staged settings persisted as device_settings-<UNIT_ID>.json and applied safely via settings_apply.

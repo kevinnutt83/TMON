@@ -147,3 +147,6 @@ Device commands:
 Next:
 - LoRa packet HMAC/replay protection and payload encryption.
 - Widgets/graphs for UC dashboards and per-device management.
+
+## Release v2.03.0
+- MicroPython firmware: v2.03.0. See CHANGELOG.md for details.

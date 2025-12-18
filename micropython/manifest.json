@@ -1,4 +1,7 @@
 {
+  "name": "tmon-micropython",
+  "version": "0.2.3",
+  "description": "TMON MicroPython firmware manifest",
   "files": {
     "lora.py": "sha256:c1f8527f4fdb279ef4fde7ec092a30aae76522fc114167ae2b1f9ff5d9b42a16",
     "main.py": "sha256:69d9a5abed1ecadbc4f1c1bd73ad482cf8a410c7c5358667a455482d73984b0d",
