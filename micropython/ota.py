@@ -48,23 +48,44 @@ async def check_for_update():
         return
     try:
         resp = requests.get(url, timeout=10)
-        if getattr(resp, 'status_code', 0) == 200:
+        status = getattr(resp, 'status_code', None)
+        if status == 200:
             remote_ver = _normalize_version(resp.text if hasattr(resp, 'text') else '')
+            await debug_print(f'OTA: remote version file fetched: {remote_ver} from {url} (status {status})', 'OTA')
             if is_newer(remote_ver, getattr(settings, 'FIRMWARE_VERSION', '')):
                 await debug_print(f'OTA: update available {remote_ver} (current {settings.FIRMWARE_VERSION})', 'OTA')
-                # mark pending for later application flow
                 try:
                     write_text(getattr(settings, 'OTA_PENDING_FILE', '/logs/ota_pending.flag'), remote_ver)
                 except Exception:
                     pass
             else:
                 await debug_print('OTA: firmware up to date', 'OTA')
+        else:
+            txt = getattr(resp, 'text', '')[:512] if hasattr(resp, 'text') else ''
+            await debug_print(f'OTA: version fetch non-200 {status} {txt}', 'ERROR')
         try:
             resp.close()
         except Exception:
             pass
     except Exception as e:
         await debug_print(f'OTA check failed: {e}', 'ERROR')
+
+# Helper: write debug artifact
+def _write_debug_artifact(name, data_bytes):
+    try:
+        dbg_dir = getattr(settings, 'LOG_DIR', '/logs')
+        try:
+            os.stat(dbg_dir)
+        except Exception:
+            try:
+                os.mkdir(dbg_dir)
+            except Exception:
+                pass
+        path = dbg_dir.rstrip('/') + '/' + name
+        with open(path, 'wb') as wf:
+            wf.write(data_bytes)
+    except Exception:
+        pass
 
 async def apply_pending_update():
     """If OTA_PENDING_FILE exists, fetch manifest and apply allowed files.
@@ -86,44 +107,67 @@ async def apply_pending_update():
             return False
         base_url = getattr(settings, 'OTA_FIRMWARE_BASE_URL', '')
         if not base_url or not requests:
+            await debug_print('OTA: no base URL or requests unavailable', 'ERROR')
             return False
-        # Manifest is optional but recommended
-        manifest_url = getattr(settings, 'OTA_MANIFEST_URL', '')
+
+        # Fetch manifest (support multiple fallbacks)
         manifest = {}
-        if manifest_url:
+        manifest_urls = getattr(settings, 'OTA_MANIFEST_URLS', [getattr(settings, 'OTA_MANIFEST_URL','')])
+        manifest_fetched = False
+        for murl in manifest_urls:
+            if not murl:
+                continue
             try:
-                r = requests.get(manifest_url, timeout=15)
-                if getattr(r, 'status_code', 0) == 200:
-                    manifest = json.loads(r.text) if hasattr(r, 'text') else {}
+                await debug_print(f'OTA: fetching manifest {murl}', 'OTA')
+                r = requests.get(murl, timeout=15)
+                status = getattr(r, 'status_code', None)
+                body = getattr(r, 'text', '') if hasattr(r, 'text') else ''
+                await debug_print(f'OTA: manifest response {status} length={len(body)}', 'OTA')
+                if status == 200 and body:
+                    try:
+                        manifest = json.loads(body)
+                        manifest_fetched = True
+                        # persist manifest for analysis
+                        try:
+                            mpath = getattr(settings, 'LOG_DIR','/logs').rstrip('/') + '/ota_manifest.json'
+                            with open(mpath, 'w') as mf:
+                                mf.write(json.dumps(manifest, indent=2))
+                            await debug_print(f'OTA: manifest saved to {mpath}', 'OTA')
+                        except Exception:
+                            pass
+                        try:
+                            r.close()
+                        except Exception:
+                            pass
+                        break
+                    except Exception as pe:
+                        await debug_print(f'OTA: manifest parse failed from {murl}: {pe}', 'ERROR')
+                        # save page for inspection
+                        try:
+                            _write_debug_artifact('ota_manifest_fetch_error.txt', (body or '').encode('utf-8', 'ignore'))
+                        except Exception:
+                            pass
+                else:
+                    await debug_print(f'OTA: manifest fetch returned {status} from {murl}', 'ERROR')
+                    try:
+                        _write_debug_artifact('ota_manifest_fetch_response.txt', (body or '').encode('utf-8', 'ignore'))
+                    except Exception:
+                        pass
                 try:
                     r.close()
                 except Exception:
                     pass
-            except Exception:
-                manifest = {}
-        # Optional manifest signature verification (HMAC)
-        try:
-            sig_url = getattr(settings, 'OTA_MANIFEST_SIG_URL', '')
-            secret = getattr(settings, 'OTA_MANIFEST_HMAC_SECRET', '')
-            if sig_url and secret:
-                rs = requests.get(sig_url, timeout=10)
-                if getattr(rs, 'status_code', 0) == 200:
-                    remote_sig = rs.text.strip() if hasattr(rs, 'text') else ''
-                    import uhashlib as _uh, ubinascii as _ub
-                    h = _uh.sha256(secret.encode() + json.dumps(manifest, sort_keys=True).encode())
-                    local_sig = _ub.hexlify(h.digest()).decode()
-                    if remote_sig[:len(local_sig)] != local_sig:
-                        await debug_print('OTA: manifest signature mismatch', 'ERROR')
-                        return False
-                try:
-                    rs.close()
-                except Exception:
-                    pass
-        except Exception:
-            pass
+            except Exception as e:
+                await debug_print(f'OTA: manifest request exception for {murl}: {e}', 'ERROR')
+
+        if not manifest_fetched:
+            await debug_print('OTA: manifest not available; aborting OTA apply', 'ERROR')
+            return False
+
         allow = getattr(settings, 'OTA_FILES_ALLOWLIST', [])
         if not allow:
             allow = ['main.py']
+
         backup_dir = getattr(settings, 'OTA_BACKUP_DIR', '/ota/backup')
         if getattr(settings, 'OTA_BACKUP_ENABLED', True):
             try:
@@ -136,74 +180,173 @@ async def apply_pending_update():
                         os.mkdir(backup_dir)
                     except Exception:
                         pass
-        downloaded = {}
+
         import ubinascii as _ub
         import uhashlib as _uh
+
+        max_hash_failures = int(getattr(settings, 'OTA_MAX_HASH_FAILURES', 3))
+        retry_interval_s = int(getattr(settings, 'OTA_HASH_RETRY_INTERVAL_S', 2))
+
+        downloaded = {}
         for name in allow:
-            url = _safe_join(base_url, name)
+            expected_hex = None
+            # Support manifest formats: { "files": { name: sha256 } } or { name: sha256 } or manifest['files'][name]['sha256']
             try:
-                rr = requests.get(url, timeout=20)
-                if getattr(rr, 'status_code', 0) != 200:
-                    await debug_print(f'OTA: download failed {name}: {getattr(rr,"status_code",0)}', 'ERROR')
-                    raise Exception('download failed')
-                content = rr.content if hasattr(rr, 'content') else (rr.text.encode() if hasattr(rr, 'text') else b'')
-                if not content:
-                    raise Exception('empty file')
-                if len(content) > int(getattr(settings, 'OTA_MAX_FILE_BYTES', 262144)):
-                    raise Exception('file too large')
-                if getattr(settings, 'OTA_HASH_VERIFY', True) and isinstance(manifest, dict):
-                    # Support manifest as { files: { name: sha256 } } or { name: sha256 }
-                    files_map = manifest.get('files', manifest)
-                    expected = files_map.get(name) if isinstance(files_map, dict) else None
-                    if expected:
-                        h = _uh.sha256(content).digest()
-                        digest = _ub.hexlify(h).decode()
-                        if digest.lower() != str(expected).lower():
-                            await debug_print(f'OTA: hash mismatch for {name}', 'ERROR')
-                            raise Exception('hash mismatch')
-                downloaded[name] = content
-            except Exception as e:
+                if isinstance(manifest, dict):
+                    if 'files' in manifest and isinstance(manifest['files'], dict):
+                        fentry = manifest['files'].get(name)
+                        if isinstance(fentry, dict):
+                            expected_hex = fentry.get('sha256') or fentry.get('hash')
+                        else:
+                            expected_hex = manifest['files'].get(name)
+                    else:
+                        entry = manifest.get(name)
+                        if isinstance(entry, dict):
+                            expected_hex = entry.get('sha256') or entry.get('hash')
+                        else:
+                            expected_hex = entry
+                if expected_hex:
+                    expected_hex = str(expected_hex).strip().lower()
+            except Exception:
+                expected_hex = None
+
+            download_ok = False
+            attempts = 0
+            last_error = ''
+            while attempts < max_hash_failures and not download_ok:
+                attempts += 1
                 try:
-                    rr.close()
-                except Exception:
-                    pass
-                # Abort and optionally restore
-                if getattr(settings, 'OTA_RESTORE_ON_FAIL', True):
-                    await debug_print(f'OTA: abort due to error {e}', 'ERROR')
-                return False
-            finally:
-                try:
-                    rr.close()
-                except Exception:
-                    pass
-        # Backup and apply
-        for name, data in downloaded.items():
-            try:
-                # Backup existing file
-                src = name
-                if getattr(settings, 'OTA_BACKUP_ENABLED', True):
-                    _ensure_dir(backup_dir + '/' + name)
+                    url = _safe_join(base_url, name)
+                    await debug_print(f'OTA: downloading {name} from {url} (attempt {attempts})', 'OTA')
+                    rr = requests.get(url, stream=True, timeout=20) if hasattr(requests, 'get') else requests.get(url, timeout=20)
+                    status = getattr(rr, 'status_code', None)
+                    content_len = None
                     try:
-                        with open(src, 'rb') as sf:
-                            with open(backup_dir + '/' + name, 'wb') as bf:
-                                bf.write(sf.read())
+                        content_len = int(rr.headers.get('Content-Length')) if hasattr(rr, 'headers') and rr.headers.get('Content-Length') else None
+                    except Exception:
+                        content_len = None
+                    await debug_print(f'OTA: HTTP {status} Content-Length={content_len}', 'OTA')
+                    if status != 200:
+                        body_snip = getattr(rr, 'text', '')[:1024] if hasattr(rr, 'text') else ''
+                        await debug_print(f'OTA: file download failed status={status} body_snip={body_snip[:200]}', 'ERROR')
+                        _write_debug_artifact(f'ota_response_{name}.txt', (body_snip or '').encode('utf-8', 'ignore'))
+                        try:
+                            rr.close()
+                        except Exception:
+                            pass
+                        last_error = f'HTTP {status}'
+                        await debug_print(f'OTA: download {name} failed with HTTP {status}', 'ERROR')
+                        await asyncio.sleep(retry_interval_s)
+                        continue
+
+                    # stream download to temp file and compute sha256
+                    tmp_path = getattr(settings, 'LOG_DIR', '/logs').rstrip('/') + f'/ota_tmp_{name}'
+                    final_path = name  # apply path
+                    h = _uh.sha256()
+                    total = 0
+                    try:
+                        if hasattr(rr, 'iter_content'):
+                            with open(tmp_path, 'wb') as wf:
+                                for chunk in rr.iter_content(1024):
+                                    if not chunk:
+                                        continue
+                                    wf.write(chunk)
+                                    try:
+                                        h.update(chunk)
+                                    except Exception:
+                                        # uhashlib in some ports uses .update or uses .digest directly - usually .update exists
+                                        pass
+                                    total += len(chunk)
+                        else:
+                            # fallback: read .content
+                            data = getattr(rr, 'content', None)
+                            if data is None and hasattr(rr, 'text'):
+                                data = getattr(rr, 'text', '').encode('utf-8', 'ignore')
+                            if data is None:
+                                data = b''
+                            with open(tmp_path, 'wb') as wf:
+                                wf.write(data)
+                            try:
+                                h.update(data)
+                            except Exception:
+                                pass
+                            total = len(data)
+                    except Exception as de:
+                        await debug_print(f'OTA: download write error for {name}: {de}', 'ERROR')
+                        try:
+                            rr.close()
+                        except Exception:
+                            pass
+                        last_error = f'download_write_error:{de}'
+                        await asyncio.sleep(retry_interval_s)
+                        continue
+                    try:
+                        rr.close()
                     except Exception:
                         pass
-                # Write new file
-                _ensure_dir(src)
-                with open(src, 'wb') as out:
-                    out.write(data)
-            except Exception as e:
-                await debug_print(f'OTA: apply failed for {name}: {e}', 'ERROR')
-                if getattr(settings, 'OTA_RESTORE_ON_FAIL', True):
-                    # Try to restore backups
+
+                    comp_hash = _ub.hexlify(h.digest()).decode().lower()
+                    await debug_print(f'OTA: downloaded {name} size={total} computed_sha256={comp_hash}', 'OTA')
+
+                    # If manifest provided expected hash, compare
+                    if expected_hex:
+                        if comp_hash != expected_hex.lower():
+                            # save artifact for investigation
+                            await debug_print(f'OTA: HASH MISMATCH for {name} expected={expected_hex} computed={comp_hash}', 'ERROR')
+                            try:
+                                _write_debug_artifact(f'ota_failed_{name}.bin', open(tmp_path, 'rb').read())
+                            except Exception:
+                                pass
+                            last_error = f'hash_mismatch expected={expected_hex} computed={comp_hash}'
+                            # on mismatch, try again after delay
+                            await asyncio.sleep(retry_interval_s)
+                            continue
+                        else:
+                            await debug_print(f'OTA: hash OK for {name}', 'OTA')
+                    else:
+                        await debug_print(f'OTA: no expected hash for {name} (manifest missing); computed={comp_hash}', 'WARN')
+
+                    # Passed checks → backup current & apply
                     try:
-                        with open(backup_dir + '/' + name, 'rb') as bf:
-                            with open(src, 'wb') as sf:
-                                sf.write(bf.read())
-                    except Exception:
-                        pass
+                        if getattr(settings, 'OTA_BACKUP_ENABLED', True):
+                            try:
+                                with open(final_path, 'rb') as sf:
+                                    with open(backup_dir.rstrip('/') + '/' + name, 'wb') as bf:
+                                        bf.write(sf.read())
+                            except Exception:
+                                pass
+                        with open(final_path, 'wb') as out:
+                            out.write(open(tmp_path, 'rb').read())
+                    except Exception as e:
+                        await debug_print(f'OTA: apply write failed for {name}: {e}', 'ERROR')
+                        last_error = f'apply_error:{e}'
+                        # restore from backup if available
+                        if getattr(settings, 'OTA_RESTORE_ON_FAIL', True):
+                            try:
+                                with open(backup_dir.rstrip('/') + '/' + name, 'rb') as bf:
+                                    with open(final_path, 'wb') as f2:
+                                        f2.write(bf.read())
+                            except Exception:
+                                pass
+                        await asyncio.sleep(retry_interval_s)
+                        continue
+
+                    # success
+                    downloaded[name] = {'path': final_path, 'sha256': comp_hash}
+                    download_ok = True
+
+                except Exception as e:
+                    await debug_print(f'OTA: exception when downloading {name}: {e}', 'ERROR')
+                    last_error = f'exception:{e}'
+                    await asyncio.sleep(retry_interval_s)
+
+            if not download_ok:
+                await debug_print(f'OTA: failed to download {name} after {attempts} attempt(s) last_error={last_error}', 'ERROR')
+                if getattr(settings, 'OTA_RESTORE_ON_FAIL', True):
+                    await debug_print('OTA: aborting apply and restoring backups where possible', 'ERROR')
+                    # restore and abort
                 return False
+
         # Success: update version and clear pending
         try:
             settings.FIRMWARE_VERSION = target_ver

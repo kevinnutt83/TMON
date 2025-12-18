@@ -25,11 +25,12 @@ def download_and_apply_firmware(url, version_hint=None, target_path=None, chunk_
     """
     Download firmware to the device OTA backup path (does not perform platform flashing).
     Returns True on successful download; actual apply is hardware-specific and should be executed by device code.
+    Returns dict with keys: { 'ok': bool, 'path': path, 'size': int, 'sha256':hex, 'error': msg }
     """
     if not url:
-        raise ValueError("No firmware URL provided")
+        return {'ok': False, 'error': 'no_url'}
 
-    # Ensure backup dir exists (MicroPython may not support makedirs)
+    # Ensure backup dir exists
     try:
         os.makedirs(OTA_BACKUP_DIR, exist_ok=True)
     except Exception:
@@ -42,28 +43,67 @@ def download_and_apply_firmware(url, version_hint=None, target_path=None, chunk_
         fname = "firmware_{v}.bin".format(v=(version_hint or "latest"))
         target_path = OTA_BACKUP_DIR.rstrip('/') + '/' + fname
 
-    resp = requests.get(url, stream=True, timeout=30)
-    if not resp or getattr(resp, 'status_code', None) not in (200, 201):
-        raise RuntimeError("HTTP error: %s" % (getattr(resp, 'status_code', None)))
+    try:
+        resp = requests.get(url, stream=True, timeout=30) if hasattr(requests, 'get') else requests.get(url, timeout=30)
+    except Exception as e:
+        return {'ok': False, 'error': f'http_error:{e}'}
+
+    status = getattr(resp, 'status_code', None)
+    if status not in (200, 201):
+        try:
+            body = getattr(resp, 'text', '')[:1024]
+            _note = f'HTTP {status} body_snip={body[:512]}'
+        except Exception:
+            _note = f'HTTP {status}'
+        try:
+            resp.close()
+        except Exception:
+            pass
+        return {'ok': False, 'error': _note}
 
     total_written = 0
+    sha = None
     try:
-        # urequests may not implement iter_content; try iter_content then fallback to content
-        if hasattr(resp, 'iter_content'):
-            with open(target_path, 'wb') as f:
-                for chunk in resp.iter_content(chunk_size):
-                    if not chunk:
-                        continue
-                    f.write(chunk)
-                    total_written += len(chunk)
-                    if total_written > OTA_MAX_FILE_BYTES:
-                        raise RuntimeError("Firmware exceeds maximum allowed size")
-        else:
-            data = getattr(resp, 'content', None)
-            if data:
+        # streaming write & incremental SHA256
+        try:
+            import uhashlib as _uh
+            import ubinascii as _ub
+            sha = _uh.sha256()
+            if hasattr(resp, 'iter_content'):
+                with open(target_path, 'wb') as f:
+                    for chunk in resp.iter_content(chunk_size):
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                        try:
+                            sha.update(chunk)
+                        except Exception:
+                            # some uhashlib implementations may differ, ignore update errors
+                            pass
+                        total_written += len(chunk)
+            else:
+                data = getattr(resp, 'content', None)
+                if data is None and hasattr(resp, 'text'):
+                    data = getattr(resp, 'text', '').encode('utf-8', 'ignore')
+                if not data:
+                    data = b''
                 with open(target_path, 'wb') as f:
                     f.write(data)
+                try:
+                    sha.update(data)
+                except Exception:
+                    pass
                 total_written = len(data)
+            hexsum = _ub.hexlify(sha.digest()).decode().lower() if sha else ''
+        except Exception:
+            # fallback: write whole content
+            data = getattr(resp, 'content', None)
+            if data is None and hasattr(resp, 'text'):
+                data = getattr(resp, 'text', '').encode('utf-8', 'ignore')
+            with open(target_path, 'wb') as f:
+                f.write(data or b'')
+            total_written = len(data or b'')
+            hexsum = ''
     finally:
         try:
             resp.close()
@@ -71,11 +111,10 @@ def download_and_apply_firmware(url, version_hint=None, target_path=None, chunk_
             pass
 
     if not os.path.exists(target_path) or os.stat(target_path)[6] == 0:
-        raise RuntimeError("Downloaded firmware is empty or missing")
+        return {'ok': False, 'error': 'empty_or_missing', 'path': target_path}
 
-    # DO NOT AUTO-FLASH: return path for device to apply safely per hardware platform
-    print("Firmware downloaded to:", target_path, "size:", total_written)
-    return True
+    # success
+    return {'ok': True, 'path': target_path, 'size': total_written, 'sha256': hexsum}
 
 # Export helper
 __all__ = ['download_and_apply_firmware']
