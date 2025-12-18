@@ -17,6 +17,10 @@ Author: TMON DevOps
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
+// Ensure common login globals exist to avoid "Undefined variable" warnings in wp-login.php.
+if (! isset( $GLOBALS['user_login'] )) $GLOBALS['user_login'] = '';
+if (! isset( $GLOBALS['user_pass'] ))  $GLOBALS['user_pass']  = '';
+
 // Defensive fallback: if WP pluggable user functions are not yet defined (some hosts/plugins can trigger REST early),
 // provide a minimal stub so current_user_can() and related checks do not fatal during early bootstrap.
 if ( ! function_exists( 'wp_get_current_user' ) ) {
@@ -29,7 +33,7 @@ if ( ! function_exists( 'wp_get_current_user' ) ) {
 			public $user_login = '';
 			public $user_email = '';
 			public function has_cap( $cap ) { return false; }
-			// Indicates whether this represents an actual WP user (matches WP_User::exists)
+			// Permanent fix: indicate this is NOT an authenticated WP_User
 			public function exists() { return false; }
 			// graceful property access
 			public function __get( $name ) { return null; }
@@ -417,54 +421,11 @@ add_action('admin_init', function(){
     }
 });
 
-// Early compatibility shim: ensure any existing "current_user" object has exists()
-// (protects against TMON_Fallback_User missing exists(), which causes a fatal).
-if (!class_exists('TMON_User_Compat_Proxy')) {
-	class TMON_User_Compat_Proxy {
-		private $orig;
-		public function __construct($orig) {
-			$this->orig = $orig;
-			// Mirror properties so other code that reads $current_user->prop still works.
-			foreach (get_object_vars($orig) as $k => $v) { $this->$k = $v; }
-		}
-		// Satisfy WP expectations (is_user_logged_in etc.)
-		public function exists() { return false; }
-		public function __get($k) { return $this->orig->$k ?? null; }
-		public function __set($k, $v) { $this->orig->$k = $v; $this->$k = $v; }
-		public function __isset($k) { return isset($this->orig->$k); }
-		public function __call($m, $a) {
-			if (is_object($this->orig) && method_exists($this->orig, $m)) {
-				return call_user_func_array([$this->orig, $m], $a);
-			}
-			return null;
-		}
-	}
+// Early safety: if the global current_user is a broken object (lacks exists()), clear it so WP will create the proper WP_User later.
+// NOTE: we deliberately clear to null rather than wrap/replace with a proxy to avoid interfering with later WP auth.
+if (isset($GLOBALS['current_user']) && is_object($GLOBALS['current_user']) && !method_exists($GLOBALS['current_user'], 'exists')) {
+	$GLOBALS['current_user'] = null;
 }
-
-$__tmon_fix_current_user = function() {
-	if (isset($GLOBALS['current_user']) && is_object($GLOBALS['current_user']) && !method_exists($GLOBALS['current_user'], 'exists')) {
-		$GLOBALS['current_user'] = new TMON_User_Compat_Proxy($GLOBALS['current_user']);
-	}
-};
-// Run immediately (plugin file load) and re-check early in bootstrap in case another plugin sets broken object later.
-$__tmon_fix_current_user();
-add_action('plugins_loaded', $__tmon_fix_current_user, 0);
-add_action('init', $__tmon_fix_current_user, 0);
-add_action('admin_init', $__tmon_fix_current_user, 0);
-
-// Guard filters: avoid determine_current_user / wp_get_current_user returning broken objects.
-add_filter('determine_current_user', function($user) {
-	if (is_object($user) && is_a($user, 'TMON_Fallback_User')) return 0;
-	return $user;
-}, 1);
-
-add_filter('wp_get_current_user', function($user) {
-	if (is_object($user) && !method_exists($user, 'exists')) {
-		if (class_exists('WP_User')) return new WP_User(0);
-		return new TMON_User_Compat_Proxy($user);
-	}
-	return $user;
-}, 1);
 
 // Ensure default variables exist so stray references do not emit PHP notices.
 // These are harmless defaults and avoid "Undefined variable" warnings if a stray reference occurs
