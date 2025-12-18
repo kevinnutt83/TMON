@@ -13,6 +13,39 @@ except Exception:
     except Exception:
         asyncio = None
 
+async def _sleep(seconds):
+	"""Robust async sleep: prefer event loop sleep, fall back to blocking sleep."""
+	try:
+		if 'asyncio' in globals() and asyncio:
+			await asyncio.sleep(seconds)
+			return
+	except Exception:
+		pass
+	# Try common async variants dynamically
+	try:
+		import uasyncio as _u
+		await _u.sleep(seconds)
+		return
+	except Exception:
+		pass
+	try:
+		import asyncio as _a
+		await _a.sleep(seconds)
+		return
+	except Exception:
+		pass
+	# Last-resort blocking sleep to avoid NameError during retries
+	try:
+		import utime as _t
+		_t.sleep(seconds)
+	except Exception:
+		try:
+			import time as _t
+			_t.sleep(seconds)
+		except Exception:
+			# give up silently
+			pass
+
 import settings
 from config_persist import write_text
 from utils import debug_print
