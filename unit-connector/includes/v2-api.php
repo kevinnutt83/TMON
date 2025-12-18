@@ -6,6 +6,9 @@ if (!defined('TMON_UC_V2_API_LOADED')) {
 	define('TMON_UC_V2_API_LOADED', true);
 }
 
+// Ensure hub config helpers are available
+include_once __DIR__ . '/hub-config.php';
+
 // Guard pull-install function registration
 add_action('rest_api_init', function(){
 	// If core tmon_uc_pull_install exists (e.g., declared in includes/api.php), do not re-register
