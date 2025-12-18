@@ -305,78 +305,86 @@ if (!function_exists('tmon_uc_ensure_commands_table')) {
 }
 add_action('init', function(){ tmon_uc_ensure_commands_table(); });
 
-// Endpoint: Admin/UC -> UC: stage a command for a device (used by Admin or hub notify)
-register_rest_route('tmon/v1', '/device/command', [
-	'methods' => 'POST',
-	'permission_callback' => '__return_true',
-	'callback' => function(WP_REST_Request $req){
-		global $wpdb;
-		$unit_id = sanitize_text_field($req->get_param('unit_id') ?? '');
-		$command = sanitize_text_field($req->get_param('command') ?? '');
-		$params = $req->get_param('params') ?? $req->get_param('payload') ?? [];
-		if (!$unit_id || !$command) return rest_ensure_response(['status'=>'error','message'=>'unit_id and command required'], 400);
-		$tbl = $wpdb->prefix . 'tmon_device_commands';
-		$wpdb->insert($tbl, [
-			'device_id' => $unit_id,
-			'command' => $command,
-			'params' => wp_json_encode($params),
-			'status' => 'queued',
-			'created_at' => current_time('mysql'),
-			'updated_at' => current_time('mysql'),
-		]);
-		return rest_ensure_response(['status'=>'ok','id'=>$wpdb->insert_id]);
-	}
-]);
+// Previously these device endpoints were registered at file-include time and could trigger rest_api_init early.
+// Move them into a guarded rest_api_init callback to avoid triggering re-entrant rest_api_init handlers.
+add_action('rest_api_init', function() {
+	static $tmon_uc_device_command_routes_registered = false;
+	if ($tmon_uc_device_command_routes_registered) return;
+	$tmon_uc_device_command_routes_registered = true;
 
-// Endpoint: Device poll for queued commands
-register_rest_route('tmon/v1', '/device/commands', [
-	'methods' => 'POST',
-	'permission_callback' => '__return_true',
-	'callback' => function(WP_REST_Request $req){
-		global $wpdb;
-		$unit_id = sanitize_text_field($req->get_param('unit_id') ?? '');
-		if (!$unit_id) return rest_ensure_response([], 200);
-		$tbl = $wpdb->prefix . 'tmon_device_commands';
-		$max = intval(get_option('tmon_uc_commands_poll_max', 20));
-		$rows = $wpdb->get_results($wpdb->prepare("SELECT id, command, params FROM {$tbl} WHERE device_id=%s AND status='queued' ORDER BY id ASC LIMIT %d", $unit_id, $max), ARRAY_A);
-		$out = [];
-		foreach ($rows as $r) {
-			$out[] = ['id' => intval($r['id']), 'command' => $r['command'], 'params' => json_decode($r['params'], true)];
-			// mark claimed to avoid immediate re-delivery
-			$wpdb->update($tbl, ['status' => 'claimed', 'updated_at' => current_time('mysql')], ['id' => intval($r['id'])]);
+	// Endpoint: Admin/UC -> UC: stage a command for a device (used by Admin or hub notify)
+	register_rest_route('tmon/v1', '/device/command', [
+		'methods' => 'POST',
+		'permission_callback' => '__return_true',
+		'callback' => function(WP_REST_Request $req){
+			global $wpdb;
+			$unit_id = sanitize_text_field($req->get_param('unit_id') ?? '');
+			$command = sanitize_text_field($req->get_param('command') ?? '');
+			$params = $req->get_param('params') ?? $req->get_param('payload') ?? [];
+			if (!$unit_id || !$command) return rest_ensure_response(['status'=>'error','message'=>'unit_id and command required'], 400);
+			$tbl = $wpdb->prefix . 'tmon_device_commands';
+			$wpdb->insert($tbl, [
+				'device_id' => $unit_id,
+				'command' => $command,
+				'params' => wp_json_encode($params),
+				'status' => 'queued',
+				'created_at' => current_time('mysql'),
+				'updated_at' => current_time('mysql'),
+			]);
+			return rest_ensure_response(['status'=>'ok','id'=>$wpdb->insert_id]);
 		}
-		return rest_ensure_response($out);
-	}
-]);
+	]);
 
-// Endpoint: Device reports completion of a command
-register_rest_route('tmon/v1', '/device/command-complete', [
-	'methods' => 'POST',
-	'permission_callback' => '__return_true',
-	'callback' => function(WP_REST_Request $req){
-		global $wpdb;
-		$job_id = intval($req->get_param('job_id') ?? $req->get_param('id') ?? 0);
-		$ok = $req->get_param('ok') ? 1 : 0;
-		$result = $req->get_param('result') ?? '';
-		if (!$job_id) return rest_ensure_response(['status'=>'error','message'=>'job_id required'], 400);
-		$tbl = $wpdb->prefix . 'tmon_device_commands';
-		$wpdb->update($tbl, ['status' => ($ok ? 'done' : 'failed'), 'executed_at'=>current_time('mysql'), 'executed_result'=>wp_json_encode($result), 'updated_at'=>current_time('mysql')], ['id' => $job_id]);
-		return rest_ensure_response(['status'=>'ok']);
-	}
-]);
+	// Endpoint: Device poll for queued commands
+	register_rest_route('tmon/v1', '/device/commands', [
+		'methods' => 'POST',
+		'permission_callback' => '__return_true',
+		'callback' => function(WP_REST_Request $req){
+			global $wpdb;
+			$unit_id = sanitize_text_field($req->get_param('unit_id') ?? '');
+			if (!$unit_id) return rest_ensure_response([], 200);
+			$tbl = $wpdb->prefix . 'tmon_device_commands';
+			$max = intval(get_option('tmon_uc_commands_poll_max', 20));
+			$rows = $wpdb->get_results($wpdb->prepare("SELECT id, command, params FROM {$tbl} WHERE device_id=%s AND status='queued' ORDER BY id ASC LIMIT %d", $unit_id, $max), ARRAY_A);
+			$out = [];
+			foreach ($rows as $r) {
+				$out[] = ['id' => intval($r['id']), 'command' => $r['command'], 'params' => json_decode($r['params'], true)];
+				// mark claimed to avoid immediate re-delivery
+				$wpdb->update($tbl, ['status' => 'claimed', 'updated_at' => current_time('mysql')], ['id' => intval($r['id'])]);
+			}
+			return rest_ensure_response($out);
+		}
+	]);
 
-// Legacy/compat: /device/ack for older devices
-register_rest_route('tmon/v1', '/device/ack', [
-	'methods' => 'POST',
-	'permission_callback' => '__return_true',
-	'callback' => function(WP_REST_Request $req){
-		global $wpdb;
-		$command_id = intval($req->get_param('command_id') ?? 0);
-		$ok = $req->get_param('ok') ? 1 : 0;
-		$result = $req->get_param('result') ?? '';
-		if (!$command_id) return rest_ensure_response(['status'=>'error','message'=>'command_id required'], 400);
-		$tbl = $wpdb->prefix . 'tmon_device_commands';
-		$wpdb->update($tbl, ['status' => ($ok ? 'done' : 'failed'), 'executed_at'=>current_time('mysql'), 'executed_result'=>wp_json_encode($result), 'updated_at'=>current_time('mysql')], ['id' => $command_id]);
-		return rest_ensure_response(['status'=>'ok']);
-	}
-]);
+	// Endpoint: Device reports completion of a command
+	register_rest_route('tmon/v1', '/device/command-complete', [
+		'methods' => 'POST',
+		'permission_callback' => '__return_true',
+		'callback' => function(WP_REST_Request $req){
+			global $wpdb;
+			$job_id = intval($req->get_param('job_id') ?? $req->get_param('id') ?? 0);
+			$ok = $req->get_param('ok') ? 1 : 0;
+			$result = $req->get_param('result') ?? '';
+			if (!$job_id) return rest_ensure_response(['status'=>'error','message'=>'job_id required'], 400);
+			$tbl = $wpdb->prefix . 'tmon_device_commands';
+			$wpdb->update($tbl, ['status' => ($ok ? 'done' : 'failed'), 'executed_at'=>current_time('mysql'), 'executed_result'=>wp_json_encode($result), 'updated_at'=>current_time('mysql')], ['id' => $job_id]);
+			return rest_ensure_response(['status'=>'ok']);
+		}
+	]);
+
+	// Legacy/compat: /device/ack for older devices
+	register_rest_route('tmon/v1', '/device/ack', [
+		'methods' => 'POST',
+		'permission_callback' => '__return_true',
+		'callback' => function(WP_REST_Request $req){
+			global $wpdb;
+			$command_id = intval($req->get_param('command_id') ?? 0);
+			$ok = $req->get_param('ok') ? 1 : 0;
+			$result = $req->get_param('result') ?? '';
+			if (!$command_id) return rest_ensure_response(['status'=>'error','message'=>'command_id required'], 400);
+			$tbl = $wpdb->prefix . 'tmon_device_commands';
+			$wpdb->update($tbl, ['status' => ($ok ? 'done' : 'failed'), 'executed_at'=>current_time('mysql'), 'executed_result'=>wp_json_encode($result), 'updated_at'=>current_time('mysql')], ['id' => $command_id]);
+			return rest_ensure_response(['status'=>'ok']);
+		}
+	]);
+});
