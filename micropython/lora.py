@@ -1768,4 +1768,37 @@ if not WORDPRESS_API_URL:
         path = getattr(settings, 'WORDPRESS_API_URL_FILE', settings.LOG_DIR + '/wordpress_api_url.txt')
         val = (read_text(path, '') or '').strip()
         if val:
-            settings
+            settings.WORDPRESS_API_URL = val
+            WORDPRESS_API_URL = val
+    except Exception:
+        pass
+
+if not WORDPRESS_API_URL:
+    try:
+        import wprest as _w
+        WORDPRESS_API_URL = getattr(_w, 'WORDPRESS_API_URL', '') or ''
+    except Exception:
+        pass
+
+def refresh_wp_url():
+    """Refresh local WORDPRESS_API_URL from settings/wprest/file."""
+    global WORDPRESS_API_URL
+    try:
+        url = getattr(settings, 'WORDPRESS_API_URL', '') or ''
+        if not url:
+            try:
+                import wprest as _w
+                url = getattr(_w, 'WORDPRESS_API_URL', '') or ''
+            except Exception:
+                url = ''
+        if not url:
+            try:
+                from config_persist import read_text
+                path = getattr(settings, 'WORDPRESS_API_URL_FILE', settings.LOG_DIR + '/wordpress_api_url.txt')
+                url = (read_text(path, '') or '').strip()
+            except Exception:
+                pass
+        if url:
+            WORDPRESS_API_URL = url
+    except Exception:
+        pass
