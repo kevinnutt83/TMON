@@ -251,7 +251,7 @@ async def apply_pending_update():
                             pass
                         last_error = f'HTTP {status}'
                         await debug_print(f'OTA: download {name} failed with HTTP {status}', 'ERROR')
-                        await asyncio.sleep(retry_interval_s)
+                        await _sleep(retry_interval_s)
                         continue
 
                     # stream download to temp file and compute sha256
@@ -293,7 +293,7 @@ async def apply_pending_update():
                         except Exception:
                             pass
                         last_error = f'download_write_error:{de}'
-                        await asyncio.sleep(retry_interval_s)
+                        await _sleep(retry_interval_s)
                         continue
                     try:
                         rr.close()
@@ -324,8 +324,8 @@ async def apply_pending_update():
                                 pass
                             last_error = f'hash_mismatch expected={expected_hex} computed={comp_hash}'
                              # on mismatch, try again after delay
-                             await asyncio.sleep(retry_interval_s)
-                             continue
+                            await _sleep(retry_interval_s)
+                            continue
                         else:
                             await debug_print(f'OTA: hash OK for {name}', 'OTA')
                     else:
@@ -353,7 +353,7 @@ async def apply_pending_update():
                                         f2.write(bf.read())
                             except Exception:
                                 pass
-                        await asyncio.sleep(retry_interval_s)
+                        await _sleep(retry_interval_s)
                         continue
 
                     # success
@@ -363,7 +363,7 @@ async def apply_pending_update():
                 except Exception as e:
                     await debug_print(f'OTA: exception when downloading {name}: {e}', 'ERROR')
                     last_error = f'exception:{e}'
-                    await asyncio.sleep(retry_interval_s)
+                    await _sleep(retry_interval_s)
 
             if not download_ok:
                 await debug_print(f'OTA: failed to download {name} after {attempts} attempt(s) last_error={last_error}', 'ERROR')
