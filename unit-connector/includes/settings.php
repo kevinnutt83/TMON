@@ -275,10 +275,13 @@ add_action('wp_ajax_tmon_uc_pair_with_hub_ajax', function(){
     check_ajax_referer('tmon_uc_pair_with_hub_ajax', 'nonce');
     $res = tmon_uc_pair_with_hub_core();
     if (isset($res['status']) && $res['status'] === 'ok' && !empty($res['paired'])) {
+        // success — return pairing info (hub_key/read_token/uc_key etc.)
         wp_send_json_success($res);
     }
+    // Return detailed error info (if available) to aid debugging in the UI.
     $msg = isset($res['message']) ? $res['message'] : 'pair_failed';
-    wp_send_json_error(['message'=>$msg, 'body'=>$res['body'] ?? null], 400);
+    // include the entire result for debugging (caller-side will pick useful fields only)
+    wp_send_json_error(['message' => $msg, 'details' => $res], 400);
 });
 
 // Admin-post: forward a claim to hub via proxy endpoint, authenticated by hub shared key

@@ -138,16 +138,39 @@ jQuery(function($){
                 if (resp.data && resp.data.hub_key) $('#tmon-uc-hub-key').text(resp.data.hub_key);
                 if (resp.data && resp.data.read_token) $('#tmon-uc-read-token').text(resp.data.read_token);
                 if (resp.data && resp.data.paired_sites) renderPairs(resp.data.paired_sites);
+                // Show the local UC key immediately (helpful when pairing just created it)
+                if (resp.data && resp.data.uc_key) {
+                    $('#tmon-uc-local-key').text(resp.data.uc_key);
+                }
             } else {
-                var msg = (resp && resp.data && resp.data.message) ? resp.data.message : 'Pairing failed';
-                $status.html('<div class="notice notice-error is-dismissible"><p>'+esc(msg)+'</p></div>');
+                // Extract error details if present and display them for debugging.
+                var data = resp && resp.data ? resp.data : {};
+                var msg = data.message || 'Pairing failed';
+                var details = data.details || data.error || null;
+                var detailText = '';
+                if (details) {
+                    try {
+                        detailText = typeof details === 'string' ? details : JSON.stringify(details, null, 2);
+                    } catch (e) { detailText = String(details); }
+                    detailText = '<pre style="white-space:pre-wrap; max-height:220px; overflow:auto; background:#f8f8f8; padding:8px; border-radius:4px; margin-top:8px;">' + $('<div>').text(detailText).html() + '</pre>';
+                }
+                $status.html('<div class="notice notice-error is-dismissible"><p>'+esc(msg)+'</p>' + detailText + '</div>');
             }
         }, 'json').fail(function(xhr){
+            // xhr may include JSON with error.details; display it if available
             var msg = 'Pairing failed';
-            if (xhr && xhr.responseJSON && xhr.responseJSON.data && xhr.responseJSON.data.message) {
-                msg = xhr.responseJSON.data.message;
-            }
-            $status.html('<div class="notice notice-error is-dismissible"><p>'+esc(msg)+'</p></div>');
+            var detailText = '';
+            try {
+                var body = xhr && xhr.responseJSON && xhr.responseJSON.data ? xhr.responseJSON.data : (xhr && xhr.responseJSON ? xhr.responseJSON : null);
+                if (body && body.message) msg = body.message;
+                if (body && body.details) {
+                    var d = body.details;
+                    detailText = '<pre style="white-space:pre-wrap; max-height:220px; overflow:auto; background:#f8f8f8; padding:8px; border-radius:4px; margin-top:8px;">' + $('<div>').text(JSON.stringify(d, null, 2)).html() + '</pre>';
+                } else if (xhr && xhr.responseText) {
+                    detailText = '<pre style="white-space:pre-wrap; max-height:220px; overflow:auto; background:#f8f8f8; padding:8px; border-radius:4px; margin-top:8px;">' + $('<div>').text(xhr.responseText).html() + '</pre>';
+                }
+            } catch(e){ /* ignore parsing errors */ }
+            $status.html('<div class="notice notice-error is-dismissible"><p>'+esc(msg)+'</p>' + detailText + '</div>');
         }).always(function(){
             $btn.prop('disabled', false).text(originalText);
         });
