@@ -20,39 +20,63 @@ if ( ! defined( 'ABSPATH' ) ) exit;
 // Ensure common login globals exist to avoid "Undefined variable" warnings in wp-login.php.
 if (! isset( $GLOBALS['user_login'] )) $GLOBALS['user_login'] = '';
 if (! isset( $GLOBALS['user_pass'] ))  $GLOBALS['user_pass']  = '';
+// Also expose short-named locals (wp-login.php expects $user_login / $user_pass variables)
+global $user_login, $user_pass;
+if (!isset($user_login)) $user_login = $GLOBALS['user_login'];
+if (!isset($user_pass))  $user_pass  = $GLOBALS['user_pass'];
 
-// Defensive fallback: if WP pluggable user functions are not yet defined (some hosts/plugins can trigger REST early),
-// provide a minimal stub so current_user_can() and related checks do not fatal during early bootstrap.
-if ( ! function_exists( 'wp_get_current_user' ) ) {
-	// Minimal WP_User-like stub used only until WP finishes loading pluggables.
-	if ( ! class_exists( 'TMON_Fallback_User' ) ) {
-		class TMON_Fallback_User {
-			public $ID = 0;
-			public $roles = [];
-			public $locale = '';
-			public $user_login = '';
-			public $user_email = '';
-			public function has_cap( $cap ) { return false; }
-			// Permanent fix: indicate this is NOT an authenticated WP_User
-			public function exists() { return false; }
-			// graceful property access
-			public function __get( $name ) { return null; }
+// --- Activation/Deactivation hooks ---
+// Register hooks only once to avoid duplicate registration/fatal redeclare issues
+if (!defined('TMON_UC_ACTIVATION_REGISTERED')) {
+	register_activation_hook( __FILE__, 'tmon_unit_connector_activate' );
+	define('TMON_UC_ACTIVATION_REGISTERED', true);
+}
+if (!defined('TMON_UC_DEACTIVATION_REGISTERED')) {
+	register_deactivation_hook( __FILE__, 'tmon_unit_connector_deactivate' );
+	define('TMON_UC_DEACTIVATION_REGISTERED', true);
+}
+
+// Guarded function declarations to avoid redeclare when file is loaded multiple ways.
+if (!function_exists('tmon_unit_connector_activate')) {
+	function tmon_unit_connector_activate() {
+		global $wpdb;
+		require_once __DIR__ . '/includes/schema.php';
+		// Create all required tables (idempotent)
+		try {
+			tmon_uc_install_schema();
+		} catch (Throwable $e) {
+			error_log('tmon-unit-connector: activation schema error: ' . $e->getMessage());
 		}
-	}
-	function wp_get_current_user() {
-		static $u = null;
-		if ( $u === null ) $u = new TMON_Fallback_User();
-		return $u;
+
+		// Add roles (idempotent)
+		add_role('tmon_manager', 'TMON Manager', [
+			'read' => true,
+			'manage_tmon' => true,
+			'edit_tmon_hierarchy' => true,
+			'edit_tmon_units' => true,
+			'edit_tmon_settings' => true,
+		]);
+		add_role('tmon_operator', 'TMON Operator', [
+			'read' => true,
+			'edit_tmon_units' => true,
+		]);
 	}
 }
-// Only define get_current_user_id() if it doesn't already exist (avoid redeclare).
-if ( ! function_exists( 'get_current_user_id' ) ) {
-	function get_current_user_id() {
-		if ( function_exists( 'wp_get_current_user' ) ) {
-			$user = wp_get_current_user();
-			return isset( $user->ID ) ? intval( $user->ID ) : 0;
+
+if (!function_exists('tmon_unit_connector_deactivate')) {
+	function tmon_unit_connector_deactivate() {
+		$remove_data = get_option('tmon_uc_remove_data_on_deactivate', false);
+		if ( $remove_data ) {
+			if (function_exists('tmon_uc_remove_all_data')) {
+				error_log('unit-connector: invoking tmon_uc_remove_all_data() during deactivate.');
+				tmon_uc_remove_all_data();
+			} else {
+				error_log('unit-connector: tmon_uc_remove_all_data() missing - skipping purge on deactivate.');
+			}
 		}
-		return 0;
+		// Remove custom roles and capabilities for TMON
+		remove_role('tmon_manager');
+		remove_role('tmon_operator');
 	}
 }
 
@@ -421,129 +445,21 @@ add_action('admin_init', function(){
     }
 });
 
-// Early safety: if the global current_user is a broken object (lacks exists()), clear it so WP will create the proper WP_User later.
-// NOTE: we deliberately clear to null rather than wrap/replace with a proxy to avoid interfering with later WP auth.
-if (isset($GLOBALS['current_user']) && is_object($GLOBALS['current_user']) && !method_exists($GLOBALS['current_user'], 'exists')) {
-	$GLOBALS['current_user'] = null;
-}
-
-// Ensure default variables exist so stray references do not emit PHP notices.
-// These are harmless defaults and avoid "Undefined variable" warnings if a stray reference occurs
-$endpoint = '';
-$headers = [];
-$token = '';
-
-// Guard deactivation/uninstall code to only call cleanup function if it exists.
-if (!function_exists('tmon_unit_connector_deactivate')) {
-	function tmon_unit_connector_deactivate() {
-		$remove_data = get_option('tmon_uc_remove_data_on_deactivate', false);
-		if ( $remove_data ) {
-			if (function_exists('tmon_uc_remove_all_data')) {
-				error_log('unit-connector: running tmon_uc_remove_all_data() on deactivation');
-				tmon_uc_remove_all_data();
-			} else {
-				error_log('unit-connector: tmon_uc_remove_all_data() not present; skip purge on deactivate');
-			}
-		}
-		// Remove custom roles and capabilities for TMON
-		remove_role('tmon_manager');
-		remove_role('tmon_operator');
-	}
-}
-register_deactivation_hook(__FILE__, 'tmon_unit_connector_deactivate');
-
-// --- Token rotation/revoke handlers --- (use the safe helper so no undefined variable warnings occur)
-add_action('admin_init', function(){
-    if (!current_user_can('manage_options')) return;
-
-    if (isset($_POST['tmon_action']) && $_POST['tmon_action'] === 'rotate_token' && check_admin_referer('tmon_admin_rotate_token')) {
-        $site_url = esc_url_raw($_POST['site_url'] ?? '');
-        if ($site_url) {
-            $map = get_option('tmon_admin_uc_sites', []);
-            if (isset($map[$site_url])) {
-                try { $token = bin2hex(random_bytes(24)); } catch (Exception $e) { $token = wp_generate_password(48, false, false); }
-                $map[$site_url]['read_token'] = $token;
-                update_option('tmon_admin_uc_sites', $map);
-
-                // Build endpoint & headers in scope and use safe helper
-                $endpoint = rtrim($site_url, '/') . '/wp-json/tmon/v1/admin/read-token/set';
-                $headers = ['Content-Type' => 'application/json'];
-                $uc_key = $map[$site_url]['uc_key'] ?? '';
-                if ($uc_key) $headers['X-TMON-ADMIN'] = $uc_key;
-                $body = wp_json_encode(['read_token' => $token]);
-
-                $res = tmon_uc_safe_remote_post($endpoint, ['timeout' => 15, 'headers' => $headers, 'body' => $body], 'rotate_token');
-                if (is_wp_error($res)) {
-                    error_log('unit-connector: Failed push read token to UC ' . $site_url . ' error=' . $res->get_error_message());
-                } else {
-                    error_log('unit-connector: Pushed read token to UC ' . $site_url . ' status=' . intval(wp_remote_retrieve_response_code($res)));
-                }
-
-                add_action('admin_notices', function(){ echo '<div class="updated"><p>Read token regenerated and pushed to UC.</p></div>'; });
-            } else {
-                error_log('unit-connector: rotate_token called for unrecognized site_url=' . $site_url);
-            }
-        } else {
-            error_log('unit-connector: rotate_token called without site_url');
-        }
-    }
-
-    if (isset($_POST['tmon_action']) && $_POST['tmon_action'] === 'revoke_token' && check_admin_referer('tmon_admin_revoke_token')) {
-        $site_url = esc_url_raw($_POST['site_url'] ?? '');
-        if ($site_url) {
-            $map = get_option('tmon_admin_uc_sites', []);
-            if (isset($map[$site_url])) {
-                $map[$site_url]['read_token'] = '';
-                update_option('tmon_admin_uc_sites', $map);
-
-                // Build endpoint & headers in scope and use safe helper
-                $endpoint = rtrim($site_url, '/') . '/wp-json/tmon/v1/admin/read-token/set';
-                $headers = ['Content-Type' => 'application/json'];
-                $uc_key = $map[$site_url]['uc_key'] ?? '';
-                if ($uc_key) $headers['X-TMON-ADMIN'] = $uc_key;
-                $body = wp_json_encode(['read_token' => '']);
-
-                $res = tmon_uc_safe_remote_post($endpoint, ['timeout' => 15, 'headers' => $headers, 'body' => $body], 'revoke_token');
-                if (is_wp_error($res)) {
-                    error_log('unit-connector: Failed to push revoke read token to UC ' . $site_url . ' error=' . $res->get_error_message());
-                } else {
-                    error_log('unit-connector: Pushed revoke read token to UC ' . $site_url . ' status=' . intval(wp_remote_retrieve_response_code($res)));
-                }
-
-                add_action('admin_notices', function(){ echo '<div class="updated"><p>Read token revoked and cleared on UC.</p></div>'; });
-            } else {
-                error_log('unit-connector: revoke_token called for unrecognized site_url=' . $site_url);
-            }
-        } else {
-            error_log('unit-connector: revoke_token called without site_url');
-        }
-    }
-});
-
-// Early compatibility: if a TMON_Fallback_User instance exists but lacks exists(),
-// replace it with an anonymous subclass instance that preserves properties and adds exists()
-// to avoid fatal errors when WP calls is_user_logged_in().
-if (isset($GLOBALS['current_user']) && is_object($GLOBALS['current_user']) && is_a($GLOBALS['current_user'], 'TMON_Fallback_User') && !method_exists($GLOBALS['current_user'], 'exists')) {
-	$orig = $GLOBALS['current_user'];
-	$GLOBALS['current_user'] = new class($orig) extends TMON_Fallback_User {
-		public function __construct($orig) { foreach (get_object_vars($orig) as $k => $v) { $this->$k = $v; } }
-		public function exists() { return false; }
-	};
-}
-
+// Early compatibility: do not replace current_user with proxies (which can block WP auth).
+// Instead, if a broken object (missing exists()) has already been set, clear it so WP can build a proper WP_User.
 if (!function_exists('tmon_fix_fallback_user')) {
 	function tmon_fix_fallback_user() {
-		if (isset($GLOBALS['current_user']) && is_object($GLOBALS['current_user']) && is_a($GLOBALS['current_user'], 'TMON_Fallback_User') && !method_exists($GLOBALS['current_user'], 'exists')) {
-			$orig = $GLOBALS['current_user'];
-			$GLOBALS['current_user'] = new class($orig) extends TMON_Fallback_User {
-				public function __construct($orig) { foreach (get_object_vars($orig) as $k => $v) { $this->$k = $v; } }
-				public function exists() { return false; }
-			};
+		if (isset($GLOBALS['current_user']) && is_object($GLOBALS['current_user']) && !method_exists($GLOBALS['current_user'], 'exists')) {
+			// Clear to let WP create a proper WP_User later (non-destructive).
+			$GLOBALS['current_user'] = null;
 		}
 	}
-	add_action('plugins_loaded', 'tmon_fix_fallback_user', 0);
-	add_action('init', 'tmon_fix_fallback_user', 0);
-	add_action('admin_init', 'tmon_fix_fallback_user', 0);
+	// Run immediately and re-check early in bootstrap to catch later assignments (non-invasive).
+	$tmon_fix_runner = function() { tmon_fix_fallback_user(); };
+	$tmon_fix_runner();
+	add_action('plugins_loaded', $tmon_fix_runner, 0);
+	add_action('init', $tmon_fix_runner, 0);
+	add_action('admin_init', $tmon_fix_runner, 0);
 }
 
 // Ensure default Admin API URL shown in settings template comes from home_url()
