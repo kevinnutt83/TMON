@@ -39,6 +39,26 @@ add_filter('determine_current_user', function($user) {
 	return $user;
 }, 20);
 
+// Ensure wp_get_current_user() never returns an object missing exists()
+// (catch cases where a TMON_Fallback_User or other broken object is set as current user).
+add_filter('wp_get_current_user', function($user) {
+	$needs_fix = is_object($user) && !method_exists($user, 'exists');
+	if (!$needs_fix) return $user;
+
+	// Prefer a proper WP_User(0) if available.
+	if (class_exists('WP_User')) {
+		return new WP_User(0);
+	}
+
+	// Fallback stub: minimal object with exists() method to avoid fatal.
+	if (!class_exists('TMON_User_Compat_Stub')) {
+		class TMON_User_Compat_Stub {
+			public function exists() { return false; }
+		}
+	}
+	return new TMON_User_Compat_Stub();
+}, 1);
+
 // Guard pull-install function registration
 add_action('rest_api_init', function(){
 	static $tmon_uc_rest_registered = false;
