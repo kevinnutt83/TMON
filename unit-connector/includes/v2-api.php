@@ -1,6 +1,36 @@
 <?php
 if (!defined('ABSPATH')) exit;
 
+// Early pluggables fallback to avoid fatal current_user_can() when REST/bootstrap ordering is odd.
+// These are minimal, conservative stubs that will be replaced by WP when pluggables load.
+if (! function_exists('wp_get_current_user') ) {
+	if (! class_exists('TMON_Fallback_User') ) {
+		class TMON_Fallback_User {
+			public $ID = 0;
+			public $roles = [];
+			public $user_login = '';
+			public $user_email = '';
+			public function has_cap($cap) { return false; }
+			public function exists() { return false; }
+			public function __get($name) { return null; }
+		}
+	}
+	function wp_get_current_user() {
+		static $u = null;
+		if ($u === null) $u = new TMON_Fallback_User();
+		return $u;
+	}
+}
+if (! function_exists('get_current_user_id') ) {
+	function get_current_user_id() {
+		if ( function_exists('wp_get_current_user') ) {
+			$user = wp_get_current_user();
+			return isset($user->ID) ? intval($user->ID) : 0;
+		}
+		return 0;
+	}
+}
+
 // Prevent double-inclusion of this file
 if (!defined('TMON_UC_V2_API_LOADED')) {
 	define('TMON_UC_V2_API_LOADED', true);

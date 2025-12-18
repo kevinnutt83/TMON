@@ -144,6 +144,10 @@ add_action('plugins_loaded', function() {
 	}
 }, 20); // run after most plugins initialize
 
+// NOTE: includes and admin pages are loaded in the plugins_loaded handler above.
+// Removed duplicate/wrong-time require_once() calls and duplicate activation/deactivation blocks
+// that caused includes to run at file-include time and triggered bootstrap ordering issues.
+
 // Note: includes/v2-api.php is loaded above via the plugins_loaded includes loop.
 // This avoids registering REST routes too early (fixes crashes during plugin load).
 
