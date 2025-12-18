@@ -29,6 +29,8 @@ if ( ! function_exists( 'wp_get_current_user' ) ) {
 			public $user_login = '';
 			public $user_email = '';
 			public function has_cap( $cap ) { return false; }
+			// Indicates whether this represents an actual WP user (matches WP_User::exists)
+			public function exists() { return false; }
 			// graceful property access
 			public function __get( $name ) { return null; }
 		}
