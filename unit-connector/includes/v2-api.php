@@ -1,68 +1,36 @@
 <?php
 if (!defined('ABSPATH')) exit;
 
-// Early pluggables fallback to avoid fatal current_user_can() when REST/bootstrap ordering is odd.
-// These are minimal, conservative stubs that will be replaced by WP when pluggables load.
-if (! function_exists('wp_get_current_user') ) {
-	if (! class_exists('TMON_Fallback_User') ) {
-		class TMON_Fallback_User {
-			public $ID = 0;
-			public $roles = [];
-			public $user_login = '';
-			public $user_email = '';
-			public function has_cap($cap) { return false; }
-			public function exists() { return false; }
-			public function __get($name) { return null; }
+// --- Replace dangerous pluggable fallbacks with safe wrappers ---
+// DO NOT define pluggable functions such as wp_get_current_user() here.
+// Defining them can permanently override WP pluggable implementations
+// and break authentication (users being logged out / permission failures).
+
+// Safe wrapper: return WP_User if available, or null if not ready
+if (!function_exists('tmon_uc_safe_get_current_user')) {
+	function tmon_uc_safe_get_current_user() {
+		if (function_exists('wp_get_current_user')) {
+			return wp_get_current_user();
 		}
-	}
-	function wp_get_current_user() {
-		static $u = null;
-		if ($u === null) $u = new TMON_Fallback_User();
-		return $u;
+		return null;
 	}
 }
-if (! function_exists('get_current_user_id') ) {
-	function get_current_user_id() {
-		if ( function_exists('wp_get_current_user') ) {
-			$user = wp_get_current_user();
-			return isset($user->ID) ? intval($user->ID) : 0;
+
+// Safe wrapper: return current user ID if available, otherwise 0
+if (!function_exists('tmon_uc_safe_get_current_user_id')) {
+	function tmon_uc_safe_get_current_user_id() {
+		if (function_exists('get_current_user_id')) {
+			return get_current_user_id();
+		}
+		// Try global shim without overwriting global state
+		if (isset($GLOBALS['current_user']) && is_object($GLOBALS['current_user']) && property_exists($GLOBALS['current_user'], 'ID')) {
+			return intval($GLOBALS['current_user']->ID);
 		}
 		return 0;
 	}
 }
 
-// Prevent double-inclusion of this file
-if (!defined('TMON_UC_V2_API_LOADED')) {
-	define('TMON_UC_V2_API_LOADED', true);
-}
-
-// Safe capability helpers to avoid calling wp_get_current_user() too early
-if (!function_exists('tmon_uc_current_user_ready')) {
-	function tmon_uc_current_user_ready() {
-		// wp_get_current_user is defined in pluggable.php and may not be available
-		// during very early bootstrap / REST init. Guard against that to avoid
-		// fatal "undefined function wp_get_current_user()" errors.
-		return function_exists('wp_get_current_user');
-	}
-}
-if (!function_exists('tmon_uc_perm_manage_options')) {
-	function tmon_uc_perm_manage_options($request = null) {
-		if (!tmon_uc_current_user_ready()) return false;
-		return current_user_can('manage_options');
-	}
-}
-if (!function_exists('tmon_uc_perm_edit_hierarchy')) {
-	function tmon_uc_perm_edit_hierarchy($request = null) {
-		if (!tmon_uc_current_user_ready()) return false;
-		return current_user_can('edit_tmon_hierarchy');
-	}
-}
-
-// Early safety: if the global current_user is a broken object (e.g., TMON_Fallback_User
-// which doesn't implement exists()), clear it so WP will create a proper WP_User later.
-if (isset($GLOBALS['current_user']) && is_object($GLOBALS['current_user']) && !method_exists($GLOBALS['current_user'], 'exists')) {
-	$GLOBALS['current_user'] = null;
-}
+// Remove prior logic that forcibly cleared $GLOBALS['current_user'].
 
 // Guard pull-install function registration
 add_action('rest_api_init', function(){
