@@ -43,7 +43,7 @@ add_filter('determine_current_user', function($user) {
 		return 0;
 	}
 	return $user;
-}, 20);
+}, 1); // <-- changed priority to 1 (run earlier)
 
 // Ensure wp_get_current_user() never returns an object missing exists()
 // (catch cases where a TMON_Fallback_User or other broken object is set as current user).
