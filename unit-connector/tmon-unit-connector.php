@@ -503,3 +503,24 @@ add_filter('tmon_uc_default_options', function($defaults) {
     $defaults['admin_api_url'] = rtrim(home_url('/'), '/');
     return $defaults;
 });
+
+// Activation: schedule cron tasks only (no current_user_can or other auth calls)
+function tmon_uc_activate() {
+	// Schedule only if not scheduled
+	if (!wp_next_scheduled('tmon_uc_command_requeue_cron')) {
+		wp_schedule_event(time() + 60, 'hourly', 'tmon_uc_command_requeue_cron');
+	}
+	// create DB tables defensively (no capability checks)
+	if (function_exists('tmon_uc_ensure_commands_table')) tmon_uc_ensure_commands_table();
+	if (function_exists('tmon_uc_ensure_staged_settings_table')) tmon_uc_ensure_staged_settings_table();
+	if (function_exists('uc_devices_ensure_table')) uc_devices_ensure_table();
+}
+register_activation_hook(__FILE__, 'tmon_uc_activate');
+
+// Deactivation: unschedule cron, leave DB intact (safe)
+function tmon_uc_deactivate() {
+	$ts = wp_next_scheduled('tmon_uc_command_requeue_cron');
+	if ($ts) wp_unschedule_event($ts, 'tmon_uc_command_requeue_cron');
+	// Do not delete data by default
+}
+register_deactivation_hook(__FILE__, 'tmon_uc_deactivate');

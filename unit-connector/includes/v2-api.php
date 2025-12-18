@@ -1,6 +1,35 @@
 <?php
 if (!defined('ABSPATH')) exit;
 
+// --- Safety: do NOT declare or override WP pluggable functions (wp_get_current_user/get_current_user_id).
+// If pluggables are not yet available, detect and defer any operations that require them.
+
+if (!function_exists('tmon_uc_current_user_ready')) {
+	function tmon_uc_current_user_ready() {
+		if (! function_exists('wp_get_current_user')) return false;
+		$u = wp_get_current_user();
+		return (is_object($u) && property_exists($u, 'ID'));
+	}
+}
+
+// Diagnostic: add admin notice if current user plumbing is not ready (harmless)
+add_action('admin_notices', function() {
+	// Only show to administrators and only when WP pluggables are unexpectedly missing.
+	if (!is_admin()) return;
+	if (function_exists('current_user_can') && !current_user_can('manage_options')) return;
+	if (!tmon_uc_current_user_ready()) {
+		error_log('tmon-unit-connector: WP pluggables not ready during plugin load; deferring capability checks.');
+		// light admin notice so install-time issues are visible
+		echo '<div class="notice notice-warning"><p>TMON Unit Connector detected WordPress authentication plumbing not ready — no privileges were changed. If you see login/permission issues after activation, please deactivate/reactivate this plugin to allow WordPress to initialize.</p></div>';
+	}
+});
+
+// Ensure we do heavy init only after pluggable functions are loaded
+add_action('plugins_loaded', function() {
+	// ...existing registration code (routes, tables, hooks) remains as-is since they are hooked into rest_api_init/init
+	// No op here — presence ensures plugins_loaded run before any optional plugin-internal init you may add later.
+}, 20);
+
 // --- Replace dangerous pluggable fallbacks with safe wrappers ---
 // DO NOT define pluggable functions such as wp_get_current_user() here.
 // Defining them can permanently override WP pluggable implementations
