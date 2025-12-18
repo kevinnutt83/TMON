@@ -4,6 +4,15 @@ try:
 except Exception:
     requests = None
 
+# Ensure we can use asyncio.sleep in this async module
+try:
+    import uasyncio as asyncio
+except Exception:
+    try:
+        import asyncio
+    except Exception:
+        asyncio = None
+
 import settings
 from config_persist import write_text
 from utils import debug_print
@@ -206,7 +215,13 @@ async def apply_pending_update():
                         else:
                             expected_hex = entry
                 if expected_hex:
-                    expected_hex = str(expected_hex).strip().lower()
+                    # normalize various manifest formats like "sha256:<hex>", "sha256=<hex>", or raw hex
+                    eh = str(expected_hex).strip().lower()
+                    for p in ('sha256:', 'sha256=', 'sha256-'):
+                        if eh.startswith(p):
+                            eh = eh[len(p):]
+                            break
+                    expected_hex = eh
             except Exception:
                 expected_hex = None
 
@@ -297,10 +312,20 @@ async def apply_pending_update():
                                 _write_debug_artifact(f'ota_failed_{name}.bin', open(tmp_path, 'rb').read())
                             except Exception:
                                 pass
+                            try:
+                                _write_debug_artifact(f'ota_failed_{name}.sha256.txt', ('expected=%s computed=%s' % (expected_hex, comp_hash)).encode('utf-8'))
+                            except Exception:
+                                pass
+                            # Save small head of the received file for quick inspection
+                            try:
+                                head = open(tmp_path, 'rb').read(256)
+                                _write_debug_artifact(f'ota_failed_{name}.head.bin', head)
+                            except Exception:
+                                pass
                             last_error = f'hash_mismatch expected={expected_hex} computed={comp_hash}'
-                            # on mismatch, try again after delay
-                            await asyncio.sleep(retry_interval_s)
-                            continue
+                             # on mismatch, try again after delay
+                             await asyncio.sleep(retry_interval_s)
+                             continue
                         else:
                             await debug_print(f'OTA: hash OK for {name}', 'OTA')
                     else:
