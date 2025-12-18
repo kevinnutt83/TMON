@@ -14,15 +14,17 @@ add_action('rest_api_init', function(){
 	}
 	register_rest_route('tmon/v1', '/uc/pull-install', [
 		'methods' => 'POST',
+		// Use app-password / Authorization header guard instead of calling current_user_can()
 		'callback' => 'tmon_uc_pull_install',
-		'permission_callback' => '__return_true',
+		'permission_callback' => 'tmon_uc_require_app_password_auth',
 	]);
 });
 
 // Define tmon_uc_pull_install only if not already defined
 if (!function_exists('tmon_uc_pull_install')) {
 	function tmon_uc_pull_install($request){
-		if (!current_user_can('manage_options')) return new WP_REST_Response(['status'=>'forbidden'], 403);
+		// Permission is enforced via the permission_callback above (app-password / Authorization).
+		// Additional runtime checks (HMAC, etc.) still apply below.
 		$payload = $request->get_param('payload');
 		$sig = $request->get_param('sig');
 		$require_auth = defined('TMON_UC_PULL_REQUIRE_AUTH') ? TMON_UC_PULL_REQUIRE_AUTH : false;
