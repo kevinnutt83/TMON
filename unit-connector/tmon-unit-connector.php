@@ -84,10 +84,8 @@ add_action('plugins_loaded', function() {
 	}
 }, 20); // run after most plugins initialize
 
-// Load v2 API routes once
-if (!defined('TMON_UC_V2_API_LOADED')) {
-	require_once __DIR__ . '/includes/v2-api.php';
-}
+// Note: includes/v2-api.php is loaded above via the plugins_loaded includes loop.
+// This avoids registering REST routes too early (fixes crashes during plugin load).
 
 // Assets
 
