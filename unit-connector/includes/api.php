@@ -1,4 +1,10 @@
 <?php
+// NOTE:
+// The /uc/pull-install REST route and handler are defined in includes/v2-api.php
+// which uses a safe permission callback. This avoids duplicate registration
+// and prevents any early current_user_can() calls that can trigger fatal
+// "undefined function wp_get_current_user()" during early REST initialization.
+
 // Unit Connector API for remote install/update orchestrated by TMON Admin
 add_action('rest_api_init', function(){
     register_rest_route('tmon/v1', '/uc/pull-install', [

@@ -6,6 +6,28 @@ if (!defined('TMON_UC_V2_API_LOADED')) {
 	define('TMON_UC_V2_API_LOADED', true);
 }
 
+// Safe capability helpers to avoid calling wp_get_current_user() too early
+if (!function_exists('tmon_uc_current_user_ready')) {
+	function tmon_uc_current_user_ready() {
+		// wp_get_current_user is defined in pluggable.php and may not be available
+		// during very early bootstrap / REST init. Guard against that to avoid
+		// fatal "undefined function wp_get_current_user()" errors.
+		return function_exists('wp_get_current_user');
+	}
+}
+if (!function_exists('tmon_uc_perm_manage_options')) {
+	function tmon_uc_perm_manage_options($request = null) {
+		if (!tmon_uc_current_user_ready()) return false;
+		return current_user_can('manage_options');
+	}
+}
+if (!function_exists('tmon_uc_perm_edit_hierarchy')) {
+	function tmon_uc_perm_edit_hierarchy($request = null) {
+		if (!tmon_uc_current_user_ready()) return false;
+		return current_user_can('edit_tmon_hierarchy');
+	}
+}
+
 // Guard pull-install function registration
 add_action('rest_api_init', function(){
 	// If core tmon_uc_pull_install exists (e.g., declared in includes/api.php), do not re-register

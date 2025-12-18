@@ -4,27 +4,27 @@ add_action('rest_api_init', function() {
     register_rest_route('tmon/v1', '/company', [
         'methods' => 'POST',
         'callback' => 'tmon_uc_create_company',
-        'permission_callback' => function() { return current_user_can('manage_options'); },
+        'permission_callback' => 'tmon_uc_perm_manage_options',
     ]);
     register_rest_route('tmon/v1', '/unit', [
         'methods' => 'POST',
         'callback' => 'tmon_uc_create_unit',
-        'permission_callback' => function() { return current_user_can('manage_options'); },
+        'permission_callback' => 'tmon_uc_perm_manage_options',
     ]);
     register_rest_route('tmon/v1', '/unit/assign', [
         'methods' => 'POST',
         'callback' => 'tmon_uc_assign_unit',
-        'permission_callback' => function() { return current_user_can('manage_options'); },
+        'permission_callback' => 'tmon_uc_perm_manage_options',
     ]);
     register_rest_route('tmon/v1', '/company/(?P<id>\d+)/units', [
         'methods' => 'GET',
         'callback' => 'tmon_uc_get_company_units',
-        'permission_callback' => function() { return current_user_can('manage_options'); },
+        'permission_callback' => 'tmon_uc_perm_manage_options',
     ]);
     register_rest_route('tmon/v1', '/unit/(?P<id>\d+)', [
         'methods' => 'GET',
         'callback' => 'tmon_uc_get_unit',
-        'permission_callback' => function() { return current_user_can('manage_options'); },
+        'permission_callback' => 'tmon_uc_perm_manage_options',
     ]);
 });
 
@@ -123,7 +123,7 @@ add_action('wp_ajax_tmon_uc_relay_command', function(){
     }
     $ok = tmon_uc_enqueue_relay_job($unit_id, $relay_num, $state, $runtime_min);
     if ($ok) wp_send_json_success(['scheduled' => false]);
-    wp_send_json_error(['message' => 'enqueue failed'], 500);
+    wp_send_json_error(['message' => 'enqueue failed', 'unit_id' => $unit_id, 'relay_num' => $relay_num, 'state' => $state, 'runtime_min' => $runtime_min], 500);
 });
 
 // Helper to enqueue a toggle_relay job into device command queue
