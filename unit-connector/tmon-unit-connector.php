@@ -17,6 +17,33 @@ Author: TMON DevOps
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
+// Defensive fallback: if WP pluggable user functions are not yet defined (some hosts/plugins can trigger REST early),
+// provide a minimal stub so current_user_can() and related checks do not fatal during early bootstrap.
+if ( ! function_exists( 'wp_get_current_user' ) ) {
+	class TMON_Fallback_User {
+		public $ID = 0;
+		public $roles = [];
+		public function has_cap( $cap ) { return false; }
+	}
+	function wp_get_current_user() {
+		static $u = null;
+		if ( $u === null ) $u = new TMON_Fallback_User();
+		return $u;
+	}
+	function get_current_user_id() { return 0; }
+}
+
+// --- Plugin bootstrap/load order notes ---
+// This file is the main plugin file and entry point. It handles initial setup, autoloading of includes,
+// and early initialization tasks. It also defines the main plugin class, which is responsible for
+// loading all other components and features of the plugin.
+// ---
+// 1. Plugin constants and initial setup
+// 2. Autoload includes
+// 3. Early initialization tasks (e.g. REST API, scheduled tasks)
+// 4. Main plugin class instantiation and setup
+// ---
+
 define( 'TMON_UNIT_CONNECTOR_VERSION', '0.2.0' );
 define( 'TMON_UNIT_CONNECTOR_PATH', plugin_dir_path( __FILE__ ) );
 define( 'TMON_UNIT_CONNECTOR_URL', plugin_dir_url( __FILE__ ) );
