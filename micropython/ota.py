@@ -241,6 +241,14 @@ async def apply_pending_update():
                     except Exception:
                         content_len = None
                     await debug_print(f'OTA: HTTP {status} Content-Length={content_len}', 'OTA')
+
+                    # Log response headers (best-effort)
+                    try:
+                        hdrs = dict(rr.headers) if hasattr(rr, 'headers') and rr.headers else {}
+                        await debug_print(f'OTA: response headers: { {k:v for k,v in list(hdrs.items())[:8]} }', 'OTA')
+                    except Exception:
+                        pass
+
                     if status != 200:
                         body_snip = getattr(rr, 'text', '')[:1024] if hasattr(rr, 'text') else ''
                         await debug_print(f'OTA: file download failed status={status} body_snip={body_snip[:200]}', 'ERROR')
@@ -260,16 +268,47 @@ async def apply_pending_update():
                     h = _uh.sha256()
                     total = 0
                     try:
+                        # Stream and inspect first chunk for HTML/error pages (common cause of bad hashes)
                         if hasattr(rr, 'iter_content'):
+                            first_chunk = True
                             with open(tmp_path, 'wb') as wf:
                                 for chunk in rr.iter_content(1024):
                                     if not chunk:
                                         continue
+                                    if first_chunk:
+                                        first_chunk = False
+                                        try:
+                                            # Content-Type hint
+                                            ct = None
+                                            if hasattr(rr, 'headers') and rr.headers:
+                                                for hk, hv in rr.headers.items():
+                                                    if hk.lower() == 'content-type':
+                                                        ct = hv
+                                                        break
+                                            chunk_l = chunk.lstrip()
+                                            is_html = False
+                                            if ct and 'html' in ct.lower():
+                                                is_html = True
+                                            if (not is_html) and (isinstance(chunk_l, (bytes, bytearray))):
+                                                low = chunk_l[:256].lower()
+                                                if low.startswith(b'<') or b'<!doctype' in low or b'<html' in low:
+                                                    is_html = True
+                                            if is_html:
+                                                # Save diagnostic artifact and abort this attempt to trigger retry path
+                                                try:
+                                                    _write_debug_artifact(f'ota_response_{name}.txt', chunk[:4096])
+                                                    hdr_txt = (str(dict(rr.headers))[:2048] if hasattr(rr, 'headers') and rr.headers else '').encode('utf-8','ignore')
+                                                    _write_debug_artifact(f'ota_response_{name}.headers.txt', hdr_txt)
+                                                    await debug_print(f'OTA: download for {name} appears to be HTML/error page (Content-Type={ct}); saved response artifact', 'ERROR')
+                                                except Exception:
+                                                    pass
+                                                raise Exception('http_html_response')
+                                        except Exception:
+                                            raise
                                     wf.write(chunk)
                                     try:
                                         h.update(chunk)
                                     except Exception:
-                                        # uhashlib in some ports uses .update or uses .digest directly - usually .update exists
                                         pass
                                     total += len(chunk)
                         else:
@@ -287,6 +326,7 @@ async def apply_pending_update():
                                 pass
                             total = len(data)
                     except Exception as de:
+                        # Mark HTML-response differently for diagnostics but follow same retry/backoff flow
                         await debug_print(f'OTA: download write error for {name}: {de}', 'ERROR')
                         try:
                             rr.close()
