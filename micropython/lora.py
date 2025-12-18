@@ -413,16 +413,78 @@ command_handlers = {
     # Add more handlers as needed, e.g., "other_func": other_func,
 }
 
+import time as _time  # used for short sleeps during pin toggles
+
+# Helpers: ensure pins / SPI are in a known state for reliable startup
+def _safe_pin_out(pin_num, value=1):
+    try:
+        p = machine.Pin(pin_num, machine.Pin.OUT)
+        p.value(value)
+        return p
+    except Exception:
+        return None
+
+def _safe_pin_input(pin_num):
+    try:
+        p = machine.Pin(pin_num, machine.Pin.IN)
+        return p
+    except Exception:
+        return None
+
+def _pulse_reset(pin_num, low_ms=50, post_high_ms=120):
+    try:
+        p = _safe_pin_out(pin_num, 0)
+        _time.sleep_ms(low_ms)
+        p.value(1)
+        _time.sleep_ms(post_high_ms)
+    except Exception:
+        try:
+            _time.sleep_ms(post_high_ms)
+        except Exception:
+            pass
+
+def _deinit_spi_if_any(lora_obj):
+    try:
+        if lora_obj and hasattr(lora_obj, 'spi') and lora_obj.spi:
+            try:
+                lora_obj.spi.deinit()
+            except Exception:
+                pass
+            try:
+                lora_obj.spi = None
+            except Exception:
+                pass
+    except Exception:
+        pass
+
 async def init_lora():
     global lora
     print('[DEBUG] init_lora: starting SX1262 init')
     try:
-        print('[DEBUG] init_lora: BEFORE SX1262 instantiation')
+        # Defensive hardware prep: ensure CS high (inactive), RST pulsed, BUSY/IRQ as inputs
+        try:
+            _safe_pin_out(settings.CS_PIN, 1)  # CS high
+        except Exception:
+            pass
+        try:
+            _safe_pin_input(settings.BUSY_PIN)
+            _safe_pin_input(settings.IRQ_PIN)
+        except Exception:
+            pass
+        # Pulse reset to try to put chip into known state before instantiation
+        try:
+            _pulse_reset(settings.RST_PIN, low_ms=50, post_high_ms=120)
+        except Exception:
+            pass
+
+        print('[DEBUG] init_lora: BEFORE SX1262 instantiation (pins prepped)')
         lora = SX1262(
             settings.SPI_BUS, settings.CLK_PIN, settings.MOSI_PIN, settings.MISO_PIN,
             settings.CS_PIN, settings.IRQ_PIN, settings.RST_PIN, settings.BUSY_PIN
         )
         print('[DEBUG] init_lora: SX1262 object created')
+        # Ensure any leftover SPI is clean
+        _deinit_spi_if_any(lora)
         status = lora.begin(
             freq=settings.FREQ, bw=settings.BW, sf=settings.SF, cr=settings.CR,
             syncWord=settings.SYNC_WORD, power=settings.POWER,
@@ -431,6 +493,24 @@ async def init_lora():
             tcxoVoltage=settings.TCXO_VOLTAGE, useRegulatorLDO=settings.USE_LDO
         )
         print(f'[DEBUG] init_lora: lora.begin() returned {status}')
+        # If chip not found, try a single reset/retry before giving up (helps with pin/SPI races on boot)
+        if status == -2:
+            await debug_print('LoRa begin returned ERR_CHIP_NOT_FOUND; attempting hardware reset + retry', 'LORA')
+            try:
+                _pulse_reset(settings.RST_PIN, low_ms=80, post_high_ms=200)
+                # brief settle time
+                _time.sleep_ms(120)
+                status = lora.begin(
+                    freq=settings.FREQ, bw=settings.BW, sf=settings.SF, cr=settings.CR,
+                    syncWord=settings.SYNC_WORD, power=settings.POWER,
+                    currentLimit=settings.CURRENT_LIMIT, preambleLength=settings.PREAMBLE_LEN,
+                    implicit=False, implicitLen=0xFF, crcOn=settings.CRC_ON, txIq=False, rxIq=False,
+                    tcxoVoltage=settings.TCXO_VOLTAGE, useRegulatorLDO=settings.USE_LDO
+                )
+                await debug_print(f'LoRa retry begin returned {status}', 'LORA')
+            except Exception as re:
+                await debug_print(f'LoRa retry exception: {re}', 'ERROR')
+
         if status == 0:
             # Configure non-blocking operation and verify it succeeded
             rc = lora.setBlockingCallback(False)
@@ -471,7 +551,14 @@ async def init_lora():
             error_msg = f"LoRa initialization failed with status: {status} ({err_name})"
             await debug_print(error_msg, "ERROR")
             await log_error(error_msg)
-            await free_pins()
+            # On persistent failure, try to put pins into a safe input state so a soft reboot starts clean
+            try:
+                _safe_pin_input(settings.CS_PIN)
+                _safe_pin_input(settings.RST_PIN)
+                _safe_pin_input(settings.IRQ_PIN)
+                _safe_pin_input(settings.BUSY_PIN)
+            except Exception:
+                pass
             lora = None
             return False
         await debug_print("LoRa initialized successfully", "LORA")
@@ -489,6 +576,11 @@ async def init_lora():
         print(error_msg)
         await debug_print(error_msg, "ERROR")
         await log_error(error_msg)
+        # Ensure we deinit spi/pins when exceptional abort happens
+        try:
+            _deinit_spi_if_any(lora)
+        except Exception:
+            pass
         await free_pins()
         lora = None
         return False
@@ -1152,16 +1244,78 @@ command_handlers = {
     # Add more handlers as needed, e.g., "other_func": other_func,
 }
 
+import time as _time  # used for short sleeps during pin toggles
+
+# Helpers: ensure pins / SPI are in a known state for reliable startup
+def _safe_pin_out(pin_num, value=1):
+    try:
+        p = machine.Pin(pin_num, machine.Pin.OUT)
+        p.value(value)
+        return p
+    except Exception:
+        return None
+
+def _safe_pin_input(pin_num):
+    try:
+        p = machine.Pin(pin_num, machine.Pin.IN)
+        return p
+    except Exception:
+        return None
+
+def _pulse_reset(pin_num, low_ms=50, post_high_ms=120):
+    try:
+        p = _safe_pin_out(pin_num, 0)
+        _time.sleep_ms(low_ms)
+        p.value(1)
+        _time.sleep_ms(post_high_ms)
+    except Exception:
+        try:
+            _time.sleep_ms(post_high_ms)
+        except Exception:
+            pass
+
+def _deinit_spi_if_any(lora_obj):
+    try:
+        if lora_obj and hasattr(lora_obj, 'spi') and lora_obj.spi:
+            try:
+                lora_obj.spi.deinit()
+            except Exception:
+                pass
+            try:
+                lora_obj.spi = None
+            except Exception:
+                pass
+    except Exception:
+        pass
+
 async def init_lora():
     global lora
     print('[DEBUG] init_lora: starting SX1262 init')
     try:
-        print('[DEBUG] init_lora: BEFORE SX1262 instantiation')
+        # Defensive hardware prep: ensure CS high (inactive), RST pulsed, BUSY/IRQ as inputs
+        try:
+            _safe_pin_out(settings.CS_PIN, 1)  # CS high
+        except Exception:
+            pass
+        try:
+            _safe_pin_input(settings.BUSY_PIN)
+            _safe_pin_input(settings.IRQ_PIN)
+        except Exception:
+            pass
+        # Pulse reset to try to put chip into known state before instantiation
+        try:
+            _pulse_reset(settings.RST_PIN, low_ms=50, post_high_ms=120)
+        except Exception:
+            pass
+
+        print('[DEBUG] init_lora: BEFORE SX1262 instantiation (pins prepped)')
         lora = SX1262(
             settings.SPI_BUS, settings.CLK_PIN, settings.MOSI_PIN, settings.MISO_PIN,
             settings.CS_PIN, settings.IRQ_PIN, settings.RST_PIN, settings.BUSY_PIN
         )
         print('[DEBUG] init_lora: SX1262 object created')
+        # Ensure any leftover SPI is clean
+        _deinit_spi_if_any(lora)
         status = lora.begin(
             freq=settings.FREQ, bw=settings.BW, sf=settings.SF, cr=settings.CR,
             syncWord=settings.SYNC_WORD, power=settings.POWER,
@@ -1170,6 +1324,24 @@ async def init_lora():
             tcxoVoltage=settings.TCXO_VOLTAGE, useRegulatorLDO=settings.USE_LDO
         )
         print(f'[DEBUG] init_lora: lora.begin() returned {status}')
+        # If chip not found, try a single reset/retry before giving up (helps with pin/SPI races on boot)
+        if status == -2:
+            await debug_print('LoRa begin returned ERR_CHIP_NOT_FOUND; attempting hardware reset + retry', 'LORA')
+            try:
+                _pulse_reset(settings.RST_PIN, low_ms=80, post_high_ms=200)
+                # brief settle time
+                _time.sleep_ms(120)
+                status = lora.begin(
+                    freq=settings.FREQ, bw=settings.BW, sf=settings.SF, cr=settings.CR,
+                    syncWord=settings.SYNC_WORD, power=settings.POWER,
+                    currentLimit=settings.CURRENT_LIMIT, preambleLength=settings.PREAMBLE_LEN,
+                    implicit=False, implicitLen=0xFF, crcOn=settings.CRC_ON, txIq=False, rxIq=False,
+                    tcxoVoltage=settings.TCXO_VOLTAGE, useRegulatorLDO=settings.USE_LDO
+                )
+                await debug_print(f'LoRa retry begin returned {status}', 'LORA')
+            except Exception as re:
+                await debug_print(f'LoRa retry exception: {re}', 'ERROR')
+
         if status == 0:
             # Configure non-blocking operation and verify it succeeded
             rc = lora.setBlockingCallback(False)
@@ -1210,7 +1382,14 @@ async def init_lora():
             error_msg = f"LoRa initialization failed with status: {status} ({err_name})"
             await debug_print(error_msg, "ERROR")
             await log_error(error_msg)
-            await free_pins()
+            # On persistent failure, try to put pins into a safe input state so a soft reboot starts clean
+            try:
+                _safe_pin_input(settings.CS_PIN)
+                _safe_pin_input(settings.RST_PIN)
+                _safe_pin_input(settings.IRQ_PIN)
+                _safe_pin_input(settings.BUSY_PIN)
+            except Exception:
+                pass
             lora = None
             return False
         await debug_print("LoRa initialized successfully", "LORA")
@@ -1228,6 +1407,11 @@ async def init_lora():
         print(error_msg)
         await debug_print(error_msg, "ERROR")
         await log_error(error_msg)
+        # Ensure we deinit spi/pins when exceptional abort happens
+        try:
+            _deinit_spi_if_any(lora)
+        except Exception:
+            pass
         await free_pins()
         lora = None
         return False
@@ -1721,84 +1905,3 @@ async def ai_input_listener():
 # asyncio.create_task(ai_dashboard_display())
 # asyncio.create_task(ai_input_listener())
 # asyncio.create_task(user_input_listener())
-
-# --- All imports at the very top ---
-try:
-    from sx1262 import SX1262
-except ImportError:
-    SX1262 = None
-try:
-    import uasyncio as asyncio
-except ImportError:
-    import asyncio
-try:
-    import sdata
-    import settings
-except ImportError:
-    sdata = None
-    settings = None
-try:
-    import machine
-except ImportError:
-    machine = None
-try:
-    import utime as time
-except ImportError:
-    import time
-import os
-try:
-    import urequests as requests
-except ImportError:
-    try:
-        import requests
-    except ImportError:
-        requests = None
-from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run
-from relay import toggle_relay
-
-# Restore: define WORDPRESS_API_URL safely for this module
-try:
-    WORDPRESS_API_URL = getattr(settings, 'WORDPRESS_API_URL', '')
-except Exception:
-    WORDPRESS_API_URL = ''
-
-if not WORDPRESS_API_URL:
-    try:
-        from config_persist import read_text
-        path = getattr(settings, 'WORDPRESS_API_URL_FILE', settings.LOG_DIR + '/wordpress_api_url.txt')
-        val = (read_text(path, '') or '').strip()
-        if val:
-            settings.WORDPRESS_API_URL = val
-            WORDPRESS_API_URL = val
-    except Exception:
-        pass
-
-if not WORDPRESS_API_URL:
-    try:
-        import wprest as _w
-        WORDPRESS_API_URL = getattr(_w, 'WORDPRESS_API_URL', '') or ''
-    except Exception:
-        pass
-
-def refresh_wp_url():
-    """Refresh local WORDPRESS_API_URL from settings/wprest/file."""
-    global WORDPRESS_API_URL
-    try:
-        url = getattr(settings, 'WORDPRESS_API_URL', '') or ''
-        if not url:
-            try:
-                import wprest as _w
-                url = getattr(_w, 'WORDPRESS_API_URL', '') or ''
-            except Exception:
-                url = ''
-        if not url:
-            try:
-                from config_persist import read_text
-                path = getattr(settings, 'WORDPRESS_API_URL_FILE', settings.LOG_DIR + '/wordpress_api_url.txt')
-                url = (read_text(path, '') or '').strip()
-            except Exception:
-                pass
-        if url:
-            WORDPRESS_API_URL = url
-    except Exception:
-        pass
