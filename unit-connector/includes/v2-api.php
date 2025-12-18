@@ -28,6 +28,12 @@ if (!function_exists('tmon_uc_perm_edit_hierarchy')) {
 	}
 }
 
+// Early safety: if the global current_user is a broken object (e.g., TMON_Fallback_User
+// which doesn't implement exists()), clear it so WP will create a proper WP_User later.
+if (isset($GLOBALS['current_user']) && is_object($GLOBALS['current_user']) && !method_exists($GLOBALS['current_user'], 'exists')) {
+	$GLOBALS['current_user'] = null;
+}
+
 // Compatibility: ensure determine_current_user never returns a TMON_Fallback_User object
 // (some environments create a fallback user class that lacks WP_User::exists()).
 add_filter('determine_current_user', function($user) {
