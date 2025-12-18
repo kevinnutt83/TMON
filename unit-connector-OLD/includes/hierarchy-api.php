@@ -4,17 +4,17 @@ add_action('rest_api_init', function() {
     register_rest_route('tmon/v1', '/hierarchy', [
         'methods' => 'GET',
         'callback' => 'tmon_uc_api_get_hierarchy',
-        'permission_callback' => function() { return current_user_can('manage_options'); }
+        'permission_callback' => 'tmon_uc_perm_manage_options'
     ]);
     register_rest_route('tmon/v1', '/hierarchy', [
         'methods' => 'POST',
         'callback' => 'tmon_uc_api_save_hierarchy',
-        'permission_callback' => function() { return current_user_can('manage_options'); }
+        'permission_callback' => 'tmon_uc_perm_manage_options'
     ]);
     register_rest_route('tmon/v1', '/hierarchy/(?P<level>company|site|zone|cluster|unit)/(?P<id>\d+)?', [
         'methods' => ['GET', 'POST', 'PUT', 'DELETE'],
         'callback' => 'tmon_uc_api_hierarchy_crud',
-        'permission_callback' => function() { return current_user_can('edit_tmon_hierarchy'); }
+        'permission_callback' => 'tmon_uc_perm_edit_hierarchy'
     ]);
     // ...add endpoints for notes, map overlays, etc.
 });

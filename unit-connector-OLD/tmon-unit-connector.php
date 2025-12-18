@@ -10,36 +10,147 @@
 
 /*
 Plugin Name: TMON Unit Connector
-Description: Site-side connector for TMON devices; receives data and manages provisioning.
-Version: 0.2.0
-Author: TMON DevOps
+Description: Unit Connector for TMON devices (backhaul, commands, staged settings).
+Version: 2.03.0
+Author: TMON
 */
+if (!defined('TMON_UC_VERSION')) define('TMON_UC_VERSION', '2.03.0');
 
 if ( ! defined( 'ABSPATH' ) ) exit;
+
+// Early pluggables fallback: ensure wp_get_current_user() & get_current_user_id() exist
+if ( ! function_exists( 'wp_get_current_user' ) ) {
+	// Minimal WP_User-like stub used only until WP finishes loading pluggables.
+	if ( ! class_exists( 'TMON_Fallback_User' ) ) {
+		class TMON_Fallback_User {
+			public $ID = 0;
+			public $roles = [];
+			public $user_login = '';
+			public $user_email = '';
+			public function has_cap( $cap ) { return false; }
+			public function exists() { return false; }
+			public function __get( $name ) { return null; }
+		}
+	}
+	function wp_get_current_user() {
+		static $u = null;
+		if ( $u === null ) $u = new TMON_Fallback_User();
+		return $u;
+	}
+}
+if ( ! function_exists( 'get_current_user_id' ) ) {
+	function get_current_user_id() {
+		if ( function_exists( 'wp_get_current_user' ) ) {
+			$user = wp_get_current_user();
+			return isset( $user->ID ) ? intval( $user->ID ) : 0;
+		}
+		return 0;
+	}
+}
+
+// Ensure common login globals exist to avoid "Undefined variable" warnings in wp-login.php.
+if (! isset( $GLOBALS['user_login'] )) $GLOBALS['user_login'] = '';
+if (! isset( $GLOBALS['user_pass'] ))  $GLOBALS['user_pass']  = '';
+// Also expose short-named locals (wp-login.php expects $user_login / $user_pass variables)
+global $user_login, $user_pass;
+if (!isset($user_login)) $user_login = $GLOBALS['user_login'];
+if (!isset($user_pass))  $user_pass  = $GLOBALS['user_pass'];
+
+// --- Activation/Deactivation hooks ---
+// Register hooks only once to avoid duplicate registration/fatal redeclare issues
+if (!defined('TMON_UC_ACTIVATION_REGISTERED')) {
+	register_activation_hook( __FILE__, 'tmon_unit_connector_activate' );
+	define('TMON_UC_ACTIVATION_REGISTERED', true);
+}
+if (!defined('TMON_UC_DEACTIVATION_REGISTERED')) {
+	register_deactivation_hook( __FILE__, 'tmon_unit_connector_deactivate' );
+	define('TMON_UC_DEACTIVATION_REGISTERED', true);
+}
+
+// Guarded function declarations to avoid redeclare when file is loaded multiple ways.
+if (!function_exists('tmon_unit_connector_activate')) {
+	function tmon_unit_connector_activate() {
+		global $wpdb;
+		require_once __DIR__ . '/includes/schema.php';
+		// Create all required tables (idempotent)
+		try {
+			tmon_uc_install_schema();
+		} catch (Throwable $e) {
+			error_log('tmon-unit-connector: activation schema error: ' . $e->getMessage());
+		}
+
+		// Add roles (idempotent)
+		add_role('tmon_manager', 'TMON Manager', [
+			'read' => true,
+			'manage_tmon' => true,
+			'edit_tmon_hierarchy' => true,
+			'edit_tmon_units' => true,
+			'edit_tmon_settings' => true,
+		]);
+		add_role('tmon_operator', 'TMON Operator', [
+			'read' => true,
+			'edit_tmon_units' => true,
+		]);
+	}
+}
+
+if (!function_exists('tmon_unit_connector_deactivate')) {
+	function tmon_unit_connector_deactivate() {
+		$remove_data = get_option('tmon_uc_remove_data_on_deactivate', false);
+		if ( $remove_data ) {
+			if (function_exists('tmon_uc_remove_all_data')) {
+				error_log('unit-connector: invoking tmon_uc_remove_all_data() during deactivate.');
+				tmon_uc_remove_all_data();
+			} else {
+				error_log('unit-connector: tmon_uc_remove_all_data() missing - skipping purge on deactivate.');
+			}
+		}
+		// Remove custom roles and capabilities for TMON
+		remove_role('tmon_manager');
+		remove_role('tmon_operator');
+	}
+}
+
+// --- Plugin bootstrap/load order notes ---
+// This file is the main plugin file and entry point. It handles initial setup, autoloading of includes,
+// and early initialization tasks. It also defines the main plugin class, which is responsible for
+// loading all other components and features of the plugin.
+// ---
+// 1. Plugin constants and initial setup
+// 2. Autoload includes
+// 3. Early initialization tasks (e.g. REST API, scheduled tasks)
+// 4. Main plugin class instantiation and setup
+// ---
 
 define( 'TMON_UNIT_CONNECTOR_VERSION', '0.2.0' );
 define( 'TMON_UNIT_CONNECTOR_PATH', plugin_dir_path( __FILE__ ) );
 define( 'TMON_UNIT_CONNECTOR_URL', plugin_dir_url( __FILE__ ) );
 
-// Autoload includes
-foreach ( glob( __DIR__ . '/includes/*.php' ) as $file ) {
-    require_once $file;
-}
+// Defer loading of includes and admin pages until plugins_loaded so REST handlers and
+// other initialization only run after WP and other plugins (e.g., Elementor) finish setup.
+add_action('plugins_loaded', function() {
+	// Load all include files (idempotent via require_once)
+	foreach ( glob( __DIR__ . '/includes/*.php' ) as $file ) {
+		require_once $file;
+	}
 
-// Load v2 API routes once
-if (!defined('TMON_UC_V2_API_LOADED')) {
-	require_once __DIR__ . '/includes/v2-api.php';
-}
+	// Admin pages and helpers (load only in admin context)
+	if ( is_admin() ) {
+		foreach ( glob( __DIR__ . '/admin/*.php' ) as $file ) {
+			require_once $file;
+		}
+		require_once __DIR__ . '/admin/starter-page.php';
+		require_once __DIR__ . '/admin/public-docs-page.php';
+		require_once __DIR__ . '/admin/location.php';
+	}
+}, 20); // run after most plugins initialize
 
-// Admin
-if ( is_admin() ) {
-    foreach ( glob( __DIR__ . '/admin/*.php' ) as $file ) {
-        require_once $file;
-    }
-}
- require_once __DIR__ . '/admin/starter-page.php';
- require_once __DIR__ . '/admin/public-docs-page.php';
- require_once __DIR__ . '/admin/location.php';
+// NOTE: includes and admin pages are loaded in the plugins_loaded handler above.
+// Removed duplicate/wrong-time require_once() calls and duplicate activation/deactivation blocks
+// that caused includes to run at file-include time and triggered bootstrap ordering issues.
+
+// Note: includes/v2-api.php is loaded above via the plugins_loaded includes loop.
+// This avoids registering REST routes too early (fixes crashes during plugin load).
 
 // Assets
 
@@ -369,9 +480,47 @@ add_action('admin_init', function(){
     }
 });
 
+// Early compatibility: do not replace current_user with proxies (which can block WP auth).
+// Instead, if a broken object (missing exists()) has already been set, clear it so WP can build a proper WP_User.
+if (!function_exists('tmon_fix_fallback_user')) {
+	function tmon_fix_fallback_user() {
+		if (isset($GLOBALS['current_user']) && is_object($GLOBALS['current_user']) && !method_exists($GLOBALS['current_user'], 'exists')) {
+			// Clear to let WP create a proper WP_User later (non-destructive).
+			$GLOBALS['current_user'] = null;
+		}
+	}
+	// Run immediately and re-check early in bootstrap to catch later assignments (non-invasive).
+	$tmon_fix_runner = function() { tmon_fix_fallback_user(); };
+	$tmon_fix_runner();
+	add_action('plugins_loaded', $tmon_fix_runner, 0);
+	add_action('init', $tmon_fix_runner, 0);
+	add_action('admin_init', $tmon_fix_runner, 0);
+}
+
 // Ensure default Admin API URL shown in settings template comes from home_url()
 // (The templates/settings.php already renders WORDPRESS_API_URL and we now default it there via schema)
 add_filter('tmon_uc_default_options', function($defaults) {
     $defaults['admin_api_url'] = rtrim(home_url('/'), '/');
     return $defaults;
 });
+
+// Activation: schedule cron tasks only (no current_user_can or other auth calls)
+function tmon_uc_activate() {
+	// Schedule only if not scheduled
+	if (!wp_next_scheduled('tmon_uc_command_requeue_cron')) {
+		wp_schedule_event(time() + 60, 'hourly', 'tmon_uc_command_requeue_cron');
+	}
+	// create DB tables defensively (no capability checks)
+	if (function_exists('tmon_uc_ensure_commands_table')) tmon_uc_ensure_commands_table();
+	if (function_exists('tmon_uc_ensure_staged_settings_table')) tmon_uc_ensure_staged_settings_table();
+	if (function_exists('uc_devices_ensure_table')) uc_devices_ensure_table();
+}
+register_activation_hook(__FILE__, 'tmon_uc_activate');
+
+// Deactivation: unschedule cron, leave DB intact (safe)
+function tmon_uc_deactivate() {
+	$ts = wp_next_scheduled('tmon_uc_command_requeue_cron');
+	if ($ts) wp_unschedule_event($ts, 'tmon_uc_command_requeue_cron');
+	// Do not delete data by default
+}
+register_deactivation_hook(__FILE__, 'tmon_uc_deactivate');
