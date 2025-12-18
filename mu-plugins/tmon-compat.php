@@ -4,6 +4,11 @@
 if (!defined('TMON_COMPAT_MU_LOADED')) {
 	define('TMON_COMPAT_MU_LOADED', true);
 
+	// Ensure common login globals exist so wp-login.php won't emit "Undefined variable" warnings.
+	// (wp-login.php can run very early; mu-plugins load before regular plugins.)
+	if (!isset($GLOBALS['user_login'])) $GLOBALS['user_login'] = '';
+	if (!isset($GLOBALS['user_pass']))  $GLOBALS['user_pass']  = '';
+
 	// Proxy that forwards to the original object but provides exists()
 	if (!class_exists('TMON_User_Proxy')) {
 		class TMON_User_Proxy {
