@@ -17,6 +17,36 @@ Author: TMON DevOps
 
 if ( ! defined( 'ABSPATH' ) ) exit;
 
+// Early pluggables fallback: ensure wp_get_current_user() & get_current_user_id() exist
+if ( ! function_exists( 'wp_get_current_user' ) ) {
+	// Minimal WP_User-like stub used only until WP finishes loading pluggables.
+	if ( ! class_exists( 'TMON_Fallback_User' ) ) {
+		class TMON_Fallback_User {
+			public $ID = 0;
+			public $roles = [];
+			public $user_login = '';
+			public $user_email = '';
+			public function has_cap( $cap ) { return false; }
+			public function exists() { return false; }
+			public function __get( $name ) { return null; }
+		}
+	}
+	function wp_get_current_user() {
+		static $u = null;
+		if ( $u === null ) $u = new TMON_Fallback_User();
+		return $u;
+	}
+}
+if ( ! function_exists( 'get_current_user_id' ) ) {
+	function get_current_user_id() {
+		if ( function_exists( 'wp_get_current_user' ) ) {
+			$user = wp_get_current_user();
+			return isset( $user->ID ) ? intval( $user->ID ) : 0;
+		}
+		return 0;
+	}
+}
+
 // Ensure common login globals exist to avoid "Undefined variable" warnings in wp-login.php.
 if (! isset( $GLOBALS['user_login'] )) $GLOBALS['user_login'] = '';
 if (! isset( $GLOBALS['user_pass'] ))  $GLOBALS['user_pass']  = '';
