@@ -153,3 +153,67 @@ function tmon_uc_install_schema() {
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     ) $charset_collate;");
 }
+
+// Ensure core DB schema and upgrade-safe column additions for Unit Connector
+
+if (!function_exists('tmon_admin_column_exists')) {
+	function tmon_admin_column_exists($table, $column) {
+		global $wpdb;
+		if (!$wpdb || empty($wpdb->prefix)) return false;
+		$col = $wpdb->get_var($wpdb->prepare("SHOW COLUMNS FROM {$table} LIKE %s", $column));
+		return !empty($col);
+	}
+}
+
+if (!function_exists('tmon_admin_ensure_columns')) {
+	function tmon_admin_ensure_columns($table, $columns) {
+		global $wpdb;
+		if (!$wpdb || empty($wpdb->prefix)) return false;
+		foreach ($columns as $col => $sql) {
+			if (tmon_admin_column_exists($table, $col)) continue;
+			$wpdb->query($sql);
+		}
+		return true;
+	}
+}
+
+if (!function_exists('tmon_admin_ensure_commands_table')) {
+	function tmon_admin_ensure_commands_table() {
+		global $wpdb;
+		if (!$wpdb || empty($wpdb->prefix)) return;
+		$table = $wpdb->prefix . 'tmon_device_commands';
+		$collate = $wpdb->get_charset_collate();
+		$wpdb->query("CREATE TABLE IF NOT EXISTS {$table} (
+			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+			device_id VARCHAR(64) NOT NULL,
+			command VARCHAR(64) NOT NULL,
+			params LONGTEXT NULL,
+			status VARCHAR(32) NOT NULL DEFAULT 'queued',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			dispatched_at DATETIME NULL,
+			executed_at DATETIME NULL,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			KEY device_idx (device_id),
+			KEY status_idx (status)
+		) {$collate}");
+	}
+}
+
+add_action('admin_init', function(){
+	global $wpdb;
+	if (!$wpdb || empty($wpdb->prefix)) return;
+	// Ensure commands table exists with dispatched/executed timestamps
+	tmon_admin_ensure_commands_table();
+
+	// Ensure legacy installs get column additions when missing
+	tmon_admin_ensure_columns($wpdb->prefix . 'tmon_device_commands', [
+		'dispatched_at' => "ALTER TABLE {$wpdb->prefix}tmon_device_commands ADD COLUMN dispatched_at DATETIME NULL",
+		'executed_at' => "ALTER TABLE {$wpdb->prefix}tmon_device_commands ADD COLUMN executed_at DATETIME NULL",
+	]);
+
+	// Ensure canBill column on tmon_devices
+	tmon_admin_ensure_columns($wpdb->prefix . 'tmon_devices', [
+		'canBill' => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN canBill TINYINT(1) NOT NULL DEFAULT 0",
+	]);
+});

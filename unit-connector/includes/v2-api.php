@@ -392,3 +392,175 @@ add_action('rest_api_init', function() {
 		}
 	]);
 });
+
+// Device registers / check-in and may send its settings snapshot
+add_action('rest_api_init', function(){
+	register_rest_route('tmon/v1', '/device/register', [
+		'methods' => 'POST',
+		'callback' => 'tmon_rest_device_register',
+		'permission_callback' => '__return_true',
+	]);
+});
+
+/* Helper: write per-device settings file under WP_CONTENT_DIR/tmon-field-logs */
+function tmon_uc_write_device_settings_file($unit_id, $settings_array) {
+	if (empty($unit_id) || !is_array($settings_array)) return false;
+	$dir = trailingslashit(WP_CONTENT_DIR) . 'tmon-field-logs';
+	if (! file_exists($dir)) wp_mkdir_p($dir);
+	$fname = $dir . '/device_settings-' . sanitize_file_name($unit_id) . '.json';
+	@file_put_contents($fname, wp_json_encode($settings_array));
+	return true;
+}
+
+/* POST /device/register
+   Accept: unit_id, machine_id, settings (object)
+   Persist to tmon_devices (settings/last_seen) and write per-device file.
+*/
+function tmon_rest_device_register(WP_REST_Request $req) {
+	global $wpdb;
+	$body = $req->get_json_params();
+	$unit_id = isset($body['unit_id']) ? sanitize_text_field($body['unit_id']) : '';
+	$machine_id = isset($body['machine_id']) ? sanitize_text_field($body['machine_id']) : '';
+	$settings = isset($body['settings']) && is_array($body['settings']) ? $body['settings'] : [];
+
+	if (! $unit_id) {
+		return rest_ensure_response(['status'=>'error','message'=>'unit_id required'], 400);
+	}
+	// Update or insert into tmon_devices (best-effort)
+	$now = current_time('mysql');
+	$row = $wpdb->get_row($wpdb->prepare("SELECT unit_id FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s LIMIT 1", $unit_id));
+	$enc = wp_json_encode($settings ?: new stdClass());
+	if ($row) {
+		$wpdb->update($wpdb->prefix.'tmon_devices', ['settings'=>$enc, 'machine_id'=>$machine_id, 'last_seen'=>$now], ['unit_id'=>$unit_id]);
+	} else {
+		$wpdb->insert($wpdb->prefix.'tmon_devices', ['unit_id'=>$unit_id,'machine_id'=>$machine_id,'unit_name'=>'','settings'=>$enc,'last_seen'=>$now]);
+	}
+	// Ensure per-device staged settings file exists for local processes/audit
+	if (! empty($settings) && is_array($settings)) {
+		tmon_uc_write_device_settings_file($unit_id, $settings);
+	}
+	return rest_ensure_response([
+		'status'=>'ok',
+		'unit_id'=>$unit_id,
+		'server_time' => current_time('mysql'),
+		'server_ts' => intval(current_time('timestamp')),
+	]);
+}
+
+/* GET /device/settings
+   Query params: unit_id or machine_id
+   Returns staged settings (if any) and queued commands for immediate download.
+*/
+function tmon_rest_device_staged_settings(WP_REST_Request $req) {
+	global $wpdb;
+	$unit_id = sanitize_text_field($req->get_param('unit_id') ?? '');
+	$machine_id = sanitize_text_field($req->get_param('machine_id') ?? '');
+	$uc_table = $wpdb->prefix . 'tmon_uc_devices';
+
+	// Find staged settings by unit or machine id
+	$staged = []; $staged_at = '';
+	if ($unit_id || $machine_id) {
+		$row = $wpdb->get_row($wpdb->prepare("SELECT staged_settings, staged_at, machine_id FROM {$uc_table} WHERE unit_id=%s OR machine_id=%s LIMIT 1", $unit_id, $machine_id), ARRAY_A);
+		if ($row && ! empty($row['staged_settings'])) {
+			$tmp = json_decode($row['staged_settings'], true);
+			if (is_array($tmp)) $staged = $tmp;
+			$staged_at = $row['staged_at'] ?? '';
+		}
+	}
+
+	// Write per-unit staged file for device-side application (best-effort)
+	if ($unit_id && is_array($staged) && $staged) {
+		tmon_uc_write_device_settings_file($unit_id, $staged);
+	}
+
+	// Return queued commands for this unit (limit)
+	$cmds = [];
+	if ($unit_id) {
+		$cmd_table = $wpdb->prefix . 'tmon_device_commands';
+		$rows = $wpdb->get_results($wpdb->prepare("SELECT id, device_id, command, params, created_at FROM {$cmd_table} WHERE device_id=%s AND status='queued' ORDER BY id ASC LIMIT %d", $unit_id, 50), ARRAY_A);
+		if ($rows) {
+			foreach ($rows as $r) {
+				$decoded = json_decode($r['params'], true);
+				$cmds[] = [
+					'id' => intval($r['id']),
+					'command' => $r['command'],
+					'params' => is_array($decoded) ? $decoded : $r['params'],
+					'created_at' => $r['created_at'],
+				];
+			}
+			// mark returned commands as dispatched
+			foreach ($rows as $r) {
+				$wpdb->update($cmd_table, ['status'=>'dispatched','dispatched_at'=>current_time('mysql')], ['id'=>intval($r['id'])]);
+			}
+		}
+	}
+
+	return rest_ensure_response([
+		'staged' => $staged,
+		'staged_at' => $staged_at,
+		'commands' => $cmds,
+		'server_time' => current_time('mysql'),
+		'server_ts' => intval(current_time('timestamp')),
+	]);
+}
+
+/* POST /device/commands
+   Body: { unit_id: "..." } returns queued commands array and marks them dispatched
+*/
+function tmon_rest_device_commands_fetch(WP_REST_Request $req) {
+	global $wpdb;
+	$body = $req->get_json_params();
+	$unit_id = sanitize_text_field($body['unit_id'] ?? '');
+	if (! $unit_id) return rest_ensure_response([], 200);
+
+	$cmd_table = $wpdb->prefix . 'tmon_device_commands';
+	$cmds = [];
+	$rows = $wpdb->get_results($wpdb->prepare("SELECT id, device_id, command, params, created_at FROM {$cmd_table} WHERE device_id=%s AND status='queued' ORDER BY id ASC LIMIT %d", $unit_id, 50), ARRAY_A);
+	if ($rows) {
+		foreach ($rows as $r) {
+			$decoded = json_decode($r['params'], true);
+			$cmds[] = [
+				'id' => intval($r['id']),
+				'command' => $r['command'],
+				'params' => is_array($decoded) ? $decoded : $r['params'],
+				'created_at' => $r['created_at'],
+			];
+		}
+		foreach ($rows as $r) {
+			$wpdb->update($cmd_table, ['status'=>'dispatched','dispatched_at'=>current_time('mysql')], ['id'=>intval($r['id'])]);
+		}
+	}
+	return rest_ensure_response(['commands'=>$cmds,'server_time'=>current_time('mysql'),'server_ts'=>intval(current_time('timestamp'))], 200);
+}
+
+/* POST /device/command-complete
+   Body: { job_id: n, ok: true/false, result: "..." }
+   Mark command executed + store result into params for audit.
+*/
+function tmon_rest_device_command_complete(WP_REST_Request $req) {
+	global $wpdb;
+	$body = $req->get_json_params();
+	$job_id = intval($body['job_id'] ?? 0);
+	$ok = isset($body['ok']) ? boolval($body['ok']) : null;
+	$result = isset($body['result']) ? sanitize_text_field($body['result']) : '';
+
+	if (! $job_id) return rest_ensure_response(['status'=>'error','message'=>'job_id required'], 400);
+
+	$cmd_table = $wpdb->prefix . 'tmon_device_commands';
+	$row = $wpdb->get_row($wpdb->prepare("SELECT params FROM {$cmd_table} WHERE id=%d LIMIT 1", $job_id), ARRAY_A);
+	if (! $row) return rest_ensure_response(['status'=>'error','message'=>'not found'], 404);
+
+	$params = $row['params'];
+	$decoded = json_decode($params, true);
+	if (!is_array($decoded)) $decoded = [];
+	if ($ok !== null) $decoded['__ok'] = $ok ? true : false;
+	if ($result !== '') $decoded['__result'] = $result;
+
+	$wpdb->update($cmd_table, [
+		'params' => wp_json_encode($decoded),
+		'status' => 'executed',
+		'executed_at' => current_time('mysql'),
+	], ['id' => $job_id]);
+
+	return rest_ensure_response(['status'=>'ok']);
+}

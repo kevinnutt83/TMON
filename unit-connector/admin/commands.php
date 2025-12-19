@@ -28,7 +28,8 @@ if (!function_exists('tmon_uc_commands_page')) {
 						'device_id' => $unit_id,
 						'command' => $command,
 						'params' => wp_json_encode($params),
-						'created_at' => tmon_uc_store_now(),
+						'created_at' => current_time('mysql'),
+						'status' => 'queued',
 					]
 				);
 				echo '<div class="updated"><p>Command enqueued. ID: '.intval($wpdb->insert_id).'</p></div>';
@@ -77,7 +78,7 @@ if (!function_exists('tmon_uc_commands_page')) {
 
 		echo '<h3>Recent Pending Commands</h3>';
 		global $wpdb;
-		$rows = $wpdb->get_results("SELECT id, device_id, command, params, created_at FROM {$wpdb->prefix}tmon_device_commands WHERE executed_at IS NULL ORDER BY id DESC LIMIT 20", ARRAY_A);
+		$rows = $wpdb->get_results("SELECT id, device_id, command, params, created_at FROM {$wpdb->prefix}tmon_device_commands WHERE status='queued' ORDER BY id DESC LIMIT 20", ARRAY_A);
 		echo '<table class="widefat"><thead><tr><th>ID</th><th>Unit ID</th><th>Command</th><th>Params</th><th>Created</th></tr></thead><tbody>';
 		foreach ($rows as $r) {
 			echo '<tr>';
@@ -91,7 +92,7 @@ if (!function_exists('tmon_uc_commands_page')) {
 		echo '</tbody></table>';
 
 		echo '<h3>Recent Executed Commands</h3>';
-		$rows2 = $wpdb->get_results("SELECT id, device_id, command, params, created_at, executed_at FROM {$wpdb->prefix}tmon_device_commands WHERE executed_at IS NOT NULL ORDER BY id DESC LIMIT 20", ARRAY_A);
+		$rows2 = $wpdb->get_results("SELECT id, device_id, command, params, created_at, executed_at FROM {$wpdb->prefix}tmon_device_commands WHERE status='executed' ORDER BY id DESC LIMIT 20", ARRAY_A);
 		echo '<table class="widefat"><thead><tr><th>ID</th><th>Unit ID</th><th>Command</th><th>Result</th><th>Created</th><th>Executed</th></tr></thead><tbody>';
 		foreach ($rows2 as $r) {
 			$p = json_decode($r['params'], true);

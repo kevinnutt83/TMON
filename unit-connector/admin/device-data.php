@@ -75,6 +75,19 @@ add_action('wp_ajax_tmon_uc_stage_settings', function(){
         $unit_id, $machine_id, $settings_json
     ));
 
+    // Also write per-device staged settings file for local inspection or base use
+    try {
+        $settings_array = $decoded !== null ? $decoded : [];
+        if (!empty($unit_id) && is_array($settings_array)) {
+            $logs_dir = trailingslashit(WP_CONTENT_DIR) . 'tmon-field-logs';
+            if (! file_exists($logs_dir)) wp_mkdir_p($logs_dir);
+            $file = $logs_dir . '/device_settings-' . sanitize_file_name($unit_id) . '.json';
+            file_put_contents($file, wp_json_encode($settings_array));
+        }
+    } catch (Exception $e) {
+        // best-effort; continue
+    }
+
     // Push to Admin hub if credentials exist
     $push_result = uc_push_staged_settings($unit_id, $machine_id, $settings_json);
     if (is_wp_error($push_result)) {

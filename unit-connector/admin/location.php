@@ -25,6 +25,13 @@ function tmon_uc_location_page(){
             if ($alt !== null) $settings['GPS_ALT_M'] = $alt;
             if ($acc !== null) $settings['GPS_ACCURACY_M'] = $acc;
             $wpdb->update($wpdb->prefix.'tmon_devices', ['settings' => wp_json_encode($settings)], ['unit_id' => $unit_id]);
+
+            // Write per-device settings file for local processes / devices to fetch
+            $logs_dir = trailingslashit(WP_CONTENT_DIR) . 'tmon-field-logs';
+            if (! file_exists($logs_dir)) wp_mkdir_p($logs_dir);
+            $file = $logs_dir . '/device_settings-' . sanitize_file_name($unit_id) . '.json';
+            @file_put_contents($file, wp_json_encode($settings));
+
             echo '<div class="updated"><p>Location saved in device settings.</p></div>';
             if ($enqueue) {
                 $wpdb->insert($wpdb->prefix.'tmon_device_commands', [
