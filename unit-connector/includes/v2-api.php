@@ -564,3 +564,161 @@ function tmon_rest_device_command_complete(WP_REST_Request $req) {
 
 	return rest_ensure_response(['status'=>'ok']);
 }
+
+// POST device settings (device -> UC)
+add_action('rest_api_init', function(){
+	register_rest_route('tmon/v1', '/device/settings', [
+		'methods' => 'POST',
+		'callback' => 'tmon_v1_device_receive_settings',
+		'permission_callback' => '__return_true',
+	]);
+});
+
+// GET ota jobs for device
+add_action('rest_api_init', function(){
+	register_rest_route('tmon/v1', '/device/ota-jobs/(?P<unit_id>[\w\-\._]+)', [
+		'methods' => 'GET',
+		'callback' => 'tmon_v1_device_ota_jobs',
+		'permission_callback' => '__return_true',
+	]);
+});
+
+// POST ota job complete
+add_action('rest_api_init', function(){
+	register_rest_route('tmon/v1', '/device/ota-job-complete', [
+		'methods' => 'POST',
+		'callback' => 'tmon_v1_device_ota_job_complete',
+		'permission_callback' => '__return_true',
+	]);
+});
+
+// File upload (multipart/form-data) - saves to wp-content/tmon-files/<unit_id>/
+add_action('rest_api_init', function(){
+	register_rest_route('tmon/v1', '/device/file', [
+		'methods' => 'POST',
+		'callback' => 'tmon_v1_device_file_upload',
+		'permission_callback' => '__return_true',
+	]);
+});
+
+// File download
+add_action('rest_api_init', function(){
+	register_rest_route('tmon/v1', '/device/file/(?P<unit_id>[\w\-\._]+)/(?P<filename>.+)', [
+		'methods' => 'GET',
+		'callback' => 'tmon_v1_device_file_fetch',
+		'permission_callback' => '__return_true',
+	]);
+});
+
+// Extract Authorization header value robustly.
+function tmon_uc_get_authorization_header() {
+	// getallheaders() exists on many environments
+	if (function_exists('getallheaders')) {
+		$h = getallheaders();
+		if (!empty($h['Authorization'])) return trim($h['Authorization']);
+		if (!empty($h['authorization'])) return trim($h['authorization']);
+	}
+	// fallback to common $_SERVER vars
+	if (!empty($_SERVER['HTTP_AUTHORIZATION'])) return trim($_SERVER['HTTP_AUTHORIZATION']);
+	if (!empty($_SERVER['REDIRECT_HTTP_AUTHORIZATION'])) return trim($_SERVER['REDIRECT_HTTP_AUTHORIZATION']);
+	// Some servers may use different casing/transforms
+	foreach ($_SERVER as $k => $v) {
+		if (stripos($k, 'AUTHORIZATION') !== false) return trim($v);
+	}
+	return '';
+}
+
+/**
+ * Permission callback for device endpoints: require HTTP Basic auth that maps to a valid WP user.
+ */
+function tmon_uc_device_permission_callback(\WP_REST_Request $request) {
+	$auth = tmon_uc_get_authorization_header();
+	if (!$auth) return new WP_Error('forbidden', 'Missing Authorization', ['status' => 401]);
+	if (stripos($auth, 'basic ') !== 0) return new WP_Error('forbidden', 'Basic auth required', ['status' => 401]);
+
+	$b64 = trim(substr($auth, 6));
+	$decoded = base64_decode($b64);
+	if ($decoded === false || strpos($decoded, ':') === false) return new WP_Error('forbidden', 'Invalid Basic credentials', ['status' => 401]);
+	list($user, $pass) = explode(':', $decoded, 2);
+
+	// Attempt WP login (does not set a session/cookie)
+	$user_obj = wp_authenticate($user, $pass);
+	if (is_wp_error($user_obj)) {
+		return new WP_Error('forbidden', 'Invalid credentials', ['status' => 403]);
+	}
+	// Optionally check capability; here any valid user is allowed to call device endpoints.
+	return true;
+}
+
+// Device-facing routes: require Basic auth
+add_action('rest_api_init', function(){
+	// Device register/check-in (POST)
+	register_rest_route('tmon/v1', '/device/register', [
+		'methods' => 'POST',
+		'callback' => 'tmon_rest_device_register',
+		'permission_callback' => 'tmon_uc_device_permission_callback',
+	]);
+
+	// GET device settings
+	register_rest_route('tmon/v1', '/device/settings/(?P<unit_id>[\w\-\._]+)', [
+		'methods' => 'GET',
+		'callback' => 'tmon_v1_device_get_settings',
+		'permission_callback' => 'tmon_uc_device_permission_callback',
+	]);
+
+	// GET staged settings + queued commands
+	register_rest_route('tmon/v1', '/device/staged-settings', [
+		'methods' => 'GET',
+		'callback' => 'tmon_v1_device_staged_settings',
+		'permission_callback' => 'tmon_uc_device_permission_callback',
+	]);
+
+	// Fetch queued commands (GET/POST)
+	register_rest_route('tmon/v1', '/device/commands', [
+		'methods' => ['GET','POST'],
+		'callback' => 'tmon_v1_device_commands_fetch',
+		'permission_callback' => 'tmon_uc_device_permission_callback',
+	]);
+
+	// Command completion ack
+	register_rest_route('tmon/v1', '/device/command-complete', [
+		'methods' => 'POST',
+		'callback' => 'tmon_v1_device_command_complete',
+		'permission_callback' => 'tmon_uc_device_permission_callback',
+	]);
+
+	// POST device settings (device -> UC)
+	register_rest_route('tmon/v1', '/device/settings', [
+		'methods' => 'POST',
+		'callback' => 'tmon_v1_device_receive_settings',
+		'permission_callback' => 'tmon_uc_device_permission_callback',
+	]);
+
+	// GET ota jobs for device
+	register_rest_route('tmon/v1', '/device/ota-jobs/(?P<unit_id>[\w\-\._]+)', [
+		'methods' => 'GET',
+		'callback' => 'tmon_v1_device_ota_jobs',
+		'permission_callback' => 'tmon_uc_device_permission_callback',
+	]);
+
+	// POST ota job complete
+	register_rest_route('tmon/v1', '/device/ota-job-complete', [
+		'methods' => 'POST',
+		'callback' => 'tmon_v1_device_ota_job_complete',
+		'permission_callback' => 'tmon_uc_device_permission_callback',
+	]);
+
+	// File upload (multipart/form-data) - saves to wp-content/tmon-files/<unit_id>/
+	register_rest_route('tmon/v1', '/device/file', [
+		'methods' => 'POST',
+		'callback' => 'tmon_v1_device_file_upload',
+		'permission_callback' => 'tmon_uc_device_permission_callback',
+	]);
+
+	// File download
+	register_rest_route('tmon/v1', '/device/file/(?P<unit_id>[\w\-\._]+)/(?P<filename>.+)', [
+		'methods' => 'GET',
+		'callback' => 'tmon_v1_device_file_fetch',
+		'permission_callback' => 'tmon_uc_device_permission_callback',
+	]);
+});

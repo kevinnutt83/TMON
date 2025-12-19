@@ -50,6 +50,25 @@ WORDPRESS_PASSWORD = getattr(settings, 'WORDPRESS_PASSWORD', None)
 def get_jwt_token():
     return ''
 
+def _build_auth_headers():
+    """Return dict with Authorization: Basic <b64(user:pass)> if credentials exist."""
+    headers = {}
+    try:
+        user = getattr(settings, 'WORDPRESS_USERNAME', '') or getattr(settings, 'FIELD_DATA_APP_USER', '')
+        pwd = getattr(settings, 'WORDPRESS_PASSWORD', '') or getattr(settings, 'FIELD_DATA_APP_PASS', '')
+        if user and pwd:
+            try:
+                import ubinascii as _ub
+                creds = f"{user}:{pwd}".encode('utf-8')
+                b64 = _ub.b2a_base64(creds).decode().strip()
+            except Exception:
+                import base64 as _b
+                b64 = _b.b64encode(f"{user}:{pwd}".encode('utf-8')).decode()
+            headers['Authorization'] = 'Basic ' + b64
+    except Exception:
+        pass
+    return headers
+
 async def register_with_wp():
     if not WORDPRESS_API_URL:
         await debug_print('No WordPress API URL set', 'ERROR')
@@ -78,6 +97,8 @@ async def register_with_wp():
     }
     try:
         headers = {'Content-Type': 'application/json'}
+        # include basic auth if configured
+        headers.update(_build_auth_headers())
         payload = ujson.dumps(data)
         response = await async_http_request(
             WORDPRESS_API_URL + '/wp-json/tmon/v1/device/register',
@@ -115,27 +136,11 @@ async def send_data_to_wp():
     except Exception:
         sdata_snapshot = {}
 
-    data = {
-        'unit_id': settings.UNIT_ID,
-        'firmware_version': getattr(settings, 'FIRMWARE_VERSION', ''),
-        'node_type': getattr(settings, 'NODE_TYPE', ''),
-        'sdata': sdata_snapshot,  # NEW: full sdata snapshot separate
-        # Backwards-compatible 'data' block for minimal consumers
-        'data': {
-            'runtime': getattr(sdata, 'loop_runtime', 0),
-            'script_runtime': getattr(sdata, 'script_runtime', 0),
-            'temp_c': getattr(sdata, 'cur_temp_c', 0),
-            'temp_f': getattr(sdata, 'cur_temp_f', 0),
-            'bar': getattr(sdata, 'cur_bar_pres', 0),
-            'humid': getattr(sdata, 'cur_humid', 0),
-            'sys_voltage': getattr(sdata, 'sys_voltage', None),
-            'wifi_rssi': getattr(sdata, 'wifi_rssi', None),
-            'lora_rssi': getattr(sdata, 'lora_SigStr', None),
-            'free_mem': getattr(sdata, 'free_mem', None),
-        }
-    }
+    data = { 'unit_id': settings.UNIT_ID, 'firmware_version': getattr(settings,'FIRMWARE_VERSION',''), 'node_type': getattr(settings,'NODE_TYPE',''), 'sdata': sdata_snapshot, 'data': {} }
+    headers = {'Content-Type':'application/json'}
+    headers.update(_build_auth_headers())
     try:
-        resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/data', json=data)
+        resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/field-data', headers=headers, json=data)
         await debug_print(f'Sent data to WP: {getattr(resp,"status_code",None)}', 'HTTP')
     except Exception as e:
         await debug_print(f'Failed to send data to WP: {e}', 'ERROR')
@@ -147,15 +152,13 @@ async def send_settings_to_wp():
     data = {
         'unit_id': settings.UNIT_ID,
         'unit_name': settings.UNIT_Name,
-        'company': getattr(settings, 'COMPANY', ''),
-        'site': getattr(settings, 'SITE', ''),
-        'zone': getattr(settings, 'ZONE', ''),
-        'cluster': getattr(settings, 'CLUSTER', ''),
-        'settings': {k: getattr(settings, k) for k in dir(settings) if not k.startswith('__') and not callable(getattr(settings, k))}
+        # ...existing...
     }
+    headers = {'Content-Type':'application/json'}
+    headers.update(_build_auth_headers())
     try:
-        resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/settings', json=data)
-        await debug_print(f'Sent settings to WP: {resp.status_code}', 'HTTP')
+        resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/settings', headers=headers, json=data)
+        await debug_print(f'Sent settings to WP: {getattr(resp,"status_code",None)}', 'HTTP')
     except Exception as e:
         await debug_print(f'Failed to send settings to WP: {e}', 'ERROR')
 
@@ -164,7 +167,8 @@ async def fetch_settings_from_wp():
         await debug_print('No WordPress API URL set', 'ERROR')
         return
     try:
-        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/settings/{settings.UNIT_ID}')
+        headers = _build_auth_headers()
+        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/settings/{settings.UNIT_ID}', headers=headers)
         if resp.status_code == 200:
             new_settings = resp.json().get('settings', {})
             for k in ['COMPANY', 'SITE', 'ZONE', 'CLUSTER']:
@@ -186,8 +190,9 @@ async def send_file_to_wp(filepath):
     try:
         with open(filepath, 'rb') as f:
             files = {'file': (os.path.basename(filepath), f.read())}
-            resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/file', files=files)
-            await debug_print(f'Sent file to WP: {resp.status_code}', 'HTTP')
+            headers = _build_auth_headers()
+            resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/file', headers=headers, files=files)
+            await debug_print(f'Sent file to WP: {getattr(resp,"status_code",None)}', 'HTTP')
     except Exception as e:
         await debug_print(f'Failed to send file to WP: {e}', 'ERROR')
 
@@ -196,7 +201,8 @@ async def request_file_from_wp(filename):
         await debug_print('No WordPress API URL set', 'ERROR')
         return
     try:
-        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/file/{settings.UNIT_ID}/{filename}')
+        headers = _build_auth_headers()
+        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/file/{settings.UNIT_ID}/{filename}', headers=headers)
         if resp.status_code == 200:
             with open(filename, 'wb') as f:
                 f.write(resp.content)
@@ -218,7 +224,8 @@ async def poll_ota_jobs():
     if not WORDPRESS_API_URL:
         return
     try:
-        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/ota-jobs/{settings.UNIT_ID}')
+        headers = _build_auth_headers()
+        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/ota-jobs/{settings.UNIT_ID}', headers=headers)
         if resp.status_code == 200:
             jobs = resp.json().get('jobs', [])
             for job in jobs:
@@ -243,9 +250,10 @@ async def poll_device_commands():
         'machine_id': getattr(settings, 'MACHINE_ID', '')
     }
     try:
-        resp = requests.post(url, json=payload, timeout=10)
+        headers = _build_auth_headers()
+        resp = requests.post(url, json=payload, headers=headers, timeout=10)
     except TypeError:
-        resp = requests.post(url, json=payload)
+        resp = requests.post(url, json=payload, headers=headers)
     ok = (resp is not None and getattr(resp, 'status_code', 0) == 200)
     if not ok:
         try:
@@ -255,8 +263,17 @@ async def poll_device_commands():
         return
     cmds = []
     try:
-        cmds = resp.json() or []
+        body = resp.json() or {}
     except Exception:
+        body = {}
+    # Accept both shapes: top-level list or {commands: [...]}
+    if isinstance(body, list):
+        cmds = body
+    elif isinstance(body, dict) and 'commands' in body and isinstance(body['commands'], list):
+        cmds = body['commands']
+    elif isinstance(body, dict) and isinstance(body.get('data'), list):
+        cmds = body.get('data', [])
+    else:
         cmds = []
     try:
         resp.close()
@@ -399,7 +416,8 @@ async def fetch_staged_settings():
         return False
     try:
         url = WORDPRESS_API_URL.rstrip('/') + f'/wp-json/tmon/v1/device/staged-settings?unit_id={settings.UNIT_ID}'
-        resp = requests.get(url, timeout=10)
+        headers = _build_auth_headers()
+        resp = requests.get(url, timeout=10, headers=headers)
         if getattr(resp, 'status_code', 0) != 200:
             await debug_print(f'fetch_staged_settings: non-200 {getattr(resp,"status_code",None)}', 'DEBUG')
             return False
