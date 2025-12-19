@@ -52,7 +52,7 @@ add_shortcode('tmon_pending_commands', function($atts){
             .'<td>'.esc_html($r['device_id']).'</td>'
             .'<td>'.esc_html($r['unit_name']).'</td>'
             .'<td>'.$cmd.'</td>'
-            .'<td>'.esc_html($r['created_at']).'</td>'
+            .'<td>'.esc_html(tmon_uc_format_mysql_datetime($r['created_at'])).'</td>'
             .'<td>';
         if ($can_control) {
             echo '<button class="button button-small tmon-cmd-del" data-id="'.intval($r['id']).'">Delete</button> ';
@@ -382,7 +382,7 @@ add_shortcode('tmon_device_status', function($atts) {
         echo '<td><span class="tmon-dot '.$cls.'" title="'.esc_attr($title).'"></span></td>';
         echo '<td>'.esc_html($r['unit_id']).'</td>';
         echo '<td>'.esc_html($r['unit_name']).'</td>';
-        echo '<td>'.esc_html($r['last_seen']).'</td>';
+        echo '<td>'.esc_html(tmon_uc_format_mysql_datetime($r['last_seen'])).'</td>';
         echo '<td>';
         if ($can_control && !empty($enabled_relays)) {
             echo '<div class="tmon-relay-ctl" data-unit="'.esc_attr($r['unit_id']).'" data-nonce="'.esc_attr($nonce).'">';
@@ -753,7 +753,7 @@ add_shortcode('tmon_active_units', function($atts) {
     if (!$rows) return '<em>No active units.</em>';
     $out = '<table class="wp-list-table widefat"><thead><tr><th>Unit ID</th><th>Name</th><th>Last Seen</th></tr></thead><tbody>';
     foreach ($rows as $r) {
-        $out .= '<tr><td>'.esc_html($r['unit_id']).'</td><td>'.esc_html($r['unit_name']).'</td><td>'.esc_html($r['last_seen']).'</td></tr>';
+        $out .= '<tr><td>'.esc_html($r['unit_id']).'</td><td>'.esc_html($r['unit_name']).'</td><td>'.esc_html(tmon_uc_format_mysql_datetime($r['last_seen'])).'</td></tr>';
     }
     $out .= '</tbody></table>';
     return $out;
@@ -770,7 +770,7 @@ add_shortcode('tmon_known_ids', function($atts){
              . '<td>' . esc_html($r['machine_id'] ?: '') . '</td>'
              . '<td>' . esc_html($r['unit_id']) . '</td>'
              . '<td>' . esc_html($r['unit_name']) . '</td>'
-             . '<td>' . esc_html($r['last_seen']) . '</td>'
+             . '<td>' . esc_html(tmon_uc_format_mysql_datetime($r['last_seen'])) . '</td>'
              . '</tr>';
     }
     $out .= '</tbody></table>';

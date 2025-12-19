@@ -53,6 +53,41 @@ if (!function_exists('tmon_uc_get_local_admin_key')) {
 	}
 }
 
+// ------------------------
+// Timezone / timestamp helpers
+// ------------------------
+if (!function_exists('tmon_uc_store_now')) {
+	/**
+	 * Return current time in UTC formatted as MySQL DATETIME (Y-m-d H:i:s).
+	 * Use this to persist times in DB in UTC consistently.
+	 *
+	 * @return string
+	 */
+	function tmon_uc_store_now() {
+		// current_time('mysql', 1) returns GMT (UTC) in WP
+		return (string) current_time('mysql', 1);
+	}
+}
+
+if (!function_exists('tmon_uc_format_mysql_datetime')) {
+	/**
+	 * Format a MySQL DATETIME (stored in UTC) into site-local time using WordPress timezone settings.
+	 *
+	 * If $mysql_dt is empty, returns an empty string.
+	 *
+	 * @param string|null $mysql_dt MySQL DATETIME in UTC (e.g., '2025-01-02 15:04:05').
+	 * @param string $format PHP date format default 'Y-m-d H:i:s T' (uses date_i18n to respect WP tz).
+	 * @return string Localized/formatted datetime.
+	 */
+	function tmon_uc_format_mysql_datetime($mysql_dt = null, $format = 'Y-m-d H:i:s T') {
+		if (empty($mysql_dt)) return '';
+		// Parse as UTC explicitly, then pass epoch to date_i18n so WP timezone applies.
+		$ts = strtotime($mysql_dt . ' UTC');
+		if ($ts === false) return (string) $mysql_dt;
+		return date_i18n($format, (int) $ts);
+	}
+}
+
 // Ensure hub URL is canonical on admin_init (best-effort, non-destructive)
 add_action('admin_init', function(){
 	$current = get_option('tmon_uc_hub_url', '');

@@ -28,7 +28,7 @@ if (!function_exists('tmon_uc_commands_page')) {
 						'device_id' => $unit_id,
 						'command' => $command,
 						'params' => wp_json_encode($params),
-						'created_at' => current_time('mysql'),
+						'created_at' => tmon_uc_store_now(),
 					]
 				);
 				echo '<div class="updated"><p>Command enqueued. ID: '.intval($wpdb->insert_id).'</p></div>';
@@ -85,7 +85,7 @@ if (!function_exists('tmon_uc_commands_page')) {
 			echo '<td>'.esc_html($r['device_id']).'</td>';
 			echo '<td>'.esc_html($r['command']).'</td>';
 			echo '<td><code>'.esc_html($r['params']).'</code></td>';
-			echo '<td>'.esc_html($r['created_at']).'</td>';
+			echo '<td>'.esc_html(tmon_uc_format_mysql_datetime($r['created_at'])).'</td>';
 			echo '</tr>';
 		}
 		echo '</tbody></table>';
@@ -102,8 +102,8 @@ if (!function_exists('tmon_uc_commands_page')) {
 			echo '<td>'.esc_html($r['device_id']).'</td>';
 			echo '<td>'.esc_html($r['command']).'</td>';
 			echo '<td>'.esc_html($ok . ($res? (" - ".$res) : "" )).'</td>';
-			echo '<td>'.esc_html($r['created_at']).'</td>';
-			echo '<td>'.esc_html($r['executed_at']).'</td>';
+			echo '<td>'.esc_html(tmon_uc_format_mysql_datetime($r['created_at'])).'</td>';
+			echo '<td>'.esc_html(tmon_uc_format_mysql_datetime($r['executed_at'])).'</td>';
 			echo '</tr>';
 		}
 		echo '</tbody></table>';

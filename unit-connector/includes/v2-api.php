@@ -332,8 +332,8 @@ add_action('rest_api_init', function() {
 				'command' => $command,
 				'params' => wp_json_encode($params),
 				'status' => 'queued',
-				'created_at' => current_time('mysql'),
-				'updated_at' => current_time('mysql'),
+				'created_at' => tmon_uc_store_now(),
+				'updated_at' => tmon_uc_store_now(),
 			]);
 			return rest_ensure_response(['status'=>'ok','id'=>$wpdb->insert_id]);
 		}
@@ -354,7 +354,7 @@ add_action('rest_api_init', function() {
 			foreach ($rows as $r) {
 				$out[] = ['id' => intval($r['id']), 'command' => $r['command'], 'params' => json_decode($r['params'], true)];
 				// mark claimed to avoid immediate re-delivery
-				$wpdb->update($tbl, ['status' => 'claimed', 'updated_at' => current_time('mysql')], ['id' => intval($r['id'])]);
+				$wpdb->update($tbl, ['status' => 'claimed', 'updated_at' => tmon_uc_store_now()], ['id' => intval($r['id'])]);
 			}
 			return rest_ensure_response($out);
 		}
@@ -371,7 +371,7 @@ add_action('rest_api_init', function() {
 			$result = $req->get_param('result') ?? '';
 			if (!$job_id) return rest_ensure_response(['status'=>'error','message'=>'job_id required'], 400);
 			$tbl = $wpdb->prefix . 'tmon_device_commands';
-			$wpdb->update($tbl, ['status' => ($ok ? 'done' : 'failed'), 'executed_at'=>current_time('mysql'), 'executed_result'=>wp_json_encode($result), 'updated_at'=>current_time('mysql')], ['id' => $job_id]);
+			$wpdb->update($tbl, ['status' => ($ok ? 'done' : 'failed'), 'executed_at'=>tmon_uc_store_now(), 'executed_result'=>wp_json_encode($result), 'updated_at'=>tmon_uc_store_now()], ['id' => $job_id]);
 			return rest_ensure_response(['status'=>'ok']);
 		}
 	]);
@@ -387,7 +387,7 @@ add_action('rest_api_init', function() {
 			$result = $req->get_param('result') ?? '';
 			if (!$command_id) return rest_ensure_response(['status'=>'error','message'=>'command_id required'], 400);
 			$tbl = $wpdb->prefix . 'tmon_device_commands';
-			$wpdb->update($tbl, ['status' => ($ok ? 'done' : 'failed'), 'executed_at'=>current_time('mysql'), 'executed_result'=>wp_json_encode($result), 'updated_at'=>current_time('mysql')], ['id' => $command_id]);
+			$wpdb->update($tbl, ['status' => ($ok ? 'done' : 'failed'), 'executed_at'=>tmon_uc_store_now(), 'executed_result'=>wp_json_encode($result), 'updated_at'=>tmon_uc_store_now()], ['id' => $command_id]);
 			return rest_ensure_response(['status'=>'ok']);
 		}
 	]);

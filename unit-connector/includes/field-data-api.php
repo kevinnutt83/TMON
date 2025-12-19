@@ -131,8 +131,9 @@ function tmon_uc_rest_list_field_data($request) {
         if (!is_array($payload)) $payload = [];
         // Merge created_at as ts_iso for UI, include unit_id
         $payload['unit_id'] = $r['unit_id'];
-        $payload['ts_iso'] = $r['created_at'];
-        $out[] = $payload;
+        // Provide a site-local ISO8601 string in addition to raw DB value
+        $payload['ts_iso'] = date_i18n(DATE_ISO8601, strtotime($r['created_at'] . ' UTC'));
+         $out[] = $payload;
     }
     return rest_ensure_response(['status'=>'ok','rows'=>$out]);
 }
@@ -200,7 +201,7 @@ function tmon_uc_rest_export_field_data($request) {
             $origin = ($remote_keys >= 3) ? 'remote' : 'base';
         }
         $flat = [
-            $r['created_at'],
+            tmon_uc_format_mysql_datetime($r['created_at']),
             $r['unit_id'],
             $origin,
             $d['timestamp'] ?? ($d['time'] ?? ''),

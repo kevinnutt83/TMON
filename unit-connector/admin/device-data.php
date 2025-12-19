@@ -34,8 +34,8 @@ add_action('wp_ajax_tmon_uc_device_bundle', function(){
         'machine_id' => $machine_id,
         'settings' => $settings,
         'staged' => $staged,
-        'staged_at' => $staged_row['staged_at'] ?? '',
-        'last_seen' => $device['last_seen'] ?? ($latest['created_at'] ?? ''),
+        'staged_at' => tmon_uc_format_mysql_datetime($staged_row['staged_at'] ?? ''),
+        'last_seen' => tmon_uc_format_mysql_datetime($device['last_seen'] ?? ($latest['created_at'] ?? '')),
     ]);
 });
 
