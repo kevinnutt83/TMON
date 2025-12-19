@@ -54,36 +54,53 @@ if (!function_exists('tmon_uc_get_local_admin_key')) {
 }
 
 // ------------------------
-// Timezone / timestamp helpers
+// Time helpers: parse & format MySQL DATETIME stored in WP site timezone
 // ------------------------
-if (!function_exists('tmon_uc_store_now')) {
+if (!function_exists('tmon_uc_mysql_to_utc_timestamp')) {
 	/**
-	 * Return current time in UTC formatted as MySQL DATETIME (Y-m-d H:i:s).
-	 * Use this to persist times in DB in UTC consistently.
+	 * Convert a MySQL DATETIME string (stored using WP site timezone settings) into a UTC epoch timestamp.
+	 * Returns 0 on failure.
 	 *
-	 * @return string
+	 * @param string|null $mysql_dt MySQL DATETIME (e.g., '2025-12-19 08:00:00').
+	 * @return int UTC epoch seconds
 	 */
-	function tmon_uc_store_now() {
-		// current_time('mysql', 1) returns GMT (UTC) in WP
-		return (string) current_time('mysql', 1);
+	function tmon_uc_mysql_to_utc_timestamp($mysql_dt) {
+		if (empty($mysql_dt)) return 0;
+		$tz_string = get_option('timezone_string', '');
+		// Prefer explicit timezone_string (DST-aware)
+		if (!empty($tz_string)) {
+			try {
+				$dt = DateTime::createFromFormat('Y-m-d H:i:s', (string)$mysql_dt, new DateTimeZone($tz_string));
+				if ($dt !== false) {
+					return (int)$dt->getTimestamp();
+				}
+			} catch (Exception $e) {
+				// fall through to gmt_offset fallback
+			}
+		}
+		// Fallback: interpret as site-local using gmt_offset
+		$offset_seconds = (int) round((float) get_option('gmt_offset', 0) * 3600);
+		$ts = strtotime($mysql_dt);
+		if ($ts === false) return 0;
+		// strtotime likely interpreted the string in server timezone (often UTC),
+		// so adjust by subtracting the site offset: ts_site_local => ts_utc = ts - offset_seconds
+		return (int) ($ts - $offset_seconds);
 	}
 }
 
 if (!function_exists('tmon_uc_format_mysql_datetime')) {
 	/**
-	 * Format a MySQL DATETIME (stored in UTC) into site-local time using WordPress timezone settings.
+	 * Format a MySQL DATETIME (stored using WP site timezone) into a site-local string.
 	 *
-	 * If $mysql_dt is empty, returns an empty string.
-	 *
-	 * @param string|null $mysql_dt MySQL DATETIME in UTC (e.g., '2025-01-02 15:04:05').
-	 * @param string $format PHP date format default 'Y-m-d H:i:s T' (uses date_i18n to respect WP tz).
-	 * @return string Localized/formatted datetime.
+	 * @param string|null $mysql_dt
+	 * @param string $format PHP date format (default uses WP date/time options)
+	 * @return string formatted datetime or empty string
 	 */
-	function tmon_uc_format_mysql_datetime($mysql_dt = null, $format = 'Y-m-d H:i:s T') {
+	function tmon_uc_format_mysql_datetime($mysql_dt = null, $format = null) {
 		if (empty($mysql_dt)) return '';
-		// Parse as UTC explicitly, then pass epoch to date_i18n so WP timezone applies.
-		$ts = strtotime($mysql_dt . ' UTC');
-		if ($ts === false) return (string) $mysql_dt;
+		if ($format === null) $format = get_option('date_format') . ' ' . get_option('time_format');
+		$ts = tmon_uc_mysql_to_utc_timestamp($mysql_dt);
+		if (!$ts) return (string)$mysql_dt;
 		return date_i18n($format, (int) $ts);
 	}
 }

@@ -330,10 +330,11 @@ add_shortcode('tmon_device_status', function($atts) {
     </style>';
     echo '<table class="wp-list-table widefat"><thead><tr><th>Status</th><th>Unit ID</th><th>Name</th><th>Last Seen</th><th>Controls</th></tr></thead><tbody>';
     // Fix: Use gmdate for now and last_seen, compare as UTC
-    $now = time(); // PHP time() is always UTC
+    $now = time(); // PHP time() is UTC; we compare against UTC timestamps
     $nonce = wp_create_nonce('tmon_uc_relay');
     foreach ($rows as $r) {
-        $last = $r['last_seen'] ? strtotime($r['last_seen'] . ' UTC') : 0;
+        // Convert MySQL DATETIME (stored in WP timezone) to an accurate UTC epoch
+        $last = $r['last_seen'] ? tmon_uc_mysql_to_utc_timestamp($r['last_seen']) : 0;
         if (!$last) {
             $age = PHP_INT_MAX;
             $cls = 'tmon-red';
@@ -349,7 +350,8 @@ add_shortcode('tmon_device_status', function($atts) {
             } else {
                 $cls = 'tmon-red';
             }
-            $title = 'Last seen: ' . gmdate(get_option('date_format') . ' ' . get_option('time_format'), $last) . ' (' . human_time_diff($last, $now) . ' ago)';
+            // Show site-local formatted time in tooltip and keep human_time_diff in UTC epoch space
+            $title = 'Last seen: ' . tmon_uc_format_mysql_datetime($r['last_seen'], get_option('date_format') . ' ' . get_option('time_format')) . ' (' . human_time_diff($last, $now) . ' ago)';
         }
 
         // Robust relay detection (scan keys like ENABLE_RELAY1, ENABLE_RELAY_1, enable_relay1, etc)
