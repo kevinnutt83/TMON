@@ -452,6 +452,10 @@ COMMAND_NAME_FACTORY_RESET = 'factory_reset'
 # Later, when loading persisted settings:
 # FIELD_DATA_APP_PASS = persisted.get("FIELD_DATA_APP_PASS", FIELD_DATA_APP_PASS)
 
+# --- DEDUPLICATION: removed a repeated block of settings that duplicated the top of this file ---
+# The repeated definitions appearing below were removed to keep this file as the single source
+# of truth for firmware constants. If you need to add or change values, edit the definitions above.
+
 # Firmware Version: v2.02.1
 
 # Bootstrap critical variables before any reference

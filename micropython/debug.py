@@ -22,7 +22,7 @@ CATEGORY_FLAGS = {
     'REMOTE': 'DEBUG_REMOTE',
 }
 
-async def log(message: str, level: str = 'INFO', category: str | None = None):
+async def log(message, level='INFO', category=None):
     """Unified async debug logger.
     - Respects settings.DEBUG and category-specific flags.
     - Delegates rendering to utils.debug_print (console + OLED when enabled).

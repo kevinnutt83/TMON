@@ -558,13 +558,20 @@ def update_sys_voltage():
 
 #Create Log File Directories
 def checkLogDirectory():
-    # Create log directory and file if not present (only for base)
+    """Create log directory and file if not present (idempotent and safe)."""
     try:
-        dirs = os.listdir('/')
-        if settings.LOG_DIR[1:] not in dirs:  # Strip '/' for check
-            os.mkdir(settings.LOG_DIR)
-    except OSError:
-        print("Error creating log directory")
+        from config_persist import ensure_dir
+        ensure_dir(getattr(settings, 'LOG_DIR', '/logs'))
+    except Exception:
+        try:
+            d = getattr(settings, 'LOG_DIR', '/logs')
+            try:
+                os.stat(d)
+            except Exception:
+                os.mkdir(d)
+        except Exception:
+            # Best-effort; do not raise to keep boot resilient
+            pass
 
 # Asynchronous function to free pins (set to input mode to avoid conflicts)
 async def free_pins():

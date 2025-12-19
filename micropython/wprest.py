@@ -18,13 +18,29 @@ import gc
 async def async_http_request(url, method='GET', headers=None, data=None):
     gc.collect()
     try:
+        # Basic URL parse: support scheme://host[:port]/path
+        if '://' not in url:
+            await debug_print(f"Malformed URL: {url}", "ERROR")
+            return None
         scheme, host_path = url.split('://', 1)
-        host, path = host_path.split('/', 1)
-        path = '/' + path
-        port = 443 if scheme == 'https' else 80
+        if '/' in host_path:
+            host_port, path = host_path.split('/', 1)
+            path = '/' + path
+        else:
+            host_port = host_path
+            path = '/'
+        if ':' in host_port:
+            host, port_s = host_port.rsplit(':', 1)
+            try:
+                port = int(port_s)
+            except Exception:
+                port = 443 if scheme == 'https' else 80
+        else:
+            host = host_port
+            port = 443 if scheme == 'https' else 80
         addr = usocket.getaddrinfo(host, port)[0][-1]
         reader, writer = await asyncio.open_connection(addr[0], port)
-        query = f"{method} {path} HTTP/1.0\r\nHost: {host}\r\n"
+        query = f"{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n"
         if headers:
             for k, v in headers.items():
                 query += f"{k}: {v}\r\n"
@@ -33,12 +49,29 @@ async def async_http_request(url, method='GET', headers=None, data=None):
         query += "\r\n"
         writer.write(query.encode())
         if data:
-            writer.write(data)
+            if isinstance(data, str):
+                writer.write(data.encode('utf-8'))
+            else:
+                writer.write(data)
         await writer.drain()
-        response = await reader.read(4096)  # Adjust buffer as needed
+        # Read until EOF (Connection: close)
+        chunks = []
+        while True:
+            part = await reader.read(4096)
+            if not part:
+                break
+            chunks.append(part)
         writer.close()
-        await writer.wait_closed()
-        return response.decode()
+        try:
+            await writer.wait_closed()
+        except Exception:
+            pass
+        resp_bytes = b''.join(chunks)
+        try:
+            resp_text = resp_bytes.decode('utf-8', 'ignore')
+        except Exception:
+            resp_text = str(resp_bytes)
+        return resp_text
     except Exception as e:
         await debug_print(f"Async HTTP error: {e}", "ERROR")
         return None

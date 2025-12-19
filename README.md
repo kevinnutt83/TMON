@@ -5,7 +5,14 @@
 
 # TMON – Environmental Monitoring & Device Management Platform
 
-TMON is a multi-component system for environmental sensing, secure device provisioning, telemetry collection, and operational control. It couples MicroPython-based field devices (base + remotes via LoRa) with a pair of WordPress plugins that provide ingestion, administration, analytics, and orchestration.
+TMON manages IoT devices (MicroPython firmware) with WordPress-based Admin & Unit Connector sites.
+
+Highlights:
+- MicroPython firmware (micropython/) for base & remote devices (LoRa + WiFi)
+- Admin & Unit Connector plugins (tmon-admin/, unit-connector/)
+- Focused recent work: settings deduplication, robust HTTP/OTA paths, safer file persistence, and consolidated docs.
+
+See TODO.md for outstanding tasks and CHANGELOG.md for recent changes.
 
 ## Table of Contents
 1. [Architecture](#architecture)

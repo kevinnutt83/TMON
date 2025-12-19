@@ -16,6 +16,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## Unreleased
+- Removed duplicated settings block (deduplicated settings.py).
+- Hardened async HTTP client in wprest to support host:port and full reads.
+- Made debug/config_persist compatible with MicroPython (removed union type hints).
+- Improved utils.checkLogDirectory for safer directory creation.
+- Consolidated project docs into TODO.md and updated README/CHANGELOG.
+
 ## v0.1.3 - 2025-11-28
 - Provisioning: Save & Provision now updates tmon_devices mirror (provisioned, provisioned_at, wordpress_api_url, unit_name).
 - Check-in: device check-in returns staged payload from queue or DB and clears settings_staged on delivery.

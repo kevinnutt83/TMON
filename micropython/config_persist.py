@@ -6,7 +6,7 @@ except Exception:
 
 import os
 
-def ensure_dir(path: str):
+def ensure_dir(path):
     try:
         d = path
         # if path is a file path, take directory
@@ -30,7 +30,7 @@ def ensure_dir(path: str):
     except Exception:
         pass
 
-def write_text(path: str, text: str) -> bool:
+def write_text(path, text):
     try:
         ensure_dir(path)
         with open(path, 'w') as f:
@@ -39,14 +39,14 @@ def write_text(path: str, text: str) -> bool:
     except Exception:
         return False
 
-def read_text(path: str, default: str | None = None) -> str | None:
+def read_text(path, default=None):
     try:
         with open(path, 'r') as f:
             return f.read()
     except Exception:
         return default
 
-def write_json(path: str, obj) -> bool:
+def write_json(path, obj):
     try:
         ensure_dir(path)
         with open(path, 'w') as f:
@@ -55,7 +55,7 @@ def write_json(path: str, obj) -> bool:
     except Exception:
         return False
 
-def read_json(path: str, default=None):
+def read_json(path, default=None):
     try:
         with open(path, 'r') as f:
             return json.loads(f.read())
