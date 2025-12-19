@@ -162,6 +162,33 @@
 			} catch (e) {
 				console.warn('Manifest (admin-ajax) fetch failed:', e);
 			}
+			// NEW UX: notify admin when manifest cannot be fetched and offer Retry + Validator link
+			const safeRepo = String(repoParam).replace(/</g,'&lt;').replace(/>/g,'&gt;');
+			const msg = 'Failed to fetch firmware manifest for repo: <strong>' + safeRepo + '</strong>. ' +
+				'<button id="tmon-manifest-retry" class="button">Retry</button> ' +
+				'<a id="tmon-manifest-validate" class="button" href="#" style="margin-left:8px">Validate Endpoints</a>';
+			showAdminNotice(msg);
+			// Attach retry handler (one-shot)
+			function onClick(ev){
+				const el = ev.target || ev.srcElement;
+				if (!el) return;
+				if (el.id === 'tmon-manifest-retry') {
+					ev.preventDefault();
+					ev.stopPropagation();
+					// Replace notice with spinner notice
+					showAdminNotice('Retrying manifest fetch... please wait.');
+					fetchManifest(repoParam);
+					document.removeEventListener('click', onClick);
+				}
+				if (el.id === 'tmon-manifest-validate') {
+					ev.preventDefault();
+					ev.stopPropagation();
+					const validator = window.open ? window.open(window.location.origin + '/wp-admin/tools.php?page=tmon-validate','_blank') : null;
+					if (!validator) alert('Open the WP endpoint validator in a new tab: ' + (window.location.origin + '/wp-admin/tools.php?page=tmon-validate'));
+					document.removeEventListener('click', onClick);
+				}
+			}
+			document.addEventListener('click', onClick);
 			return null;
 		}
 

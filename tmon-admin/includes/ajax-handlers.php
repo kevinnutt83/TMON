@@ -747,3 +747,235 @@ if (!function_exists('tmon_admin_record_provision_history')) {
 if (!defined('TMON_ADMIN_HANDLERS_INCLUDED')) {
 	define('TMON_ADMIN_HANDLERS_INCLUDED', true);
 }
+
+// AJAX: fetch GitHub manifest (proxy)
+if (!function_exists('tmon_admin_ajax_fetch_github_manifest')) {
+    function tmon_admin_ajax_fetch_github_manifest() {
+        if (!current_user_can('manage_options') && !is_user_logged_in()) {
+            wp_send_json_error('forbidden', 403);
+        }
+        $repo = isset($_GET['repo']) ? sanitize_text_field($_GET['repo']) : '';
+        if (!$repo) {
+            wp_send_json_error('missing repo', 400);
+        }
+        // Simple mapping: user expects manifest.json at the tree main/micropython/manifest.json
+        $manifest_url = $repo;
+        // If repo looks like a tree URL, rewrite common pattern to raw manifest path
+        // e.g., https://github.com/kevinnutt83/TMON/tree/main/micropython -> raw.githubusercontent...
+        if (preg_match('#https?://github.com/([^/]+)/([^/]+)/tree/([^/]+)/(.+)$#', $repo, $m)) {
+            $user = $m[1]; $repo_name = $m[2]; $branch = $m[3]; $path = $m[4];
+            $manifest_url = "https://raw.githubusercontent.com/{$user}/{$repo_name}/{$branch}/" . trim($path, '/') . "/manifest.json";
+        } elseif (strpos($repo, 'raw.githubusercontent.com') !== false && strpos($repo, 'manifest.json') === false) {
+            $manifest_url = rtrim($repo, '/') . '/manifest.json';
+        }
+        $res = wp_remote_get($manifest_url, ['timeout' => 8]);
+        if (is_wp_error($res)) {
+            wp_send_json_error(['error' => $res->get_error_message()], 502);
+        }
+        $code = wp_remote_retrieve_response_code($res);
+        $body = wp_remote_retrieve_body($res);
+        if ($code !== 200 || !$body) {
+            wp_send_json_error(['status' => $code, 'body' => substr($body, 0, 1024)], 502);
+        }
+        $data = json_decode($body, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            wp_send_json_success(['raw' => $body]); // return raw body if not strict JSON
+        }
+        wp_send_json_success($data);
+    }
+    add_action('wp_ajax_tmon_admin_fetch_github_manifest', 'tmon_admin_ajax_fetch_github_manifest');
+}
+
+// --- Tools > TMON Validate Page (register under Tools) ---
+if (!function_exists('tmon_admin_register_tools_validate_page')) {
+	add_action('admin_menu', function(){
+		add_management_page('TMON Validate', 'TMON Validate', 'manage_options', 'tmon-validate', 'tmon_admin_tools_validate_page');
+	});
+	function tmon_admin_tools_validate_page() {
+		if (!current_user_can('manage_options')) wp_die('Forbidden');
+		$nonce = wp_create_nonce('tmon_admin_validate');
+		?>
+		<div class="wrap tmon-admin">
+			<h1>TMON — Validate WP Endpoints & Compute Manifest</h1>
+			<p class="description">Quickly validate Unit Connector/Admin endpoints and compute OTA manifest SHA256 hashes (local repo).</p>
+
+			<h2>Validate WordPress Endpoints</h2>
+			<table class="form-table">
+				<tr><th>Base URL</th><td><input id="tmon-validate-base" class="regular-text" value="<?php echo esc_attr(get_option('tmon_admin_staging_wp_url','')); ?>" placeholder="https://example.com"></td></tr>
+				<tr><th>Unit ID</th><td><input id="tmon-validate-unit" class="regular-text" placeholder="170170"></td></tr>
+				<tr><th>Auth</th><td><input id="tmon-validate-auth" class="regular-text" placeholder="Bearer token or user:pass"></td></tr>
+				<tr><th>Retries</th><td><input id="tmon-validate-retries" class="small-text" value="1"></td></tr>
+				<tr><th>Timeout (s)</th><td><input id="tmon-validate-timeout" class="small-text" value="8"></td></tr>
+			</table>
+			<p>
+				<button id="tmon-validate-run" class="button button-primary">Run Validation</button>
+				<button id="tmon-validate-compute" class="button">Compute Manifest Hashes</button>
+			</p>
+			<pre id="tmon-validate-output" style="max-width:100%;white-space:pre-wrap;background:#fff;border:1px solid #ddd;padding:10px;min-height:120px;"></pre>
+		</div>
+		<script>
+		(function(){
+			const out = id => document.getElementById(id);
+			const ajaxUrl = '<?php echo esc_js(admin_url('admin-ajax.php')); ?>';
+			const nonce = '<?php echo esc_js($nonce); ?>';
+			async function runValidate() {
+				const base = out('tmon-validate-base').value;
+				const unit = out('tmon-validate-unit').value;
+				const auth = out('tmon-validate-auth').value;
+				const retries = out('tmon-validate-retries').value || '1';
+				const timeout = out('tmon-validate-timeout').value || '8';
+				out('tmon-validate-output').textContent = 'Validating...';
+				const body = new URLSearchParams();
+				body.append('action', 'tmon_admin_validate_wp_endpoints');
+				body.append('_wpnonce', nonce);
+				body.append('base', base);
+				body.append('unit', unit);
+				body.append('auth', auth);
+				body.append('retries', retries);
+				body.append('timeout', timeout);
+				try {
+					const r = await fetch(ajaxUrl, { method: 'POST', credentials: 'same-origin', body });
+					const json = await r.json();
+					out('tmon-validate-output').textContent = JSON.stringify(json, null, 2);
+				} catch (e) {
+					out('tmon-validate-output').textContent = 'Validation failed: ' + (e.message || e);
+				}
+			}
+			async function computeManifest() {
+				out('tmon-validate-output').textContent = 'Computing SHA256 hashes for micropython/ (may take a moment)...';
+				const body = new URLSearchParams();
+				body.append('action', 'tmon_admin_compute_manifest_hashes');
+				body.append('_wpnonce', nonce);
+				try {
+					const r = await fetch(ajaxUrl, { method: 'POST', credentials: 'same-origin', body });
+					const json = await r.json();
+					out('tmon-validate-output').textContent = JSON.stringify(json, null, 2);
+				} catch (e) {
+					out('tmon-validate-output').textContent = 'Compute failed: ' + (e.message || e);
+				}
+			}
+			document.getElementById('tmon-validate-run').addEventListener('click', runValidate);
+			document.getElementById('tmon-validate-compute').addEventListener('click', computeManifest);
+		})();
+		</script>
+		<?php
+	}
+}
+
+// --- AJAX: run the python validator or fallback to PHP validator ---
+if (!function_exists('tmon_admin_ajax_validate_wp_endpoints')) {
+	function tmon_admin_ajax_validate_wp_endpoints() {
+		if (!current_user_can('manage_options')) wp_send_json_error(['message' => 'forbidden'], 403);
+		check_ajax_referer('tmon_admin_validate');
+		$base = isset($_POST['base']) ? esc_url_raw($_POST['base']) : '';
+		$unit = isset($_POST['unit']) ? sanitize_text_field($_POST['unit']) : '';
+		$auth = isset($_POST['auth']) ? sanitize_text_field($_POST['auth']) : '';
+		$retries = max(1, intval($_POST['retries'] ?? 1));
+		$timeout = max(1, intval($_POST['timeout'] ?? 8));
+
+		// First: attempt to execute the Python script if shell_exec is available
+		$script = dirname(__DIR__, 2) . '/scripts/validate_wp_endpoints.py';
+		if (function_exists('shell_exec') && is_file($script) && is_executable(PHP_BINARY)) {
+			$py = trim(shell_exec('which python3 || which python || true'));
+			if ($py) {
+				$cmd = escapeshellcmd($py) . ' ' . escapeshellarg($script) . ' ' . escapeshellarg($base);
+				if ($unit) $cmd .= ' --unit ' . escapeshellarg($unit);
+				if ($auth) $cmd .= ' --auth ' . escapeshellarg($auth);
+				$cmd .= ' --retries ' . intval($retries) . ' --timeout ' . intval($timeout);
+				// Run with a reasonable timeout wrapper if proc_open available (best-effort)
+				try {
+					$output = shell_exec($cmd . ' 2>&1');
+					$json = @json_decode($output, true);
+					if (is_array($json)) {
+						wp_send_json_success(['source' => 'python', 'results' => $json, 'raw' => $output]);
+					} else {
+						// Fall back to PHP validator if output not JSON
+						$python_failure = $output;
+					}
+				} catch (Exception $e) {
+					$python_failure = $e->getMessage();
+				}
+			}
+		}
+
+		// PHP fallback validator (uses WordPress HTTP)
+		$endpoints = [
+			'/wp-json/tmon/v1/device/field-data',
+			'/wp-json/tmon/v1/device/commands',
+			'/wp-json/tmon/v1/device/settings', // may append /{unit}
+			'/wp-json/tmon-admin/v1/device/check-in'
+		];
+		$results = [];
+		$headers = [];
+		if ($auth) {
+			// Support Bearer or user:pass (basic)
+			if (stripos($auth, 'bearer ') === 0) {
+				$headers['Authorization'] = $auth;
+			} elseif (strpos($auth, ':') !== false && strpos($auth, ' ') === false) {
+				$headers['Authorization'] = 'Basic ' . base64_encode($auth);
+			} else {
+				$headers['Authorization'] = $auth;
+			}
+		}
+		foreach ($endpoints as $ep) {
+			$path = $ep;
+			if (strpos($ep, '/device/settings') !== false && $unit) $path = rtrim($ep, '/') . '/' . rawurlencode($unit);
+			$ok = false;
+			$last_error = '';
+			for ($i=1; $i <= $retries; $i++) {
+				$url = rtrim($base, '/') . $path;
+				$args = ['timeout' => $timeout, 'headers' => $headers];
+				$res = wp_remote_get($url, $args);
+				if (is_wp_error($res)) {
+					$last_error = $res->get_error_message();
+					sleep(1);
+					continue;
+				}
+				$code = wp_remote_retrieve_response_code($res);
+				$ok = in_array($code, [200,201], true);
+				$results[] = ['url' => $url, 'status' => $code, 'ok' => $ok];
+				break;
+			}
+			if (!$ok && empty($results)) {
+				$results[] = ['url' => $url, 'status' => null, 'ok' => false, 'error' => $last_error];
+			}
+		}
+		$payload = ['source' => 'php_fallback', 'results' => $results];
+		if (!empty($python_failure)) $payload['python_error'] = substr($python_failure, 0, 4096);
+		wp_send_json_success($payload);
+	}
+	add_action('wp_ajax_tmon_admin_validate_wp_endpoints', 'tmon_admin_ajax_validate_wp_endpoints');
+}
+
+// --- AJAX: compute micropython/ manifest hashes and return a manifest object ---
+if (!function_exists('tmon_admin_ajax_compute_manifest_hashes')) {
+	function tmon_admin_ajax_compute_manifest_hashes() {
+		if (!current_user_can('manage_options')) wp_send_json_error(['message' => 'forbidden'], 403);
+		check_ajax_referer('tmon_admin_validate');
+		// Resolve repository root (attempt relative to this file)
+		$repo_root = dirname(__DIR__, 2);
+		$mpath = $repo_root . '/micropython';
+		if (!is_dir($mpath)) {
+			wp_send_json_error(['message' => "micropython directory not found at {$mpath}"], 404);
+		}
+		$iter = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($mpath));
+		$files = [];
+		foreach ($iter as $f) {
+			if ($f->isFile()) {
+				$rel = substr($f->getPathname(), strlen($mpath) + 1);
+				// skip pycache and hidden
+				if (strpos($rel, '__pycache__') !== false) continue;
+				if (strpos($rel, '.') === 0) continue;
+				$files[$rel] = $f->getPathname();
+			}
+		}
+		$manifest = ['name' => 'tmon-micropython', 'version' => '', 'files' => new stdClass()];
+		foreach ($files as $rel => $abs) {
+			$hash = @hash_file('sha256', $abs);
+			if (!$hash) $hash = str_repeat('0', 64);
+			$manifest['files'][$rel] = 'sha256:' . $hash;
+		}
+		wp_send_json_success(['manifest' => $manifest, 'path' => $mpath]);
+	}
+	add_action('wp_ajax_tmon_admin_compute_manifest_hashes', 'tmon_admin_ajax_compute_manifest_hashes');
+}

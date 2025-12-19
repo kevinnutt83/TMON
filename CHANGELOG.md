@@ -22,6 +22,10 @@ All notable changes to this project will be documented in this file.
 - Made debug/config_persist compatible with MicroPython (removed union type hints).
 - Improved utils.checkLogDirectory for safer directory creation.
 - Consolidated project docs into TODO.md and updated README/CHANGELOG.
+- Add nightly WP endpoint validator workflow (optional, uses STAGING_WP_URL secret).
+- scripts/validate_wp_endpoints.py: retries, timeout, flexible auth (Bearer or user:pass).
+- Admin UI manifest failure notice: Retry + "Validate endpoints" quick action.
+- OTA manifest verification: support hex/base64 sigs and HMAC-SHA256 using OTA_MANIFEST_HMAC_SECRET; skip manifests that fail verification.
 
 ## v0.1.3 - 2025-11-28
 - Provisioning: Save & Provision now updates tmon_devices mirror (provisioned, provisioned_at, wordpress_api_url, unit_name).

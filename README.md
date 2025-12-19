@@ -157,3 +157,15 @@ Next:
 
 ## Release v2.03.0
 - MicroPython firmware: v2.03.0. See CHANGELOG.md for details.
+
+# TMON — Notes
+
+Added:
+- Nightly staged WP validator: .github/workflows/validate-staging-nightly.yml (runs when STAGING_WP_URL secret present).
+- scripts/validate_wp_endpoints.py supports retries, timeouts, and flexible --auth (Bearer token or user:pass → Basic).
+- Admin UI: improved manifest-failure notice with Retry and validator quick link.
+- OTA: manifest HMAC/signature verification supports hex or base64 sigs and uses HMAC-SHA256 when secret provided.
+
+Usage:
+- To enable nightly WP validation, add repository secrets: STAGING_WP_URL, STAGING_WP_UNIT (optional), STAGING_WP_AUTH (optional).
+- To enable OTA manifest HMAC verification, set OTA_MANIFEST_SIG_URL and/or OTA_MANIFEST_HMAC_SECRET in micropython/settings.py.

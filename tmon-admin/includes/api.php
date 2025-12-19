@@ -512,6 +512,39 @@ add_action('rest_api_init', function() {
             return new WP_REST_Response($out, 404);
         }
     ]);
+
+    register_rest_route('tmon/v1', '/version', [
+        'methods' => 'GET',
+        'callback' => function ($request) {
+            // Return known firmware version (can be enhanced to read from option or manifest URL)
+            $ver = get_option('tmon_admin_firmware_version', 'v2.03.0');
+            return rest_ensure_response(['version' => $ver, 'ok' => true]);
+        },
+        'permission_callback' => '__return_true'
+    ]);
+
+    register_rest_route('tmon-admin/v1', '/device/confirm-applied', [
+        'methods' => 'POST',
+        'callback' => function ($request) {
+            $params = $request->get_json_params();
+            if (empty($params)) return new WP_Error('bad_payload', 'Missing payload', ['status'=>400]);
+            // Optional token header X-TMON-CONFIRM verification
+            $expected = get_option('tmon_admin_confirm_token', '');
+            $provided = $request->get_header('X-TMON-CONFIRM') ?? '';
+            if ($expected && $provided !== $expected) {
+                return new WP_Error('auth', 'Invalid confirm token', ['status'=>403]);
+            }
+            // Record confirmation in audit log (option-based simple history)
+            $history = get_option('tmon_admin_provision_history', []);
+            $history[] = [
+                'ts' => current_time('mysql'),
+                'payload' => $params
+            ];
+            update_option('tmon_admin_provision_history', $history);
+            return rest_ensure_response(['ok' => true]);
+        },
+        'permission_callback' => '__return_true'
+    ]);
 });
 
 // Authorization: decide if a device is allowed to post data (fee-for-service, provisioning, etc.)

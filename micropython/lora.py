@@ -966,9 +966,16 @@ async def connectLora():
                         base_interval = getattr(settings, 'nextLoraSync', 300)
                         min_gap = getattr(settings, 'LORA_SYNC_WINDOW', 2)
 
-                        # Determine next slot that doesn't overlap existing scheduled slots
-                        # Use relative seconds by default; support absolute epoch if configured
-                        default_interval = base_interval if isinstance(base_interval, (int, float)) else 300
+                        # Determine default interval in seconds:
+                        # If LORA_CHECK_IN_MINUTES configured, prefer that (minutes -> seconds)
+                        lci_min = getattr(settings, 'LORA_CHECK_IN_MINUTES', None)
+                        if isinstance(lci_min, (int, float)) and lci_min > 0:
+                            default_interval = int(lci_min * 60)
+                        else:
+                            default_interval = base_interval if isinstance(base_interval, (int, float)) else 300
+
+                        # If default_interval appears to be an absolute epoch (a large integer), keep it;
+                        # otherwise treat it as a relative period (seconds)
                         if default_interval <= 100000:
                             candidate = int(now_epoch + max(1, int(default_interval)))
                         else:
@@ -1757,151 +1764,4 @@ async def connectLora():
                                             try:
                                                 with open(rctr_file, 'w') as rfw:
                                                     rfw.write(ujson.dumps(table))
-                                            except Exception:
-                                                pass
-                            except Exception:
-                                pass
-                        if not (net_ok and key_ok):
-                            # Optionally send an auth error ack
-                            try:
-                                nack = {'err': 'auth'}
-                                if lora is not None:
-                                    _, stn = lora.send(ujson.dumps(nack).encode('utf-8'))
-                                    write_lora_log(f"Base NACK auth (rc={stn})", 'WARN')
-                            except Exception:
-                                pass
-                            await debug_print('Base: rejected packet (LoRa network credentials mismatch)', 'WARN')
-                            led_status_flash('WARN')
-                            return True
-                        # Capture RSSI/SNR and last message for UI
-                        try:
-                            if hasattr(lora, 'getRSSI'):
-                                sdata.lora_SigStr = lora.getRSSI()
-                            if hasattr(lora, 'getSNR'):
-                                sdata.lora_snr = lora.getSNR()
-                            sdata.last_message = ujson.dumps(obj)[:32]
-                        except Exception:
-                            pass
-                        uid = str(obj.get('unit_id', 'unknown'))
-                        # Track latest remote payload
-                        if not hasattr(settings, 'REMOTE_NODE_INFO') or not isinstance(getattr(settings, 'REMOTE_NODE_INFO'), dict):
-                            settings.REMOTE_NODE_INFO = {}
-                        settings.REMOTE_NODE_INFO[uid] = obj
-                        save_remote_node_info()
-
-                        # Compute and send ACK with next absolute sync time for this remote
-                        if not hasattr(settings, 'REMOTE_SYNC_SCHEDULE') or not isinstance(getattr(settings, 'REMOTE_SYNC_SCHEDULE'), dict):
-                            settings.REMOTE_SYNC_SCHEDULE = {}
-
-                        now_epoch = time.time()
-                        base_interval = getattr(settings, 'nextLoraSync', 300)
-                        min_gap = getattr(settings, 'LORA_SYNC_WINDOW', 2)
-
-                        # Determine next slot that doesn't overlap existing scheduled slots
-                        # Use relative seconds by default; support absolute epoch if configured
-                        default_interval = base_interval if isinstance(base_interval, (int, float)) else 300
-                        if default_interval <= 100000:
-                            candidate = int(now_epoch + max(1, int(default_interval)))
-                        else:
-                            candidate = int(default_interval)
-                        def overlaps(ts):
-                            for other_uid, other_ts in settings.REMOTE_SYNC_SCHEDULE.items():
-                                try:
-                                    if abs(int(other_ts) - int(ts)) < min_gap:
-                                        return True
-                                except Exception:
-                                    continue
-                            return False
-
-                        # Limit attempts to avoid infinite loop
-                        attempts = 0
-                        while overlaps(candidate) and attempts < 50:
-                            candidate += min_gap
-                            attempts += 1
-
-                        settings.REMOTE_SYNC_SCHEDULE[uid] = candidate
-                        save_remote_sync_schedule()
-
-                        # Include absolute and relative schedule in ACK for robustness
-                        next_in = max(1, int(candidate - now_epoch))
-                        ack = {'ack': 'ok', 'next': candidate, 'next_in': next_in, 'net': getattr(settings, 'LORA_NETWORK_NAME', 'tmon')}
-                        try:
-                            if lora is None:
-                                raise Exception('LoRa unavailable for ACK TX')
-                            _, st2 = lora.send(ujson.dumps(ack).encode('utf-8'))
-                            await debug_print(f"Base ACK sent to {uid} with next={candidate} next_in={next_in} rc={st2}", 'LORA')
-                            write_lora_log(f"Base ACK to {uid} next={candidate} next_in={next_in} rc={st2}", 'INFO')
-                            if st2 == 0:
-                                led_status_flash('SUCCESS')
-                                # Wait briefly for TX_DONE then return to RX mode
-                                tx_start = time.ticks_ms()
-                                while time.ticks_diff(time.ticks_ms(), tx_start) < 1000:
-                                    if lora is None:
-                                        break
-                                    ev3 = lora._events()
-                                    if ev3 & SX1262.TX_DONE:
-                                        await debug_print("Base: ACK TX_DONE", 'LORA')
-                                        break
-                                    await asyncio.sleep(0.01)
-                        except Exception as se:
-                            await debug_print(f"Base ACK send error: {se}", 'ERROR')
-                            await log_error(f"Base ACK send error: {se}")
-                            led_status_flash('ERROR')
-                        finally:
-                            # Always try to return to RX to continue listening for other remotes
-                            try:
-                                if lora is not None:
-                                    lora.setOperatingMode(lora.MODE_RX)
-                            except Exception:
-                                pass
-                    except Exception as pe:
-                        await debug_print(f"RX parse error: {pe}", 'ERROR')
-                        await log_error(f"RX parse error: {pe}")
-                        led_status_flash('ERROR')
-        except Exception as e:
-            await debug_print(f"Base RX exception: {e}", 'ERROR')
-            await log_error(f"Base RX exception: {e}")
-
-    # Idle timeout: deinit if no activity for a while
-    idle_timeout_ms = 10 * 60 * 1000  # 10 minutes
-    if lora is not None and _last_activity_ms and time.ticks_diff(now, _last_activity_ms) > idle_timeout_ms:
-        await debug_print("LoRa idle timeout, deinitializing", 'LORA')
-        async with pin_lock:
-            try:
-                if hasattr(lora, 'spi') and lora.spi:
-                    lora.spi.deinit()
-            except Exception:
-                pass
-            lora = None
-        await free_pins()
-
-    return lora is not None
-
-async def ai_dashboard_display():
-    """Display AI health and error stats on OLED or console."""
-    from oled import display_message
-    while True:
-        msg = f"AI ERR: {TMON_AI.error_count}\n"
-        if TMON_AI.last_error:
-            msg += f"LAST: {TMON_AI.last_error[0][:20]}"
-        await display_message(msg, 2)
-        await asyncio.sleep(60)
-
-async def ai_input_listener():
-    """Listen for user/system input to interact with AI (e.g., via UART, button, or network)."""
-    # Example: listen for a button press to reset error count
-    from machine import Pin
-    reset_btn = Pin(settings.AI_RESET_BTN_PIN, Pin.IN, Pin.PULL_UP)
-    while True:
-        if not reset_btn.value():  # Button pressed
-            TMON_AI.error_count = 0
-            await log_error('AI error count reset by user', 'ai_input_listener')
-            await asyncio.sleep(1)  # Debounce
-        await asyncio.sleep(0.1)
-
-# In boot.py or main.py, launch these as background tasks:
-# asyncio.create_task(main_loop())
-# asyncio.create_task(ai_health_monitor())
-# asyncio.create_task(ai_dashboard_display())
-# asyncio.create_task(ai_input_listener())
-# asyncio.create_task(user_input_listener())
+                                           

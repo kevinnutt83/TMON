@@ -51,6 +51,7 @@ from config_persist import write_text
 from utils import debug_print
 import ujson as json
 import os
+import binascii as _binascii
 
 def _safe_join(base: str, name: str) -> str:
     if not base.endswith('/'):
@@ -166,6 +167,22 @@ async def apply_pending_update():
                 body = getattr(r, 'text', '') if hasattr(r, 'text') else ''
                 await debug_print(f'OTA: manifest response {status} length={len(body)}', 'OTA')
                 if status == 200 and body:
+                    # NEW: verify detached sig or HMAC secret if configured
+                    sig_url = getattr(settings, 'OTA_MANIFEST_SIG_URL', '') or ''
+                    secret = getattr(settings, 'OTA_MANIFEST_HMAC_SECRET', '') or ''
+                    if sig_url or secret:
+                        ok_sig = _verify_manifest_signature(body, sig_url, secret)
+                        if not ok_sig:
+                            await debug_print(f'OTA: manifest signature/HMAC verification failed for {murl}; trying next manifest', 'ERROR')
+                            try:
+                                _write_debug_artifact('ota_manifest_bad_signature.txt', (body or '').encode('utf-8', 'ignore'))
+                            except Exception:
+                                pass
+                            try:
+                                r.close()
+                            except Exception:
+                                pass
+                            continue
                     try:
                         manifest = json.loads(body)
                         manifest_fetched = True
@@ -458,4 +475,96 @@ async def apply_pending_update():
         return True
     except Exception as e:
         await debug_print(f'OTA apply exception: {e}', 'ERROR')
+        return False
+
+def _const_time_eq(a, b):
+    try:
+        if isinstance(a, str): a = a.encode('utf-8')
+        if isinstance(b, str): b = b.encode('utf-8')
+        if len(a) != len(b):
+            return False
+        res = 0
+        for x, y in zip(a, b):
+            res |= x ^ y
+        return res == 0
+    except Exception:
+        return False
+
+def _normalize_sig_text(sig_txt):
+    """Return raw hex string (lowercase) if recognized, else None.
+       Accept formats: raw hex, 'sha256:<hex>', or base64 (decode to hex)."""
+    if not sig_txt:
+        return None
+    s = sig_txt.strip()
+    # strip sha256: prefix
+    for p in ('sha256:', 'sha256=', 'sha256-'):
+        if s.lower().startswith(p):
+            s = s[len(p):]
+            break
+    s = s.strip()
+    # If looks like hex
+    try:
+        if all(c in '0123456789abcdefABCDEF' for c in s) and len(s) >= 64:
+            return s.lower()
+    except Exception:
+        pass
+    # Try base64 decode
+    try:
+        raw = _binascii.a2b_base64(s)
+        return _binascii.hexlify(raw).decode().lower()
+    except Exception:
+        pass
+    return None
+
+def _verify_manifest_signature(body_text, sig_url, secret):
+    try:
+        if not secret and not sig_url:
+            return True
+        # If signature URL present, fetch and normalize
+        sig_hex = None
+        if sig_url and requests:
+            try:
+                sresp = requests.get(sig_url, timeout=10)
+            except TypeError:
+                sresp = requests.get(sig_url)
+            if sresp and getattr(sresp, 'status_code', 0) == 200:
+                raw_sig = (getattr(sresp, 'text', '') or '').strip().splitlines()[0]
+                sig_hex = _normalize_sig_text(raw_sig)
+            try:
+                if sresp: sresp.close()
+            except Exception:
+                pass
+            if not sig_hex and secret:
+                # If remote signature missing but secret present, reject (explicit policy)
+                return False
+        # If secret present, compute expected HMAC-SHA256 and compare
+        if secret:
+            try:
+                import hmac as _h, hashlib as _hl
+                expected = _h.new(secret.encode(), body_text.encode('utf-8'), _hl.sha256).hexdigest().lower()
+            except Exception:
+                try:
+                    import uhashlib as _uh
+                    h = _uh.sha256(secret.encode() + body_text.encode('utf-8'))
+                    expected = _binascii.hexlify(h.digest()).decode().lower()
+                except Exception:
+                    return False
+            if sig_hex:
+                return _const_time_eq(expected.encode('ascii'), sig_hex.encode('ascii'))
+            # If no sig_hex but secret provided treat signature absence as failure
+            return False
+        # If no secret but sig_hex present, compute plain sha256 of manifest body and compare
+        if sig_hex:
+            try:
+                import hashlib as _hl
+                computed = _hl.sha256(body_text.encode('utf-8')).hexdigest().lower()
+            except Exception:
+                try:
+                    import uhashlib as _uh
+                    computed = _binascii.hexlify(_uh.sha256(body_text.encode('utf-8')).digest()).decode().lower()
+                except Exception:
+                    return False
+            return _const_time_eq(computed.encode('ascii'), sig_hex.encode('ascii'))
+        return True
+    except Exception:
         return False
