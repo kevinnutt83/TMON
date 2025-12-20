@@ -517,7 +517,7 @@ add_action('rest_api_init', function() {
         'methods' => 'GET',
         'callback' => function ($request) {
             // Return known firmware version (can be enhanced to read from option or manifest URL)
-            $ver = get_option('tmon_admin_firmware_version', 'v2.03.0');
+            $ver = get_option('tmon_admin_firmware_version', 'v2.04.0');
             return rest_ensure_response(['version' => $ver, 'ok' => true]);
         },
         'permission_callback' => '__return_true'

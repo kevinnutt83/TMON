@@ -1,3 +1,4 @@
+# Firmware Version: v2.04.0
 # OTA scaffolding: version check and pending flag
 try:
     import urequests as requests

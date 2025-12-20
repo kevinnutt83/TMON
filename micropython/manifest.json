@@ -1,6 +1,6 @@
 {
   "name": "tmon-micropython",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "TMON MicroPython firmware manifest",
   "files": {
     "main.py": "sha256:0000000000000000000000000000000000000000000000000000000000000000",

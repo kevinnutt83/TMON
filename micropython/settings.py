@@ -1,4 +1,4 @@
-# Firmware Version: v2.02.1
+# Firmware Version: v2.04.0
 
 # Bootstrap critical variables before any reference
 try:
@@ -40,7 +40,7 @@ UNIT_Name = "No Device Name"    # Human-friendly name (provisioned)
 NODE_TYPE = 'base'             # 'base','wifi', or 'remote'; base can host LoRa network & WiFi; remote uses LoRa primarily
 #NODE_TYPE = 'remote'          # Uncomment for remote role during flashing
 
-FIRMWARE_VERSION = "v2.03.0"    # Bumped for v2.03.0 OTA and metadata
+FIRMWARE_VERSION = "v2.04.0"    # Bumped for v2.03.0 OTA and metadata
 
  # WordPress Unit Connector API integration
 WORDPRESS_API_URL = ""   # Customer Unit Connector site for provisioned devices
@@ -278,7 +278,7 @@ OTA_MANIFEST_URLS = [
     'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/manifest.json',
 ]
 OTA_HTTP_HEADERS = {
-    'User-Agent': 'TMON-Device/v2.03.0',
+    'User-Agent': 'TMON-Device/v2.04.0',
     'Accept': '*/*',
     'Cache-Control': 'no-cache',
     'Pragma': 'no-cache',
@@ -737,7 +737,7 @@ OTA_MANIFEST_URLS = [
     'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/manifest.json',
 ]
 OTA_HTTP_HEADERS = {
-    'User-Agent': 'TMON-Device/v2.03.0',
+    'User-Agent': 'TMON-Device/v2.04.0',
     'Accept': '*/*',
     'Cache-Control': 'no-cache',
     'Pragma': 'no-cache',

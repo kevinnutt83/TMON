@@ -16,6 +16,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## v2.04.0 — Unreleased
+- Bump firmware version to v2.04.0 and align manifest to 0.2.4.
+- Updated User-Agent headers and admin API defaults to v2.04.0.
+- Misc metadata consistency updates across micropython/ modules.
+
 ## Unreleased
 - Removed duplicated settings block (deduplicated settings.py).
 - Hardened async HTTP client in wprest to support host:port and full reads.
