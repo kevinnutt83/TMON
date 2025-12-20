@@ -53,6 +53,7 @@ from utils import debug_print
 import ujson as json
 import os
 import binascii as _binascii
+import re as _re
 
 def _safe_join(base: str, name: str) -> str:
     if not base.endswith('/'):
@@ -168,6 +169,38 @@ async def apply_pending_update():
                 body = getattr(r, 'text', '') if hasattr(r, 'text') else ''
                 await debug_print(f'OTA: manifest response {status} length={len(body)}', 'OTA')
                 if status == 200 and body:
+                    # NEW: quick scan for placeholder/invalid hashes (e.g., sha256:0000...)
+                    try:
+                        js = json.loads(body)
+                        bad_files = []
+                        files = js.get('files') if isinstance(js, dict) else {}
+                        if isinstance(files, dict):
+                            for fname, hval in files.items():
+                                hv = str(hval or '').lower()
+                                m = _re.search(r'([0-9a-f]{64})', hv)
+                                if not m:
+                                    continuation = False
+                                else:
+                                    hexpart = m.group(1)
+                                    # treat all-zero hex (placeholder) as invalid manifest
+                                    if hexpart == ('0'*64):
+                                        bad_files.append(fname)
+                        if bad_files:
+                            await debug_print(f'OTA: manifest contains placeholder hashes for files: {bad_files}; aborting manifest', 'ERROR')
+                            try:
+                                _write_debug_artifact('ota_manifest_placeholder_hashes.txt', (json.dumps({'url': murl, 'bad_files': bad_files}, indent=2)).encode('utf-8'))
+                            except Exception:
+                                pass
+                            try:
+                                r.close()
+                            except Exception:
+                                pass
+                            # try next manifest URL if available
+                            continue
+                    except Exception:
+                        # if we cannot parse, proceed to the normal signature/parse flow
+                        pass
+
                     # NEW: verify detached sig or HMAC secret if configured
                     sig_url = getattr(settings, 'OTA_MANIFEST_SIG_URL', '') or ''
                     secret = getattr(settings, 'OTA_MANIFEST_HMAC_SECRET', '') or ''

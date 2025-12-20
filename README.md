@@ -169,3 +169,8 @@ Added:
 Usage:
 - To enable nightly WP validation, add repository secrets: STAGING_WP_URL, STAGING_WP_UNIT (optional), STAGING_WP_AUTH (optional).
 - To enable OTA manifest HMAC verification, set OTA_MANIFEST_SIG_URL and/or OTA_MANIFEST_HMAC_SECRET in micropython/settings.py.
+
+If you see OTA hash mismatches, regenerate the manifest (recommended workflow):
+- Run locally: python scripts/generate_manifest.py
+- To create an HMAC signature file (manifest.json.sig), set OTA_MANIFEST_HMAC_SECRET in env before running.
+- There's a manual GitHub Action: .github/workflows/compute-manifest.yml (run "Run workflow" and it will compute and commit the manifest).
