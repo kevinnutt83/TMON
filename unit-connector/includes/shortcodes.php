@@ -1081,28 +1081,8 @@ add_action('wp_ajax_tmon_uc_update_unit_name', function() {
 });
 
 // AJAX: Update unit name
-// Replaced anonymous closure with a named function to avoid parsing issues.
-if (! function_exists('tmon_uc_update_unit_name_direct')) {
-function tmon_uc_update_unit_name_direct() {
-    check_admin_referer('tmon_uc_device_data');
-    if (! current_user_can('manage_options') ) {
-        wp_send_json_error();
-    }
-    $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
-    $unit_name = sanitize_text_field($_POST['unit_name'] ?? '');
-    if ( ! $unit_id ) {
-        wp_send_json_error(array('message' => 'unit_id required'), 400);
-    }
-    global $wpdb;
-    try {
-        $wpdb->update( $wpdb->prefix . 'tmon_devices', array('unit_name' => $unit_name), array('unit_id' => $unit_id) );
-        wp_send_json_success();
-    } catch (Exception $e) {
-        wp_send_json_error(array('message' => 'update_failed', 'error' => $e->getMessage()), 500);
-    }
-}
-}
-add_action('wp_ajax_tmon_uc_update_unit_name', 'tmon_uc_update_unit_name_direct');
+// <-- removed duplicate anonymous handler that caused unbalanced braces and parse errors.
+// The named handler `tmon_uc_update_unit_name_direct` is registered above and should be used instead.
 
 // Fallback AJAX handler for pending commands count (if REST endpoint is not present)
 add_action('wp_ajax_tmon_pending_commands_count', function() {
