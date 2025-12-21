@@ -1080,6 +1080,30 @@ add_action('wp_ajax_tmon_uc_update_unit_name', function() {
 	wp_send_json_success(array('ok' => true, 'unit_id' => $unit, 'settings' => $entry['settings']));
 });
 
+// AJAX: Update unit name
+// Replaced anonymous closure with a named function to avoid parsing issues.
+if (! function_exists('tmon_uc_update_unit_name_direct')) {
+function tmon_uc_update_unit_name_direct() {
+    check_admin_referer('tmon_uc_device_data');
+    if (! current_user_can('manage_options') ) {
+        wp_send_json_error();
+    }
+    $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
+    $unit_name = sanitize_text_field($_POST['unit_name'] ?? '');
+    if ( ! $unit_id ) {
+        wp_send_json_error(array('message' => 'unit_id required'), 400);
+    }
+    global $wpdb;
+    try {
+        $wpdb->update( $wpdb->prefix . 'tmon_devices', array('unit_name' => $unit_name), array('unit_id' => $unit_id) );
+        wp_send_json_success();
+    } catch (Exception $e) {
+        wp_send_json_error(array('message' => 'update_failed', 'error' => $e->getMessage()), 500);
+    }
+}
+}
+add_action('wp_ajax_tmon_uc_update_unit_name', 'tmon_uc_update_unit_name_direct');
+
 // Fallback AJAX handler for pending commands count (if REST endpoint is not present)
 add_action('wp_ajax_tmon_pending_commands_count', function() {
     if (!isset($_GET['unit_id'])) {
@@ -1261,20 +1285,7 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
                                     if (empty($applied)) { $applied = $staged; $applied_source = 'field_log'; }
                                     break 2; }
                                 continue;
-                            }
-
-                            // If file is .txt, attempt to parse key/value lines
-                            if (strcasecmp($ext, 'txt') === 0 || preg_match('/\.txt$/i', $f)) {
-                                $parsed = $parse_text_settings($ln);
-                                if (is_array($parsed)) {
-                                    $staged = $parsed;
-                                    $staged_source = 'field_log';
-                                    if (empty($applied)) { $applied = $staged; $applied_source = 'field_log'; }
-                                    break 2;
-                                }
-                            }
-                        }
-                        continue;
+ }
                     }
 
                     // If file() failed, fall back to whole-file content handling
@@ -1290,7 +1301,6 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
                             if (empty($applied)) { $applied = $staged; $applied_source = 'field_log'; }
                             break;
                         }
- }
                     }
 
                     // existing heuristic: whole-file JSON or embedded JSON
