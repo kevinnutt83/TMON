@@ -243,11 +243,12 @@ function tmon_admin_uc_site_data_page(){
     echo '</div>';
 }
 
-// enqueue per-page JS for UC Site Data
+// enqueue per-page JS & CSS for UC Site Data
 add_action('admin_enqueue_scripts', function($hook){
 	// only load on our UC Site Data page
 	if (isset($_GET['page']) && $_GET['page'] === 'tmon-admin-uc-data') {
-		wp_enqueue_script('tmon-admin-uc-refresh', plugin_dir_url(__FILE__) . '../assets/uc-refresh.js', [], '0.1', true);
+		wp_enqueue_script('tmon-admin-uc-refresh', plugins_url('assets/uc-refresh.js', __DIR__ . '/../tmon-admin.php'), [], '0.1', true);
+		wp_enqueue_style('tmon-admin-uc-refresh', plugins_url('assets/uc-refresh.css', __DIR__ . '/../tmon-admin.php'), [], '0.1');
 		wp_localize_script('tmon-admin-uc-refresh', 'tmonUcRefresh', [
 			'ajax_url' => admin_url('admin-ajax.php'),
 			'nonce' => wp_create_nonce('tmon_admin_uc_refresh'),

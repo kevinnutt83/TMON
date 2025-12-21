@@ -1,5 +1,5 @@
 <?php
-// Admin page: Staged Settings -> apply now / clear staged
+// Admin page: Staged Settings -> apply now / clear
 add_action('admin_menu', function(){
     add_submenu_page('tmon-admin', 'Staged Settings', 'Staged Settings', 'manage_options', 'tmon-admin-staged-settings', 'tmon_admin_staged_settings_page');
 });

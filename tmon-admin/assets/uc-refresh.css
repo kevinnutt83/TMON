@@ -1,0 +1,4 @@
+.tmon-uc-refresh-status.tmon-refreshing { color: #2b90d9; }
+.tmon-uc-refresh-status.tmon-refresh-ok { color: #2ecc71; }
+.tmon-uc-refresh-status.tmon-refresh-err { color: #e74c3c; }
+.tmon-uc-refresh-status { font-size: 0.9em; margin-left:6px; }
