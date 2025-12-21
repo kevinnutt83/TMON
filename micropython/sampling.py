@@ -60,12 +60,12 @@ async def sampleBME280():
 
             if settings.DEBUG and settings.DEBUG_TEMP:
                 await debug_print(
-                    "SAMPLE - BME280 | pressure : %7.2f hPa, temp : %-6.2f ℃, hum : %6.2f ％" % (data[0], data[1], data[2]),
+                    "sample:BME p:%7.2f t:%-6.2f h:%6.2f" % (data[0], data[1], data[2]),
                     "DEBUG TEMP"
                 )
         except Exception as e:
             if settings.DEBUG and settings.DEBUG_TEMP:
-                await debug_print(f"Sampling BME280 has encountered an error {e}", "SAMPLE ERROR TEMP")
+                await debug_print(f"sample:BME err: {e}", "SAMPLE ERROR TEMP")
         finally:
             # Some MicroPython ports do not implement I2C.deinit(); guard accordingly
             try:
@@ -75,7 +75,7 @@ async def sampleBME280():
                         i2c_obj.deinit()
             except Exception as e:
                 if settings.DEBUG and settings.DEBUG_TEMP:
-                    await debug_print(f"BME280 I2C deinit skipped: {e}", "DEBUG TEMP")
+                    await debug_print(f"BME: deinit skipped: {e}", "DEBUG TEMP")
             finally:
                 # Help GC release the bus reference
                 sensor.i2c = None
@@ -182,4 +182,4 @@ async def frost_and_heat_watch():
                     sdata.heat_act = False
                     await endHeatOperations()
     except Exception as e:
-        await debug_print(f"Frost/Heat watch error: {e}", "FROSTHEATWATCH ERROR")
+        await debug_print(f"sample:frost/heat err: {e}", "FROSTHEATWATCH ERROR")

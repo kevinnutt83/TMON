@@ -1,4 +1,4 @@
-# Firmware Version: v2.04.0
+# Firmware Version: v2.05.0
 # wprest.py
 # Handles all WordPress REST API communication for TMON MicroPython device
 import settings
@@ -104,7 +104,7 @@ def _build_auth_headers():
 
 async def register_with_wp():
     if not WORDPRESS_API_URL:
-        await debug_print('No WordPress API URL set', 'ERROR')
+        await debug_print('wp: no url', 'ERROR')
         return
     # Build settings snapshot (persistent settings only)
     settings_snapshot = {}
@@ -151,14 +151,14 @@ async def register_with_wp():
                         persist_unit_id(settings.UNIT_ID)
                     except Exception:
                         pass
-                    await debug_print(f'UNIT_ID updated from WP: {settings.UNIT_ID}', 'HTTP')
+                    await debug_print(f'wp: unit {settings.UNIT_ID} updated', 'HTTP')
         # NEW: Always attempt to flush any queued command confirmations on check-in (best-effort)
         try:
             await _flush_pending_command_confirms()
         except Exception:
             pass
     except Exception as e:
-        await debug_print(f'Failed to register with WP: {e}', 'ERROR')
+        await debug_print(f'wp: register fail: {e}', 'ERROR')
 
 async def send_data_to_wp():
     if not WORDPRESS_API_URL:
@@ -179,30 +179,36 @@ async def send_data_to_wp():
     headers.update(_build_auth_headers())
     try:
         resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/field-data', headers=headers, json=data)
-        await debug_print(f'Sent data to WP: {getattr(resp,"status_code",None)}', 'HTTP')
+        await debug_print(f'wp:data status {getattr(resp,"status_code",None)}', 'HTTP')
     except Exception as e:
-        await debug_print(f'Failed to send data to WP: {e}', 'ERROR')
+        await debug_print(f'wp:data fail: {e}', 'ERROR')
 
 async def send_settings_to_wp():
     if not WORDPRESS_API_URL:
-        await debug_print('No WordPress API URL set', 'ERROR')
+        await debug_print('wp: no url', 'ERROR')
         return
     data = {
         'unit_id': settings.UNIT_ID,
         'unit_name': settings.UNIT_Name,
-        # ...existing...
+        'company': getattr(settings, 'COMPANY', ''),
+        'site': getattr(settings, 'SITE', ''),
+        'zone': getattr(settings, 'ZONE', ''),
+        'cluster': getattr(settings, 'CLUSTER', ''),
+        'machine_id': get_machine_id() or '',
+        'firmware_version': getattr(settings, 'FIRMWARE_VERSION', ''),
+        'node_type': getattr(settings, 'NODE_TYPE', ''),
     }
     headers = {'Content-Type':'application/json'}
     headers.update(_build_auth_headers())
     try:
         resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/settings', headers=headers, json=data)
-        await debug_print(f'Sent settings to WP: {getattr(resp,"status_code",None)}', 'HTTP')
+        await debug_print(f'wp:settings status {getattr(resp,"status_code",None)}', 'HTTP')
     except Exception as e:
-        await debug_print(f'Failed to send settings to WP: {e}', 'ERROR')
+        await debug_print(f'wp:settings fail: {e}', 'ERROR')
 
 async def fetch_settings_from_wp():
     if not WORDPRESS_API_URL:
-        await debug_print('No WordPress API URL set', 'ERROR')
+        await debug_print('wp: no url', 'ERROR')
         return
     try:
         headers = _build_auth_headers()
@@ -215,11 +221,11 @@ async def fetch_settings_from_wp():
             for k, v in new_settings.items():
                 if hasattr(settings, k):
                     setattr(settings, k, v)
-            await debug_print('Settings updated from WP', 'HTTP')
+            await debug_print('wp: settings updated', 'HTTP')
         else:
-            await debug_print(f'Failed to fetch settings: {resp.status_code}', 'ERROR')
+            await debug_print(f'wp: fetch settings {resp.status_code}', 'ERROR')
     except Exception as e:
-        await debug_print(f'Failed to fetch settings from WP: {e}', 'ERROR')
+        await debug_print(f'wp: fetch fail: {e}', 'ERROR')
 
 async def send_file_to_wp(filepath):
     if not WORDPRESS_API_URL:
@@ -468,7 +474,7 @@ async def handle_device_command(job):
 async def fetch_staged_settings():
     """Fetch staged/applied settings and pending commands for this unit; save staged settings to disk."""
     if not WORDPRESS_API_URL:
-        await debug_print('fetch_staged_settings: No WORDPRESS_API_URL set', 'ERROR')
+        await debug_print('wp: no url (staged)', 'ERROR')
         return False
     try:
         url = WORDPRESS_API_URL.rstrip('/') + f'/wp-json/tmon/v1/device/staged-settings?unit_id={settings.UNIT_ID}'
@@ -485,9 +491,9 @@ async def fetch_staged_settings():
             try:
                 with open(fname, 'w') as f:
                     ujson.dump(staged, f)
-                await debug_print(f'Fetched staged settings saved to {fname}', 'HTTP')
+                await debug_print(f'wp: staged saved {fname}', 'HTTP')
             except Exception as e:
-                await debug_print(f'Failed to write staged settings file: {e}', 'ERROR')
+                await debug_print(f'wp: staged save fail: {e}', 'ERROR')
             # Also write to global staged file path so settings_apply can find it
             try:
                 gpath = getattr(settings, 'REMOTE_SETTINGS_STAGED_FILE', settings.LOG_DIR + '/remote_settings.staged.json')
@@ -509,7 +515,7 @@ async def fetch_staged_settings():
         # If there are commands, process them (base & wifi nodes handle direct commands here)
         cmds = data.get('commands', []) or []
         if cmds:
-            await debug_print(f'Fetched {len(cmds)} staged command(s) for this unit', 'HTTP')
+            await debug_print(f'wp: staged cmds {len(cmds)}', 'HTTP')
             # Process commands inline for base & wifi nodes (remote nodes get commands via LoRa)
             node_role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
             if node_role in ('base', 'wifi'):
@@ -644,7 +650,7 @@ async def _flush_pending_command_confirms():
 
 async def register_with_wp():
     if not WORDPRESS_API_URL:
-        await debug_print('No WordPress API URL set', 'ERROR')
+        await debug_print('wp: no url', 'ERROR')
         return
     # Build settings snapshot (persistent settings only)
     settings_snapshot = {}
@@ -691,11 +697,11 @@ async def register_with_wp():
                         persist_unit_id(settings.UNIT_ID)
                     except Exception:
                         pass
-                    await debug_print(f'UNIT_ID updated from WP: {settings.UNIT_ID}', 'HTTP')
+                    await debug_print(f'wp: unit {settings.UNIT_ID} updated', 'HTTP')
         # NEW: Always attempt to flush any queued command confirmations on check-in (best-effort)
         try:
             await _flush_pending_command_confirms()
         except Exception:
             pass
     except Exception as e:
-        await debug_print(f'Failed to register with WP: {e}', 'ERROR')
+        await debug_print(f'wp: register fail: {e}', 'ERROR')

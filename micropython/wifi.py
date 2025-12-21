@@ -1,4 +1,4 @@
-# Firmware Version: v2.04.0
+# Firmware Version: v2.05.0
 
 import utime as time
 import network
@@ -109,9 +109,9 @@ async def connectToWifiNetwork():
 	if wlan.isconnected():
 		_refresh_rssi(wlan)
 		sdata.WIFI_CONNECTED = True
-		await debug_print("Already connected.", "WIFI")
+		await debug_print("wifi: already connected", "WIFI")
 		return
-	await debug_print("Scanning for networks...", "WIFI")
+	await debug_print("wifi: scanning", "WIFI")
 	try:
 		available_networks = wlan.scan()
 	except Exception:
@@ -125,9 +125,9 @@ async def connectToWifiNetwork():
 		except Exception:
 			pass
 	if not target_found:
-		await debug_print("Target SSID not found.", "WARN")
+		await debug_print("wifi: ssid not found", "WARN")
 		return
-	await debug_print(f"Network {getattr(s, 'WIFI_SSID', '')} found, connecting...", "WIFI")
+	await debug_print(f"wifi: connect {getattr(s, 'WIFI_SSID', '')}", "WIFI")
 	retries = int(getattr(s, 'WIFI_CONN_RETRIES', 5))
 	backoff = int(getattr(s, 'WIFI_BACKOFF_S', 15))
 	for attempt in range(1, retries + 1):
@@ -158,7 +158,7 @@ async def connectToWifiNetwork():
 		await asyncio.sleep(backoff)
 	# all attempts failed
 	sdata.WIFI_CONNECTED = False
-	await debug_print("Failed to connect to WiFi after retries.", "ERROR")
+	await debug_print("wifi: connect failed", "ERROR")
 
 async def scanToWifiNetwork():
 	# ...existing code...

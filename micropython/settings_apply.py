@@ -190,11 +190,11 @@ async def apply_staged_settings_once():
             pass
         try:
             msg = 'Settings applied: ' \
-                  + ('added=' + ','.join(meta.get('added_keys', [])) if meta.get('added_keys') else 'added=0') \
-                  + ' | ' \
-                  + ('changed=' + ','.join(meta.get('changed_keys', [])) if meta.get('changed_keys') else 'changed=0') \
-                  + ' | ' \
-                  + ('ignored=' + ','.join(meta.get('ignored_keys', [])) if meta.get('ignored_keys') else 'ignored=0')
+                  + ('a=' + ','.join(meta.get('added_keys', [])) if meta.get('added_keys') else 'a=0') \
+                  + ' ' \
+                  + ('c=' + ','.join(meta.get('changed_keys', [])) if meta.get('changed_keys') else 'c=0') \
+                  + ' ' \
+                  + ('i=' + ','.join(meta.get('ignored_keys', [])) if meta.get('ignored_keys') else 'i=0')
         except Exception:
             msg = 'Settings: staged settings applied'
         await debug_print(msg, 'INFO')

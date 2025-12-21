@@ -1,4 +1,4 @@
-# Firmware Version: v2.04.0
+# Firmware Version: v2.05.0
 
 
 
@@ -162,12 +162,12 @@ async def lora_comm_task():
                 result = await connectLora()
             if result is False:
                 led_status_flash('WARN')
-                await debug_print("LoRa init failed, retrying...", "WARN")
+                await debug_print("lora: init fail, retry", "WARN")
                 for _ in range(10):
                     await asyncio.sleep(1)
         except Exception as e:
             led_status_flash('ERROR')
-            error_msg = f"Unexpected error in lora_comm_task: {e}"
+            error_msg = f"lora_task err: {e}"
             if "blocking" in error_msg:
                 error_msg += " | .blocking attribute does not exist on SX1262."
             await debug_print(error_msg, "ERROR")
@@ -193,7 +193,7 @@ async def sample_task():
     led_status_flash('INFO')  # Always flash LED for info
     # Skip sampling if suspended
     if getattr(settings, 'DEVICE_SUSPENDED', False):
-        await debug_print("Device suspended; skipping sampling", "WARN")
+        await debug_print("suspended: skip sample", "WARN")
     else:
         await sampleEnviroment()
     sdata.loop_runtime = (time.ticks_ms() - loop_start_time) // 1000
@@ -210,10 +210,8 @@ async def sample_task():
     sdata.error_count = getattr(TMON_AI, 'error_count', 0)
     sdata.last_error = getattr(TMON_AI, 'last_error', '')
     # Shortened debug print; consider making it conditional on settings.DEBUG
-    if getattr(settings, 'DEBUG', False):
-        print(f"[DEBUG] sample_task: loop_runtime={sdata.loop_runtime}, script_runtime={sdata.script_runtime}, free_mem={sdata.free_mem}")
     record_field_data()
-    await debug_print(f"sample_task: loop_runtime: {sdata.loop_runtime}s | script_runtime: {sdata.script_runtime}s | free_mem: {sdata.free_mem}", "INFO")
+    await debug_print(f"sample: lr={sdata.loop_runtime}s sr={sdata.script_runtime}s mem={sdata.free_mem}", "INFO")
     led_status_flash('INFO')  # Always flash LED for info
 
 async def periodic_field_data_task():
@@ -225,11 +223,11 @@ async def periodic_field_data_task():
         # Run send sequentially to avoid overlapping uploads (reduces memory pressure)
         try:
             if getattr(settings, 'DEVICE_SUSPENDED', False):
-                await debug_print("Device suspended; skip field data send", "WARN")
+                await debug_print("suspended: skip sfd send", "WARN")
             else:
                 await send_field_data_log()
         except Exception as e:
-            await debug_print(f"field_data_task error: {e}", "ERROR")
+            await debug_print(f"sfd: task err {e}", "ERROR")
         await asyncio.sleep(settings.FIELD_DATA_SEND_INTERVAL)
 
 async def periodic_command_poll_task():
@@ -460,7 +458,7 @@ async def periodic_uc_checkin_task():
                     except Exception as e:
                         await debug_print(f"Command poll error (checkin): {e}", "ERROR")
         except Exception as e:
-            await debug_print(f"UC check-in error: {e}", "ERROR")
+            await debug_print(f"uc: checkin err {e}", "ERROR")
         await asyncio.sleep(interval)
 
 async def startup():
@@ -500,10 +498,10 @@ async def startup():
     # Start provisioning loop
     try:
         import uasyncio as _a5
-        await debug_print('startup: scheduling periodic_provision_check', 'INFO')
+        await debug_print('startup: schedule prov-check', 'INFO')
         _a5.create_task(periodic_provision_check())
     except Exception as e:
-        await debug_print('startup: failed to schedule periodic_provision_check: %s' % e, 'ERROR')
+        await debug_print(f'startup: prov-check schedule fail: {e}', 'ERROR')
 
     # Staged settings apply loop
     try:
@@ -583,11 +581,11 @@ async def startup():
         ):
             import uasyncio as _ae
             _ae.create_task(engine_loop())
-            await debug_print('startup: started engine_loop', 'INFO')
+            await debug_print('startup: engine_loop started', 'INFO')
         else:
             await debug_print('startup: engine_loop disabled', 'INFO')
     except Exception as e:
-        await debug_print('startup: failed to start engine_loop: %s' % e, 'ERROR')
+        await debug_print(f'startup: engine start fail: {e}', 'ERROR')
 
     await tm.run()
 

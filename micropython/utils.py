@@ -1,4 +1,4 @@
-# Firmware Version: v2.04.0
+# Firmware Version: v2.05.0
 import ujson
 import uasyncio as asyncio
 import os
@@ -170,7 +170,7 @@ async def send_field_data_log():
     from wprest import WORDPRESS_API_URL as _wp_mod
     local_url = getattr(settings, 'WORDPRESS_API_URL', '') or _wp_mod
     if not local_url:
-        await debug_print('send_field_data_log: No WORDPRESS_API_URL set', 'ERROR')
+        await debug_print('sfd: no WP url', 'ERROR')
         return
     WORDPRESS_API_URL = local_url  # override for remainder
     checkLogDirectory()
@@ -181,7 +181,7 @@ async def send_field_data_log():
         except OSError:
             with open(settings.FIELD_DATA_LOG, 'w') as f:
                 f.write('')
-            await debug_print('send_field_data_log: FIELD_DATA_LOG did not exist, created empty file', 'DEBUG')
+            await debug_print('sfd: created empty field log', 'DEBUG')
     except Exception as e:
         await debug_print(f'send_field_data_log: Exception checking/creating FIELD_DATA_LOG: {e}', 'ERROR')
         return
@@ -191,7 +191,7 @@ async def send_field_data_log():
             await debug_print('send_field_data_log: another send in progress, skipping this cycle', 'DEBUG')
             return
         async with _send_field_data_lock:
-            await debug_print('send_field_data_log: Reading field_data.log', 'DEBUG')
+            await debug_print('sfd: reading log', 'DEBUG')
             payloads = []
             total_lines = 0
             batch = []
@@ -218,13 +218,13 @@ async def send_field_data_log():
                             await debug_print(f'send_field_data_log: JSON parse error on a line: {pe}', 'ERROR')
             if batch:
                 payloads.append({'unit_id': settings.UNIT_ID, 'data': batch})
-            await debug_print(f'send_field_data_log: Read {total_lines} lines and built {len(payloads)} batched payloads', 'DEBUG')
+            await debug_print(f'sfd: read {total_lines} lines, {len(payloads)} batches', 'DEBUG')
             backlog = read_backlog()
-            await debug_print(f'send_field_data_log: Read {len(backlog)} backlog payloads', 'DEBUG')
+            await debug_print(f'sfd: backlog {len(backlog)}', 'DEBUG')
             payloads = backlog + payloads
             backlog_count = len(backlog)
             if not payloads:
-                await debug_print('send_field_data_log: No payloads to send', 'DEBUG')
+                await debug_print('sfd: no payloads', 'DEBUG')
                 return
             import urequests as requests
             def _sanitize_json(obj, depth=0):
@@ -286,7 +286,7 @@ async def send_field_data_log():
                 except Exception:
                     pass
                 delivered = False
-                await debug_print(f'send_field_data_log: Sending payload {idx+1}/{len(payloads)}', 'DEBUG')
+                await debug_print(f'sfd: send {idx+1}/{len(payloads)}', 'DEBUG')
                 for attempt in range(1, max_retries + 1):
                     try:
                         import gc as _gc
@@ -322,7 +322,7 @@ async def send_field_data_log():
                                     payload['sig_v'] = 1
                         except Exception:
                             pass
-                        await debug_print(f'send_field_data_log: Attempt {attempt} POST to {WORDPRESS_API_URL}/wp-json/tmon/v1/device/field-data', 'DEBUG')
+                        await debug_print(f'sfd: POST att{attempt} to WP', 'DEBUG')
                         safe_payload = _sanitize_json(payload)
                         try:
                             encoded = ujson.dumps(safe_payload)
@@ -336,10 +336,10 @@ async def send_field_data_log():
                             log_snippet = ''.join(ch if 32 <= ord(ch) <= 126 else ' ' for ch in log_snippet)
                         except Exception:
                             log_snippet = '<payload>'
-                        await debug_print(f'send_field_data_log: Payload: {log_snippet}', 'DEBUG')
+                        await debug_print(f'sfd: payload {log_snippet}', 'DEBUG')
                         resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/field-data', headers=headers, data=encoded, timeout=10)
                         try:
-                            await debug_print(f'send_field_data_log: Response status: {resp.status_code}', 'DEBUG')
+                            await debug_print(f'sfd: resp {resp.status_code}', 'DEBUG')
                             resp_bytes = b''
                             try:
                                 resp_bytes = resp.content if hasattr(resp, 'content') else b''
@@ -371,7 +371,7 @@ async def send_field_data_log():
                                 except Exception:
                                     pass
                                 delivered = True
-                                await debug_print(f'send_field_data_log: Payload {idx+1} delivered successfully', 'DEBUG')
+                                await debug_print(f'sfd: payload {idx+1} ok', 'DEBUG')
                                 break
                             else:
                                 err_txt = ''
@@ -380,7 +380,7 @@ async def send_field_data_log():
                                     err_txt = ''.join(ch if 32 <= ord(ch) <= 126 else ' ' for ch in err_txt)
                                 except Exception:
                                     pass
-                                await log_error(f'Field data log delivery failed (attempt {attempt}): {resp.status_code} {err_txt}', 'field_data')
+                                await log_error(f'sfd: delivery fail att{attempt} {resp.status_code} {err_txt}', 'field_data')
                         finally:
                             try:
                                 resp.close()
@@ -392,29 +392,29 @@ async def send_field_data_log():
                             emsg = ''.join(ch if ord(ch) >= 32 else ' ' for ch in emsg)
                         except Exception:
                             emsg = f"{type(e).__name__}"
-                        await debug_print(f'send_field_data_log: Exception during delivery attempt {attempt}: {emsg}', 'ERROR')
+                        await debug_print(f'sfd: delivery exc att{attempt}: {emsg}', 'ERROR')
                         await log_error(f'Field data log delivery exception (attempt {attempt}): {emsg}', 'field_data')
                     await asyncio.sleep(delay)
                     delay = min(delay * 2, 60)
                 if delivered:
                     sent_indices.append(idx)
                 else:
-                    await debug_print(f'send_field_data_log: Payload {idx+1} failed after {max_retries} attempts', 'ERROR')
+                    await debug_print(f'sfd: payload {idx+1} failed after max', 'ERROR')
                     await log_error('Field data log delivery failed after max retries, will try again later.', 'field_data')
             if total_lines:
                 current_indices = range(backlog_count, len(payloads))
                 delivered_current_all = all(i in sent_indices for i in current_indices) if len(payloads) > backlog_count else False
                 if delivered_current_all:
-                    await debug_print('send_field_data_log: Rotating field_data.log after successful delivery of current payloads', 'DEBUG')
+                    await debug_print('sfd: rotate field log', 'DEBUG')
                     rotate_field_data_log()
             unsent = [payloads[i] for i in range(len(payloads)) if i not in sent_indices]
             if unsent:
-                await debug_print(f'send_field_data_log: Writing {len(unsent)} unsent payloads back to backlog', 'DEBUG')
+                await debug_print(f'sfd: backlog write {len(unsent)}', 'DEBUG')
                 clear_backlog()
                 for p in unsent:
                     append_to_backlog(p)
             else:
-                await debug_print('send_field_data_log: All payloads delivered, clearing backlog', 'DEBUG')
+                await debug_print('sfd: all delivered, clear backlog', 'DEBUG')
                 clear_backlog()
     except Exception as e:
         try:
@@ -441,8 +441,8 @@ async def send_field_data_log():
             tb_str = ''.join(ch if 32 <= ord(ch) <= 126 or ch in '\n\r\t' else ' ' for ch in tb_str)
         except Exception:
             pass
-        await debug_print(f'send_field_data_log: Exception in send_field_data_log: {emsg}\n{tb_str}', 'ERROR')
-        await log_error(f'Failed to send field data log: {emsg}\n{tb_str}', 'field_data')
+        await debug_print(f'sfd: exception {emsg}', 'ERROR')
+        await log_error(f'sfd: failed send: {emsg}\n{tb_str}', 'field_data')
     finally:
         # nothing to do; lock released by context manager
         pass
@@ -919,13 +919,13 @@ async def periodic_provision_check():
                 wp_url_set = bool(str(getattr(settings, 'WORDPRESS_API_URL', '')).strip())
                 uid_set = bool(str(getattr(settings, 'UNIT_ID', '')).strip())
                 if hub and flag_file and flag_exists and wp_url_set and uid_set:
-                    await debug_print('periodic_provision_check: fully provisioned (flag + URL + UNIT_ID)', 'PROVISION')
+                    await debug_print('prov: provisioned', 'PROVISION')
                     return
             except Exception:
                 pass
 
             if not hub:
-                await debug_print('periodic_provision_check: TMON_ADMIN_API_URL not set', 'PROVISION')
+                await debug_print('prov: no hub', 'PROVISION')
             else:
                 # Prefer urequests; fall back to any already-imported requests module
                 try:
@@ -970,7 +970,7 @@ async def periodic_provision_check():
                             resp_json = {}
                         staged = bool(resp_json.get('staged_exists'))
                         provisioned = bool(resp_json.get('provisioned'))
-                        await debug_print(f'periodic_provision_check: check (staged_exists={staged}, provisioned={provisioned})', 'PROVISION')
+                        await debug_print(f'prov: check staged={staged} prov={provisioned}', 'PROVISION')
                         # Persist UNIT_ID if provided and non-empty
                         new_uid = resp_json.get('unit_id')
                         if new_uid and str(new_uid).strip():
@@ -1033,7 +1033,7 @@ async def periodic_provision_check():
                                             gf.write('1')
                                     except Exception:
                                         pass
-                                    await debug_print('periodic_provision_check: provisioning applied; soft resetting', 'PROVISION')
+                                    await debug_print('prov: applied -> soft reset', 'PROVISION')
                                     _provision_reboot_guard_written = True
                                     try:
                                         import machine
@@ -1041,7 +1041,7 @@ async def periodic_provision_check():
                                     except Exception:
                                         pass
                     else:
-                        await debug_print('periodic_provision_check: requests module unavailable; skipping', 'PROVISION')
+                        await debug_print('prov: no requests', 'PROVISION')
                     # Safely close response
                     try:
                         if resp:
@@ -1050,7 +1050,7 @@ async def periodic_provision_check():
                         pass
         except Exception as e:
             try:
-                await debug_print(f'periodic_provision_check: error {e}', 'ERROR')
+                await debug_print(f'prov: error {e}', 'ERROR')
             except Exception:
                 pass
         # Always yield and delay to avoid a tight loop in error conditions

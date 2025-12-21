@@ -1,4 +1,4 @@
-# Firmware Version: v2.04.0
+# Firmware Version: v2.05.0
 # Utility to print remote node info
 def print_remote_nodes():
     import settings
@@ -459,7 +459,7 @@ def _deinit_spi_if_any(lora_obj):
 
 async def init_lora():
     global lora
-    print('[DEBUG] init_lora: starting SX1262 init')
+    print('[DEBUG] init_lora start')
     try:
         # Defensive hardware prep: ensure CS high (inactive), RST pulsed, BUSY/IRQ as inputs
         try:
@@ -495,7 +495,7 @@ async def init_lora():
         print(f'[DEBUG] init_lora: lora.begin() returned {status}')
         # If chip not found, try a single reset/retry before giving up (helps with pin/SPI races on boot)
         if status == -2:
-            await debug_print('LoRa begin returned ERR_CHIP_NOT_FOUND; attempting hardware reset + retry', 'LORA')
+            await debug_print('lora: chip not found, retry', 'LORA')
             try:
                 _pulse_reset(settings.RST_PIN, low_ms=80, post_high_ms=200)
                 # brief settle time
@@ -507,7 +507,7 @@ async def init_lora():
                     implicit=False, implicitLen=0xFF, crcOn=settings.CRC_ON, txIq=False, rxIq=False,
                     tcxoVoltage=settings.TCXO_VOLTAGE, useRegulatorLDO=settings.USE_LDO
                 )
-                await debug_print(f'LoRa retry begin returned {status}', 'LORA')
+                await debug_print(f'lora: retry begin {status}', 'LORA')
             except Exception as re:
                 await debug_print(f'LoRa retry exception: {re}', 'ERROR')
 
@@ -520,7 +520,7 @@ async def init_lora():
                     err_name = SXERR.get(rc, 'UNKNOWN')
                 except Exception:
                     err_name = 'UNKNOWN'
-                await debug_print(f"LoRa setBlockingCallback failed: {rc} ({err_name})", "ERROR")
+                await debug_print(f"lora: setBlockingCallback fail {rc}", "ERROR")
                 await log_error(f"LoRa setBlockingCallback failed: {rc} ({err_name})")
                 await free_pins()
                 lora = None
@@ -530,7 +530,7 @@ async def init_lora():
                 from _sx126x import SX126X_PACKET_TYPE_LORA
                 pkt_type = lora.getPacketType()
                 if pkt_type != SX126X_PACKET_TYPE_LORA:
-                    await debug_print(f"LoRa init verify failed: packet type={pkt_type} (expected LoRa)", "ERROR")
+                    await debug_print("lora: init verify pkt_type mismatch", "ERROR")
                     await log_error(f"LoRa init verify failed: packet type={pkt_type}")
                     await free_pins()
                     lora = None
@@ -561,7 +561,7 @@ async def init_lora():
                 pass
             lora = None
             return False
-        await debug_print("LoRa initialized successfully", "LORA")
+        await debug_print("lora: initialized", "LORA")
         print_remote_nodes()
         # Ensure base starts in RX mode to listen for remotes
         try:
@@ -711,7 +711,7 @@ async def connectLora():
                 # Transmit in non-blocking mode; poll for TX_DONE
                 # If radio was deinitialized in a prior loop, re-init
                 if lora is None:
-                    await debug_print('Remote: lora handle is None before send, reinitializing', 'WARN')
+                    await debug_print('lora: reinit before send', 'WARN')
                     async with pin_lock:
                         ok = await init_lora()
                     if not ok:
@@ -724,13 +724,13 @@ async def connectLora():
                         err_name = SXERR.get(state, 'UNKNOWN')
                     except Exception:
                         err_name = 'UNKNOWN'
-                    await debug_print(f"LoRa TX error: {state} ({err_name})", 'ERROR')
+                    await debug_print(f"lora: TX err {state}", 'ERROR')
                     await log_error(f"LoRa TX error: {state} ({err_name})")
                     led_status_flash('ERROR')
                     # Try to read device error flags for more detail
                     try:
                         dev_err = lora.getDeviceErrors()
-                        await debug_print(f"LoRa device errors: 0x{dev_err:04X}", 'ERROR')
+                        await debug_print(f"lora: device err 0x{dev_err:04X}", 'ERROR')
                         await log_error(f"LoRa device errors: 0x{dev_err:04X}")
                     except Exception:
                         pass
@@ -773,7 +773,7 @@ async def connectLora():
                             break
                         ev = lora._events()
                         if ev & SX1262.TX_DONE:
-                            await debug_print("Remote: TX_DONE", 'LORA')
+                            await debug_print("lora: TX_DONE", 'LORA')
                             write_lora_log("Remote TX_DONE", 'INFO')
                             break
                         await asyncio.sleep(0.01)
@@ -831,10 +831,10 @@ async def connectLora():
                                                     bacc = obj2.get('gps_accuracy_m')
                                                     bts = obj2.get('gps_last_fix_ts')
                                                     save_gps_state(blat, blng, balt, bacc, bts)
-                                                    await debug_print('Remote adopted GPS from base', 'LORA')
+                                                    await debug_print('lora: GPS adopted', 'LORA')
                                         except Exception:
                                             pass
-                                        await debug_print(f"Remote stored next sync epoch: {settings.nextLoraSync}", 'LORA')
+                                        await debug_print(f"lora: next {settings.nextLoraSync}", 'LORA')
                                         write_lora_log(f"Remote stored next sync epoch: {settings.nextLoraSync}", 'INFO')
                                         led_status_flash('SUCCESS')
                                         break
@@ -861,7 +861,7 @@ async def connectLora():
                 msg, err = lora._readData(0)
                 if err == 0 and msg:
                     _last_activity_ms = time.ticks_ms()
-                    await debug_print("Base: RX packet", 'LORA')
+                    await debug_print("lora: RX", 'LORA')
                     led_status_flash('LORA_RX')
                     write_lora_log("Base RX packet", 'INFO')
                     try:
@@ -1005,7 +1005,7 @@ async def connectLora():
                             if lora is None:
                                 raise Exception('LoRa unavailable for ACK TX')
                             _, st2 = lora.send(ujson.dumps(ack).encode('utf-8'))
-                            await debug_print(f"Base ACK sent to {uid} with next={candidate} next_in={next_in} rc={st2}", 'LORA')
+                            await debug_print(f"lora: ACK {uid} next_in={next_in} rc={st2}", 'LORA')
                             write_lora_log(f"Base ACK to {uid} next={candidate} next_in={next_in} rc={st2}", 'INFO')
                             if st2 == 0:
                                 led_status_flash('SUCCESS')
@@ -1020,7 +1020,7 @@ async def connectLora():
                                         break
                                     await asyncio.sleep(0.01)
                         except Exception as se:
-                            await debug_print(f"Base ACK send error: {se}", 'ERROR')
+                            await debug_print(f"lora: ACK send err: {se}", 'ERROR')
                             await log_error(f"Base ACK send error: {se}")
                             led_status_flash('ERROR')
                         finally:
@@ -1031,17 +1031,17 @@ async def connectLora():
                             except Exception:
                                 pass
                     except Exception as pe:
-                        await debug_print(f"RX parse error: {pe}", 'ERROR')
+                        await debug_print(f"lora: rx parse err: {pe}", 'ERROR')
                         await log_error(f"RX parse error: {pe}")
                         led_status_flash('ERROR')
         except Exception as e:
-            await debug_print(f"Base RX exception: {e}", 'ERROR')
+            await debug_print(f"lora: base rx exc: {e}", 'ERROR')
             await log_error(f"Base RX exception: {e}")
 
     # Idle timeout: deinit if no activity for a while
     idle_timeout_ms = 10 * 60 * 1000  # 10 minutes
     if lora is not None and _last_activity_ms and time.ticks_diff(now, _last_activity_ms) > idle_timeout_ms:
-        await debug_print("LoRa idle timeout, deinitializing", 'LORA')
+        await debug_print("lora: idle timeout, deinit", 'LORA')
         async with pin_lock:
             try:
                 if hasattr(lora, 'spi') and lora.spi:
@@ -1297,7 +1297,7 @@ def _deinit_spi_if_any(lora_obj):
 
 async def init_lora():
     global lora
-    print('[DEBUG] init_lora: starting SX1262 init')
+    print('[DEBUG] init_lora start')
     try:
         # Defensive hardware prep: ensure CS high (inactive), RST pulsed, BUSY/IRQ as inputs
         try:
@@ -1333,7 +1333,7 @@ async def init_lora():
         print(f'[DEBUG] init_lora: lora.begin() returned {status}')
         # If chip not found, try a single reset/retry before giving up (helps with pin/SPI races on boot)
         if status == -2:
-            await debug_print('LoRa begin returned ERR_CHIP_NOT_FOUND; attempting hardware reset + retry', 'LORA')
+            await debug_print('lora: chip not found, retry', 'LORA')
             try:
                 _pulse_reset(settings.RST_PIN, low_ms=80, post_high_ms=200)
                 # brief settle time
@@ -1345,7 +1345,7 @@ async def init_lora():
                     implicit=False, implicitLen=0xFF, crcOn=settings.CRC_ON, txIq=False, rxIq=False,
                     tcxoVoltage=settings.TCXO_VOLTAGE, useRegulatorLDO=settings.USE_LDO
                 )
-                await debug_print(f'LoRa retry begin returned {status}', 'LORA')
+                await debug_print(f'lora: retry begin {status}', 'LORA')
             except Exception as re:
                 await debug_print(f'LoRa retry exception: {re}', 'ERROR')
 
@@ -1358,7 +1358,7 @@ async def init_lora():
                     err_name = SXERR.get(rc, 'UNKNOWN')
                 except Exception:
                     err_name = 'UNKNOWN'
-                await debug_print(f"LoRa setBlockingCallback failed: {rc} ({err_name})", "ERROR")
+                await debug_print(f"lora: setBlockingCallback fail {rc}", "ERROR")
                 await log_error(f"LoRa setBlockingCallback failed: {rc} ({err_name})")
                 await free_pins()
                 lora = None
@@ -1368,7 +1368,7 @@ async def init_lora():
                 from _sx126x import SX126X_PACKET_TYPE_LORA
                 pkt_type = lora.getPacketType()
                 if pkt_type != SX126X_PACKET_TYPE_LORA:
-                    await debug_print(f"LoRa init verify failed: packet type={pkt_type} (expected LoRa)", "ERROR")
+                    await debug_print("lora: init verify pkt_type mismatch", "ERROR")
                     await log_error(f"LoRa init verify failed: packet type={pkt_type}")
                     await free_pins()
                     lora = None
@@ -1399,7 +1399,7 @@ async def init_lora():
                 pass
             lora = None
             return False
-        await debug_print("LoRa initialized successfully", "LORA")
+        await debug_print("lora: initialized", "LORA")
         print_remote_nodes()
         # Ensure base starts in RX mode to listen for remotes
         try:
@@ -1549,7 +1549,7 @@ async def connectLora():
                 # Transmit in non-blocking mode; poll for TX_DONE
                 # If radio was deinitialized in a prior loop, re-init
                 if lora is None:
-                    await debug_print('Remote: lora handle is None before send, reinitializing', 'WARN')
+                    await debug_print('lora: reinit before send', 'WARN')
                     async with pin_lock:
                         ok = await init_lora()
                     if not ok:
@@ -1562,13 +1562,13 @@ async def connectLora():
                         err_name = SXERR.get(state, 'UNKNOWN')
                     except Exception:
                         err_name = 'UNKNOWN'
-                    await debug_print(f"LoRa TX error: {state} ({err_name})", 'ERROR')
+                    await debug_print(f"lora: TX err {state}", 'ERROR')
                     await log_error(f"LoRa TX error: {state} ({err_name})")
                     led_status_flash('ERROR')
                     # Try to read device error flags for more detail
                     try:
                         dev_err = lora.getDeviceErrors()
-                        await debug_print(f"LoRa device errors: 0x{dev_err:04X}", 'ERROR')
+                        await debug_print(f"lora: device err 0x{dev_err:04X}", 'ERROR')
                         await log_error(f"LoRa device errors: 0x{dev_err:04X}")
                     except Exception:
                         pass
@@ -1611,7 +1611,7 @@ async def connectLora():
                             break
                         ev = lora._events()
                         if ev & SX1262.TX_DONE:
-                            await debug_print("Remote: TX_DONE", 'LORA')
+                            await debug_print("lora: TX_DONE", 'LORA')
                             write_lora_log("Remote TX_DONE", 'INFO')
                             break
                         await asyncio.sleep(0.01)
@@ -1669,10 +1669,10 @@ async def connectLora():
                                                     bacc = obj2.get('gps_accuracy_m')
                                                     bts = obj2.get('gps_last_fix_ts')
                                                     save_gps_state(blat, blng, balt, bacc, bts)
-                                                    await debug_print('Remote adopted GPS from base', 'LORA')
+                                                    await debug_print('lora: GPS adopted', 'LORA')
                                         except Exception:
                                             pass
-                                        await debug_print(f"Remote stored next sync epoch: {settings.nextLoraSync}", 'LORA')
+                                        await debug_print(f"lora: next {settings.nextLoraSync}", 'LORA')
                                         write_lora_log(f"Remote stored next sync epoch: {settings.nextLoraSync}", 'INFO')
                                         led_status_flash('SUCCESS')
                                         break
@@ -1699,7 +1699,7 @@ async def connectLora():
                 msg, err = lora._readData(0)
                 if err == 0 and msg:
                     _last_activity_ms = time.ticks_ms()
-                    await debug_print("Base: RX packet", 'LORA')
+                    await debug_print("lora: RX", 'LORA')
                     led_status_flash('LORA_RX')
                     write_lora_log("Base RX packet", 'INFO')
                     try:
@@ -1843,7 +1843,7 @@ async def connectLora():
                             if lora is None:
                                 raise Exception('LoRa unavailable for ACK TX')
                             _, st2 = lora.send(ujson.dumps(ack).encode('utf-8'))
-                            await debug_print(f"Base ACK sent to {uid} with next={candidate} next_in={next_in} rc={st2}", 'LORA')
+                            await debug_print(f"lora: ACK {uid} next_in={next_in} rc={st2}", 'LORA')
                             write_lora_log(f"Base ACK to {uid} next={candidate} next_in={next_in} rc={st2}", 'INFO')
                             if st2 == 0:
                                 led_status_flash('SUCCESS')
@@ -1858,7 +1858,7 @@ async def connectLora():
                                         break
                                     await asyncio.sleep(0.01)
                         except Exception as se:
-                            await debug_print(f"Base ACK send error: {se}", 'ERROR')
+                            await debug_print(f"lora: ACK send err: {se}", 'ERROR')
                             await log_error(f"Base ACK send error: {se}")
                             led_status_flash('ERROR')
                         finally:
@@ -1869,17 +1869,17 @@ async def connectLora():
                             except Exception:
                                 pass
                     except Exception as pe:
-                        await debug_print(f"RX parse error: {pe}", 'ERROR')
+                        await debug_print(f"lora: rx parse err: {pe}", 'ERROR')
                         await log_error(f"RX parse error: {pe}")
                         led_status_flash('ERROR')
         except Exception as e:
-            await debug_print(f"Base RX exception: {e}", 'ERROR')
+            await debug_print(f"lora: base rx exc: {e}", 'ERROR')
             await log_error(f"Base RX exception: {e}")
 
     # Idle timeout: deinit if no activity for a while
     idle_timeout_ms = 10 * 60 * 1000  # 10 minutes
     if lora is not None and _last_activity_ms and time.ticks_diff(now, _last_activity_ms) > idle_timeout_ms:
-        await debug_print("LoRa idle timeout, deinitializing", 'LORA')
+        await debug_print("lora: idle timeout, deinit", 'LORA')
         async with pin_lock:
             try:
                 if hasattr(lora, 'spi') and lora.spi:

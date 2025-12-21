@@ -1,4 +1,4 @@
-# Firmware Version: v2.04.0
+# Firmware Version: v2.05.0
 # OTA scaffolding: version check and pending flag
 try:
     import urequests as requests
@@ -96,18 +96,17 @@ async def check_for_update():
         status = getattr(resp, 'status_code', None)
         if status == 200:
             remote_ver = _normalize_version(resp.text if hasattr(resp, 'text') else '')
-            await debug_print(f'OTA: remote version file fetched: {remote_ver} from {url} (status {status})', 'OTA')
+            await debug_print(f'ota: ver {remote_ver} fetched', 'OTA')
             if is_newer(remote_ver, getattr(settings, 'FIRMWARE_VERSION', '')):
-                await debug_print(f'OTA: update available {remote_ver} (current {settings.FIRMWARE_VERSION})', 'OTA')
+                await debug_print(f'ota: update {remote_ver} available', 'OTA')
                 try:
                     write_text(getattr(settings, 'OTA_PENDING_FILE', '/logs/ota_pending.flag'), remote_ver)
                 except Exception:
                     pass
             else:
-                await debug_print('OTA: firmware up to date', 'OTA')
+                await debug_print('ota: up-to-date', 'OTA')
         else:
-            txt = getattr(resp, 'text', '')[:512] if hasattr(resp, 'text') else ''
-            await debug_print(f'OTA: version fetch non-200 {status} {txt}', 'ERROR')
+            await debug_print(f'ota: ver fetch {status}', 'ERROR')
         try:
             resp.close()
         except Exception:
@@ -335,7 +334,7 @@ async def apply_pending_update():
 
                     if status != 200:
                         body_snip = getattr(rr, 'text', '')[:1024] if hasattr(rr, 'text') else ''
-                        await debug_print(f'OTA: file download failed status={status} body_snip={body_snip[:200]}', 'ERROR')
+                        await debug_print(f'ota: download {name} HTTP {status}', 'ERROR')
                         _write_debug_artifact(f'ota_response_{name}.txt', (body_snip or '').encode('utf-8', 'ignore'))
                         try:
                             rr.close()
@@ -431,7 +430,7 @@ async def apply_pending_update():
                     if expected_hex:
                         if comp_hash != expected_hex.lower():
                             # save artifact for investigation
-                            await debug_print(f'OTA: HASH MISMATCH for {name} expected={expected_hex} computed={comp_hash}', 'ERROR')
+                            await debug_print(f'ota: {name} hash mismatch', 'ERROR')
                             try:
                                 _write_debug_artifact(f'ota_failed_{name}.bin', open(tmp_path, 'rb').read())
                             except Exception:
@@ -490,9 +489,9 @@ async def apply_pending_update():
                     await _sleep(retry_interval_s)
 
             if not download_ok:
-                await debug_print(f'OTA: failed to download {name} after {attempts} attempt(s) last_error={last_error}', 'ERROR')
+                await debug_print(f'ota: {name} failed after {attempts}', 'ERROR')
                 if getattr(settings, 'OTA_RESTORE_ON_FAIL', True):
-                    await debug_print('OTA: aborting apply and restoring backups where possible', 'ERROR')
+                    await debug_print('ota: abort & restore', 'ERROR')
                     # restore and abort
                 return False
 
@@ -508,7 +507,7 @@ async def apply_pending_update():
         await debug_print('OTA: apply completed', 'OTA')
         return True
     except Exception as e:
-        await debug_print(f'OTA apply exception: {e}', 'ERROR')
+        await debug_print(f'ota: apply exc: {e}', 'ERROR')
         return False
 
 def _const_time_eq(a, b):
