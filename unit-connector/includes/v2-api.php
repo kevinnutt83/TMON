@@ -722,3 +722,31 @@ add_action('rest_api_init', function(){
 		'permission_callback' => 'tmon_uc_device_permission_callback',
 	]);
 });
+
+// Device-facing: staged/applied settings + pending commands for a unit (used by MicroPython devices)
+add_action('rest_api_init', function() {
+	register_rest_route('tmon/v1', '/device/staged-settings', [
+		'methods' => 'GET',
+		'permission_callback' => '__return_true',
+		'callback' => function(WP_REST_Request $req) {
+			global $wpdb;
+			$unit = sanitize_text_field($req->get_param('unit_id') ?? '');
+			$machine = sanitize_text_field($req->get_param('machine_id') ?? '');
+			if (!$unit && !$machine) {
+				return new WP_REST_Response(['staged' => null, 'commands' => []], 200);
+			}
+			// Primary lookup by unit_id
+			$map = get_option('tmon_uc_staged_settings', []);
+			$staged = null;
+			if ($unit && is_array($map) && !empty($map[$unit])) {
+				$staged = $map[$unit];
+			} else if ($machine) {
+				// If there is a machine->unit mapping stored somewhere, attempt lookup (optional)
+				// fallback: try to find any staged entry with matching machine in payload (not implemented)
+				$staged = null;
+			}
+			return new WP_REST_Response(['staged' => $staged, 'commands' => []], 200);
+		},
+		'permission_callback' => '__return_true' // devices fetch without WP auth; rely on unit_id param
+    ]);
+});

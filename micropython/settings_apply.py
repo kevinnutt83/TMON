@@ -116,6 +116,66 @@ def load_applied_settings_on_boot():
     except Exception:
         pass
 
+def _post_command_confirm(payload):
+    """Best-effort: POST a command-complete / ack to the configured WP URL."""
+    try:
+        # import in-function to avoid circular deps on device
+        try:
+            import urequests as requests
+        except Exception:
+            import requests
+        wp_url = getattr(settings, 'WORDPRESS_API_URL', '') or ''
+        if not wp_url:
+            return False
+        headers = {'Content-Type': 'application/json'}
+        # Try primary endpoint
+        try:
+            resp = requests.post(wp_url.rstrip('/') + '/wp-json/tmon/v1/device/command-complete', headers=headers, json=payload, timeout=8)
+            ok = getattr(resp, 'status_code', 0) in (200, 201)
+            try:
+                if resp: resp.close()
+            except Exception:
+                pass
+            if ok:
+                return True
+        except Exception:
+            pass
+        # Fallback to legacy ack endpoint
+        try:
+            legacy = {'command_id': payload.get('job_id') or payload.get('command_id'), 'ok': payload.get('ok', False), 'result': payload.get('result','')}
+            resp2 = requests.post(wp_url.rstrip('/') + '/wp-json/tmon/v1/device/ack', headers=headers, json=legacy, timeout=8)
+            ok2 = getattr(resp2, 'status_code', 0) in (200, 201)
+            try:
+                if resp2: resp2.close()
+            except Exception:
+                pass
+            return ok2
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+def _append_staged_audit(unit_id, action, details):
+    """Append an audit line to LOG_DIR/staged_settings_audit.log for traceability."""
+    try:
+        import utime as _t
+        ts = int(_t.time()) if hasattr(_t, 'time') else 0
+    except Exception:
+        ts = 0
+    try:
+        path = getattr(settings, 'LOG_DIR', '/logs').rstrip('/') + '/staged_settings_audit.log'
+        line = {'ts': ts, 'unit_id': str(unit_id), 'action': action, 'details': details}
+        try:
+            import ujson as _j
+            s = _j.dumps(line)
+        except Exception:
+            import json as _j
+            s = _j.dumps(line)
+        with open(path, 'a') as af:
+            af.write(s + '\n')
+    except Exception:
+        pass
+
 async def apply_staged_settings_once():
     staged_path = getattr(settings, 'REMOTE_SETTINGS_STAGED_FILE', '/logs/remote_settings.staged.json')
     applied_path = getattr(settings, 'REMOTE_SETTINGS_APPLIED_FILE', '/logs/remote_settings.applied.json')
@@ -188,6 +248,31 @@ async def apply_staged_settings_once():
             os.remove(staged_path)
         except Exception:
             pass
+
+        # NEW: If staged included commands, attempt to confirm/clear them on the server
+        try:
+            cmds = staged.get('commands', []) if isinstance(staged, dict) else []
+            confirmed = 0
+            for c in (cmds or []):
+                try:
+                    job_id = c.get('id') or c.get('job_id') or c.get('command_id')
+                    payload = {'job_id': job_id, 'ok': True, 'result': 'applied_via_staged_settings'}
+                    if job_id:
+                        if _post_command_confirm(payload):
+                            confirmed += 1
+                        else:
+                            # best-effort only; log failure
+                            await debug_print(f'Failed to confirm staged command {job_id}', 'WARN')
+                except Exception:
+                    pass
+            # Append audit entry for applied settings + command confirms
+            try:
+                _append_staged_audit(getattr(settings, 'UNIT_ID', ''), 'apply', {'applied_keys': list(applied.keys()), 'commands_confirmed': confirmed, 'added': meta.get('added_keys',[]), 'changed': meta.get('changed_keys',[]), 'ignored': meta.get('ignored_keys',[])})
+            except Exception:
+                pass
+        except Exception:
+            pass
+
         try:
             msg = 'Settings applied: ' \
                   + ('a=' + ','.join(meta.get('added_keys', [])) if meta.get('added_keys') else 'a=0') \

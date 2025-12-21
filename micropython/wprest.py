@@ -492,6 +492,22 @@ async def fetch_staged_settings():
                 with open(fname, 'w') as f:
                     ujson.dump(staged, f)
                 await debug_print(f'wp: staged saved {fname}', 'HTTP')
+                # NEW: audit staged save for traceability
+                try:
+                    audit_path = getattr(settings, 'LOG_DIR', '/logs').rstrip('/') + '/staged_settings_audit.log'
+                    import utime as _t
+                    ts = int(_t.time()) if hasattr(_t, 'time') else 0
+                    entry = {'ts': ts, 'unit_id': settings.UNIT_ID, 'keys': list(staged.keys()), 'commands': len(staged.get('commands', []) if isinstance(staged, dict) else 0)}
+                    try:
+                        import ujson as _j
+                        s = _j.dumps(entry)
+                    except Exception:
+                        import json as _j
+                        s = _j.dumps(entry)
+                    with open(audit_path, 'a') as af:
+                        af.write(s + '\n')
+                except Exception:
+                    pass
             except Exception as e:
                 await debug_print(f'wp: staged save fail: {e}', 'ERROR')
             # Also write to global staged file path so settings_apply can find it
