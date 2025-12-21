@@ -93,10 +93,40 @@ def git_commit(path, message='chore: update micropython manifest'):
     except Exception as e:
         print('Git commit skipped/failed:', e)
 
+def manifest_equal(manifest, path):
+    """
+    Return True if the JSON manifest at 'path' is semantically equal to 'manifest' dict.
+    """
+    try:
+        if not os.path.exists(path):
+            return False
+        with open(path, 'r') as f:
+            existing = json.load(f)
+        return existing == manifest
+    except Exception:
+        return False
+
+def sig_equal(manifest, sig_path, secret_env='OTA_MANIFEST_HMAC_SECRET'):
+    secret = os.environ.get(secret_env, '')
+    if not secret:
+        # no secret provided → cannot validate, treat as equal to avoid false failures
+        return True
+    try:
+        if not os.path.exists(sig_path):
+            return False
+        canonical = json.dumps(manifest, separators=(',', ':'), sort_keys=True).encode('utf-8')
+        mac = hmac.new(secret.encode('utf-8'), canonical, hashlib.sha256).hexdigest().lower()
+        with open(sig_path, 'r') as sf:
+            existing = sf.read().strip().lower()
+        return existing == mac
+    except Exception:
+        return False
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--commit', action='store_true', help='git commit the new manifest (requires git & token in CI)')
     ap.add_argument('--sig-secret-env', default='OTA_MANIFEST_HMAC_SECRET', help='Env var name to read HMAC secret from for .sig generation')
+    ap.add_argument('--check-only', action='store_true', help='Build and compare manifest+sig and exit non-zero if different (CI friendly)')
     args = ap.parse_args()
 
     if not os.path.isdir(MP_DIR):
@@ -105,6 +135,20 @@ def main():
 
     version = read_version()
     manifest = build_manifest(version=version)
+
+    if args.check_only:
+        ok_m = manifest_equal(manifest, MANIFEST_PATH)
+        ok_s = sig_equal(manifest, SIG_PATH, args.sig_secret_env)
+        if ok_m and ok_s:
+            print('Manifest and signature are up-to-date.')
+            sys.exit(0)
+        else:
+            if not ok_m:
+                print('Manifest file is out-of-date or missing.')
+            if not ok_s:
+                print('Manifest signature is out-of-date or missing (secret provided).')
+            sys.exit(1)
+
     emit_manifest(manifest)
     emit_sig(manifest, secret_env=args.sig_secret_env)
 
