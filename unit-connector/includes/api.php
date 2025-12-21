@@ -86,7 +86,7 @@ function tmon_uc_pull_install($request){
         ]);
     }
     return rest_ensure_response(['status' => $status]);
-});
+}
 
 // Register REST routes for staged settings
 add_action('rest_api_init', function() {
