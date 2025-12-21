@@ -1298,7 +1298,8 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
                     if (json_last_error() === JSON_ERROR_NONE && is_array($tmp)) { $staged = $tmp;
                         $staged_source = 'field_log';
                         if (empty($applied)) { $applied = $staged; $applied_source = 'field_log'; }
-                        break; }
+                        break;
+                    }
                     if (preg_match_all('/\{[\s\S]*?\}/', $content, $matches)) {
                         foreach (array_reverse($matches[0]) as $part) {
                             $tmp2 = json_decode($part, true);
