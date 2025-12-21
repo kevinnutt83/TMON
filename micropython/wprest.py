@@ -152,6 +152,11 @@ async def register_with_wp():
                     except Exception:
                         pass
                     await debug_print(f'UNIT_ID updated from WP: {settings.UNIT_ID}', 'HTTP')
+        # NEW: Always attempt to flush any queued command confirmations on check-in (best-effort)
+        try:
+            await _flush_pending_command_confirms()
+        except Exception:
+            pass
     except Exception as e:
         await debug_print(f'Failed to register with WP: {e}', 'ERROR')
 
@@ -431,14 +436,32 @@ async def handle_device_command(job):
             # Fallback if route isn't present or returns error
             if getattr(resp, 'status_code', 500) == 404 or getattr(resp, 'status_code', 500) >= 400:
                 try:
-                    requests.post(
+                    # try legacy ack
+                    resp2 = requests.post(
                         WORDPRESS_API_URL + '/wp-json/tmon/v1/device/ack',
                         json={'command_id': job_id, 'ok': ok, 'result': result}
                     )
+                    code2 = getattr(resp2, 'status_code', None)
+                    try:
+                        if resp2: resp2.close()
+                    except Exception:
+                        pass
+                    if code2 not in (200, 201):
+                        _queue_command_confirm({'job_id': job_id, 'ok': ok, 'result': result, 'ts': int(__import__('time').time())})
+                    else:
+                        _remove_pending_confirm(job_id)
                 except Exception:
-                    pass
+                    _queue_command_confirm({'job_id': job_id, 'ok': ok, 'result': result, 'ts': int(__import__('time').time())})
+            else:
+                # success -> ensure any queued confirmations are removed
+                _remove_pending_confirm(job_id)
+            try:
+                if resp: resp.close()
+            except Exception:
+                pass
         except Exception:
-            pass
+            # If posting immediately fails, persist for later flush during checkin
+            _queue_command_confirm({'job_id': job_id, 'ok': ok, 'result': result, 'ts': int(__import__('time').time())})
     except Exception as e:
         await debug_print(f'Command error: {e}', 'ERROR')
 
@@ -506,3 +529,173 @@ async def fetch_staged_settings():
     except Exception as e:
         await debug_print(f'fetch_staged_settings exception: {e}', 'ERROR')
         return False
+
+# --- Pending command confirmations queue helpers ---
+# NEW: persist confirmations locally when immediate confirm POST fails,
+# and flush them on next checkin so the UC marks the command processed.
+try:
+	import ujson as _j
+except Exception:
+	import json as _j
+
+def _pending_confirms_path():
+	try:
+		import settings as _s
+		return getattr(_s, 'LOG_DIR', '/logs').rstrip('/') + '/pending_cmd_confirms.json'
+	except Exception:
+		return '/logs/pending_cmd_confirms.json'
+
+def _load_pending_confirms():
+	try:
+		p = _pending_confirms_path()
+		with open(p, 'r') as f:
+			return _j.loads(f.read()) or []
+	except Exception:
+		return []
+
+def _save_pending_confirms(arr):
+	try:
+		p = _pending_confirms_path()
+		with open(p, 'w') as f:
+			f.write(_j.dumps(arr))
+		return True
+	except Exception:
+		return False
+
+def _queue_command_confirm(entry):
+	try:
+		arr = _load_pending_confirms()
+		# dedupe by job_id if present
+		if entry.get('job_id'):
+			arr = [e for e in arr if e.get('job_id') != entry.get('job_id')]
+		arr.append(entry)
+		_save_pending_confirms(arr)
+	except Exception:
+		pass
+
+def _remove_pending_confirm(job_id):
+	try:
+		if not job_id:
+			return
+		arr = _load_pending_confirms()
+		arr = [e for e in arr if e.get('job_id') != job_id]
+		_save_pending_confirms(arr)
+	except Exception:
+		pass
+
+async def _flush_pending_command_confirms():
+	"""Attempt to deliver queued confirmations to the configured WORDPRESS_API_URL.
+	   Called from register_with_wp() (check-in) so confirmations are sent reliably on next checkin.
+	"""
+	try:
+		if not getattr(globals(), 'WORDPRESS_API_URL', ''):
+			return False
+		arr = _load_pending_confirms()
+		if not arr:
+			return True
+		remaining = []
+		for e in arr:
+			try:
+				# Build payload shape compatible with command-complete and legacy ack
+				payload = { 'job_id': e.get('job_id') or e.get('command_id'), 'ok': e.get('ok', False), 'result': e.get('result', '') }
+				try:
+					resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/command-complete', json=payload, timeout=10)
+				except TypeError:
+					resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/command-complete', json=payload)
+				code = getattr(resp, 'status_code', None) if resp is not None else None
+				ok = code in (200, 201)
+				try:
+					if resp:
+						resp.close()
+				except Exception:
+					pass
+				if not ok:
+					# Try legacy ack endpoint
+					try:
+						payload_legacy = { 'command_id': payload.get('job_id'), 'ok': payload.get('ok'), 'result': payload.get('result') }
+						try:
+							resp2 = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/ack', json=payload_legacy, timeout=10)
+						except TypeError:
+							resp2 = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/ack', json=payload_legacy)
+						code2 = getattr(resp2, 'status_code', None) if resp2 is not None else None
+						try:
+							if resp2:
+								resp2.close()
+						except Exception:
+							pass
+						ok = code2 in (200, 201)
+					except Exception:
+						ok = False
+				if not ok:
+					# keep for retry later
+					e['last_try'] = int(__import__('time').time())
+					remaining.append(e)
+				else:
+					# remove any duplicates on success (handled implicitly by not adding to remaining)
+					_remove_pending_confirm(payload.get('job_id'))
+			except Exception:
+				# keep this entry for later attempts
+				e['last_try'] = int(__import__('time').time())
+				remaining.append(e)
+		_save_pending_confirms(remaining)
+		return True
+	except Exception:
+		return False
+
+async def register_with_wp():
+    if not WORDPRESS_API_URL:
+        await debug_print('No WordPress API URL set', 'ERROR')
+        return
+    # Build settings snapshot (persistent settings only)
+    settings_snapshot = {}
+    try:
+        import settings as _s
+        for k in dir(_s):
+            if k.startswith('__') or callable(getattr(_s, k)) or k in ('LOG_DIR',):
+                continue
+            settings_snapshot[k] = getattr(_s, k)
+    except Exception:
+        settings_snapshot = {}
+    data = {
+        'unit_id': settings.UNIT_ID,
+        'unit_name': settings.UNIT_Name,
+        'company': getattr(settings, 'COMPANY', ''),
+        'site': getattr(settings, 'SITE', ''),
+        'zone': getattr(settings, 'ZONE', ''),
+        'cluster': getattr(settings, 'CLUSTER', ''),
+        'machine_id': get_machine_id() or '',
+        'firmware_version': getattr(settings, 'FIRMWARE_VERSION', ''),
+        'node_type': getattr(settings, 'NODE_TYPE', ''),
+        'settings_snapshot': settings_snapshot  # NEW: send persistent settings on check-in
+    }
+    try:
+        headers = {'Content-Type': 'application/json'}
+        # include basic auth if configured
+        headers.update(_build_auth_headers())
+        payload = ujson.dumps(data)
+        response = await async_http_request(
+            WORDPRESS_API_URL + '/wp-json/tmon/v1/device/register',
+            method='POST', headers=headers, data=payload
+        )
+        if response:
+            try:
+                import ujson as _j
+                resp_obj = _j.loads(response)
+            except Exception:
+                resp_obj = None
+            if isinstance(resp_obj, dict):
+                new_uid = resp_obj.get('unit_id')
+                if new_uid and str(new_uid) != str(settings.UNIT_ID):
+                    settings.UNIT_ID = str(new_uid)
+                    try:
+                        persist_unit_id(settings.UNIT_ID)
+                    except Exception:
+                        pass
+                    await debug_print(f'UNIT_ID updated from WP: {settings.UNIT_ID}', 'HTTP')
+        # NEW: Always attempt to flush any queued command confirmations on check-in (best-effort)
+        try:
+            await _flush_pending_command_confirms()
+        except Exception:
+            pass
+    except Exception as e:
+        await debug_print(f'Failed to register with WP: {e}', 'ERROR')

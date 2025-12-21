@@ -406,3 +406,135 @@ if (!function_exists('tmon_uc_send_command')) {
 		return true;
 	}
 }
+
+// Unit Connector: basic device commands & confirmations endpoints.
+//
+// Minimal, backward-compatible handlers:
+//  - POST /wp-json/tmon/v1/device/commands  -> returns pending commands for unit_id
+//  - POST /wp-json/tmon/v1/device/command-complete -> acknowledges completion
+//  - POST /wp-json/tmon/v1/device/ack -> legacy alias to the above
+//
+// Commands are stored (and filtered) via a small option map: option 'tmon_device_commands'
+// Structure: array( unit_id => [ [ 'id'=>..., 'command'=>..., 'params'=>..., 'processed'=>bool, ... ], ... ] )
+// Confirmations are appended to option 'tmon_device_command_confirms' for audit/history.
+//
+// Register REST routes
+add_action( 'rest_api_init', function () {
+	register_rest_route( 'tmon/v1', '/device/commands', array(
+		'methods'             => 'POST',
+		'callback'            => 'tmon_uc_get_device_commands',
+		'permission_callback' => '__return_true',
+	) );
+	register_rest_route( 'tmon/v1', '/device/command-complete', array(
+		'methods'             => 'POST',
+		'callback'            => 'tmon_uc_handle_command_complete',
+		'permission_callback' => '__return_true',
+	) );
+	// Legacy alias
+	register_rest_route( 'tmon/v1', '/device/ack', array(
+		'methods'             => 'POST',
+		'callback'            => 'tmon_uc_handle_command_complete',
+		'permission_callback' => '__return_true',
+	) );
+} );
+
+// Return pending commands for the given unit (payload: { unit_id: '...' , limit: n })
+function tmon_uc_get_device_commands( WP_REST_Request $req ) {
+	$params = $req->get_json_params();
+	$unit_id = isset( $params['unit_id'] ) ? sanitize_text_field( $params['unit_id'] ) : '';
+	$limit = isset( $params['limit'] ) ? intval( $params['limit'] ) : 50;
+	if ( ! $unit_id ) {
+		return new WP_REST_Response( array( 'error' => 'missing unit_id' ), 400 );
+	}
+	$all = get_option( 'tmon_device_commands', array() );
+	$list = isset( $all[ $unit_id ] ) && is_array( $all[ $unit_id ] ) ? $all[ $unit_id ] : array();
+	$out = array();
+	foreach ( $list as $cmd ) {
+		if ( ! empty( $cmd['processed'] ) ) {
+			continue;
+		}
+		$out[] = $cmd;
+		if ( count( $out ) >= $limit ) {
+			break;
+		}
+	}
+	return rest_ensure_response( array( 'commands' => $out ) );
+}
+
+// Mark command processed for the given unit/job and record confirmation (best-effort, idempotent)
+function tmon_uc_mark_command_processed( $unit_id, $job_id, $ok = true, $result = '' ) {
+	if ( ! $job_id ) {
+		return false;
+	}
+	$unit_id = $unit_id ? sanitize_text_field( $unit_id ) : '';
+	$all = get_option( 'tmon_device_commands', array() );
+	$changed = false;
+	if ( ! isset( $all[ $unit_id ] ) || ! is_array( $all[ $unit_id ] ) ) {
+		$all[ $unit_id ] = array();
+	}
+	foreach ( $all[ $unit_id ] as &$cmd ) {
+		if ( (string) ( $cmd['id'] ?? '' ) === (string) $job_id ) {
+			$cmd['processed'] = true;
+			$cmd['processed_at'] = current_time( 'mysql' );
+			$cmd['ok'] = boolval( $ok );
+			$cmd['result'] = is_scalar( $result ) ? $result : wp_json_encode( $result );
+			$changed = true;
+			break;
+		}
+	}
+	// If not found, append a tombstone (useful for late confirmations)
+	if ( ! $changed ) {
+		$all[ $unit_id ][] = array(
+			'id'           => (string) $job_id,
+			'command'      => 'unknown',
+			'params'       => (object) array(),
+			'processed'    => true,
+			'processed_at' => current_time( 'mysql' ),
+			'ok'           => boolval( $ok ),
+			'result'       => is_scalar( $result ) ? $result : wp_json_encode( $result ),
+		);
+		$changed = true;
+	}
+	if ( $changed ) {
+		update_option( 'tmon_device_commands', $all );
+	}
+	// Append to confirms for audit/history
+	$confirms = get_option( 'tmon_device_command_confirms', array() );
+	$confirms[] = array(
+		'unit_id' => $unit_id,
+		'job_id'  => (string) $job_id,
+		'ok'      => boolval( $ok ),
+		'result'  => is_scalar( $result ) ? $result : wp_json_encode( $result ),
+		'ts'      => current_time( 'mysql' ),
+	);
+	update_option( 'tmon_device_command_confirms', $confirms );
+	// Allow hooks for other systems to react
+	do_action( 'tmon_uc_command_confirmed', $unit_id, $job_id, $ok, $result );
+	return true;
+}
+
+// REST callback for command-complete / ack endpoints
+function tmon_uc_handle_command_complete( WP_REST_Request $req ) {
+	$params = $req->get_json_params();
+	$job_id = isset( $params['job_id'] ) ? $params['job_id'] : ( isset( $params['command_id'] ) ? $params['command_id'] : '' );
+	$unit_id = isset( $params['unit_id'] ) ? sanitize_text_field( $params['unit_id'] ) : '';
+	$ok = isset( $params['ok'] ) ? boolval( $params['ok'] ) : false;
+	$result = isset( $params['result'] ) ? $params['result'] : '';
+	if ( ! $job_id ) {
+		return new WP_REST_Response( array( 'error' => 'missing job_id' ), 400 );
+	}
+	// If unit_id missing, attempt to locate job across units
+	if ( empty( $unit_id ) ) {
+		$all = get_option( 'tmon_device_commands', array() );
+		foreach ( $all as $u => $list ) {
+			foreach ( $list as $cmd ) {
+				if ( (string) ( $cmd['id'] ?? '' ) === (string) $job_id ) {
+					$unit_id = $u;
+					break 2;
+				}
+			}
+		}
+	}
+	tmon_uc_mark_command_processed( $unit_id ?: 'unknown', $job_id, $ok, $result );
+	return rest_ensure_response( array( 'status' => 'ok' ) );
+}
