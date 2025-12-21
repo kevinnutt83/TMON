@@ -828,8 +828,8 @@ add_shortcode('tmon_device_sdata', function($atts) {
 
     $default_unit = $devices[0]['unit_id'];
     $select_id = 'tmon-sdata-select-' . wp_generate_password(6, false, false);
-    $table_id = 'tmon-sdata-table-' . wp_generate_password(6, false, false);
-    $meta_id = 'tmon-sdata-meta-' . wp_generate_password(6, false, false);
+    $table_id  = 'tmon-sdata-table-' . wp_generate_password(6, false, false);
+    $meta_id   = 'tmon-sdata-meta-' . wp_generate_password(6, false, false);
     $ajax_root = esc_js(rest_url());
     ob_start();
     echo '<div class="tmon-sdata-widget">';
@@ -842,6 +842,7 @@ add_shortcode('tmon_device_sdata', function($atts) {
     echo '</select>';
     echo '<div id="'.$meta_id.'" class="tmon-sdata-meta"></div>';
     echo '<table class="wp-list-table widefat"><tbody id="'.$table_id.'"><tr><td><em>Loading...</em></td></tr></tbody></table>';
+
     $sdata_script = <<<'JS'
 (function(){
     var select = document.getElementById("%SELECT_ID%");
@@ -880,6 +881,7 @@ add_shortcode('tmon_device_sdata', function($atts) {
     if (refreshMs > 0) { setInterval(function(){ render(activeSelect.value); }, refreshMs); }
 })();
 JS;
+
     $sdata_script = str_replace(
         ['%SELECT_ID%', '%TABLE_ID%', '%META_ID%', '%AJAX_ROOT%', '%REFRESH_MS%'],
         [esc_js($select_id), esc_js($table_id), esc_js($meta_id), esc_js(rest_url()), ($refresh*1000)],
@@ -1618,8 +1620,8 @@ add_shortcode('tmon_device_sdata', function($atts) {
 
     $default_unit = $devices[0]['unit_id'];
     $select_id = 'tmon-sdata-select-' . wp_generate_password(6, false, false);
-    $table_id = 'tmon-sdata-table-' . wp_generate_password(6, false, false);
-    $meta_id = 'tmon-sdata-meta-' . wp_generate_password(6, false, false);
+    $table_id  = 'tmon-sdata-table-' . wp_generate_password(6, false, false);
+    $meta_id   = 'tmon-sdata-meta-' . wp_generate_password(6, false, false);
     $ajax_root = esc_js(rest_url());
     ob_start();
     echo '<div class="tmon-sdata-widget">';
@@ -1632,6 +1634,7 @@ add_shortcode('tmon_device_sdata', function($atts) {
     echo '</select>';
     echo '<div id="'.$meta_id.'" class="tmon-sdata-meta"></div>';
     echo '<table class="wp-list-table widefat"><tbody id="'.$table_id.'"><tr><td><em>Loading...</em></td></tr></tbody></table>';
+
     $sdata_script = <<<'JS'
 (function(){
     var select = document.getElementById("%SELECT_ID%");
@@ -1670,6 +1673,7 @@ add_shortcode('tmon_device_sdata', function($atts) {
     if (refreshMs > 0) { setInterval(function(){ render(activeSelect.value); }, refreshMs); }
 })();
 JS;
+
     $sdata_script = str_replace(
         ['%SELECT_ID%', '%TABLE_ID%', '%META_ID%', '%AJAX_ROOT%', '%REFRESH_MS%'],
         [esc_js($select_id), esc_js($table_id), esc_js($meta_id), esc_js(rest_url()), ($refresh*1000)],
@@ -2400,4 +2404,161 @@ add_shortcode('tmon_device_sdata', function($atts) {
     $a = shortcode_atts([
         'refresh_s' => '30',
     ], $atts);
-    $refresh = max(0,
+    $refresh = max(0, intval($a['refresh_s']));
+$devices = tmon_uc_list_feature_devices('sample');
+if (empty($devices)) {
+    return '<em>No provisioned devices found for this feature.</em>';
+}
+
+$default_unit = $devices[0]['unit_id'];
+$select_id = 'tmon-sdata-select-' . wp_generate_password(6, false, false);
+$table_id  = 'tmon-sdata-table-' . wp_generate_password(6, false, false);
+$meta_id   = 'tmon-sdata-meta-' . wp_generate_password(6, false, false);
+$ajax_root = esc_js(rest_url());
+ob_start();
+echo '<div class="tmon-sdata-widget">';
+echo '<label class="screen-reader-text" for="'.$select_id.'">Device</label>';
+echo '<select id="'.$select_id.'" class="tmon-sdata-select">';
+foreach ($devices as $d) {
+    $sel = selected($default_unit, $d['unit_id'], false);
+    echo '<option value="'.esc_attr($d['unit_id']).'" '.$sel.'>'.esc_html($d['label']).'</option>';
+}
+echo '</select>';
+echo '<div id="'.$meta_id.'" class="tmon-sdata-meta"></div>';
+echo '<table class="wp-list-table widefat"><tbody id="'.$table_id.'"><tr><td><em>Loading...</em></td></tr></tbody></table>';
+
+$sdata_script = <<<'JS'
+(function(){
+    var select = document.getElementById("%SELECT_ID%");
+    var external = document.getElementById("tmon-unit-picker");
+    if (external) { select.style.display = "none"; }
+    var activeSelect = external || select;
+    var table = document.getElementById("%TABLE_ID%");
+    var meta = document.getElementById("%META_ID%");
+    var base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : "%AJAX_ROOT%".replace(/\/$/, "");
+    function render(unit){
+        var url = base + "/tmon/v1/device/sdata?unit_id=" + encodeURIComponent(unit);
+        fetch(url).then(function(r){ return r.json(); }).then(function(data){
+            if (!data || !data.data) {
+                table.innerHTML = '<tr><td><em>No data for this unit.</em></td></tr>';
+                meta.textContent = '';
+                return;
+            }
+            var friendly = data.friendly || {};
+            var rows = [];
+            Object.keys(friendly).forEach(function(k){
+                var v = friendly[k];
+                if (v === null || v === undefined || v === '') return;
+                rows.push('<tr><th>' + k + '</th><td>' + v + '</td></tr>');
+            });
+            table.innerHTML = rows.length ? rows.join('') : '<tr><td><em>No fields reported.</em></td></tr>';
+            meta.textContent = data.created_at ? ('Last sample: ' + data.created_at) : '';
+        }).catch(function(err){
+            console.error('TMON sdata fetch error', err);
+            table.innerHTML = '<tr><td><em>Error loading data.</em></td></tr>';
+            meta.textContent = '';
+        });
+    }
+    activeSelect.addEventListener('change', function(ev){ render(ev.target.value); });
+    render(activeSelect.value);
+    var refreshMs = %REFRESH_MS%;
+    if (refreshMs > 0) { setInterval(function(){ render(activeSelect.value); }, refreshMs); }
+})();
+JS;
+
+$sdata_script = str_replace(
+    ['%SELECT_ID%', '%TABLE_ID%', '%META_ID%', '%AJAX_ROOT%', '%REFRESH_MS%'],
+    [esc_js($select_id), esc_js($table_id), esc_js($meta_id), esc_js(rest_url()), ($refresh*1000)],
+    $sdata_script
+);
+echo '<script>'.$sdata_script.'</script>';
+echo '</div>';
+return ob_get_clean();
+});
+
+// Shortcode to embed device settings form (alias for template inclusion)
+function tmon_device_settings_shortcode($atts = []) {
+    ob_start();
+    include plugin_dir_path(__FILE__) . '../templates/device-data.php';
+    return ob_get_clean();
+}
+add_shortcode('tmon_device_settings', 'tmon_device_settings_shortcode');
+
+// AJAX: save staged settings for a unit (admin only)
+add_action('wp_ajax_tmon_uc_stage_device_settings', function(){
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Forbidden');
+    }
+    if (!check_admin_referer('tmon_uc_stage_settings', '_wpnonce', false)) {
+        // also accept older nonce field name for compatibility
+        if (!isset($_POST['_wpnonce']) || !wp_verify_nonce($_POST['_wpnonce'], 'tmon_uc_stage_settings')) {
+            wp_send_json_error('Invalid nonce');
+        }
+    }
+    $unit = sanitize_text_field($_POST['unit_id'] ?? '');
+    if (!$unit) wp_send_json_error('Missing unit_id');
+    $raw = $_POST['settings'] ?? '{}';
+    $settings_in = json_decode(wp_unslash($raw), true);
+    if (!is_array($settings_in)) $settings_in = [];
+
+    // Allowed keys (a minimal whitelist; server-side sanitization)
+    $allowed = [
+        'NODE_TYPE','UNIT_Name',
+        'SAMPLE_TEMP','SAMPLE_HUMID','SAMPLE_BAR',
+        'ENABLE_OLED',
+        'ENGINE_ENABLED','ENGINE_FORCE_DISABLED',
+        'WIFI_SSID','WIFI_PASS',
+        'RELAY_PIN1','RELAY_PIN2'
+    ];
+
+    $out = [];
+    foreach ($settings_in as $k => $v) {
+        if (!in_array($k, $allowed, true)) continue;
+        // sanitize by key
+        switch ($k) {
+            case 'NODE_TYPE':
+            case 'UNIT_Name':
+            case 'WIFI_SSID':
+            case 'WIFI_PASS':
+                $out[$k] = sanitize_text_field($v);
+                break;
+            case 'RELAY_PIN1':
+            case 'RELAY_PIN2':
+                $out[$k] = intval($v);
+                break;
+            case 'SAMPLE_TEMP':
+            case 'SAMPLE_HUMID':
+            case 'SAMPLE_BAR':
+            case 'ENABLE_OLED':
+            case 'ENGINE_ENABLED':
+            case 'ENGINE_FORCE_DISABLED':
+                // accept 0/1, true/false, "1"/"0"
+                $out[$k] = (bool) filter_var($v, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+                break;
+            default:
+                $out[$k] = sanitize_text_field($v);
+        }
+    }
+
+    // persist to single option mapping unit_id -> staged settings
+    $map = get_option('tmon_uc_staged_settings', []);
+    if (!is_array($map)) $map = [];
+    $map[$unit] = $out;
+    update_option('tmon_uc_staged_settings', $map);
+    wp_send_json_success('staged');
+});
+
+// AJAX: get staged settings for a unit (admin only)
+add_action('wp_ajax_tmon_uc_get_staged_settings', function(){
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error('Forbidden');
+    }
+    $unit = sanitize_text_field($_POST['unit_id'] ?? $_GET['unit_id'] ?? '');
+    if (!$unit) wp_send_json_error('Missing unit_id');
+    $map = get_option('tmon_uc_staged_settings', []);
+    if (!is_array($map) || empty($map[$unit])) {
+        wp_send_json_success([]); // empty staged settings
+    } else {
+        wp_send_json_success($map[$unit]);
+    }
+});
