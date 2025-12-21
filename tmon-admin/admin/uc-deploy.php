@@ -102,3 +102,195 @@ function tmon_admin_deploy_uc_page(){
     echo '</tbody></table>';
     echo '</div>';
 }
+
+// Add a submenu for UC Site Data
+add_action('admin_menu', function(){
+    add_submenu_page('tmon-admin', 'UC Site Data', 'UC Site Data', 'manage_options', 'tmon-admin-uc-data', 'tmon_admin_uc_site_data_page');
+});
+
+function tmon_admin_uc_site_data_page(){
+    if (!current_user_can('manage_options')) wp_die('Forbidden');
+
+    // Handle "refresh device counts" POST
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['tmon_refresh_counts'])) {
+        if (!function_exists('tmon_admin_verify_nonce') || !tmon_admin_verify_nonce('tmon_admin_uc_refresh')) {
+            echo '<div class="notice notice-error"><p>Security check failed. Please refresh and try again.</p></div>';
+        } else {
+            $paired = get_option('tmon_admin_uc_sites', []);
+            if (!is_array($paired)) $paired = [];
+            $updated = 0;
+            foreach ($paired as $url => &$info) {
+                $count = null;
+                $endpoint = rtrim($url, '/') . '/wp-json/tmon/v1/admin/site/devices';
+                $remote = wp_remote_get($endpoint, ['timeout' => 5]);
+                if (!is_wp_error($remote) && in_array(intval(wp_remote_retrieve_response_code($remote)), [200,201], true)) {
+                    $body = wp_remote_retrieve_body($remote);
+                    $j = json_decode($body, true);
+                    if (is_array($j)) {
+                        if (isset($j['count'])) $count = intval($j['count']);
+                        elseif (isset($j['devices']) && is_array($j['devices'])) $count = count($j['devices']);
+                        elseif (array_values($j) === $j) $count = count($j);
+                    }
+                }
+                $info['devices'] = $count !== null ? intval($count) : '';
+                $updated++;
+            }
+            unset($info);
+            update_option('tmon_admin_uc_sites', $paired);
+            echo '<div class="updated"><p>Refreshed device counts for '.intval($updated).' site(s).</p></div>';
+        }
+    }
+
+    // Parameters
+    $filter = isset($_GET['filter']) ? sanitize_text_field($_GET['filter']) : 'all'; // all|paired|unpaired
+    $q = isset($_GET['q']) ? sanitize_text_field($_GET['q']) : '';
+    $paged = max(1, intval($_GET['paged'] ?? 1));
+    $per_page = 10;
+
+    // Load pairings
+    $paired = get_option('tmon_admin_uc_sites', []);
+    if (!is_array($paired)) $paired = [];
+
+    // Display cron last-run summary (if present)
+    $last_run = get_option('tmon_admin_hourly_last_run', 0);
+    $sites_count = get_option('tmon_admin_uc_sites_count', null);
+    if ($last_run) {
+        echo '<div class="notice notice-info"><p>Hourly cron last run: '.esc_html(date('Y-m-d H:i:s', intval($last_run))).' (sites: '.esc_html(intval($sites_count ?? count($paired))).')</p></div>';
+    }
+
+    // Normalize into rows
+    $rows = [];
+    foreach ($paired as $url => $info) {
+        $is_paired = !empty($info['uc_key']) || !empty($info['paired_at']);
+        $rows[] = [
+            'url' => $url,
+            'paired' => $is_paired,
+            'paired_at' => $info['paired_at'] ?? '',
+            'uc_key' => isset($info['uc_key']) ? 'yes' : '',
+            'last_push' => $info['last_push'] ?? '',
+            'devices' => isset($info['devices']) ? intval($info['devices']) : (isset($info['device_count']) ? intval($info['device_count']) : '')
+        ];
+    }
+
+    // Filtering & search
+    if ($filter === 'paired') {
+        $rows = array_filter($rows, function($r){ return $r['paired']; });
+    } elseif ($filter === 'unpaired') {
+        $rows = array_filter($rows, function($r){ return !$r['paired']; });
+    }
+    if ($q !== '') {
+        $q_l = strtolower($q);
+        $rows = array_filter($rows, function($r) use ($q_l){ return false !== strpos(strtolower($r['url']), $q_l); });
+    }
+
+    $total = count($rows);
+    $pages = max(1, ceil($total / $per_page));
+    $offset = ($paged - 1) * $per_page;
+    $rows = array_slice(array_values($rows), $offset, $per_page);
+
+    echo '<div class="wrap"><h1>UC Site Data</h1>';
+    echo '<form method="get" action="">';
+    echo '<input type="hidden" name="page" value="tmon-admin-uc-data">';
+    echo '<p class="search-box">';
+    echo '<input type="search" name="q" value="'.esc_attr($q).'" placeholder="Search site URL" />';
+    echo ' <select name="filter"><option value="all"'.($filter==='all'?' selected':'').'>All</option><option value="paired"'.($filter==='paired'?' selected':'').'>Paired</option><option value="unpaired"'.($filter==='unpaired'?' selected':'').'>Unpaired</option></select> ';
+    echo '<button class="button">Filter</button></p>';
+    echo '</form>';
+
+    // Refresh counts form (POST)
+    echo '<form method="post" style="margin:8px 0">';
+    if (function_exists('wp_nonce_field')) wp_nonce_field('tmon_admin_uc_refresh');
+    echo '<button class="button" name="tmon_refresh_counts" value="1">Refresh device counts (best-effort)</button>';
+    echo '</form>';
+
+    echo '<table class="widefat fixed striped"><thead><tr><th>Site URL</th><th>Paired</th><th>Paired At</th><th>UC Key</th><th>Devices</th><th>Last Push</th></tr></thead><tbody>';
+    if ($rows) {
+        foreach ($rows as $r) {
+            $site_attr = esc_attr($r['url']);
+            $devices_display = ($r['devices'] !== '' ? esc_html($r['devices']) : '<em>n/a</em>');
+            // Per-site refresh button + status span (JS will update .tmon-dev-count)
+            echo '<tr>';
+            echo '<td><a href="'.esc_url($r['url']).'" target="_blank">'.esc_html($r['url']).'</a></td>';
+            echo '<td>'.($r['paired']?'<span style="color:#2ecc71">Yes</span>':'<span style="color:#e67e22">No</span>').'</td>';
+            echo '<td>'.esc_html($r['paired_at']).'</td>';
+            echo '<td>'.esc_html($r['uc_key']).'</td>';
+            echo '<td>';
+            echo '<span class="tmon-dev-count" data-site="'.esc_attr($r['url']).'">'.$devices_display.'</span> ';
+            echo '<button type="button" class="button tmon-uc-refresh-btn" data-site="'.$site_attr.'">Refresh</button> ';
+            echo '<span class="tmon-uc-refresh-status" aria-hidden="true" style="margin-left:6px"></span>';
+            echo '</td>';
+            echo '<td>'.esc_html($r['last_push']).'</td>';
+            echo '</tr>';
+        }
+    } else {
+        echo '<tr><td colspan="6"><em>No sites found.</em></td></tr>';
+    }
+    echo '</tbody></table>';
+
+    // Pagination
+    echo '<p style="margin-top:8px;">';
+    $base_url = remove_query_arg(['paged']);
+    for ($i=1;$i<=$pages;$i++) {
+        if ($i == $paged) {
+            echo '<span class="button disabled" style="margin-right:4px;">'.$i.'</span>';
+        } else {
+            $link = add_query_arg(['paged'=>$i,'q'=>$q,'filter'=>$filter], $base_url);
+            echo '<a class="button" href="'.esc_url($link).'" style="margin-right:4px;">'.$i.'</a>';
+        }
+    }
+    echo '</p>';
+
+    echo '</div>';
+}
+
+// enqueue per-page JS for UC Site Data
+add_action('admin_enqueue_scripts', function($hook){
+	// only load on our UC Site Data page
+	if (isset($_GET['page']) && $_GET['page'] === 'tmon-admin-uc-data') {
+		wp_enqueue_script('tmon-admin-uc-refresh', plugin_dir_url(__FILE__) . '../assets/uc-refresh.js', [], '0.1', true);
+		wp_localize_script('tmon-admin-uc-refresh', 'tmonUcRefresh', [
+			'ajax_url' => admin_url('admin-ajax.php'),
+			'nonce' => wp_create_nonce('tmon_admin_uc_refresh'),
+		]);
+	}
+});
+
+// AJAX handler for per-site device count refresh
+add_action('wp_ajax_tmon_refresh_site_count', function(){
+	if (!current_user_can('manage_options')) {
+		wp_send_json_error('Permission denied', 403);
+	}
+
+	$nonce = $_REQUEST['_wpnonce'] ?? '';
+	if (!wp_verify_nonce($nonce, 'tmon_admin_uc_refresh')) {
+		wp_send_json_error('Invalid nonce', 403);
+	}
+
+	$site_url = $_REQUEST['site'] ?? '';
+	$site_url = filter_var($site_url, FILTER_SANITIZE_URL);
+	if (!filter_var($site_url, FILTER_VALIDATE_URL)) {
+		wp_send_json_error('Invalid site URL', 400);
+	}
+
+	// Query the remote site for device count
+	$count = null;
+	$endpoint = rtrim($site_url, '/') . '/wp-json/tmon/v1/admin/site/devices';
+	$remote = wp_remote_get($endpoint, ['timeout' => 10]);
+	if (!is_wp_error($remote) && in_array(intval(wp_remote_retrieve_response_code($remote)), [200,201], true)) {
+		$body = wp_remote_retrieve_body($remote);
+		$j = json_decode($body, true);
+		if (is_array($j)) {
+			if (isset($j['count'])) $count = intval($j['count']);
+			elseif (isset($j['devices']) && is_array($j['devices'])) $count = count($j['devices']);
+			elseif (array_values($j) === $j) $count = count($j);
+		}
+	}
+
+	if ($count !== null) {
+		// Success
+		wp_send_json_success(['count' => $count]);
+	} else {
+		// Failure
+		wp_send_json_error('Unable to retrieve device count', 500);
+	}
+});

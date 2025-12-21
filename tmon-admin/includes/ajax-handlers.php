@@ -979,3 +979,48 @@ if (!function_exists('tmon_admin_ajax_compute_manifest_hashes')) {
 	}
 	add_action('wp_ajax_tmon_admin_compute_manifest_hashes', 'tmon_admin_ajax_compute_manifest_hashes');
 }
+
+// AJAX: refresh device count for a single UC site (per-site refresh button)
+add_action('wp_ajax_tmon_refresh_site_count', 'tmon_admin_ajax_refresh_site_count');
+function tmon_admin_ajax_refresh_site_count() {
+	if (!current_user_can('manage_options')) {
+		wp_send_json_error(['message' => 'Forbidden'], 403);
+	}
+
+	// Verify nonce (returns false instead of die when arg 3 is false)
+	if (! isset($_REQUEST['nonce']) || ! check_ajax_referer('tmon_admin_uc_refresh', 'nonce', false) ) {
+		wp_send_json_error(['message' => 'Security check failed'], 403);
+	}
+
+	$site = esc_url_raw($_POST['site_url'] ?? $_GET['site_url'] ?? '');
+	if (! $site) {
+		wp_send_json_error(['message' => 'Missing site_url'], 400);
+	}
+
+	$endpoint = rtrim($site, '/') . '/wp-json/tmon/v1/admin/site/devices';
+	$resp = wp_remote_get($endpoint, ['timeout' => 5, 'headers' => ['Accept' => 'application/json']]);
+	if (is_wp_error($resp)) {
+		wp_send_json_error(['message' => $resp->get_error_message()]);
+	}
+	$code = intval(wp_remote_retrieve_response_code($resp));
+	$body = wp_remote_retrieve_body($resp);
+	if (! in_array($code, [200,201], true)) {
+		wp_send_json_error(['message' => 'HTTP '. $code, 'raw' => substr($body,0,400)]);
+	}
+
+	$count = null;
+	// Try JSON parse first, accept {count:N} or {devices:[..]} or top-level array
+	$j = json_decode($body, true);
+	if (is_array($j)) {
+		if (isset($j['count'])) $count = intval($j['count']);
+		elseif (isset($j['devices']) && is_array($j['devices'])) $count = count($j['devices']);
+		elseif (array_values($j) === $j) $count = count($j);
+	}
+	// If parsing failed, try to extract a number from body
+	if ($count === null) {
+		if (preg_match('/\bcount\D?(\d+)\b/i', $body, $m)) $count = intval($m[1]);
+		elseif (preg_match('/^(\d+)\s*$/', trim($body), $m)) $count = intval($m[1]);
+	}
+
+	wp_send_json_success(['count' => $count, 'raw' => substr($body, 0, 400)]);
+}

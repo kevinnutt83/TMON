@@ -107,4 +107,53 @@ add_action('rest_api_init', function () {
 		},
 		'permission_callback' => '__return_true',
 	));
+
+	register_rest_route('tmon-admin/v1', '/uc/site-data', [
+		'methods' => WP_REST_Server::CREATABLE,
+		'callback' => 'tmon_admin_uc_receive_site_data',
+		'permission_callback' => '__return_true' // allow UC pushes (we validate hub key below)
+	]);
+	register_rest_route('tmon-admin/v1', '/uc/site-data', [
+		'methods' => WP_REST_Server::READABLE,
+		'callback' => 'tmon_admin_uc_list_site_data',
+		'permission_callback' => function(){ return current_user_can('manage_options'); }
+	]);
 });
+
+function tmon_admin_uc_receive_site_data( WP_REST_Request $req ){
+	$hub_key = $req->get_header('x-tmon-hub') ?: '';
+	$expected = get_option('tmon_admin_hub_shared_key','');
+	// If an expected key is set, require it; else accept anonymous pushes (best-effort)
+	if ($expected && $hub_key !== $expected) {
+		return new WP_REST_Response(['error'=>'forbidden'], 403);
+	}
+	$payload = $req->get_json_params();
+	if (!is_array($payload)) $payload = [];
+	$entry = [
+		'ts' => time(),
+		'site_url' => $payload['site_url'] ?? ($req->get_header('host') ?? ''),
+		'payload' => $payload,
+		'remote_ip' => $_SERVER['REMOTE_ADDR'] ?? '',
+	];
+	$logs = get_option('tmon_admin_uc_site_data', []);
+	if (!is_array($logs)) $logs = [];
+	$logs[] = $entry;
+	// keep last 2000 by default
+	update_option('tmon_admin_uc_site_data', array_slice($logs, -2000, 2000));
+	// also ensure sites map for selection in UI
+	$sites = get_option('tmon_admin_uc_sites', []);
+	if (!is_array($sites)) $sites = [];
+	$site_key = $entry['site_url'] ?: 'unknown';
+	$sites[$site_key] = ['last_seen' => $entry['ts']];
+	update_option('tmon_admin_uc_sites', $sites);
+	return new WP_REST_Response(['status'=>'ok'], 200);
+}
+
+function tmon_admin_uc_list_site_data( WP_REST_Request $req ){
+	$limit = intval($req->get_param('limit') ?: 200);
+	$logs = get_option('tmon_admin_uc_site_data', []);
+	if (!is_array($logs)) $logs = [];
+	// return most recent first
+	$logs = array_reverse($logs);
+	return array_slice($logs, 0, max(1, $limit));
+}

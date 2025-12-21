@@ -208,3 +208,28 @@ add_action('admin_init', function () {
 		@ob_end_clean();
 	}
 });
+
+// Register activation/deactivation hooks to schedule/unschedule a cron event
+if (!function_exists('tmon_admin_activate')) {
+	register_activation_hook(__FILE__, 'tmon_admin_activate');
+	function tmon_admin_activate() {
+		if (!wp_next_scheduled('tmon_admin_hourly_event')) {
+			wp_schedule_event(time(), 'hourly', 'tmon_admin_hourly_event');
+		}
+	}
+
+	register_deactivation_hook(__FILE__, 'tmon_admin_deactivate');
+	function tmon_admin_deactivate() {
+		$ts = wp_next_scheduled('tmon_admin_hourly_event');
+		if ($ts) wp_unschedule_event($ts, 'tmon_admin_hourly_event');
+	}
+
+	// Cron handler (lightweight housekeeping)
+	add_action('tmon_admin_hourly_event', 'tmon_admin_hourly_handler');
+	function tmon_admin_hourly_handler() {
+		$sites = get_option('tmon_admin_uc_sites', []);
+		if (!is_array($sites)) $sites = [];
+		update_option('tmon_admin_hourly_last_run', time());
+		update_option('tmon_admin_uc_sites_count', count($sites));
+	}
+}

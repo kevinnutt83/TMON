@@ -48,4 +48,22 @@ add_action('tmon_admin_uc_connectors_page', function () {
 	echo '</tbody></table></div>';
 });
 
-// ...existing code...
+function tmon_admin_get_uc_site_data($limit = 200) {
+	$logs = get_option('tmon_admin_uc_site_data', []);
+	if (!is_array($logs)) return [];
+	return array_reverse(array_slice($logs, -1 * max(1,intval($limit))));
+}
+
+function tmon_admin_send_command_to_uc($site_url, $payload, $hub_key='') {
+	$endpoint = rtrim($site_url, '/') . '/wp-json/tmon/v1/admin/device/commands';
+	$headers = ['Content-Type' => 'application/json'];
+	if ($hub_key) $headers['X-TMON-HUB'] = $hub_key;
+	$resp = wp_remote_post($endpoint, [
+		'headers' => $headers,
+		'body' => wp_json_encode($payload),
+		'timeout' => 10,
+	]);
+	$code = is_wp_error($resp) ? 0 : intval(wp_remote_retrieve_response_code($resp));
+	$body = is_wp_error($resp) ? $resp->get_error_message() : substr(wp_remote_retrieve_body($resp),0,1000);
+	return ['code' => $code, 'body' => $body, 'error' => is_wp_error($resp) ? $resp->get_error_message() : null];
+}

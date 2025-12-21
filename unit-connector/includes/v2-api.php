@@ -750,3 +750,48 @@ add_action('rest_api_init', function() {
 		'permission_callback' => '__return_true' // devices fetch without WP auth; rely on unit_id param
     ]);
 });
+
+// POST /wp-json/tmon/v1/admin/device/settings-staged
+add_action('rest_api_init', function() {
+	register_rest_route('tmon/v1', '/admin/device/settings-staged', array(
+		'methods' => 'POST',
+		'callback' => function( WP_REST_Request $req ) {
+			// capability check: admins or users who can edit tmon units
+			if ( ! current_user_can('manage_options') && ! current_user_can('edit_tmon_units') ) {
+				return new WP_Error('rest_forbidden', 'Forbidden', array('status'=>403));
+			}
+			global $wpdb;
+			// ensure staged table exists
+			if ( function_exists('tmon_uc_ensure_staged_settings_table') ) tmon_uc_ensure_staged_settings_table();
+
+			$data = $req->get_json_params();
+			$unit_id = isset($data['unit_id']) ? sanitize_text_field($data['unit_id']) : '';
+			$settings = $data['settings'] ?? '';
+
+			if ( ! $unit_id ) {
+				return new WP_Error('rest_bad_request', 'unit_id required', array('status'=>400));
+			}
+
+			// Accept either object or JSON string for settings
+			if ( is_array($settings) ) {
+				$settings_json = wp_json_encode($settings);
+			} elseif ( is_string($settings) && $settings !== '' ) {
+				$settings_json = $settings;
+			} else {
+				$settings_json = '{}';
+			}
+
+			$wpdb->replace($wpdb->prefix . 'tmon_staged_settings', array(
+				'unit_id' => $unit_id,
+				'settings' => $settings_json,
+				'updated_at' => current_time('mysql', 1)
+			));
+
+			// mirror old behavior/hook
+			do_action('tmon_staged_settings_updated', $unit_id, json_decode($settings_json, true));
+
+			return rest_ensure_response(array('ok'=>true,'unit_id'=>$unit_id));
+		},
+		'permission_callback' => function(){ return current_user_can('manage_options') || current_user_can('edit_tmon_units'); }
+	));
+});

@@ -518,7 +518,7 @@ add_shortcode('tmon_device_history', function($atts) {
 				if (Object.prototype.hasOwnProperty.call(pt, k)) {
 					const v = pt[k];
 					if (typeof v === 'boolean') return v ? 1 : 0;
-					if (typeof v === 'number') return v;
+					if (typeof v === 'number' ) return v;
 					if (typeof v === 'string') {
 						const lv = v.trim().toLowerCase();
 						if (['1','true','on','yes'].includes(lv)) return 1;
@@ -534,7 +534,7 @@ add_shortcode('tmon_device_history', function($atts) {
 					if (m && Number(m[1]) === num) {
 						const v = pt.relay[k];
 						if (typeof v === 'boolean') return v ? 1 : 0;
-						if (typeof v === 'number') return v;
+						if (typeof v === 'number' ) return v;
 						if (typeof v === 'string') {
 							const lv = v.trim().toLowerCase();
 							if (['1','true','on','yes'].includes(lv)) return 1;
@@ -907,13 +907,7 @@ add_shortcode('tmon_device_settings', function($atts = array()){
 	ob_start();
 	?>
 	<div id="tmon-device-settings" class="tmon-device-settings">
-		<label for="tmon_ds_unit">Select unit</label>
-		<select id="tmon_ds_unit">
-			<option value="">-- choose unit --</option>
-			<?php foreach ($devices as $uid => $label) : ?>
-				<option value="<?php echo esc_attr($uid); ?>"><?php echo esc_html($label); ?></option>
-			<?php endforeach; ?>
-		</select>
+		<p><em>Use the page-level Unit selector (id="tmon-unit-picker") to select a device. The settings panel will follow that selection.</em></p>
 		<button id="tmon_ds_load" class="button">Load</button>
 
 		<div id="tmon_ds_form" style="margin-top:12px; display:none;">
@@ -928,130 +922,165 @@ add_shortcode('tmon_device_settings', function($atts = array()){
 		</div>
 	</div>
 
+	<!-- Ensure a global 'picker' variable exists (null when no page-level picker is present) -->
+	<script>var picker = (document && typeof document.getElementById === 'function') ? document.getElementById('tmon-unit-picker') || null : null;</script>
+
+	<!-- Expose a REST nonce as a fallback when wp.apiSettings.nonce is not available -->
+	<script>var TMON_REST_NONCE = '<?php echo esc_js(wp_create_nonce('wp_rest')); ?>';</script>
+
 	<script>
-		(function(){
-			const elUnit = document.getElementById('tmon_ds_unit');
-			const btnLoad = document.getElementById('tmon_ds_load');
-			const formWrap = document.getElementById('tmon_ds_form');
-			const fields = document.getElementById('tmon_ds_fields');
-			const status = document.getElementById('tmon_ds_status');
-			const saveBtn = document.getElementById('tmon_ds_save');
+	(function(){
+		// Use the canonical page-level picker (id="tmon-unit-picker") only.
+		// We rely on the global `picker` var defined above to avoid ReferenceError.
+		var external = (typeof picker !== 'undefined' && picker) ? picker : (document.getElementById ? document.getElementById('tmon-unit-picker') : null);
+ 		var btnLoad = document.getElementById('tmon_ds_load');
+ 		var formWrap = document.getElementById('tmon_ds_form');
+ 		var fields = document.getElementById('tmon_ds_fields');
+ 		var status = document.getElementById('tmon_ds_status');
+ 		var saveBtn = document.getElementById('tmon_ds_save');
+ 
+ 		// Keep an inline, local SCHEMA identical to what the UI expects
+ 		var SCHEMA = [
+ 			{key:'NODE_TYPE', type:'select', opts:['base','wifi','remote'], label:'Node Type'},
+ 			{key:'UNIT_Name', type:'text', label:'Unit Name'},
+ 			{key:'SAMPLE_TEMP', type:'bool', label:'Enable Temperature Sampling'},
+ 			{key:'SAMPLE_HUMID', type:'bool', label:'Enable Humidity Sampling'},
+ 			{key:'SAMPLE_BAR', type:'bool', label:'Enable Barometric Pressure Sampling'},
+ 			{key:'ENABLE_OLED', type:'bool', label:'Enable OLED'},
+ 			{key:'ENGINE_ENABLED', type:'bool', label:'Enable Engine Controller'},
+ 			{key:'RELAY_PIN1', type:'number', label:'Relay Pin 1'},
+ 			{key:'RELAY_PIN2', type:'number', label:'Relay Pin 2'},
+ 			{key:'WIFI_SSID', type:'text', label:'WiFi SSID'},
+ 			{key:'WIFI_PASS', type:'text', label:'WiFi Password'}
+ 		];
 
-			const SCHEMA = [
-				{key:'NODE_TYPE', type:'select', opts:['base','wifi','remote'], label:'Node Type'},
-				{key:'UNIT_Name', type:'text', label:'Unit Name'},
-				{key:'SAMPLE_TEMP', type:'bool', label:'Enable Temperature Sampling'},
-				{key:'SAMPLE_HUMID', type:'bool', label:'Enable Humidity Sampling'},
-				{key:'SAMPLE_BAR', type:'bool', label:'Enable Barometric Pressure Sampling'},
-				{key:'ENABLE_OLED', type:'bool', label:'Enable OLED'},
-				{key:'ENGINE_ENABLED', type:'bool', label:'Enable Engine Controller'},
-				{key:'RELAY_PIN1', type:'number', label:'Relay Pin 1'},
-				{key:'RELAY_PIN2', type:'number', label:'Relay Pin 2'},
-				{key:'WIFI_SSID', type:'text', label:'WiFi SSID'},
-				{key:'WIFI_PASS', type:'text', label:'WiFi Password'}
-			];
+ 		function renderFields(values){
+ 			fields.innerHTML = '';
+ 			SCHEMA.forEach(function(f){
+ 				var v = values && (values[f.key] !== undefined) ? values[f.key] : '';
+ 				var row = document.createElement('div');
+ 				row.style.marginBottom = '8px';
+ 				var label = document.createElement('label');
+ 				label.style.display = 'block';
+ 				label.style.fontWeight = '600';
+ 				label.textContent = f.label;
+ 				row.appendChild(label);
 
-			function renderFields(values){
-				fields.innerHTML = '';
-				SCHEMA.forEach(function(f){
-					const v = values && (values[f.key] !== undefined) ? values[f.key] : '';
-					const row = document.createElement('div');
-					row.style.marginBottom = '8px';
-					const label = document.createElement('label');
-					label.style.display = 'block';
-					label.style.fontWeight = '600';
-					label.textContent = f.label;
-					row.appendChild(label);
+ 				if (f.type === 'bool') {
+ 					var chk = document.createElement('input');
+ 					chk.type = 'checkbox';
+ 					chk.name = f.key;
+ 					chk.checked = !!v;
+ 					row.appendChild(chk);
+ 				} else if (f.type === 'select') {
+ 					var sel = document.createElement('select');
+ 					sel.name = f.key;
+ 					f.opts.forEach(function(o){
+ 						var opt = document.createElement('option');
+ 						opt.value = o;
+ 						opt.textContent = o;
+ 						if (o === v) opt.selected = true;
+ 						sel.appendChild(opt);
+ 					});
+ 					row.appendChild(sel);
+ 				} else {
+ 					var inp = document.createElement('input');
+ 					inp.type = (f.type === 'number') ? 'number' : 'text';
+ 					inp.name = f.key;
+ 					inp.value = (v === null || v === undefined) ? '' : v;
+ 					inp.className = 'regular-text';
+ 					row.appendChild(inp);
+ 				}
+ 				fields.appendChild(row);
+ 			});
+ 		}
 
-					if (f.type === 'bool') {
-						const chk = document.createElement('input');
-						chk.type = 'checkbox';
-						chk.name = f.key;
-						chk.checked = !!v;
-						row.appendChild(chk);
-					} else if (f.type === 'select') {
-						const sel = document.createElement('select');
-						sel.name = f.key;
-						f.opts.forEach(function(o){
-							const opt = document.createElement('option');
-							opt.value = o;
-							opt.textContent = o;
-							if (o === v) opt.selected = true;
-							sel.appendChild(opt);
-						});
-						row.appendChild(sel);
-					} else {
-						const inp = document.createElement('input');
-						inp.type = (f.type === 'number') ? 'number' : 'text';
-						inp.name = f.key;
-						inp.value = (v === null || v === undefined) ? '' : v;
-						inp.className = 'regular-text';
-						row.appendChild(inp);
-					}
-					fields.appendChild(row);
-				});
-			}
+ 		function fetchStaged(unit){
+ 			status.textContent = 'Loading...';
+ 			return fetch(window.location.origin + '/wp-json/tmon/v1/device/staged-settings?unit_id=' + encodeURIComponent(unit), { credentials: 'same-origin' })
+ 				.then(function(r){ return r.json(); })
+ 				.then(function(j){ status.textContent = ''; return j.staged || {}; })
+ 				.catch(function(){ status.textContent = 'Load failed'; return {}; });
+ 		}
 
-			async function fetchStaged(unit){
-				status.textContent = 'Loading...';
-				try {
-					const r = await fetch( window.location.origin + '/wp-json/tmon/v1/device/staged-settings?unit_id=' + encodeURIComponent(unit), { credentials: 'same-origin' } );
-					const j = await r.json();
-					status.textContent = '';
-					return j.staged || {};
-				} catch (e) {
-					status.textContent = 'Load failed';
-					return {};
+ 		function loadVals(unit){
+ 			if (!unit) { status.textContent = 'Choose a unit'; return; }
+ 			status.textContent = 'Loading...';
+ 			fetchStaged(unit).then(function(vals){
+ 				status.textContent = '';
+ 				renderFields(vals);
+ 				formWrap.style.display = '';
+ 			}).catch(function(){ status.textContent = 'Load failed'; });
+ 		}
+
+ 		// If no page-level picker, disable controls and show a hint.
+ 		// We intentionally do NOT clone or create a picker here — the admin should provide the canonical selector.
+ 		if (!external) {
+ 			if (status) status.textContent = 'Page-level unit selector (id=\"tmon-unit-picker\") not found; add it to use this panel.';
+ 			if (btnLoad) btnLoad.disabled = true;
+ 			if (saveBtn) saveBtn.disabled = true;
+ 			return;
+ 		}
+
+ 		// Auto-load when picker changes
+ 		external.addEventListener('change', function(){ loadVals(external.value); });
+
+ 		// Load button uses the page-level picker
+ 		if (btnLoad) btnLoad.addEventListener('click', function(e){
+ 			e.preventDefault();
+ 			var unit = external.value;
+ 			if (!unit) { alert('Choose a unit'); return; }
+ 			loadVals(unit);
+ 		});
+
+ 		// Initial populate: auto-load for current selection if available
+ 		(function(){
+ 			var initial = (external && external.value) ? external.value : (external && external.options && external.options.length ? external.options[0].value : null);
+ 			if (initial) loadVals(initial);
+ 		})();
+
+ 		// Save: stage settings to server (uses page-level picker)
+ 		if (saveBtn) saveBtn.addEventListener('click', function(e){
+ 			e.preventDefault();
+ 			status.textContent = 'Saving...';
+ 			var unit = external.value;
+ 			if (!unit) { alert('Choose a unit'); status.textContent = ''; return; }
+ 			var payload = { unit_id: unit, settings: {} };
+ 			SCHEMA.forEach(function(f){
+ 				var el = document.querySelector('[name="'+f.key+'"]');
+ 				if (!el) return;
+ 				var v;
+ 				if (f.type === 'bool') v = !!el.checked;
+ 				else if (f.type === 'number') v = el.value !== '' ? Number(el.value) : '';
+ 				else v = el.value;
+ 				payload.settings[f.key] = v;
+ 			});
+			// include WP REST nonce (if available) to authenticate cookie-based POSTs.
+			// Use wp.apiSettings.nonce when available, otherwise fallback to TMON_REST_NONCE injected above.
+			var nonce = (window.wp && wp.apiSettings && wp.apiSettings.nonce) ? wp.apiSettings.nonce : (typeof TMON_REST_NONCE !== 'undefined' ? TMON_REST_NONCE : '');
+			var headers = {'Content-Type': 'application/json'};
+			if (nonce) headers['X-WP-Nonce'] = nonce;
+			fetch(window.location.origin + '/wp-json/tmon/v1/admin/device/settings-staged', {
+				method: 'POST',
+				credentials: 'same-origin',
+				headers: headers,
+				body: JSON.stringify(payload)
+			}).then(function(r){ return r.json(); }).then(function(j){
+				if (j && j.ok) {
+					status.textContent = 'Staged. Will be delivered at next device check-in.';
+					loadVals(unit);
+				} else {
+					status.textContent = (j && j.message) ? j.message : 'Save failed';
+					if (j && j.code === 'rest_forbidden') alert('Permission denied: you must be an admin to stage settings.');
 				}
-			}
-
-			btnLoad.addEventListener('click', async function(e){
-				e.preventDefault();
-				const unit = elUnit.value;
-				if (!unit) { alert('Choose a unit'); return; }
-				const vals = await fetchStaged(unit);
-				renderFields(vals);
-				formWrap.style.display = '';
-			});
-
-			saveBtn.addEventListener('click', async function(e){
-				e.preventDefault();
-				status.textContent = 'Saving...';
-				const unit = elUnit.value;
-				if (!unit) { alert('Choose a unit'); return; }
-				const payload = { unit_id: unit, settings: {} };
-				SCHEMA.forEach(function(f){
-					const el = document.querySelector('[name="'+f.key+'"]');
-					if (!el) return;
-					let v;
-					if (f.type === 'bool') v = !!el.checked;
-					else if (f.type === 'number') v = el.value !== '' ? Number(el.value) : '';
-					else v = el.value;
-					payload.settings[f.key] = v;
-				});
-				try {
-					const r = await fetch(window.location.origin + '/wp-json/tmon/v1/admin/device/settings-staged', {
-						method: 'POST',
-						credentials: 'same-origin',
-						headers: {'Content-Type': 'application/json'},
-						body: JSON.stringify(payload)
-					});
-					const j = await r.json();
-					if (r.ok && j.ok) {
-						status.textContent = 'Staged. Will be delivered at next device check-in.';
-					} else {
-						status.textContent = j.message || 'Save failed';
-					}
-				} catch (err) {
-					status.textContent = 'Save request failed';
-				}
-			});
-		})();
+			}).catch(function(){ status.textContent = 'Save request failed'; });
+ 		});
+	})();
 	</script>
 	<?php
 	return ob_get_clean();
-});
-
+ });
+ 
 // AJAX: stage a UNIT_Name update for a specific unit (admin UI -> stage name for next check-in)
 add_action('wp_ajax_tmon_uc_update_unit_name', function() {
 	// Optional: verify nonce if provided
@@ -1080,59 +1109,17 @@ add_action('wp_ajax_tmon_uc_update_unit_name', function() {
 	wp_send_json_success(array('ok' => true, 'unit_id' => $unit, 'settings' => $entry['settings']));
 });
 
-// AJAX: Update unit name
-// <-- removed duplicate anonymous handler that caused unbalanced braces and parse errors.
-// The named handler `tmon_uc_update_unit_name_direct` is registered above and should be used instead.
-
-// Fallback AJAX handler for pending commands count (if REST endpoint is not present)
-add_action('wp_ajax_tmon_pending_commands_count', function() {
-    if (!isset($_GET['unit_id'])) {
-        wp_send_json(['count' => 0]);
-    }
-    global $wpdb;
-    $unit = sanitize_text_field($_GET['unit_id']);
-    $cnt = $wpdb->get_var($wpdb->prepare(
-        "SELECT COUNT(*) FROM {$wpdb->prefix}tmon_device_commands WHERE device_id = %s AND executed_at IS NULL",
-        $unit
-    ));
-    wp_send_json(['count' => intval($cnt)]);
-});
-add_action('wp_ajax_nopriv_tmon_pending_commands_count', function() {
-    // Optionally allow non-logged-in users
-    if (!isset($_GET['unit_id'])) {
-        wp_send_json(['count' => 0]);
-    }
-    global $wpdb;
-    $unit = sanitize_text_field($_GET['unit_id']);
-    $cnt = $wpdb->get_var($wpdb->prepare(
-        "SELECT COUNT(*) FROM {$wpdb->prefix}tmon_device_commands WHERE device_id = %s AND executed_at IS NULL",
-        $unit
-    ));
-    wp_send_json(['count' => intval($cnt)]);
-});
-
-// AJAX: Update unit name
-add_action('wp_ajax_tmon_uc_update_unit_name', function() {
-    check_admin_referer('tmon_uc_device_data');
-    if (!current_user_can('manage_options')) wp_send_json_error();
-    $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
-    $unit_name = sanitize_text_field($_POST['unit_name'] ?? '');
-    global $wpdb;
-    $wpdb->update($wpdb->prefix.'tmon_devices', ['unit_name'=>$unit_name], ['unit_id'=>$unit_id]);
-    wp_send_json_success();
-});
-
 // AJAX: Get settings (applied/staged)
-add_action('wp_ajax_tmon_uc_get_settings', function() {
-    if (!current_user_can('manage_options')) wp_send_json_error();
+// Replaced large anonymous closure with a concise named handler to avoid deeply nested logic and unbalanced braces.
+if (! function_exists('tmon_uc_get_settings_handler')) {
+function tmon_uc_get_settings_handler() {
+    if (! current_user_can('manage_options') ) wp_send_json_error();
     global $wpdb;
     $unit_id = sanitize_text_field($_GET['unit_id'] ?? '');
-    $applied = [];
-    $staged = [];
-    $applied_source = 'none';
-    $staged_source = 'none';
+    $applied = $staged = [];
+    $applied_source = $staged_source = 'none';
 
-    // Applied from devices.settings (validate JSON)
+    // Applied settings from devices table (validate JSON)
     $row = $wpdb->get_row($wpdb->prepare("SELECT settings FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s", $unit_id), ARRAY_A);
     if ($row && !empty($row['settings'])) {
         $tmp = json_decode($row['settings'], true);
@@ -1142,7 +1129,7 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
         }
     }
 
-    // First attempt: staged table (validate JSON)
+    // Staged settings: staged table first
     $row2 = $wpdb->get_row($wpdb->prepare("SELECT settings FROM {$wpdb->prefix}tmon_staged_settings WHERE unit_id=%s", $unit_id), ARRAY_A);
     if ($row2 && !empty($row2['settings'])) {
         $tmp = json_decode($row2['settings'], true);
@@ -1152,28 +1139,51 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
         }
     }
 
-    // Fallback: try to read tmon-field-logs files for this unit (newest first)
+    // Option fallback (legacy option map)
+    if (empty($staged)) {
+        $optmap = get_option('tmon_uc_staged_settings', []);
+        if (is_array($optmap) && isset($optmap[$unit_id]) && is_array($optmap[$unit_id]['settings'] ?? null)) {
+            $staged = $optmap[$unit_id]['settings'];
+            $staged_source = 'options';
+        }
+    }
+
+    // Lightweight log scan fallback: prefer recent files named for unit and look for last JSON object
     if (empty($staged)) {
         $log_dir = WP_CONTENT_DIR . '/tmon-field-logs';
         if (is_dir($log_dir) && is_readable($log_dir)) {
             $safe_unit = preg_replace('/[^A-Za-z0-9._-]/', '', $unit_id);
             $files = [];
-            // prefer files named "field_data_unit-<unit>*" first
-            $prefFiles = glob($log_dir . '/field_data_unit-' . $safe_unit . '*') ?: [];
+            $pref = glob($log_dir . '/field_data_unit-' . $safe_unit . '*') ?: [];
             $general = glob($log_dir . '/*' . $safe_unit . '*') ?: [];
-            $files = array_values(array_unique(array_merge($prefFiles, $general)));
-
-            if (!empty($files)) {
-                // prefer .txt first then newest-first
-                usort($files, function($a, $b) {
-                    $aTxt = preg_match('/\.txt$/i', $a) ? 0 : 1;
-                    $bTxt = preg_match('/\.txt$/i', $b) ? 0 : 1;
-                    if ($aTxt !== $bTxt) return $aTxt - $bTxt;
-                    return filemtime($b) - filemtime($a);
-                });
-
-                // small tolerant key=value parser for .txt files
-                $parse_text_settings = function($content) {
+            $files = array_values(array_unique(array_merge($pref, $general)));
+            // prefer .txt then newest-first
+            usort($files, function($a, $b) {
+                $aTxt = preg_match('/\.txt$/i', $a) ? 0 : 1;
+                $bTxt = preg_match('/\.txt$/i', $b) ? 0 : 1;
+                if ($aTxt !== $bTxt) return $aTxt - $bTxt;
+                return filemtime($b) - filemtime($a);
+            });
+            foreach ($files as $f) {
+                $content = @file_get_contents($f);
+                if ($content === false) continue;
+                // extract last JSON object if present
+                if (preg_match_all('/\{[\s\S]*?\}/', $content, $matches)) {
+                    foreach (array_reverse($matches[0]) as $part) {
+                        $tmp = json_decode($part, true);
+                        if (json_last_error() === JSON_ERROR_NONE && is_array($tmp)) {
+                            if (isset($tmp['settings']) && is_array($tmp['settings'])) {
+                                $staged = $tmp['settings'];
+                            } else {
+                                $staged = $tmp;
+                            }
+                            $staged_source = 'field_log';
+                            break 2;
+                        }
+                    }
+                }
+                // fallback: simple key=value parser for .txt files
+                if (preg_match('/\.txt$/i', $f)) {
                     $lines = preg_split('/\r\n|\r|\n/', $content);
                     $kv = [];
                     foreach ($lines as $ln) {
@@ -1185,9 +1195,8 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
                             if ((substr($v,0,1) === '"' && substr($v,-1) === '"') || (substr($v,0,1) === "'" && substr($v,-1) === "'")) {
                                 $v = substr($v,1,-1);
                             }
-                            if (is_numeric($v)) {
-                                $v = $v + 0;
-                            } else {
+                            if (is_numeric($v)) $v = $v + 0;
+                            else {
                                 $lv = strtolower($v);
                                 if (in_array($lv, ['true','false','on','off','yes','no','1','0'], true)) {
                                     $v = in_array($lv, ['true','on','yes','1'], true);
@@ -1196,54 +1205,20 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
                             $kv[$k] = $v;
                         }
                     }
-                    return !empty($kv) ? $kv : null;
-                };
-
-                // Iterate newest-first and try to extract JSON object (prefer last JSON object) or parse .txt
-                foreach ($files as $f) {
-                    $content = @file_get_contents($f);
-                    if ($content === false) continue;
-
-                    // Try to extract last JSON object block
-                    if (preg_match_all('/\{[\s\S]*?\}/', $content, $matches)) {
-                        foreach (array_reverse($matches[0]) as $part) {
-                            $tmp = json_decode($part, true);
-                            if (json_last_error() === JSON_ERROR_NONE && is_array($tmp)) {
-                                if (isset($tmp['settings']) && is_array($tmp['settings'])) {
-                                    $staged = $tmp['settings'];
-                            } else {
-                                $staged = $tmp;
-                            }
-                            $staged_source = 'field_log';
-                            if (empty($applied)) { $applied = $staged; $applied_source = 'field_log'; }
-                            break 2;
-                        }
-                    }
-                }
-
-                // If file looks like .txt, try key=value parser on whole file
-                if (preg_match('/\.txt$/i', $f)) {
-                    $parsed = $parse_text_settings($content);
-                    if (is_array($parsed)) {
-                        $staged = $parsed;
-                        $staged_source = 'field_log';
-                        if (empty($applied)) { $applied = $staged; $applied_source = 'field_log'; }
-                        break;
-                    }
+                    if (!empty($kv)) { $staged = $kv; $staged_source = 'field_log'; break; }
                 }
             }
         }
     }
 
-    // If there was no explicit staged entry, expose the applied settings for editing (so user can edit current)
+    // If no staged but applied exists, expose applied to editor
     if (empty($staged) && !empty($applied)) {
         $staged = $applied;
-        $staged_source = $staged_source === 'none' ? 'derived_from_applied' : $staged_source;
+        $staged_source = 'derived_from_applied';
     }
 
-    // Provide pretty JSON for front-end editable textbox convenience
-    $applied_json = (empty($applied) ? '' : json_encode($applied, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-    $staged_json = (empty($staged) ? '' : json_encode($staged, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
+    $applied_json = empty($applied) ? '' : json_encode($applied, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+    $staged_json = empty($staged) ? '' : json_encode($staged, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
 
     wp_send_json([
         'success' => true,
@@ -1254,54 +1229,23 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
         'applied_source' => $applied_source,
         'staged_source' => $staged_source,
     ]);
-});
-// Note: we intentionally keep compatibility with existing consumers while also returning
-// useful JSON strings and source info for front-end usage elsewhere (see comment above).
+}
+}
+add_action('wp_ajax_tmon_uc_get_settings', 'tmon_uc_get_settings_handler', 10);
 
-// AJAX: Stage settings
-add_action('wp_ajax_tmon_uc_stage_settings', function() {
+// AJAX: Update unit name
+// Removed duplicate anonymous handler to avoid parsing issues and duplicate registration.
+// The named handler `tmon_uc_update_unit_name_direct` is registered earlier and should be used instead.
+
+// AJAX: Update unit name
+add_action('wp_ajax_tmon_uc_update_unit_name', function() {
     check_admin_referer('tmon_uc_device_data');
     if (!current_user_can('manage_options')) wp_send_json_error();
-    global $wpdb;
     $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
-    $settings = $_POST['settings'] ?? '';
-    $wpdb->replace($wpdb->prefix.'tmon_staged_settings', [
-        'unit_id' => $unit_id,
-        'settings' => $settings,
-        'updated_at' => current_time('mysql', 1)
-    ]);
-    wp_send_json_success();
-});
-
-// AJAX: List pending commands for a unit
-add_action('wp_ajax_tmon_pending_commands_list', function() {
-    check_ajax_referer('tmon_pending_cmds');
-    if (!isset($_GET['unit_id'])) wp_send_json_error(['commands'=>[]]);
+    $unit_name = sanitize_text_field($_POST['unit_name'] ?? '');
     global $wpdb;
-    $unit = sanitize_text_field($_GET['unit_id']);
-    // Fetch ALL staged commands, including those with NULL or empty executed_at
-    $rows = $wpdb->get_results($wpdb->prepare(
-        "SELECT id, command, created_at, executed_at FROM {$wpdb->prefix}tmon_device_commands WHERE device_id = %s AND (executed_at IS NULL OR executed_at = '' OR executed_at = '0000-00-00 00:00:00') ORDER BY created_at ASC",
-        $unit
-    ), ARRAY_A);
-    $out = [];
-    foreach ($rows as $r) {
-        $cmd = $r['command'];
-        // Try to pretty-print JSON if possible
-        if (is_string($cmd) && ($decoded = json_decode($cmd, true)) && json_last_error() === JSON_ERROR_NONE) {
-            $cmd = json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-        }
-        $out[] = [
-            'id' => $r['id'],
-            'command' => $cmd,
-            'created_at' => $r['created_at'],
-            'executed_at' => $r['executed_at']
-        ];
-    }
-    wp_send_json_success(['commands' => $out]);
-});
-add_action('wp_ajax_nopriv_tmon_pending_commands_list', function() {
-    wp_send_json_error(['commands'=>[]]);
+    $wpdb->update($wpdb->prefix.'tmon_devices', ['unit_name'=>$unit_name], ['unit_id'=>$unit_id]);
+    wp_send_json_success();
 });
 
 // AJAX: Delete a pending command by id
@@ -1318,6 +1262,7 @@ add_action('wp_ajax_nopriv_tmon_pending_commands_delete', function() {
 });
 
 // AJAX: Get command by id for re-queue
+
 add_action('wp_ajax_tmon_pending_commands_get', function() {
     check_ajax_referer('tmon_pending_cmds');
     if (!isset($_POST['id'])) wp_send_json_error();
@@ -1355,6 +1300,7 @@ function tmon_uc_ensure_staged_settings_table() {
     $table = $wpdb->prefix . 'tmon_staged_settings';
     $charset_collate = $wpdb->get_charset_collate();
     $sql = "CREATE TABLE IF NOT EXISTS `$table` (
+
         `unit_id` varchar(64) NOT NULL,
         `settings` longtext NOT NULL,
         `updated_at` datetime DEFAULT CURRENT_TIMESTAMP,
