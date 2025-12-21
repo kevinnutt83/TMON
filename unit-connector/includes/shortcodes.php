@@ -494,124 +494,159 @@ add_shortcode('tmon_device_history', function($atts) {
     ?>
     <script>
     (function(){
-        const select = document.getElementById("<?php echo esc_js($select_id); ?>");
-        const hoursSel = document.getElementById("<?php echo esc_js($hours_id); ?>");
-        const csvBtn = document.getElementById("<?php echo esc_js($csv_btn_id); ?>");
-        const canvas = document.getElementById(select.getAttribute("data-canvas"));
-        if(!select || !canvas) return;
-        const ctx = canvas.getContext("2d");
-        const base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : "<?php echo $ajax_root; ?>".replace(/\/$/, "");
-        let chart = null;
-        let lastData = null;
-        function relayStateValue(p, num) {
-            // Accept relay1_on, relay_1_on, etc.
-            if (!p.relay) return null;
-            var k1 = "relay" + num + "_on";
-            var k2 = "relay_" + num + "_on";
-            if (Object.prototype.hasOwnProperty.call(p.relay, k1)) return Number(p.relay[k1]);
-            if (Object.prototype.hasOwnProperty.call(p.relay, k2)) return Number(p.relay[k2]);
-            return null;
-        }
-        function render(unit, hours){
-            let url;
-            if (hours === 'yoy') {
-                url = base + "/tmon/v1/device/history-yoy?unit_id=" + encodeURIComponent(unit);
-            } else {
-                url = base + "/tmon/v1/device/history?unit_id=" + encodeURIComponent(unit) + "&hours=" + encodeURIComponent(hours);
-            }
-            fetch(url).then(r=>r.json()).then(data=>{
-                lastData = data;
-                const pts = Array.isArray(data.points) ? data.points : [];
-                const labels = pts.map(p=>p.t);
-                const temp = pts.map(p=>p.temp_f);
-                const humid = pts.map(p=>p.humid);
-                const bar = pts.map(p=>p.bar);
-                const volt = pts.map(p=>p.volt);
-                // Relay state data
-                const enabledRelays = Array.isArray(data.enabled_relays) ? data.enabled_relays : [];
-                const relayColors = ["#6c757d", "#95a5a6", "#34495e", "#7f8c8d", "#95a5a6", "#2d3436", "#636e72", "#99a3ad"];
-                const relayDatasets = enabledRelays.map(function(num, idx){
-                    const values = pts.map(function(p){ 
-                        var v = relayStateValue(p, num);
-                        return (v === null || v === undefined) ? null : v;
-                    });
-                    return {label: "Relay " + num, data: values, borderColor: relayColors[idx % relayColors.length], borderDash: [6,3], fill:false, yAxisID: "relay", stepped:true, hidden:false};
-                });
-                const cfg = {
-                    type: "line",
-                    data: {
-                        labels: labels,
-                        datasets: [
-                            {label: "Temp (F)", data: temp, borderColor: "#e67e22", fill:false, yAxisID: "y1"},
-                            {label: "Humidity (%)", data: humid, borderColor: "#3498db", fill:false, yAxisID: "y2"},
-                            {label: "Pressure (hPa)", data: bar, borderColor: "#2ecc71", fill:false, yAxisID: "y3"},
-                            {label: "Voltage (V)", data: volt, borderColor: "#9b59b6", fill:false, yAxisID: "y4"}
-                        ].concat(relayDatasets)
-                    },
-                    options: {
-                        responsive: true,
-                        interaction: { mode: "index", intersect: false },
-                        stacked: false,
-                        plugins: {
-                            legend: {
-                                position: "top",
-                                onClick: (evt, item, legend) => {
-                                    const ci = legend.chart;
-                                    const index = item.datasetIndex;
-                                    const visible = ci.isDatasetVisible(index);
-                                    ci.setDatasetVisibility(index, !visible);
-                                    ci.update();
-                                }
-                            }
-                        },
-                        scales: {
-                            y1: { type: "linear", position: "left" },
-                            y2: { type: "linear", position: "right", grid: { drawOnChartArea: false } },
-                            y3: { type: "linear", position: "right", grid: { drawOnChartArea: false } },
-                            y4: { type: "linear", position: "left", grid: { drawOnChartArea: false }, suggestedMin: <?php echo $y4min; ?>, suggestedMax: <?php echo $y4max; ?> },
-                            relay: { type: "linear", position: "right", min: -0.1, max: 1.1, grid: { drawOnChartArea: false }, ticks: { stepSize: 1, callback: v => v ? "On" : "Off" } }
-                        }
-                    }
-                };
-                if (chart) { chart.destroy(); }
-                chart = new Chart(ctx, cfg);
-            }).catch(err=>{ console.error("TMON history fetch error", err); });
-        }
-        function getCurrentUnit() { return select.value; }
-        function getCurrentHours() { return hoursSel.value; }
-        select.addEventListener("change", function(){ render(getCurrentUnit(), getCurrentHours()); });
-        hoursSel.addEventListener("change", function(){ render(getCurrentUnit(), getCurrentHours()); });
-        render(getCurrentUnit(), getCurrentHours());
-        // CSV export
-        csvBtn.addEventListener('click', function(){
-            if (!lastData || !Array.isArray(lastData.points) || !lastData.points.length) {
-                alert('No data to export.');
-                return;
-            }
-            const pts = lastData.points;
-            // Collect all keys
-            let keys = new Set();
-            pts.forEach(p => Object.keys(p).forEach(k => keys.add(k)));
-            keys = Array.from(keys);
-            let csv = keys.join(',') + '\n';
-            pts.forEach(p => {
-                csv += keys.map(k => (p[k] !== undefined ? JSON.stringify(p[k]) : '')).join(',') + '\n';
-            });
-            const blob = new Blob([csv], {type: 'text/csv'});
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'tmon_history_' + getCurrentUnit() + '_' + getCurrentHours() + '.csv';
-            document.body.appendChild(a);
-            a.click();
-            setTimeout(()=>{ document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
-        });
-        // Optional: auto-refresh
-        const refreshMs = <?php echo ($refresh*1000); ?>;
-        if (refreshMs > 0) {
-            setInterval(function(){ render(getCurrentUnit(), getCurrentHours()); }, refreshMs);
-        }
-    })();
+		const localSelect = document.getElementById("<?php echo esc_js($select_id); ?>");
+		const hoursSel    = document.getElementById("<?php echo esc_js($hours_id); ?>");
+		const csvBtn      = document.getElementById("<?php echo esc_js($csv_btn_id); ?>");
+		const canvas      = document.getElementById("<?php echo esc_js($canvas_id); ?>");
+		if (!localSelect || !canvas) return;
+
+		// Use page-level picker when present to avoid duplicate selectors in device template.
+		const externalSelect = document.getElementById('tmon-unit-picker');
+		if (externalSelect) { try { localSelect.style.display = 'none'; } catch(e){} }
+		const select = externalSelect || localSelect;
+
+		const ctx = canvas.getContext('2d');
+		const base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : "<?php echo $ajax_root; ?>".replace(/\/$/, "");
+		let chart = null;
+		let lastData = null;
+
+		// Robust relay value extraction (top-level keys and nested p.relay)
+		function relayStateValue(pt, num) {
+			if (!pt) return null;
+			const keys = [`relay${num}_on`, `relay_${num}_on`, `relay${num}`, `relay_${num}`, `r${num}`];
+			for (const k of keys) {
+				if (Object.prototype.hasOwnProperty.call(pt, k)) {
+					const v = pt[k];
+					if (typeof v === 'boolean') return v ? 1 : 0;
+					if (typeof v === 'number') return v;
+					if (typeof v === 'string') {
+						const lv = v.trim().toLowerCase();
+						if (['1','true','on','yes'].includes(lv)) return 1;
+						if (['0','false','off','no'].includes(lv)) return 0;
+						const nv = Number(v);
+						return isNaN(nv) ? null : nv;
+					}
+				}
+			}
+			if (pt && typeof pt.relay === 'object') {
+				for (const k of Object.keys(pt.relay)) {
+					let m = k.match(/^relay[_]?(\d+)_?on$/i) || k.match(/^relay[_]?(\d+)$/i) || k.match(/^r(\d+)$/i);
+					if (m && Number(m[1]) === num) {
+						const v = pt.relay[k];
+						if (typeof v === 'boolean') return v ? 1 : 0;
+						if (typeof v === 'number') return v;
+						if (typeof v === 'string') {
+							const lv = v.trim().toLowerCase();
+							if (['1','true','on','yes'].includes(lv)) return 1;
+							if (['0','false','off','no'].includes(lv)) return 0;
+							const nv = Number(v);
+							return isNaN(nv) ? null : nv;
+						}
+					}
+				}
+			}
+			return null;
+		}
+
+		// Infer relay channel numbers from point keys when server doesn't return enabled_relays
+		function detectRelaysFromPoints(pts) {
+			const nums = new Set();
+			(pts || []).forEach(p => {
+				Object.keys(p || {}).forEach(k => {
+					let m = k.match(/^relay[_]?(\d+)_?on$/i) || k.match(/^relay[_]?(\d+)$/i) || k.match(/^r(\d+)$/i);
+					if (m) nums.add(parseInt(m[1], 10));
+				});
+				if (p && typeof p.relay === 'object') {
+					Object.keys(p.relay).forEach(k => {
+						let m = k.match(/^relay[_]?(\d+)_?on$/i) || k.match(/^relay[_]?(\d+)$/i) || k.match(/^r(\d+)$/i);
+						if (m) nums.add(parseInt(m[1], 10));
+					});
+				}
+			});
+			return Array.from(nums).sort((a,b)=>a-b);
+		}
+
+		function render(unit, hours) {
+			if (!unit) return;
+			const url = (hours === 'yoy')
+				? (base + "/tmon/v1/device/history-yoy?unit_id=" + encodeURIComponent(unit))
+				: (base + "/tmon/v1/device/history?unit_id=" + encodeURIComponent(unit) + "&hours=" + encodeURIComponent(hours));
+			fetch(url).then(r=>r.json()).then(data=>{
+				lastData = data;
+				const pts = Array.isArray(data.points) ? data.points : [];
+				const labels = pts.map(p=>p.t || '');
+				const temp = pts.map(p => (p && typeof p.temp_f !== 'undefined') ? p.temp_f : null);
+				const humid = pts.map(p => (p && typeof p.humid !== 'undefined') ? p.humid : null);
+				const bar = pts.map(p => (p && typeof p.bar !== 'undefined') ? p.bar : null);
+				const volt = pts.map(p => (p && typeof p.volt !== 'undefined') ? p.volt : null);
+
+				const relayNums = Array.isArray(data.enabled_relays) && data.enabled_relays.length ? data.enabled_relays : detectRelaysFromPoints(pts);
+				const relayColors = ["#6c757d","#95a5a6","#34495e","#7f8c8d","#95a5a6","#2d3436","#636e72","#99a3ad"];
+				const relayDatasets = relayNums.map((num, idx) => {
+					const values = pts.map(p => relayStateValue(p, num));
+					return { label: "Relay " + num, data: values, borderColor: relayColors[idx % relayColors.length], borderDash: [6,3], fill: false, yAxisID: "relay", stepped: true, pointRadius: 0 };
+				});
+
+				const cfg = {
+					type: "line",
+					data: {
+						labels: labels,
+						datasets: [
+							{ label: "Temp (F)", data: temp, borderColor: "#e67e22", fill:false, yAxisID: "y1" },
+							{ label: "Humidity (%)", data: humid, borderColor: "#3498db", fill:false, yAxisID: "y2" },
+							{ label: "Pressure (hPa)", data: bar, borderColor: "#2ecc71", fill:false, yAxisID: "y3" },
+							{ label: "Voltage (V)", data: volt, borderColor: "#9b59b6", fill:false, yAxisID: "y4" }
+						].concat(relayDatasets)
+					},
+					options: {
+						responsive: true,
+						interaction: { mode: "index", intersect: false },
+						plugins: { legend: { position: "top" } },
+						scales: {
+							y1: { type: "linear", position: "left" },
+							y2: { type: "linear", position: "right", grid: { drawOnChartArea: false } },
+							y3: { type: "linear", position: "right", grid: { drawOnChartArea: false } },
+							y4: { type: "linear", position: "left", grid: { drawOnChartArea: false }, suggestedMin: <?php echo $y4min; ?>, suggestedMax: <?php echo $y4max; ?> },
+							relay: { type: "linear", position: "right", min: -0.1, max: 1.1, grid: { drawOnChartArea: false }, ticks: { stepSize: 1, callback: v => v ? "On" : "Off" } }
+						}
+					}
+				};
+				if (chart) chart.destroy();
+				chart = new Chart(ctx, cfg);
+			}).catch(err=>{ console.error("TMON history fetch error", err); });
+		}
+
+		function getCurrentUnit(){ return select.value; }
+		function getCurrentHours(){ return hoursSel.value; }
+
+		// Listen to page-level picker when present so graph follows page controls
+		if (externalSelect) externalSelect.addEventListener('change', function(){ render(getCurrentUnit(), getCurrentHours()); });
+		select.addEventListener('change', function(){ render(getCurrentUnit(), getCurrentHours()); });
+		hoursSel.addEventListener('change', function(){ render(getCurrentUnit(), getCurrentHours()); });
+
+		render(getCurrentUnit(), getCurrentHours());
+
+		// CSV export (unchanged behavior)
+		csvBtn.addEventListener('click', function(){
+			if (!lastData || !Array.isArray(lastData.points) || !lastData.points.length) { alert('No data to export.'); return; }
+			const pts = lastData.points;
+			let keys = new Set();
+			pts.forEach(p => Object.keys(p || {}).forEach(k => keys.add(k)));
+			keys = Array.from(keys);
+			let csv = keys.join(',') + '\n';
+			pts.forEach(p => {
+				csv += keys.map(k => (p[k] !== undefined ? JSON.stringify(p[k]) : '')).join(',') + '\n';
+			});
+			const blob = new Blob([csv], {type: 'text/csv'});
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a'); a.href = url; a.download = 'tmon_history_' + getCurrentUnit() + '_' + getCurrentHours() + '.csv';
+			document.body.appendChild(a); a.click(); setTimeout(()=>{ document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+		});
+
+		// Optional: auto-refresh
+		const refreshMs = <?php echo ($refresh*1000); ?>;
+		if (refreshMs > 0) setInterval(function(){ render(getCurrentUnit(), getCurrentHours()); }, refreshMs);
+	})();
     </script>
     <?php
     echo '</div>';
