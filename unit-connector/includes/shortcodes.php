@@ -1158,21 +1158,13 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
         if (is_dir($log_dir) && is_readable($log_dir)) {
             $safe_unit = preg_replace('/[^A-Za-z0-9._-]/', '', $unit_id);
             $files = [];
-            // Prefer files named "field_data_unit-<unit>*" first (e.g. field_data_unit-3pd8sj.txt),
-            // then append any other files that contain the unit id.
-            $prefixPattern = $log_dir . '/field_data_unit-' . $safe_unit . '*';
-            $prefFiles = glob($prefixPattern);
-            if (!empty($prefFiles)) {
-                $files = array_merge($files, $prefFiles);
-            }
-            $general = glob($log_dir . '/*' . $safe_unit . '*');
-            if (!empty($general)) {
-                foreach ($general as $f) {
-                    if (!in_array($f, $files)) $files[] = $f;
-                }
-            }
+            // prefer files named "field_data_unit-<unit>*" first
+            $prefFiles = glob($log_dir . '/field_data_unit-' . $safe_unit . '*') ?: [];
+            $general = glob($log_dir . '/*' . $safe_unit . '*') ?: [];
+            $files = array_values(array_unique(array_merge($prefFiles, $general)));
+
             if (!empty($files)) {
-                // prefer .txt files first (case-insensitive), then newest-first among equal preference
+                // prefer .txt first then newest-first
                 usort($files, function($a, $b) {
                     $aTxt = preg_match('/\.txt$/i', $a) ? 0 : 1;
                     $bTxt = preg_match('/\.txt$/i', $b) ? 0 : 1;
@@ -1180,21 +1172,8 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
                     return filemtime($b) - filemtime($a);
                 });
 
-                // helper parser for .txt content: try JSON, embedded JSON, then key=value/key: value lines
+                // small tolerant key=value parser for .txt files
                 $parse_text_settings = function($content) {
-                    // try whole-file JSON
-                    $tmp = json_decode($content, true);
-                    if (json_last_error() === JSON_ERROR_NONE && is_array($tmp)) return $tmp;
-
-                    // extract last JSON object in file (if present)
-                    if (preg_match_all('/\{[\s\S]*\}/', $content, $matches)) {
-                        foreach (array_reverse($matches[0]) as $part) {
-                            $tmp2 = json_decode($part, true);
-                            if (json_last_error() === JSON_ERROR_NONE && is_array($tmp2)) return $tmp2;
-                        }
-                    }
-
-                    // fallback: parse simple key=value or key: value lines into associative array
                     $lines = preg_split('/\r\n|\r|\n/', $content);
                     $kv = [];
                     foreach ($lines as $ln) {
@@ -1203,18 +1182,15 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
                         if (preg_match('/^\s*([A-Za-z0-9_.-]+)\s*[:=]\s*(.+)$/', $ln, $m)) {
                             $k = $m[1];
                             $v = trim($m[2]);
-                            // strip surrounding quotes
                             if ((substr($v,0,1) === '"' && substr($v,-1) === '"') || (substr($v,0,1) === "'" && substr($v,-1) === "'")) {
                                 $v = substr($v,1,-1);
                             }
-                            // cast numbers and booleans where obvious
                             if (is_numeric($v)) {
                                 $v = $v + 0;
                             } else {
                                 $lv = strtolower($v);
                                 if (in_array($lv, ['true','false','on','off','yes','no','1','0'], true)) {
-                                    if (in_array($lv, ['true','on','yes','1'], true)) $v = true;
-                                    else $v = false;
+                                    $v = in_array($lv, ['true','on','yes','1'], true);
                                 }
                             }
                             $kv[$k] = $v;
@@ -1223,88 +1199,36 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
                     return !empty($kv) ? $kv : null;
                 };
 
+                // Iterate newest-first and try to extract JSON object (prefer last JSON object) or parse .txt
                 foreach ($files as $f) {
-                    // prefer to use .txt files (we already sorted such that .txt come first)
-                    $ext = pathinfo($f, PATHINFO_EXTENSION);
-
-                    // try to read file lines (preferred) otherwise whole content
-                    $lines = @file($f, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-                    if ($lines) {
-                        // iterate lines in reverse (newest-first)
-                        for ($i = count($lines) - 1; $i >= 0; $i--) {
-                            $ln = trim($lines[$i]);
-                            if ($ln === '') continue;
-
-                            // If this line is JSON, decode it
-                            $obj = null;
-                            if (strpos($ln, '{') !== false) {
-                                $obj = json_decode($ln, true);
-                                if (json_last_error() !== JSON_ERROR_NONE) {
-                                    if (preg_match('/\{[\s\S]*\}/', $ln, $m)) {
-                                        $obj = json_decode($m[0], true);
-                                        if (json_last_error() !== JSON_ERROR_NONE) $obj = null;
-                                    } else {
-                                        $obj = null;
-                                    }
-                                }
-                            }
-
-                            if (is_array($obj)) {
-                                if (isset($obj['settings']) && is_array($obj['settings'])) {
-                                    $staged = $obj['settings'];
-                                    $staged_source = 'field_log';
-                                    // If applied missing, use this as the applied settings as well.
-                                    if (empty($applied)) { $applied = $staged; $applied_source = 'field_log'; }
-                                    break 2;
-                                }
-                                // top-level object that looks like settings
-                                $scalar_count = 0;
-                                foreach ($obj as $k=>$v) { if (!is_array($v) && !is_object($v)) $scalar_count++; }
-                                if ($scalar_count >= 1 && count($obj) <= 200) { $staged = $obj;
-                                    $staged_source = 'field_log';
-                                    if (empty($applied)) { $applied = $staged; $applied_source = 'field_log'; }
-                                    break 2; }
-                                continue;
- }
-                    }
-
-                    // If file() failed, fall back to whole-file content handling
                     $content = @file_get_contents($f);
                     if ($content === false) continue;
 
-                    // Give .txt parser first crack
-                    if (preg_match('/\.txt$/i', $f)) {
-                        $parsed = $parse_text_settings($content);
-                        if (is_array($parsed)) {
-                            $staged = $parsed;
+                    // Try to extract last JSON object block
+                    if (preg_match_all('/\{[\s\S]*?\}/', $content, $matches)) {
+                        foreach (array_reverse($matches[0]) as $part) {
+                            $tmp = json_decode($part, true);
+                            if (json_last_error() === JSON_ERROR_NONE && is_array($tmp)) {
+                                if (isset($tmp['settings']) && is_array($tmp['settings'])) {
+                                    $staged = $tmp['settings'];
+                            } else {
+                                $staged = $tmp;
+                            }
                             $staged_source = 'field_log';
                             if (empty($applied)) { $applied = $staged; $applied_source = 'field_log'; }
-                            break;
+                            break 2;
                         }
                     }
+                }
 
-                    // existing heuristic: whole-file JSON or embedded JSON
-                    $tmp = json_decode($content, true);
-                    if (json_last_error() === JSON_ERROR_NONE && is_array($tmp)) { $staged = $tmp;
+                // If file looks like .txt, try key=value parser on whole file
+                if (preg_match('/\.txt$/i', $f)) {
+                    $parsed = $parse_text_settings($content);
+                    if (is_array($parsed)) {
+                        $staged = $parsed;
                         $staged_source = 'field_log';
                         if (empty($applied)) { $applied = $staged; $applied_source = 'field_log'; }
                         break;
-                    }
-                    if (preg_match_all('/\{[\s\S]*?\}/', $content, $matches)) {
-                        foreach (array_reverse($matches[0]) as $part) {
-                            $tmp2 = json_decode($part, true);
-                            if (json_last_error() === JSON_ERROR_NONE && is_array($tmp2)) {
-                                // Prefer explicit settings key
-                                if (isset($tmp2['settings']) && is_array($tmp2['settings'])) {
-                                    $staged = $tmp2['settings']; $staged_source = 'field_log';
-                                    if (empty($applied)) { $applied = $staged; $applied_source = 'field_log'; }
-                                    break 2;
-                                }
-                                $staged = $tmp2; $staged_source = 'field_log';
-                                if (empty($applied)) { $applied = $staged; $applied_source = 'field_log'; }
-                                break 2;
-                            }
-                        }
                     }
                 }
             }
