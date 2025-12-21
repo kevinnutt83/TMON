@@ -200,6 +200,66 @@ $nonce = wp_create_nonce('tmon_uc_device_data');
         })();
       </script>
     </div>
+
+    <!-- Device Settings editor (shortcode) -->
+    <h2>Device Settings (Stage for next check-in)</h2>
+    <?php echo do_shortcode('[tmon_device_settings]'); ?>
+
+    <?php
+    // Unit Name quick-update (stage for next check-in)
+    $unit = isset($_GET['unit_id']) ? sanitize_text_field($_GET['unit_id']) : (isset($_GET['unit']) ? sanitize_text_field($_GET['unit']) : '');
+    $staged_map = get_option('tmon_uc_staged_settings', array());
+    $staged_name = '';
+    if ($unit && is_array($staged_map) && isset($staged_map[$unit]['settings']['UNIT_Name'])) {
+    	$staged_name = $staged_map[$unit]['settings']['UNIT_Name'];
+    } else {
+    	// best-effort fallback: try provisioning index helper
+    	if (function_exists('tmon_admin_get_device')) {
+    		$dev = tmon_admin_get_device($unit);
+    		if ($dev) $staged_name = $dev['unit_name'] ?? '';
+    	}
+    }
+    ?>
+    <div id="tmon-unit-name-update" style="margin-top:12px;">
+    	<label for="tmon_unit_name_input"><strong>Unit Name</strong></label><br/>
+    	<input id="tmon_unit_name_input" class="regular-text" value="<?php echo esc_attr($staged_name); ?>" />
+    	<button id="tmon_update_unit_name_btn" class="button">Update name</button>
+    	<span id="tmon_unit_name_status" style="margin-left:12px;"></span>
+    </div>
+
+    <script>
+    (function(){
+    	const btn = document.getElementById('tmon_update_unit_name_btn');
+    	const input = document.getElementById('tmon_unit_name_input');
+    	const status = document.getElementById('tmon_unit_name_status');
+    	const unit = '<?php echo esc_js($unit); ?>';
+    	const nonce = '<?php echo wp_create_nonce('tmon_uc_nonce'); ?>';
+
+    	btn.addEventListener('click', function(e){
+    		e.preventDefault();
+    		if (!unit) { alert('No unit selected'); return; }
+    		const name = input.value || '';
+    		status.textContent = 'Saving...';
+    		const body = new URLSearchParams();
+    		body.append('action','tmon_uc_update_unit_name');
+    		body.append('unit_id', unit);
+    		body.append('unit_name', name);
+    		body.append('security', nonce);
+    		fetch(ajaxurl, {
+    			method: 'POST',
+    			credentials: 'same-origin',
+    			body: body
+    		}).then(function(resp){
+    			return resp.json().catch(function(){ return resp.text(); });
+    		}).then(function(j){
+    			status.textContent = 'Settings AJAX response: ' + (j && j.data ? JSON.stringify(j.data) : JSON.stringify(j));
+    		}).catch(function(err){
+    			status.textContent = 'Update failed';
+    			console.error(err);
+    		});
+    	});
+    })();
+    </script>
 </div>
 <script>
 (function(){

@@ -890,6 +890,196 @@ JS;
     return ob_get_clean();
 });
 
+// Shortcode: [tmon_device_settings] — admin/uc device settings editor
+add_shortcode('tmon_device_settings', function($atts = array()){
+	// Gather device list (best-effort): prefer helper if available
+	$devices = array();
+	if (function_exists('tmon_admin_get_all_devices')) {
+		foreach ((array) tmon_admin_get_all_devices() as $d) {
+			if (!empty($d['unit_id'])) $devices[$d['unit_id']] = $d['unit_id'] . ' — ' . ($d['unit_name'] ?? '');
+		}
+	} else {
+		$opt = get_option('tmon_admin_provisioned_devices', array());
+		if (is_array($opt)) {
+			foreach ($opt as $u => $m) { $devices[$u] = $u; }
+		}
+	}
+	ob_start();
+	?>
+	<div id="tmon-device-settings" class="tmon-device-settings">
+		<label for="tmon_ds_unit">Select unit</label>
+		<select id="tmon_ds_unit">
+			<option value="">-- choose unit --</option>
+			<?php foreach ($devices as $uid => $label) : ?>
+				<option value="<?php echo esc_attr($uid); ?>"><?php echo esc_html($label); ?></option>
+			<?php endforeach; ?>
+		</select>
+		<button id="tmon_ds_load" class="button">Load</button>
+
+		<div id="tmon_ds_form" style="margin-top:12px; display:none;">
+			<form id="tmon_ds_editor">
+				<!-- Controls are rendered by JS for flexibility -->
+				<div id="tmon_ds_fields"></div>
+				<p class="submit">
+					<button id="tmon_ds_save" class="button button-primary">Stage settings</button>
+					<span id="tmon_ds_status" style="margin-left:12px"></span>
+				</p>
+			</form>
+		</div>
+	</div>
+
+	<script>
+		(function(){
+			const elUnit = document.getElementById('tmon_ds_unit');
+			const btnLoad = document.getElementById('tmon_ds_load');
+			const formWrap = document.getElementById('tmon_ds_form');
+			const fields = document.getElementById('tmon_ds_fields');
+			const status = document.getElementById('tmon_ds_status');
+			const saveBtn = document.getElementById('tmon_ds_save');
+
+			const SCHEMA = [
+				{key:'NODE_TYPE', type:'select', opts:['base','wifi','remote'], label:'Node Type'},
+				{key:'UNIT_Name', type:'text', label:'Unit Name'},
+				{key:'SAMPLE_TEMP', type:'bool', label:'Enable Temperature Sampling'},
+				{key:'SAMPLE_HUMID', type:'bool', label:'Enable Humidity Sampling'},
+				{key:'SAMPLE_BAR', type:'bool', label:'Enable Barometric Pressure Sampling'},
+				{key:'ENABLE_OLED', type:'bool', label:'Enable OLED'},
+				{key:'ENGINE_ENABLED', type:'bool', label:'Enable Engine Controller'},
+				{key:'RELAY_PIN1', type:'number', label:'Relay Pin 1'},
+				{key:'RELAY_PIN2', type:'number', label:'Relay Pin 2'},
+				{key:'WIFI_SSID', type:'text', label:'WiFi SSID'},
+				{key:'WIFI_PASS', type:'text', label:'WiFi Password'}
+			];
+
+			function renderFields(values){
+				fields.innerHTML = '';
+				SCHEMA.forEach(function(f){
+					const v = values && (values[f.key] !== undefined) ? values[f.key] : '';
+					const row = document.createElement('div');
+					row.style.marginBottom = '8px';
+					const label = document.createElement('label');
+					label.style.display = 'block';
+					label.style.fontWeight = '600';
+					label.textContent = f.label;
+					row.appendChild(label);
+
+					if (f.type === 'bool') {
+						const chk = document.createElement('input');
+						chk.type = 'checkbox';
+						chk.name = f.key;
+						chk.checked = !!v;
+						row.appendChild(chk);
+					} else if (f.type === 'select') {
+						const sel = document.createElement('select');
+						sel.name = f.key;
+						f.opts.forEach(function(o){
+							const opt = document.createElement('option');
+							opt.value = o;
+							opt.textContent = o;
+							if (o === v) opt.selected = true;
+							sel.appendChild(opt);
+						});
+						row.appendChild(sel);
+					} else {
+						const inp = document.createElement('input');
+						inp.type = (f.type === 'number') ? 'number' : 'text';
+						inp.name = f.key;
+						inp.value = (v === null || v === undefined) ? '' : v;
+						inp.className = 'regular-text';
+						row.appendChild(inp);
+					}
+					fields.appendChild(row);
+				});
+			}
+
+			async function fetchStaged(unit){
+				status.textContent = 'Loading...';
+				try {
+					const r = await fetch( window.location.origin + '/wp-json/tmon/v1/device/staged-settings?unit_id=' + encodeURIComponent(unit), { credentials: 'same-origin' } );
+					const j = await r.json();
+					status.textContent = '';
+					return j.staged || {};
+				} catch (e) {
+					status.textContent = 'Load failed';
+					return {};
+				}
+			}
+
+			btnLoad.addEventListener('click', async function(e){
+				e.preventDefault();
+				const unit = elUnit.value;
+				if (!unit) { alert('Choose a unit'); return; }
+				const vals = await fetchStaged(unit);
+				renderFields(vals);
+				formWrap.style.display = '';
+			});
+
+			saveBtn.addEventListener('click', async function(e){
+				e.preventDefault();
+				status.textContent = 'Saving...';
+				const unit = elUnit.value;
+				if (!unit) { alert('Choose a unit'); return; }
+				const payload = { unit_id: unit, settings: {} };
+				SCHEMA.forEach(function(f){
+					const el = document.querySelector('[name="'+f.key+'"]');
+					if (!el) return;
+					let v;
+					if (f.type === 'bool') v = !!el.checked;
+					else if (f.type === 'number') v = el.value !== '' ? Number(el.value) : '';
+					else v = el.value;
+					payload.settings[f.key] = v;
+				});
+				try {
+					const r = await fetch(window.location.origin + '/wp-json/tmon/v1/admin/device/settings-staged', {
+						method: 'POST',
+						credentials: 'same-origin',
+						headers: {'Content-Type': 'application/json'},
+						body: JSON.stringify(payload)
+					});
+					const j = await r.json();
+					if (r.ok && j.ok) {
+						status.textContent = 'Staged. Will be delivered at next device check-in.';
+					} else {
+						status.textContent = j.message || 'Save failed';
+					}
+				} catch (err) {
+					status.textContent = 'Save request failed';
+				}
+			});
+		})();
+	</script>
+	<?php
+	return ob_get_clean();
+});
+
+// AJAX: stage a UNIT_Name update for a specific unit (admin UI -> stage name for next check-in)
+add_action('wp_ajax_tmon_uc_update_unit_name', function() {
+	// Optional: verify nonce if provided
+	if ( isset($_REQUEST['security']) ) {
+		check_ajax_referer('tmon_uc_nonce', 'security');
+	}
+	if ( ! current_user_can('manage_options') ) {
+		wp_send_json_error(array('message' => 'forbidden'), 403);
+	}
+	$unit = isset($_REQUEST['unit_id']) ? sanitize_text_field($_REQUEST['unit_id']) : '';
+	$name = isset($_REQUEST['unit_name']) ? sanitize_text_field($_REQUEST['unit_name']) : '';
+	if ( ! $unit ) {
+		wp_send_json_error(array('message' => 'unit_id required'), 400);
+	}
+	$map = get_option('tmon_uc_staged_settings', array());
+	if (! is_array($map)) $map = array();
+	$entry = isset($map[$unit]) && is_array($map[$unit]) ? $map[$unit] : array('settings' => array(), 'ts' => current_time('timestamp'), 'who' => wp_get_current_user()->user_login);
+	if (! isset($entry['settings']) || ! is_array($entry['settings'])) $entry['settings'] = array();
+	$entry['settings']['UNIT_Name'] = $name;
+	$entry['ts']  = current_time('timestamp');
+	$entry['who'] = wp_get_current_user()->user_login;
+	$map[$unit] = $entry;
+	update_option('tmon_uc_staged_settings', $map);
+	// Keep existing hook/audit behavior consistent
+	do_action('tmon_staged_settings_updated', $unit, $entry['settings']);
+	wp_send_json_success(array('ok' => true, 'unit_id' => $unit, 'settings' => $entry['settings']));
+});
+
 // Fallback AJAX handler for pending commands count (if REST endpoint is not present)
 add_action('wp_ajax_tmon_pending_commands_count', function() {
     if (!isset($_GET['unit_id'])) {
@@ -1100,6 +1290,7 @@ add_action('wp_ajax_tmon_uc_get_settings', function() {
                             if (empty($applied)) { $applied = $staged; $applied_source = 'field_log'; }
                             break;
                         }
+ }
                     }
 
                     // existing heuristic: whole-file JSON or embedded JSON

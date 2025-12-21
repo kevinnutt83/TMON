@@ -249,6 +249,22 @@ async def apply_staged_settings_once():
         except Exception:
             pass
 
+        # NEW: Reboot policy: if applied included critical keys, perform a soft reset
+        try:
+            REBOOT_KEYS = set(['NODE_TYPE','WIFI_SSID','WIFI_PASS','RELAY_PIN1','RELAY_PIN2','ENGINE_ENABLED','ENABLE_OLED','ENABLE_LORA','ENABLE_WIFI'])
+            applied_keys = set(list(applied.keys()))
+            if applied_keys & REBOOT_KEYS:
+                await debug_print('Settings applied include critical keys; performing soft reset', 'PROVISION')
+                try:
+                    import machine
+                    # best-effort single soft reset
+                    machine.soft_reset()
+                except Exception:
+                    # if machine not available (desktop), skip
+                    pass
+        except Exception:
+            pass
+
         # NEW: If staged included commands, attempt to confirm/clear them on the server
         try:
             cmds = staged.get('commands', []) if isinstance(staged, dict) else []

@@ -86,4 +86,66 @@ function tmon_uc_pull_install($request){
         ]);
     }
     return rest_ensure_response(['status' => $status]);
-}
+});
+
+// Register REST routes for staged settings
+add_action('rest_api_init', function() {
+	// GET staged settings for a unit (used by device or admin)
+	register_rest_route('tmon/v1', '/device/staged-settings', array(
+		'methods'  => 'GET',
+		'callback' => function(\WP_REST_Request $req) {
+			$unit = sanitize_text_field($req->get_param('unit_id') ?: $req->get_param('machine_id') ?: '');
+			if (!$unit) {
+				return new WP_REST_Response(array('staged_exists' => false, 'staged' => null), 200);
+			}
+			$map = get_option('tmon_uc_staged_settings', array());
+			$entry = is_array($map) && isset($map[$unit]) ? $map[$unit] : null;
+			if (!$entry) {
+				return new WP_REST_Response(array('staged_exists' => false, 'staged' => null), 200);
+			}
+			return new WP_REST_Response(array('staged_exists' => true, 'staged' => $entry['settings'], 'meta' => array('ts' => $entry['ts'], 'who' => $entry['who'] ?? '')), 200);
+		},
+		'permission_callback' => '__return_true' // allow devices / anonymous to GET (tokenized channels may layer on this)
+	));
+
+	// POST staged settings (admin UI -> stage settings for a unit)
+	register_rest_route('tmon/v1', '/admin/device/settings-staged', array(
+		'methods'  => 'POST',
+		'callback' => function(\WP_REST_Request $req) {
+			if (!current_user_can('manage_options')) {
+				return new WP_Error('forbidden', 'Insufficient permissions', array('status' => 403));
+			}
+			$body = $req->get_json_params();
+			$unit = sanitize_text_field($body['unit_id'] ?? '');
+			$settings = isset($body['settings']) && is_array($body['settings']) ? $body['settings'] : array();
+			if (!$unit || !$settings) {
+				return new WP_Error('invalid', 'unit_id and settings are required', array('status' => 400));
+			}
+			// Merge/overwrite permitted keys only (server-side sanitization)
+			$allowed = apply_filters('tmon_staged_settings_allowed_keys', array(
+				'NODE_TYPE','UNIT_Name','SAMPLE_TEMP','SAMPLE_HUMID','SAMPLE_BAR','ENABLE_OLED','ENGINE_ENABLED',
+				'RELAY_PIN1','RELAY_PIN2','RELAY_RUNTIME_LIMITS','WIFI_SSID','WIFI_PASS','ENABLE_sensorBME280',
+				'ENABLE_WIFI','ENABLE_LORA','DEVICE_SUSPENDED','FIELD_DATA_HMAC_ENABLED','FIELD_DATA_HMAC_SECRET'
+			));
+			$safe = array();
+			foreach ($settings as $k => $v) {
+				if (in_array($k, $allowed, true)) {
+					// Coerce simple types: boolean strings -> bool
+					if (is_string($v) && in_array(strtolower($v), array('true','false','1','0','yes','no'), true)) {
+						$v_l = strtolower($v);
+						$v = in_array($v_l, array('true','1','yes'), true);
+					}
+					$safe[$k] = $v;
+				}
+			}
+			$map = get_option('tmon_uc_staged_settings', array());
+			if (!is_array($map)) $map = array();
+			$map[$unit] = array('settings' => $safe, 'ts' => current_time('timestamp'), 'who' => wp_get_current_user()->user_login);
+			update_option('tmon_uc_staged_settings', $map);
+			// For audit & discoverability, also write a transient for quick admin UI access
+			do_action('tmon_staged_settings_updated', $unit, $safe);
+			return new WP_REST_Response(array('ok' => true, 'unit_id' => $unit, 'settings' => $safe), 200);
+		},
+		'permission_callback' => function() { return current_user_can('manage_options'); }
+	));
+});
