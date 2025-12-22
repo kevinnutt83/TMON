@@ -34,6 +34,8 @@ def _auth_headers(mode=None):
        'basic' => Basic auth using FIELD_DATA_APP_USER / FIELD_DATA_APP_PASS or WORDPRESS_USERNAME/PASSWORD
        'hub' => X-TMON-HUB header using any available hub shared key setting
        'read' => read token as X-TMON-READ or Bearer authorization
+       'admin' => admin confirm header (used by Unit Connector Admin routes)
+       'api_key' => generic API key header
     """
     headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
     try:
@@ -67,6 +69,16 @@ def _auth_headers(mode=None):
             read = getattr(settings, 'TMON_HUB_READ_TOKEN', None) or getattr(settings, 'WORDPRESS_READ_TOKEN', None)
             if read:
                 h = dict(headers); h['X-TMON-READ'] = str(read); h['Authorization'] = 'Bearer ' + str(read); return h
+        # Admin confirm header (used by Unit Connector Admin routes)
+        if mode == 'admin':
+            token = getattr(settings, 'TMON_ADMIN_CONFIRM_TOKEN', None) or getattr(settings, 'WORDPRESS_ADMIN_TOKEN', None)
+            if token:
+                h = dict(headers); h[getattr(settings, 'REST_HEADER_ADMIN_KEY', 'X-TMON-ADMIN')] = str(token); return h
+        # Generic API key header
+        if mode == 'api_key':
+            apik = getattr(settings, 'WORDPRESS_API_KEY', None) or getattr(settings, 'TMON_API_KEY', None)
+            if apik:
+                h = dict(headers); h[getattr(settings, 'REST_HEADER_API_KEY', 'X-TMON-API-Key')] = str(apik); return h
     except Exception:
         pass
     # default: return headers w/o auth
@@ -201,9 +213,10 @@ async def send_settings_to_wp():
                 except Exception:
                     pass
 
+        # Prefer legacy admin path first, then admin-scoped, then device path
         candidate_paths = [
-            '/wp-json/tmon/v1/admin/device/settings',
             '/wp-json/tmon-admin/v1/device/settings',
+            '/wp-json/tmon/v1/admin/device/settings',
             '/wp-json/tmon/v1/device/settings'
         ]
         auth_modes = [None, 'basic', 'hub', 'read', 'none']
@@ -231,7 +244,28 @@ async def send_settings_to_wp():
                     last_response = (code, body, mode, p)
                     if code in (200, 201):
                         return True
-                    # continue trying other auth modes/paths on 401/403/4xx
+                    # On 403, try targeted header fallbacks for admin-style endpoints before continuing
+                    if code == 403:
+                        await debug_print(f"wprest: {p} -> 403, trying header fallbacks", 'WARN')
+                        for hdr_mode in ('hub', 'admin', 'api_key', 'read', 'basic'):
+                            try:
+                                fb = _auth_headers(hdr_mode)
+                            except Exception:
+                                fb = {}
+                            try:
+                                try:
+                                    r2 = requests.post(target, json=payload, headers=fb, timeout=8)
+                                except TypeError:
+                                    r2 = requests.post(target, json=payload, headers=fb)
+                                c2 = getattr(r2, 'status_code', 0)
+                                b2 = (getattr(r2, 'text', '') or '')[:300]
+                                if r2: r2.close()
+                                await debug_print(f"wprest: send_settings fallback {hdr_mode} {p} -> {c2} ({b2})", 'HTTP')
+                                if c2 in (200,201):
+                                    return True
+                            except Exception as e:
+                                await debug_print(f"wprest: send_settings fallback {hdr_mode} exception: {e}", 'ERROR')
+                        # fell through, continue trying other candidate paths
                 except Exception as e:
                     await debug_print(f'wprest: send_settings attempt {p} auth={mode} exception: {e}', 'ERROR')
                     last_response = ('err', str(e), mode, p)
