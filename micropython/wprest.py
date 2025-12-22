@@ -170,83 +170,64 @@ async def send_settings_to_wp():
         except Exception:
             hdrs = {}
         try:
-            resp = requests.post(url, json=payload, headers=hdrs, timeout=8)
-            code = getattr(resp, 'status_code', 0)
-            body_snip = (getattr(resp, 'text', '') or '')[:400]
-            if resp: resp.close()
-            await debug_print(f'wprest: send_settings status {code}', 'INFO')
-            if code in (200,201):
-                return True
-            # On 401 attempt quick diagnostics + safe fallbacks
-            if code == 401:
-                # Diagnostic summary (do not print secrets)
-                auth_sent = bool(hdrs.get('Authorization'))
-                user_set = bool(getattr(settings, 'FIELD_DATA_APP_USER', None) or getattr(settings, 'WORDPRESS_USERNAME', None))
-                pass_set = bool(getattr(settings, 'FIELD_DATA_APP_PASS', None))
-                await debug_print(f'wprest: send_settings 401 (auth_sent={auth_sent} user_set={user_set} pass_set={pass_set})', 'WARN')
-                # Try explicit Basic auth fallback if we have username+pass but _auth_headers didn't send Authorization
+            # Prefer the admin-style endpoint where UC/Admin exposes device settings APIs.
+            candidate_paths = [
+                '/wp-json/tmon/v1/admin/device/settings',  # preferred admin endpoint
+                '/wp-json/tmon-admin/v1/device/settings',   # legacy/hub-style
+                '/wp-json/tmon/v1/device/settings',         # older device-targeted endpoint (may require Basic auth)
+            ]
+            for p in candidate_paths:
                 try:
-                    if not auth_sent and user_set and pass_set:
-                        # Build a conservative Basic header and retry
-                        try:
-                            import ubinascii as _ub
-                            user = getattr(settings, 'FIELD_DATA_APP_USER', '') or getattr(settings, 'WORDPRESS_USERNAME', '')
-                            pwd = getattr(settings, 'FIELD_DATA_APP_PASS', '')
-                            creds = (str(user) + ':' + str(pwd)).encode('utf-8')
-                            b64 = _ub.b2a_base64(creds).decode('ascii').strip()
-                            fb = dict(hdrs)
-                            fb['Authorization'] = 'Basic ' + b64
-                            try:
-                                r2 = requests.post(url, json=payload, headers=fb, timeout=8)
-                            except TypeError:
-                                r2 = requests.post(url, json=payload, headers=fb)
-                            c2 = getattr(r2, 'status_code', 0)
-                            b2 = (getattr(r2, 'text', '') or '')[:400]
-                            if r2: r2.close()
-                            await debug_print(f'wprest: send_settings fallback Basic auth status {c2} ({b2[:200]})', 'INFO')
-                            if c2 in (200,201):
-                                return True
-                        except Exception as e:
-                            await debug_print(f'wprest: fallback Basic auth attempt failed: {e}', 'ERROR')
-                except Exception:
-                    pass
-                # Try a small set of alternative admin endpoints and log responses
-                alt_paths = [
-                    getattr(settings, 'ADMIN_SETTINGS_PATH', '/wp-json/tmon-admin/v1/device/settings'),
-                    '/wp-json/tmon-admin/v1/device/settings',
-                    '/wp-json/tmon/v1/device/settings',  # redundant but explicit
-                    getattr(settings, 'ADMIN_CONFIRM_APPLIED_PATH', '/wp-json/tmon-admin/v1/device/confirm-applied')
-                ]
-                for p in alt_paths:
+                    target = settings.WORDPRESS_API_URL.rstrip('/') + p
                     try:
-                        alt_url = settings.WORDPRESS_API_URL.rstrip('/') + p
-                        try:
-                            resp_alt = requests.post(alt_url, json=payload, headers=hdrs, timeout=8)
-                        except TypeError:
-                            resp_alt = requests.post(alt_url, json=payload, headers=hdrs)
-                        alt_code = getattr(resp_alt, 'status_code', 0)
-                        alt_snip = (getattr(resp_alt, 'text', '') or '')[:400]
-                        if resp_alt: resp_alt.close()
-                        await debug_print(f'wprest: send_settings alt {p} -> {alt_code} ({alt_snip[:200]})', 'WARN')
-                        if alt_code in (200,201):
-                            return True
-                    except Exception as e:
-                        await debug_print(f'wprest: send_settings alt {p} exception: {e}', 'ERROR')
-                # Persist payload to backlog for later retry to avoid data loss
-                try:
-                    append_to_backlog({'type': 'settings', 'payload': payload, 'ts': int(time.time())})
-                except Exception:
-                    pass
-                return False
-            # other non-success codes: log and queue
-            await debug_print(f'wprest: send_settings failed {code} ({body_snip[:200]})', 'WARN')
+                        resp = requests.post(target, json=payload, headers=hdrs, timeout=8)
+                    except TypeError:
+                        resp = requests.post(target, json=payload, headers=hdrs)
+                    code = getattr(resp, 'status_code', 0)
+                    body_snip = (getattr(resp, 'text', '') or '')[:400]
+                    if resp: resp.close()
+                    await debug_print(f'wprest: send_settings {p} -> {code} ({body_snip[:200]})', 'HTTP')
+                    if code in (200, 201):
+                        return True
+                    if code == 401:
+                        # Diagnostic: did we send Authorization? do we have app-pass configured?
+                        auth_sent = bool(hdrs.get('Authorization'))
+                        user_set = bool(getattr(settings, 'FIELD_DATA_APP_USER', None) or getattr(settings, 'WORDPRESS_USERNAME', None))
+                        pass_set = bool(getattr(settings, 'FIELD_DATA_APP_PASS', None))
+                        await debug_print(f'wprest: send_settings 401 on {p} (auth_sent={auth_sent} user_set={user_set} pass_set={pass_set})', 'WARN')
+                        # Try Basic fallback if possible
+                        if not auth_sent and user_set and pass_set:
+                            try:
+                                import ubinascii as _ub
+                                user = getattr(settings, 'FIELD_DATA_APP_USER', '') or getattr(settings, 'WORDPRESS_USERNAME', '')
+                                pwd = getattr(settings, 'FIELD_DATA_APP_PASS', '')
+                                creds = (str(user) + ':' + str(pwd)).encode('utf-8')
+                                b64 = _ub.b2a_base64(creds).decode('ascii').strip()
+                                fb = dict(hdrs); fb['Authorization'] = 'Basic ' + b64
+                                try:
+                                    r2 = requests.post(target, json=payload, headers=fb, timeout=8)
+                                except TypeError:
+                                    r2 = requests.post(target, json=payload, headers=fb)
+                                c2 = getattr(r2, 'status_code', 0)
+                                b2 = (getattr(r2, 'text', '') or '')[:400]
+                                if r2: r2.close()
+                                await debug_print(f'wprest: send_settings fallback Basic auth {p} -> {c2} ({b2[:200]})', 'HTTP')
+                                if c2 in (200,201):
+                                    return True
+                            except Exception as e:
+                                await debug_print(f'wprest: fallback Basic auth attempt failed: {e}', 'ERROR')
+                    # continue to next candidate on non-success
+                except Exception as e:
+                    await debug_print(f'wprest: send_settings attempt {p} exception: {e}', 'ERROR')
+            # If we reach here, none succeeded. Queue for retry to avoid data loss.
+            await debug_print('wprest: send_settings all attempts failed; queuing payload', 'WARN')
             try:
                 append_to_backlog({'type': 'settings', 'payload': payload, 'ts': int(time.time())})
             except Exception:
                 pass
             return False
         except Exception as e:
-            await debug_print(f'wprest: send_settings err {e}', 'ERROR')
+            await debug_print(f'wprest: send_settings exc {e}', 'ERROR')
             try:
                 append_to_backlog({'type': 'settings', 'payload': payload, 'ts': int(time.time())})
             except Exception:

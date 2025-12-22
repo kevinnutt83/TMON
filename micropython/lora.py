@@ -564,6 +564,27 @@ async def init_lora():
                                             except Exception:
                                                 pass
                                             return None
+                                    def read(self, nbytes):
+                                        try:
+                                            # Most SPI implementations provide read(n)
+                                            if hasattr(self._spi, 'read'):
+                                                return self._spi.read(nbytes)
+                                        except Exception:
+                                            pass
+                                        # Fallback: use readinto into buffer
+                                        try:
+                                            buf = bytearray(nbytes)
+                                            if hasattr(self._spi, 'readinto'):
+                                                self._spi.readinto(buf)
+                                                return bytes(buf)
+                                            # As last resort, try write_readinto with dummy out
+                                            if hasattr(self._spi, 'write_readinto'):
+                                                out = bytes([0]*nbytes)
+                                                self._spi.write_readinto(out, buf)
+                                                return bytes(buf)
+                                        except Exception:
+                                            pass
+                                        return bytes([0]*nbytes)
                                     def readinto(self, buf):
                                         try:
                                             return self._spi.readinto(buf)
@@ -1494,6 +1515,27 @@ async def init_lora():
                                             except Exception:
                                                 pass
                                             return None
+                                    def read(self, nbytes):
+                                        try:
+                                            # Most SPI implementations provide read(n)
+                                            if hasattr(self._spi, 'read'):
+                                                return self._spi.read(nbytes)
+                                        except Exception:
+                                            pass
+                                        # Fallback: use readinto into buffer
+                                        try:
+                                            buf = bytearray(nbytes)
+                                            if hasattr(self._spi, 'readinto'):
+                                                self._spi.readinto(buf)
+                                                return bytes(buf)
+                                            # As last resort, try write_readinto with dummy out
+                                            if hasattr(self._spi, 'write_readinto'):
+                                                out = bytes([0]*nbytes)
+                                                self._spi.write_readinto(out, buf)
+                                                return bytes(buf)
+                                        except Exception:
+                                            pass
+                                        return bytes([0]*nbytes)
                                     def readinto(self, buf):
                                         try:
                                             return self._spi.readinto(buf)
