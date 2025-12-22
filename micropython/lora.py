@@ -491,6 +491,106 @@ def _deinit_spi_if_any(lora_obj):
     except Exception:
         pass
 
+# NEW helper: attempt to create machine.SPI and return a tolerant shim instance or None.
+def _attach_spi_shim():
+    """Try various machine.SPI construction patterns and return a compact shim object or None."""
+    try:
+        if not (machine and hasattr(machine, 'SPI') and getattr(settings, 'CLK_PIN', None) is not None):
+            return None
+        spi = None
+        # Try constructor with kwargs (common on many ports)
+        try:
+            spi = machine.SPI(
+                settings.SPI_BUS,
+                baudrate=getattr(settings, 'LORA_SPI_BAUD', 1000000),
+                sck=machine.Pin(settings.CLK_PIN),
+                mosi=machine.Pin(settings.MOSI_PIN),
+                miso=machine.Pin(settings.MISO_PIN)
+            )
+        except Exception:
+            # Fallback: construct then .init()
+            try:
+                spi = machine.SPI(settings.SPI_BUS)
+                try:
+                    spi.init(
+                        baudrate=getattr(settings, 'LORA_SPI_BAUD', 1000000),
+                        sck=machine.Pin(settings.CLK_PIN),
+                        mosi=machine.Pin(settings.MOSI_PIN),
+                        miso=machine.Pin(settings.MISO_PIN)
+                    )
+                except Exception:
+                    # keep spi instance even if init signature differs
+                    pass
+            except Exception:
+                spi = None
+        if not spi:
+            return None
+        # Compact shim with tolerant methods and attribute passthrough
+        class _SPIShim:
+            def __init__(self, spi_obj):
+                self._spi = spi_obj
+            def __getattr__(self, name):
+                return getattr(self._spi, name)
+            def __call__(self, *a, **kw):
+                try:
+                    return self._spi(*a, **kw)
+                except Exception:
+                    return self._spi
+            def init(self, *a, **kw):
+                try:
+                    return self._spi.init(*a, **kw)
+                except Exception:
+                    return None
+            def write(self, buf, *a, **kw):
+                try:
+                    return self._spi.write(buf, *a, **kw)
+                except Exception:
+                    try:
+                        if hasattr(self._spi, 'write_readinto'):
+                            dummy = bytearray(len(buf))
+                            return self._spi.write_readinto(buf, dummy)
+                    except Exception:
+                        pass
+                    return None
+            def read(self, nbytes, *a, **kw):
+                try:
+                    if hasattr(self._spi, 'read'):
+                        return self._spi.read(nbytes, *a, **kw)
+                except Exception:
+                    pass
+                try:
+                    buf = bytearray(nbytes)
+                    if hasattr(self._spi, 'readinto'):
+                        self._spi.readinto(buf)
+                        return bytes(buf)
+                    if hasattr(self._spi, 'write_readinto'):
+                        out = bytes([0]*nbytes)
+                        self._spi.write_readinto(out, buf)
+                        return bytes(buf)
+                except Exception:
+                    pass
+                return bytes([0]*nbytes)
+            def readinto(self, buf, *a, **kw):
+                try:
+                    return self._spi.readinto(buf, *a, **kw)
+                except Exception:
+                    return None
+            def write_readinto(self, out, into, *a, **kw):
+                try:
+                    return self._spi.write_readinto(out, into, *a, **kw)
+                except Exception:
+                    return None
+            def deinit(self, *a, **kw):
+                try:
+                    if hasattr(self._spi, 'deinit'):
+                        return self._spi.deinit(*a, **kw)
+                except Exception:
+                    pass
+                return None
+        return _SPIShim(spi)
+    except Exception:
+        return None
+
 async def init_lora():
     global lora
     print('[DEBUG] init_lora start')
@@ -539,114 +639,21 @@ async def init_lora():
                     except Exception:
                         msg = ''
                     await debug_print(f"lora.begin AttributeError: {msg}", "ERROR")
-                    # conservative attach attempt
+                    # concise attach attempt using helper
                     try:
-                        if machine and hasattr(machine, 'SPI') and getattr(settings, 'CLK_PIN', None) is not None:
-                            spi = None
-                            # Try constructor with keyword args (common on many ports)
-                            try:
-                                spi = machine.SPI(
-                                    settings.SPI_BUS,
-                                    baudrate=getattr(settings, 'LORA_SPI_BAUD', 1000000),
-                                    sck=machine.Pin(settings.CLK_PIN),
-                                    mosi=machine.Pin(settings.MOSI_PIN),
-                                    miso=machine.Pin(settings.MISO_PIN)
-                                )
-                            except TypeError:
-                                # Some ports require SPI(...); then .init(...)
-                                try:
-                                    spi = machine.SPI(settings.SPI_BUS)
-                                    try:
-                                        spi.init(
-                                            baudrate=getattr(settings, 'LORA_SPI_BAUD', 1000000),
-                                            sck=machine.Pin(settings.CLK_PIN),
-                                            mosi=machine.Pin(settings.MOSI_PIN),
-                                            miso=machine.Pin(settings.MISO_PIN)
-                                        )
-                                    except TypeError:
-                                        # best-effort: keep spi instance even if specific init params unsupported
-                                        pass
-                                except Exception as se:
-                                    await debug_print(f"lora: machine.SPI construct/init failed: {se}", "ERROR")
-                                    spi = None
-                            except Exception as se:
-                                await debug_print(f"lora: machine.SPI creation failed: {se}", "ERROR")
-                                spi = None
-
-                            if spi:
-                                # Compact, consistently-indented SPI shim (no multiline docstring).
-                                class _SPIShim:
-                                    def __init__(self, spi_obj):
-                                        self._spi = spi_obj
-                                    def __getattr__(self, name):
-                                        return getattr(self._spi, name)
-                                    def __call__(self, *a, **kw):
-                                        try:
-                                            return self._spi(*a, **kw)
-                                        except Exception:
-                                            return self._spi
-                                    def init(self, *a, **kw):
-                                        try:
-                                            return self._spi.init(*a, **kw)
-                                        except Exception:
-                                            return None
-                                    def write(self, buf, *a, **kw):
-                                        try:
-                                            return self._spi.write(buf, *a, **kw)
-                                        except Exception:
-                                            try:
-                                                if hasattr(self._spi, 'write_readinto'):
-                                                    dummy = bytearray(len(buf))
-                                                    return self._spi.write_readinto(buf, dummy)
-                                            except Exception:
-                                                pass
-                                            return None
-                                    def read(self, nbytes, *a, **kw):
-                                        try:
-                                            if hasattr(self._spi, 'read'):
-                                                return self._spi.read(nbytes, *a, **kw)
-                                        except Exception:
-                                            pass
-                                        try:
-                                            buf = bytearray(nbytes)
-                                            if hasattr(self._spi, 'readinto'):
-                                                self._spi.readinto(buf)
-                                                return bytes(buf)
-                                            if hasattr(self._spi, 'write_readinto'):
-                                                out = bytes([0]*nbytes)
-                                                self._spi.write_readinto(out, buf)
-                                                return bytes(buf)
-                                        except Exception:
-                                            pass
-                                        return bytes([0]*nbytes)
-                                    def readinto(self, buf, *a, **kw):
-                                        try:
-                                            return self._spi.readinto(buf, *a, **kw)
-                                        except Exception:
-                                            return None
-                                    def write_readinto(self, out, into, *a, **kw):
-                                        try:
-                                            return self._spi.write_readinto(out, into, *a, **kw)
-                                        except Exception:
-                                            return None
-                                    def deinit(self, *a, **kw):
-                                        try:
-                                            if hasattr(self._spi, 'deinit'):
-                                                return self._spi.deinit(*a, **kw)
-                                        except Exception:
-                                            pass
-                                        return None
-                                lo.spi = _SPIShim(spi)
-                                await debug_print("lora: attached machine.SPI shim and retrying begin", "LORA")
-                            else:
-                                await debug_print("lora: no usable machine.SPI instance available", "ERROR")
-                     except Exception:
-                         pass
-                     try:
-                         _time.sleep_ms(120)
-                     except Exception:
-                         pass
-                     continue
+                        shim = _attach_spi_shim()
+                        if shim:
+                            lo.spi = shim
+                            await debug_print("lora: attached machine.SPI shim and retrying begin", "LORA")
+                        else:
+                            await debug_print("lora: no usable machine.SPI instance available", "ERROR")
+                    except Exception:
+                        pass
+                    try:
+                        _time.sleep_ms(120)
+                    except Exception:
+                        pass
+                    continue
                  except Exception as e:
                      await debug_print(f"lora.begin exception: {e}", "ERROR")
                      return -999
@@ -1476,6 +1483,106 @@ def _deinit_spi_if_any(lora_obj):
     except Exception:
         pass
 
+# NEW helper: attempt to create machine.SPI and return a tolerant shim instance or None.
+def _attach_spi_shim():
+    """Try various machine.SPI construction patterns and return a compact shim object or None."""
+    try:
+        if not (machine and hasattr(machine, 'SPI') and getattr(settings, 'CLK_PIN', None) is not None):
+            return None
+        spi = None
+        # Try constructor with kwargs (common on many ports)
+        try:
+            spi = machine.SPI(
+                settings.SPI_BUS,
+                baudrate=getattr(settings, 'LORA_SPI_BAUD', 1000000),
+                sck=machine.Pin(settings.CLK_PIN),
+                mosi=machine.Pin(settings.MOSI_PIN),
+                miso=machine.Pin(settings.MISO_PIN)
+            )
+        except Exception:
+            # Fallback: construct then .init()
+            try:
+                spi = machine.SPI(settings.SPI_BUS)
+                try:
+                    spi.init(
+                        baudrate=getattr(settings, 'LORA_SPI_BAUD', 1000000),
+                        sck=machine.Pin(settings.CLK_PIN),
+                        mosi=machine.Pin(settings.MOSI_PIN),
+                        miso=machine.Pin(settings.MISO_PIN)
+                    )
+                except Exception:
+                    # keep spi instance even if init signature differs
+                    pass
+            except Exception:
+                spi = None
+        if not spi:
+            return None
+        # Compact shim with tolerant methods and attribute passthrough
+        class _SPIShim:
+            def __init__(self, spi_obj):
+                self._spi = spi_obj
+            def __getattr__(self, name):
+                return getattr(self._spi, name)
+            def __call__(self, *a, **kw):
+                try:
+                    return self._spi(*a, **kw)
+                except Exception:
+                    return self._spi
+            def init(self, *a, **kw):
+                try:
+                    return self._spi.init(*a, **kw)
+                except Exception:
+                    return None
+            def write(self, buf, *a, **kw):
+                try:
+                    return self._spi.write(buf, *a, **kw)
+                except Exception:
+                    try:
+                        if hasattr(self._spi, 'write_readinto'):
+                            dummy = bytearray(len(buf))
+                            return self._spi.write_readinto(buf, dummy)
+                    except Exception:
+                        pass
+                    return None
+            def read(self, nbytes, *a, **kw):
+                try:
+                    if hasattr(self._spi, 'read'):
+                        return self._spi.read(nbytes, *a, **kw)
+                except Exception:
+                    pass
+                try:
+                    buf = bytearray(nbytes)
+                    if hasattr(self._spi, 'readinto'):
+                        self._spi.readinto(buf)
+                        return bytes(buf)
+                    if hasattr(self._spi, 'write_readinto'):
+                        out = bytes([0]*nbytes)
+                        self._spi.write_readinto(out, buf)
+                        return bytes(buf)
+                except Exception:
+                    pass
+                return bytes([0]*nbytes)
+            def readinto(self, buf, *a, **kw):
+                try:
+                    return self._spi.readinto(buf, *a, **kw)
+                except Exception:
+                    return None
+            def write_readinto(self, out, into, *a, **kw):
+                try:
+                    return self._spi.write_readinto(out, into, *a, **kw)
+                except Exception:
+                    return None
+            def deinit(self, *a, **kw):
+                try:
+                    if hasattr(self._spi, 'deinit'):
+                        return self._spi.deinit(*a, **kw)
+                except Exception:
+                    pass
+                return None
+        return _SPIShim(spi)
+    except Exception:
+        return None
+
 async def init_lora():
     global lora
     print('[DEBUG] init_lora start')
@@ -1524,114 +1631,21 @@ async def init_lora():
                     except Exception:
                         msg = ''
                     await debug_print(f"lora.begin AttributeError: {msg}", "ERROR")
-                    # conservative attach attempt
+                    # concise attach attempt using helper
                     try:
-                        if machine and hasattr(machine, 'SPI') and getattr(settings, 'CLK_PIN', None) is not None:
-                            spi = None
-                            # Try constructor with keyword args (common on many ports)
-                            try:
-                                spi = machine.SPI(
-                                    settings.SPI_BUS,
-                                    baudrate=getattr(settings, 'LORA_SPI_BAUD', 1000000),
-                                    sck=machine.Pin(settings.CLK_PIN),
-                                    mosi=machine.Pin(settings.MOSI_PIN),
-                                    miso=machine.Pin(settings.MISO_PIN)
-                                )
-                            except TypeError:
-                                # Some ports require SPI(...); then .init(...)
-                                try:
-                                    spi = machine.SPI(settings.SPI_BUS)
-                                    try:
-                                        spi.init(
-                                            baudrate=getattr(settings, 'LORA_SPI_BAUD', 1000000),
-                                            sck=machine.Pin(settings.CLK_PIN),
-                                            mosi=machine.Pin(settings.MOSI_PIN),
-                                            miso=machine.Pin(settings.MISO_PIN)
-                                        )
-                                    except TypeError:
-                                        # best-effort: keep spi instance even if specific init params unsupported
-                                        pass
-                                except Exception as se:
-                                    await debug_print(f"lora: machine.SPI construct/init failed: {se}", "ERROR")
-                                    spi = None
-                            except Exception as se:
-                                await debug_print(f"lora: machine.SPI creation failed: {se}", "ERROR")
-                                spi = None
-
-                            if spi:
-                                # Compact, consistently-indented SPI shim (no multiline docstring).
-                                class _SPIShim:
-                                    def __init__(self, spi_obj):
-                                        self._spi = spi_obj
-                                    def __getattr__(self, name):
-                                        return getattr(self._spi, name)
-                                    def __call__(self, *a, **kw):
-                                        try:
-                                            return self._spi(*a, **kw)
-                                        except Exception:
-                                            return self._spi
-                                    def init(self, *a, **kw):
-                                        try:
-                                            return self._spi.init(*a, **kw)
-                                        except Exception:
-                                            return None
-                                    def write(self, buf, *a, **kw):
-                                        try:
-                                            return self._spi.write(buf, *a, **kw)
-                                        except Exception:
-                                            try:
-                                                if hasattr(self._spi, 'write_readinto'):
-                                                    dummy = bytearray(len(buf))
-                                                    return self._spi.write_readinto(buf, dummy)
-                                            except Exception:
-                                                pass
-                                            return None
-                                    def read(self, nbytes, *a, **kw):
-                                        try:
-                                            if hasattr(self._spi, 'read'):
-                                                return self._spi.read(nbytes, *a, **kw)
-                                        except Exception:
-                                            pass
-                                        try:
-                                            buf = bytearray(nbytes)
-                                            if hasattr(self._spi, 'readinto'):
-                                                self._spi.readinto(buf)
-                                                return bytes(buf)
-                                            if hasattr(self._spi, 'write_readinto'):
-                                                out = bytes([0]*nbytes)
-                                                self._spi.write_readinto(out, buf)
-                                                return bytes(buf)
-                                        except Exception:
-                                            pass
-                                        return bytes([0]*nbytes)
-                                    def readinto(self, buf, *a, **kw):
-                                        try:
-                                            return self._spi.readinto(buf, *a, **kw)
-                                        except Exception:
-                                            return None
-                                    def write_readinto(self, out, into, *a, **kw):
-                                        try:
-                                            return self._spi.write_readinto(out, into, *a, **kw)
-                                        except Exception:
-                                            return None
-                                    def deinit(self, *a, **kw):
-                                        try:
-                                            if hasattr(self._spi, 'deinit'):
-                                                return self._spi.deinit(*a, **kw)
-                                        except Exception:
-                                            pass
-                                        return None
-                                lo.spi = _SPIShim(spi)
-                                await debug_print("lora: attached machine.SPI shim and retrying begin", "LORA")
-                            else:
-                                await debug_print("lora: no usable machine.SPI instance available", "ERROR")
-                     except Exception:
-                         pass
-                     try:
-                         _time.sleep_ms(120)
-                     except Exception:
-                         pass
-                     continue
+                        shim = _attach_spi_shim()
+                        if shim:
+                            lo.spi = shim
+                            await debug_print("lora: attached machine.SPI shim and retrying begin", "LORA")
+                        else:
+                            await debug_print("lora: no usable machine.SPI instance available", "ERROR")
+                    except Exception:
+                        pass
+                    try:
+                        _time.sleep_ms(120)
+                    except Exception:
+                        pass
+                    continue
                  except Exception as e:
                      await debug_print(f"lora.begin exception: {e}", "ERROR")
                      return -999
