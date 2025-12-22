@@ -46,18 +46,24 @@ try:
 except Exception:
     chacha20_encrypt = None
     derive_nonce = None
-from wprest import (
-    register_with_wp,
-    send_data_to_wp,
-    send_settings_to_wp,
-    fetch_settings_from_wp,
-    send_file_to_wp,
-    request_file_from_wp,
-    heartbeat_ping,
-    poll_ota_jobs,
-    handle_ota_job,
-    _auth_headers  # <-- add auth helper import
-)
+
+# Guarded import of optional wprest helpers to avoid ImportError on devices that don't expose all names.
+try:
+    import wprest as _wp
+    register_with_wp = getattr(_wp, 'register_with_wp', None)
+    send_data_to_wp = getattr(_wp, 'send_data_to_wp', None)
+    send_settings_to_wp = getattr(_wp, 'send_settings_to_wp', None)
+    # Note: fetch_settings_from_wp is optional; the module provides a local implementation below if needed.
+    fetch_settings_from_wp = getattr(_wp, 'fetch_settings_from_wp', None)
+    send_file_to_wp = getattr(_wp, 'send_file_to_wp', None)
+    request_file_from_wp = getattr(_wp, 'request_file_from_wp', None)
+    heartbeat_ping = getattr(_wp, 'heartbeat_ping', None)
+    poll_ota_jobs = getattr(_wp, 'poll_ota_jobs', None)
+    handle_ota_job = getattr(_wp, 'handle_ota_job', None)
+    _auth_headers = getattr(_wp, '_auth_headers', None)
+except Exception:
+    register_with_wp = send_data_to_wp = send_settings_to_wp = fetch_settings_from_wp = None
+    send_file_to_wp = request_file_from_wp = heartbeat_ping = poll_ota_jobs = handle_ota_job = _auth_headers = None
 
 async def user_input_listener():
     """Non-blocking input for user commands via UART/serial."""
