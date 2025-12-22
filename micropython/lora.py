@@ -654,10 +654,10 @@ async def init_lora():
                     except Exception:
                         pass
                     continue
-                 except Exception as e:
-                     await debug_print(f"lora.begin exception: {e}", "ERROR")
-                     return -999
-             return -999
+                except Exception as e:
+                    await debug_print(f"lora.begin exception: {e}", "ERROR")
+                    return -999
+            return -999
 
         status = await _attempt_begin(lora, attempts=2)
         print(f'[DEBUG] init_lora: lora.begin() returned {status}')
@@ -1646,10 +1646,10 @@ async def init_lora():
                     except Exception:
                         pass
                     continue
-                 except Exception as e:
-                     await debug_print(f"lora.begin exception: {e}", "ERROR")
-                     return -999
-             return -999
+                except Exception as e:
+                    await debug_print(f"lora.begin exception: {e}", "ERROR")
+                    return -999
+            return -999
 
         status = await _attempt_begin(lora, attempts=2)
         print(f'[DEBUG] init_lora: lora.begin() returned {status}')
