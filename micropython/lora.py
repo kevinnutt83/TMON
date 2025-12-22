@@ -574,18 +574,13 @@ async def init_lora():
                                 spi = None
 
                             if spi:
-                                # Robust shim that delegates unknown attributes to the underlying SPI,
-                                # and implements the common methods the SX1262 driver expects.
+                                # Compact, consistently-indented SPI shim (no multiline docstring).
                                 class _SPIShim:
-                                    """Flexible wrapper around machine.SPI to tolerate different ports/driver usage.
-                                    Provides attribute passthrough and tolerant implementations of common methods.
-                                    """
                                     def __init__(self, spi_obj):
                                         self._spi = spi_obj
                                     def __getattr__(self, name):
                                         return getattr(self._spi, name)
                                     def __call__(self, *a, **kw):
-                                        # Some drivers may attempt to call the SPI-like object; forward if possible.
                                         try:
                                             return self._spi(*a, **kw)
                                         except Exception:
@@ -599,7 +594,6 @@ async def init_lora():
                                         try:
                                             return self._spi.write(buf, *a, **kw)
                                         except Exception:
-                                            # Fallbacks: try write_readinto or emulate with write_readinto
                                             try:
                                                 if hasattr(self._spi, 'write_readinto'):
                                                     dummy = bytearray(len(buf))
@@ -1565,18 +1559,13 @@ async def init_lora():
                                 spi = None
 
                             if spi:
-                                # Robust shim that delegates unknown attributes to the underlying SPI,
-                                # and implements the common methods the SX1262 driver expects.
+                                # Compact, consistently-indented SPI shim (no multiline docstring).
                                 class _SPIShim:
-                                    """Flexible wrapper around machine.SPI to tolerate different ports/driver usage.
-                                    Provides attribute passthrough and tolerant implementations of common methods.
-                                    """
                                     def __init__(self, spi_obj):
                                         self._spi = spi_obj
                                     def __getattr__(self, name):
                                         return getattr(self._spi, name)
                                     def __call__(self, *a, **kw):
-                                        # Some drivers may attempt to call the SPI-like object; forward if possible.
                                         try:
                                             return self._spi(*a, **kw)
                                         except Exception:
@@ -1590,7 +1579,6 @@ async def init_lora():
                                         try:
                                             return self._spi.write(buf, *a, **kw)
                                         except Exception:
-                                            # Fallbacks: try write_readinto or emulate with write_readinto
                                             try:
                                                 if hasattr(self._spi, 'write_readinto'):
                                                     dummy = bytearray(len(buf))
@@ -1824,7 +1812,6 @@ async def connectLora():
                         import uhashlib, ubinascii, ujson
                         ctr_file = getattr(settings, 'LORA_HMAC_COUNTER_FILE', '/logs/lora_ctr.json')
                         ctr = 0
-
                         try:
                             with open(ctr_file, 'r') as cf:
                                 ctr_obj = ujson.loads(cf.read())
