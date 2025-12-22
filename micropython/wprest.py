@@ -213,9 +213,13 @@ async def send_settings_to_wp():
                 except Exception:
                     pass
 
-        # Prefer UC/Admin-style endpoint first (many deployments require X-TMON-ADMIN header),
-        # then device endpoint, then legacy hub-style endpoint.
+        # Prefer the newer Unit Connector "settings-applied" path first when present,
+        # then admin/scoped, then device, then legacy hub path.
         candidate_paths = []
+        try:
+            candidate_paths.append(getattr(settings, 'UC_SETTINGS_APPLIED_PATH', '/wp-json/tmon/v1/admin/device/settings-applied'))
+        except Exception:
+            candidate_paths.append('/wp-json/tmon/v1/admin/device/settings-applied')
         try:
             candidate_paths.append(getattr(settings, 'ADMIN_SETTINGS_PATH', '/wp-json/tmon/v1/admin/device/settings'))
         except Exception:

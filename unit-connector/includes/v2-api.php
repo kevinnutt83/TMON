@@ -795,3 +795,125 @@ add_action('rest_api_init', function() {
 		'permission_callback' => function(){ return current_user_can('manage_options') || current_user_can('edit_tmon_units'); }
 	));
 });
+
+// Register settings endpoints and add handlers + permission callback. This is minimal and conservative: it persists the incoming settings using update_option(...) and logs via error_log for diagnostics. You can later change persistence to DB tables or files as required.
+add_action( 'rest_api_init', function () {
+	$ns = 'tmon/v1';
+	$ns_legacy = 'tmon-admin/v1';
+
+	// Permission callback used by the routes: allow if current user is admin OR a configured token header matches
+	$perm_cb = function ( WP_REST_Request $request ) {
+		// Admin users can always access
+		if ( current_user_can( 'manage_options' ) ) {
+			return true;
+		}
+		// Header-based tokens (site config). Avoid echoing secrets in logs.
+		$hdrs = array_change_key_case( $request->get_headers(), CASE_LOWER );
+		$admin_token = trim( (string) get_option( 'tmon_admin_confirm_token', '' ) );
+		$hub_key = trim( (string) get_option( 'tmon_hub_shared_key', '' ) );
+		$api_key = trim( (string) get_option( 'tmon_api_key', '' ) );
+
+		if ( $admin_token && ! empty( $hdrs['x-tmon-admin'] ) && hash_equals( $admin_token, trim( (string) $hdrs['x-tmon-admin'][0] ) ) ) {
+			return true;
+		}
+		if ( $hub_key && ! empty( $hdrs['x-tmon-hub'] ) && hash_equals( $hub_key, trim( (string) $hdrs['x-tmon-hub'][0] ) ) ) {
+			return true;
+		}
+		if ( $api_key && ! empty( $hdrs['x-tmon-api-key'] ) && hash_equals( $api_key, trim( (string) $hdrs['x-tmon-api-key'][0] ) ) ) {
+			return true;
+		}
+		// Otherwise deny (WP's REST will return 403)
+		return new WP_Error( 'rest_forbidden', 'Forbidden', array( 'status' => 403 ) );
+	};
+
+	// Handler: accept POST/GET, persist settings per-unit using update_option for traceability, and return {status:ok}
+	$handler = function ( WP_REST_Request $request ) {
+		$params = $request->get_params();
+		$body   = $request->get_body();
+		$data   = array();
+
+		// Prefer JSON body for POST
+		if ( $request->get_method() === 'POST' && $body ) {
+			$decoded = json_decode( $body, true );
+			if ( is_array( $decoded ) ) {
+				$data = $decoded;
+			}
+		}
+		// Fallback to request params for GET or POST form-encoded
+		if ( empty( $data ) && is_array( $params ) ) {
+			$data = $params;
+		}
+
+		$unit_id = '';
+		if ( ! empty( $data['unit_id'] ) ) {
+			$unit_id = (string) $data['unit_id'];
+		} elseif ( ! empty( $params['unit_id'] ) ) {
+			$unit_id = (string) $params['unit_id'];
+		} elseif ( ! empty( $data['machine_id'] ) ) {
+			$unit_id = 'machine:' . (string) $data['machine_id'];
+		}
+
+		// Basic validation: require unit id / machine id in most cases
+		if ( empty( $unit_id ) && empty( $data ) ) {
+			return rest_ensure_response( array( 'status' => 'error', 'message' => 'no payload' ) );
+		}
+
+		// Persist incoming payload keyed by unit for later inspection and staged-apply
+		$opt_key = 'tmon_settings_' . ( $unit_id ? sanitize_key( $unit_id ) : 'unknown' );
+		try {
+			update_option( $opt_key, $data );
+			// Log arrival for diagnostics (concise)
+			if ( function_exists( 'error_log' ) ) {
+				$msg = sprintf( '[TMON] settings received unit=%s keys=%s', $unit_id, implode( ',', array_keys( (array) $data ) ) );
+				error_log( $msg );
+			}
+		} catch ( Exception $e ) {
+			return rest_ensure_response( array( 'status' => 'error', 'message' => 'persist_failed' ) );
+		}
+
+		// Return canonical success payload device expects
+		return rest_ensure_response( array( 'status' => 'ok', 'received' => true, 'unit_id' => $unit_id ) );
+	};
+
+	// Preferred admin-scoped settings endpoint (UC v2-style)
+	register_rest_route( $ns, '/admin/device/settings', array(
+		array(
+			'methods'             => WP_REST_Server::CREATABLE, // POST
+			'callback'            => $handler,
+			'permission_callback' => $perm_cb,
+		),
+		array(
+			'methods'             => WP_REST_Server::READABLE,  // GET for convenience
+			'callback'            => $handler,
+			'permission_callback' => $perm_cb,
+		),
+	) );
+
+	// Device-level settings endpoint (device-targeted)
+	register_rest_route( $ns, '/device/settings', array(
+		array(
+			'methods'             => WP_REST_Server::CREATABLE,
+			'callback'            => $handler,
+			'permission_callback' => $perm_cb,
+		),
+		array(
+			'methods'             => WP_REST_Server::READABLE,
+			'callback'            => $handler,
+			'permission_callback' => $perm_cb,
+		),
+	) );
+
+	// Legacy hub-style settings path (compatibility)
+	register_rest_route( $ns_legacy, '/device/settings', array(
+		array(
+			'methods'             => WP_REST_Server::CREATABLE,
+			'callback'            => $handler,
+			'permission_callback' => $perm_cb,
+		),
+		array(
+			'methods'             => WP_REST_Server::READABLE,
+			'callback'            => $handler,
+			'permission_callback' => $perm_cb,
+		),
+	) );
+} );
