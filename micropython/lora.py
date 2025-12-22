@@ -519,13 +519,51 @@ async def init_lora():
         print('[DEBUG] init_lora: SX1262 object created')
         # Ensure any leftover SPI is clean
         _deinit_spi_if_any(lora)
-        status = lora.begin(
-            freq=settings.FREQ, bw=settings.BW, sf=settings.SF, cr=settings.CR,
-            syncWord=settings.SYNC_WORD, power=settings.POWER,
-            currentLimit=settings.CURRENT_LIMIT, preambleLength=settings.PREAMBLE_LEN,
-            implicit=False, implicitLen=0xFF, crcOn=settings.CRC_ON, txIq=False, rxIq=False,
-            tcxoVoltage=settings.TCXO_VOLTAGE, useRegulatorLDO=settings.USE_LDO
-        )
+        # Guarded begin: retry and attempt to attach a machine.SPI instance if the driver
+        # throws an AttributeError referencing a missing 'write' (common when SPI wasn't bound).
+        async def _attempt_begin(lo, attempts=2):
+            for i in range(attempts):
+                try:
+                    status = lo.begin(
+                        freq=settings.FREQ, bw=settings.BW, sf=settings.SF, cr=settings.CR,
+                        syncWord=settings.SYNC_WORD, power=settings.POWER,
+                        currentLimit=settings.CURRENT_LIMIT, preambleLength=settings.PREAMBLE_LEN,
+                        implicit=False, implicitLen=0xFF, crcOn=settings.CRC_ON, txIq=False, rxIq=False,
+                        tcxoVoltage=settings.TCXO_VOLTAGE, useRegulatorLDO=settings.USE_LDO
+                    )
+                    return status
+                except AttributeError as ae:
+                    # If AES/spi write missing, try to provide a SPI object and retry once
+                    try:
+                        msg = str(ae)
+                    except Exception:
+                        msg = ''
+                    await debug_print(f"lora.begin AttributeError: {msg}", "ERROR")
+                    # conservative attach attempt
+                    try:
+                        if machine and hasattr(machine, 'SPI') and getattr(settings, 'CLK_PIN', None) is not None:
+                            try:
+                                spi = machine.SPI(settings.SPI_BUS, baudrate=getattr(settings, 'LORA_SPI_BAUD', 1000000),
+                                                  sck=machine.Pin(settings.CLK_PIN),
+                                                  mosi=machine.Pin(settings.MOSI_PIN),
+                                                  miso=machine.Pin(settings.MISO_PIN))
+                                lo.spi = spi
+                                await debug_print("lora: attached machine.SPI and retrying begin", "LORA")
+                            except Exception as se:
+                                await debug_print(f"lora: manual SPI attach failed: {se}", "ERROR")
+                    except Exception:
+                        pass
+                    try:
+                        _time.sleep_ms(120)
+                    except Exception:
+                        pass
+                    continue
+                except Exception as e:
+                    await debug_print(f"lora.begin exception: {e}", "ERROR")
+                    return -999
+            return -999
+
+        status = await _attempt_begin(lora, attempts=2)
         print(f'[DEBUG] init_lora: lora.begin() returned {status}')
         # If chip not found, try a single reset/retry before giving up (helps with pin/SPI races on boot)
         if status == -2:
@@ -1377,13 +1415,51 @@ async def init_lora():
         print('[DEBUG] init_lora: SX1262 object created')
         # Ensure any leftover SPI is clean
         _deinit_spi_if_any(lora)
-        status = lora.begin(
-            freq=settings.FREQ, bw=settings.BW, sf=settings.SF, cr=settings.CR,
-            syncWord=settings.SYNC_WORD, power=settings.POWER,
-            currentLimit=settings.CURRENT_LIMIT, preambleLength=settings.PREAMBLE_LEN,
-            implicit=False, implicitLen=0xFF, crcOn=settings.CRC_ON, txIq=False, rxIq=False,
-            tcxoVoltage=settings.TCXO_VOLTAGE, useRegulatorLDO=settings.USE_LDO
-        )
+        # Guarded begin: retry and attempt to attach a machine.SPI instance if the driver
+        # throws an AttributeError referencing a missing 'write' (common when SPI wasn't bound).
+        async def _attempt_begin(lo, attempts=2):
+            for i in range(attempts):
+                try:
+                    status = lo.begin(
+                        freq=settings.FREQ, bw=settings.BW, sf=settings.SF, cr=settings.CR,
+                        syncWord=settings.SYNC_WORD, power=settings.POWER,
+                        currentLimit=settings.CURRENT_LIMIT, preambleLength=settings.PREAMBLE_LEN,
+                        implicit=False, implicitLen=0xFF, crcOn=settings.CRC_ON, txIq=False, rxIq=False,
+                        tcxoVoltage=settings.TCXO_VOLTAGE, useRegulatorLDO=settings.USE_LDO
+                    )
+                    return status
+                except AttributeError as ae:
+                    # If AES/spi write missing, try to provide a SPI object and retry once
+                    try:
+                        msg = str(ae)
+                    except Exception:
+                        msg = ''
+                    await debug_print(f"lora.begin AttributeError: {msg}", "ERROR")
+                    # conservative attach attempt
+                    try:
+                        if machine and hasattr(machine, 'SPI') and getattr(settings, 'CLK_PIN', None) is not None:
+                            try:
+                                spi = machine.SPI(settings.SPI_BUS, baudrate=getattr(settings, 'LORA_SPI_BAUD', 1000000),
+                                                  sck=machine.Pin(settings.CLK_PIN),
+                                                  mosi=machine.Pin(settings.MOSI_PIN),
+                                                  miso=machine.Pin(settings.MISO_PIN))
+                                lo.spi = spi
+                                await debug_print("lora: attached machine.SPI and retrying begin", "LORA")
+                            except Exception as se:
+                                await debug_print(f"lora: manual SPI attach failed: {se}", "ERROR")
+                    except Exception:
+                        pass
+                    try:
+                        _time.sleep_ms(120)
+                    except Exception:
+                        pass
+                    continue
+                except Exception as e:
+                    await debug_print(f"lora.begin exception: {e}", "ERROR")
+                    return -999
+            return -999
+
+        status = await _attempt_begin(lora, attempts=2)
         print(f'[DEBUG] init_lora: lora.begin() returned {status}')
         # If chip not found, try a single reset/retry before giving up (helps with pin/SPI races on boot)
         if status == -2:
