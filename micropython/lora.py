@@ -547,8 +547,42 @@ async def init_lora():
                                                   sck=machine.Pin(settings.CLK_PIN),
                                                   mosi=machine.Pin(settings.MOSI_PIN),
                                                   miso=machine.Pin(settings.MISO_PIN))
-                                lo.spi = spi
-                                await debug_print("lora: attached machine.SPI and retrying begin", "LORA")
+                                # Small shim to ensure the LoRa driver finds 'write' (and other) methods.
+                                class _SPIShim:
+                                    def __init__(self, spi_obj):
+                                        self._spi = spi_obj
+                                    def write(self, buf):
+                                        try:
+                                            return self._spi.write(buf)
+                                        except Exception:
+                                            # Fallback to write_readinto when available (best-effort)
+                                            try:
+                                                if hasattr(self._spi, 'write_readinto'):
+                                                    dummy = bytearray(len(buf))
+                                                    self._spi.write_readinto(buf, dummy)
+                                                    return None
+                                            except Exception:
+                                                pass
+                                            return None
+                                    def readinto(self, buf):
+                                        try:
+                                            return self._spi.readinto(buf)
+                                        except Exception:
+                                            return None
+                                    def write_readinto(self, out, into):
+                                        try:
+                                            return self._spi.write_readinto(out, into)
+                                        except Exception:
+                                            return None
+                                    def deinit(self):
+                                        try:
+                                            if hasattr(self._spi, 'deinit'):
+                                                return self._spi.deinit()
+                                        except Exception:
+                                            pass
+                                        return None
+                                lo.spi = _SPIShim(spi)
+                                await debug_print("lora: attached machine.SPI shim and retrying begin", "LORA")
                             except Exception as se:
                                 await debug_print(f"lora: manual SPI attach failed: {se}", "ERROR")
                     except Exception:
@@ -1443,8 +1477,42 @@ async def init_lora():
                                                   sck=machine.Pin(settings.CLK_PIN),
                                                   mosi=machine.Pin(settings.MOSI_PIN),
                                                   miso=machine.Pin(settings.MISO_PIN))
-                                lo.spi = spi
-                                await debug_print("lora: attached machine.SPI and retrying begin", "LORA")
+                                # Small shim to ensure the LoRa driver finds 'write' (and other) methods.
+                                class _SPIShim:
+                                    def __init__(self, spi_obj):
+                                        self._spi = spi_obj
+                                    def write(self, buf):
+                                        try:
+                                            return self._spi.write(buf)
+                                        except Exception:
+                                            # Fallback to write_readinto when available (best-effort)
+                                            try:
+                                                if hasattr(self._spi, 'write_readinto'):
+                                                    dummy = bytearray(len(buf))
+                                                    self._spi.write_readinto(buf, dummy)
+                                                    return None
+                                            except Exception:
+                                                pass
+                                            return None
+                                    def readinto(self, buf):
+                                        try:
+                                            return self._spi.readinto(buf)
+                                        except Exception:
+                                            return None
+                                    def write_readinto(self, out, into):
+                                        try:
+                                            return self._spi.write_readinto(out, into)
+                                        except Exception:
+                                            return None
+                                    def deinit(self):
+                                        try:
+                                            if hasattr(self._spi, 'deinit'):
+                                                return self._spi.deinit()
+                                        except Exception:
+                                            pass
+                                        return None
+                                lo.spi = _SPIShim(spi)
+                                await debug_print("lora: attached machine.SPI shim and retrying begin", "LORA")
                             except Exception as se:
                                 await debug_print(f"lora: manual SPI attach failed: {se}", "ERROR")
                     except Exception:
