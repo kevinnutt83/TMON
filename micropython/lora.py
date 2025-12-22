@@ -577,31 +577,40 @@ async def init_lora():
                                 # Robust shim that delegates unknown attributes to the underlying SPI,
                                 # and implements the common methods the SX1262 driver expects.
                                 class _SPIShim:
+                                    """Flexible wrapper around machine.SPI to tolerate different ports/driver usage.
+                                    Provides attribute passthrough and tolerant implementations of common methods.
+                                    """
                                     def __init__(self, spi_obj):
                                         self._spi = spi_obj
                                     def __getattr__(self, name):
                                         return getattr(self._spi, name)
+                                    def __call__(self, *a, **kw):
+                                        # Some drivers may attempt to call the SPI-like object; forward if possible.
+                                        try:
+                                            return self._spi(*a, **kw)
+                                        except Exception:
+                                            return self._spi
                                     def init(self, *a, **kw):
                                         try:
                                             return self._spi.init(*a, **kw)
                                         except Exception:
                                             return None
-                                    def write(self, buf):
+                                    def write(self, buf, *a, **kw):
                                         try:
-                                            return self._spi.write(buf)
+                                            return self._spi.write(buf, *a, **kw)
                                         except Exception:
+                                            # Fallbacks: try write_readinto or emulate with write_readinto
                                             try:
                                                 if hasattr(self._spi, 'write_readinto'):
                                                     dummy = bytearray(len(buf))
-                                                    self._spi.write_readinto(buf, dummy)
-                                                    return None
+                                                    return self._spi.write_readinto(buf, dummy)
                                             except Exception:
                                                 pass
                                             return None
-                                    def read(self, nbytes):
+                                    def read(self, nbytes, *a, **kw):
                                         try:
                                             if hasattr(self._spi, 'read'):
-                                                return self._spi.read(nbytes)
+                                                return self._spi.read(nbytes, *a, **kw)
                                         except Exception:
                                             pass
                                         try:
@@ -616,20 +625,20 @@ async def init_lora():
                                         except Exception:
                                             pass
                                         return bytes([0]*nbytes)
-                                    def readinto(self, buf):
+                                    def readinto(self, buf, *a, **kw):
                                         try:
-                                            return self._spi.readinto(buf)
+                                            return self._spi.readinto(buf, *a, **kw)
                                         except Exception:
                                             return None
-                                    def write_readinto(self, out, into):
+                                    def write_readinto(self, out, into, *a, **kw):
                                         try:
-                                            return self._spi.write_readinto(out, into)
+                                            return self._spi.write_readinto(out, into, *a, **kw)
                                         except Exception:
                                             return None
-                                    def deinit(self):
+                                    def deinit(self, *a, **kw):
                                         try:
                                             if hasattr(self._spi, 'deinit'):
-                                                return self._spi.deinit()
+                                                return self._spi.deinit(*a, **kw)
                                         except Exception:
                                             pass
                                         return None
@@ -637,17 +646,17 @@ async def init_lora():
                                 await debug_print("lora: attached machine.SPI shim and retrying begin", "LORA")
                             else:
                                 await debug_print("lora: no usable machine.SPI instance available", "ERROR")
-                    except Exception:
-                        pass
-                    try:
-                        _time.sleep_ms(120)
-                    except Exception:
-                        pass
-                    continue
-                except Exception as e:
-                    await debug_print(f"lora.begin exception: {e}", "ERROR")
-                    return -999
-            return -999
+                     except Exception:
+                         pass
+                     try:
+                         _time.sleep_ms(120)
+                     except Exception:
+                         pass
+                     continue
+                 except Exception as e:
+                     await debug_print(f"lora.begin exception: {e}", "ERROR")
+                     return -999
+             return -999
 
         status = await _attempt_begin(lora, attempts=2)
         print(f'[DEBUG] init_lora: lora.begin() returned {status}')
@@ -1559,31 +1568,40 @@ async def init_lora():
                                 # Robust shim that delegates unknown attributes to the underlying SPI,
                                 # and implements the common methods the SX1262 driver expects.
                                 class _SPIShim:
+                                    """Flexible wrapper around machine.SPI to tolerate different ports/driver usage.
+                                    Provides attribute passthrough and tolerant implementations of common methods.
+                                    """
                                     def __init__(self, spi_obj):
                                         self._spi = spi_obj
                                     def __getattr__(self, name):
                                         return getattr(self._spi, name)
+                                    def __call__(self, *a, **kw):
+                                        # Some drivers may attempt to call the SPI-like object; forward if possible.
+                                        try:
+                                            return self._spi(*a, **kw)
+                                        except Exception:
+                                            return self._spi
                                     def init(self, *a, **kw):
                                         try:
                                             return self._spi.init(*a, **kw)
                                         except Exception:
                                             return None
-                                    def write(self, buf):
+                                    def write(self, buf, *a, **kw):
                                         try:
-                                            return self._spi.write(buf)
+                                            return self._spi.write(buf, *a, **kw)
                                         except Exception:
+                                            # Fallbacks: try write_readinto or emulate with write_readinto
                                             try:
                                                 if hasattr(self._spi, 'write_readinto'):
                                                     dummy = bytearray(len(buf))
-                                                    self._spi.write_readinto(buf, dummy)
-                                                    return None
+                                                    return self._spi.write_readinto(buf, dummy)
                                             except Exception:
                                                 pass
                                             return None
-                                    def read(self, nbytes):
+                                    def read(self, nbytes, *a, **kw):
                                         try:
                                             if hasattr(self._spi, 'read'):
-                                                return self._spi.read(nbytes)
+                                                return self._spi.read(nbytes, *a, **kw)
                                         except Exception:
                                             pass
                                         try:
@@ -1598,20 +1616,20 @@ async def init_lora():
                                         except Exception:
                                             pass
                                         return bytes([0]*nbytes)
-                                    def readinto(self, buf):
+                                    def readinto(self, buf, *a, **kw):
                                         try:
-                                            return self._spi.readinto(buf)
+                                            return self._spi.readinto(buf, *a, **kw)
                                         except Exception:
                                             return None
-                                    def write_readinto(self, out, into):
+                                    def write_readinto(self, out, into, *a, **kw):
                                         try:
-                                            return self._spi.write_readinto(out, into)
+                                            return self._spi.write_readinto(out, into, *a, **kw)
                                         except Exception:
                                             return None
-                                    def deinit(self):
+                                    def deinit(self, *a, **kw):
                                         try:
                                             if hasattr(self._spi, 'deinit'):
-                                                return self._spi.deinit()
+                                                return self._spi.deinit(*a, **kw)
                                         except Exception:
                                             pass
                                         return None
@@ -1619,17 +1637,17 @@ async def init_lora():
                                 await debug_print("lora: attached machine.SPI shim and retrying begin", "LORA")
                             else:
                                 await debug_print("lora: no usable machine.SPI instance available", "ERROR")
-                    except Exception:
-                        pass
-                    try:
-                        _time.sleep_ms(120)
-                    except Exception:
-                        pass
-                    continue
-                except Exception as e:
-                    await debug_print(f"lora.begin exception: {e}", "ERROR")
-                    return -999
-            return -999
+                     except Exception:
+                         pass
+                     try:
+                         _time.sleep_ms(120)
+                     except Exception:
+                         pass
+                     continue
+                 except Exception as e:
+                     await debug_print(f"lora.begin exception: {e}", "ERROR")
+                     return -999
+             return -999
 
         status = await _attempt_begin(lora, attempts=2)
         print(f'[DEBUG] init_lora: lora.begin() returned {status}')
@@ -1806,6 +1824,7 @@ async def connectLora():
                         import uhashlib, ubinascii, ujson
                         ctr_file = getattr(settings, 'LORA_HMAC_COUNTER_FILE', '/logs/lora_ctr.json')
                         ctr = 0
+
                         try:
                             with open(ctr_file, 'r') as cf:
                                 ctr_obj = ujson.loads(cf.read())
