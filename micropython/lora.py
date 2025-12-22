@@ -717,24 +717,67 @@ async def init_lora():
 
         status = await _attempt_begin(lora, attempts=2)
         print(f'[DEBUG] init_lora: lora.begin() returned {status}')
-        # If chip not found, try a single reset/retry before giving up (helps with pin/SPI races on boot)
+        # If chip not found, attempt diagnostics, re-instantiation with shim, reset and a single retry.
         if status == -2:
-            await debug_print('lora: chip not found, retry', 'LORA')
+            await debug_print('lora: chip not found, performing diagnostics & retry', 'LORA')
             try:
-                _pulse_reset(settings.RST_PIN, low_ms=80, post_high_ms=200)
-                # brief settle time
-                _time.sleep_ms(120)
-                status = lora.begin(
-                    freq=settings.FREQ, bw=settings.BW, sf=settings.SF, cr=settings.CR,
-                    syncWord=settings.SYNC_WORD, power=settings.POWER,
-                    currentLimit=settings.CURRENT_LIMIT, preambleLength=settings.PREAMBLE_LEN,
-                    implicit=False, implicitLen=0xFF, crcOn=settings.CRC_ON, txIq=False, rxIq=False,
-                    tcxoVoltage=settings.TCXO_VOLTAGE, useRegulatorLDO=settings.USE_LDO
-                )
-                await debug_print(f'lora: retry begin {status}', 'LORA')
-            except Exception as re:
-                await debug_print(f'LoRa retry exception: {re}', 'ERROR')
+                # Diagnostics: device errors, status, and SPI presence/type
+                try:
+                    dev_err = lora.getDeviceErrors()
+                    await debug_print(f"lora: device errors 0x{dev_err:04X}", "LORA")
+                except Exception:
+                    pass
+                try:
+                    st = lora.getStatus()
+                    await debug_print(f"lora: status {st}", "LORA")
+                except Exception:
+                    pass
+                try:
+                    spi_obj = getattr(lora, 'spi', None)
+                    await debug_print(f"lora: spi present? {bool(spi_obj)} type={type(spi_obj)} has_write={hasattr(spi_obj, 'write') if spi_obj else False}", "LORA")
+                except Exception:
+                    pass
 
+                # Try to reinstantiate driver using a shim (some ports accept an SPI instance in constructor)
+                try:
+                    shim = _attach_spi_shim()
+                    if shim:
+                        await debug_print("lora: attempting re-instantiation with SPI shim", "LORA")
+                        newlo = None
+                        try:
+                            # positional variant (common)
+                            newlo = SX1262(shim, settings.CS_PIN, settings.IRQ_PIN, settings.RST_PIN, settings.BUSY_PIN)
+                        except Exception:
+                            try:
+                                # keyword variant (some wrappers)
+                                newlo = SX1262(spi=shim, cs=settings.CS_PIN, irq=settings.IRQ_PIN, rst=settings.RST_PIN, busy=settings.BUSY_PIN)
+                            except Exception:
+                                newlo = None
+                        if newlo:
+                            lora = newlo
+                            await debug_print("lora: re-instantiated SX1262 with shim, retrying begin", "LORA")
+                except Exception:
+                    pass
+
+                # Pulse reset and wait, then try a single begin again (conservative)
+                try:
+                    _pulse_reset(settings.RST_PIN, low_ms=80, post_high_ms=200)
+                    _time.sleep_ms(140)
+                    status = lora.begin(
+                        freq=settings.FREQ, bw=settings.BW, sf=settings.SF, cr=settings.CR,
+                        syncWord=settings.SYNC_WORD, power=settings.POWER,
+                        currentLimit=settings.CURRENT_LIMIT, preambleLength=settings.PREAMBLE_LEN,
+                        implicit=False, implicitLen=0xFF, crcOn=settings.CRC_ON, txIq=False, rxIq=False,
+                        tcxoVoltage=settings.TCXO_VOLTAGE, useRegulatorLDO=settings.USE_LDO
+                    )
+                    await debug_print(f'lora: retry begin {status}', 'LORA')
+                except Exception as re:
+                    await debug_print(f'LoRa retry exception: {re}', 'ERROR')
+            except Exception as exc:
+                await debug_print(f'LoRa chip-not-found diagnostics failed: {exc}', 'ERROR')
+                await log_error(f'LoRa chip-not-found diagnostics failed: {exc}')
+                lora = None
+                return False
         if status == 0:
             # Configure non-blocking operation and verify it succeeded
             rc = lora.setBlockingCallback(False)
@@ -754,7 +797,7 @@ async def init_lora():
                 from _sx126x import SX126X_PACKET_TYPE_LORA
                 pkt_type = lora.getPacketType()
                 if pkt_type != SX126X_PACKET_TYPE_LORA:
-                    await debug_print "lora: init verify pkt_type mismatch", "ERROR")
+                    await debug_print("lora: init verify pkt_type mismatch", "ERROR")
                     await log_error(f"LoRa init verify failed: packet type={pkt_type}")
                     await free_pins()
                     lora = None
@@ -1765,24 +1808,67 @@ async def init_lora():
 
         status = await _attempt_begin(lora, attempts=2)
         print(f'[DEBUG] init_lora: lora.begin() returned {status}')
-        # If chip not found, try a single reset/retry before giving up (helps with pin/SPI races on boot)
+        # If chip not found, attempt diagnostics, re-instantiation with shim, reset and a single retry.
         if status == -2:
-            await debug_print('lora: chip not found, retry', 'LORA')
+            await debug_print('lora: chip not found, performing diagnostics & retry', 'LORA')
             try:
-                _pulse_reset(settings.RST_PIN, low_ms=80, post_high_ms=200)
-                # brief settle time
-                _time.sleep_ms(120)
-                status = lora.begin(
-                    freq=settings.FREQ, bw=settings.BW, sf=settings.SF, cr=settings.CR,
-                    syncWord=settings.SYNC_WORD, power=settings.POWER,
-                    currentLimit=settings.CURRENT_LIMIT, preambleLength=settings.PREAMBLE_LEN,
-                    implicit=False, implicitLen=0xFF, crcOn=settings.CRC_ON, txIq=False, rxIq=False,
-                    tcxoVoltage=settings.TCXO_VOLTAGE, useRegulatorLDO=settings.USE_LDO
-                )
-                await debug_print(f'lora: retry begin {status}', 'LORA')
-            except Exception as re:
-                await debug_print(f'LoRa retry exception: {re}', 'ERROR')
+                # Diagnostics: device errors, status, and SPI presence/type
+                try:
+                    dev_err = lora.getDeviceErrors()
+                    await debug_print(f"lora: device errors 0x{dev_err:04X}", "LORA")
+                except Exception:
+                    pass
+                try:
+                    st = lora.getStatus()
+                    await debug_print(f"lora: status {st}", "LORA")
+                except Exception:
+                    pass
+                try:
+                    spi_obj = getattr(lora, 'spi', None)
+                    await debug_print(f"lora: spi present? {bool(spi_obj)} type={type(spi_obj)} has_write={hasattr(spi_obj, 'write') if spi_obj else False}", "LORA")
+                except Exception:
+                    pass
 
+                # Try to reinstantiate driver using a shim (some ports accept an SPI instance in constructor)
+                try:
+                    shim = _attach_spi_shim()
+                    if shim:
+                        await debug_print("lora: attempting re-instantiation with SPI shim", "LORA")
+                        newlo = None
+                        try:
+                            # positional variant (common)
+                            newlo = SX1262(shim, settings.CS_PIN, settings.IRQ_PIN, settings.RST_PIN, settings.BUSY_PIN)
+                        except Exception:
+                            try:
+                                # keyword variant (some wrappers)
+                                newlo = SX1262(spi=shim, cs=settings.CS_PIN, irq=settings.IRQ_PIN, rst=settings.RST_PIN, busy=settings.BUSY_PIN)
+                            except Exception:
+                                newlo = None
+                        if newlo:
+                            lora = newlo
+                            await debug_print("lora: re-instantiated SX1262 with shim, retrying begin", "LORA")
+                except Exception:
+                    pass
+
+                # Pulse reset and wait, then try a single begin again (conservative)
+                try:
+                    _pulse_reset(settings.RST_PIN, low_ms=80, post_high_ms=200)
+                    _time.sleep_ms(140)
+                    status = lora.begin(
+                        freq=settings.FREQ, bw=settings.BW, sf=settings.SF, cr=settings.CR,
+                        syncWord=settings.SYNC_WORD, power=settings.POWER,
+                        currentLimit=settings.CURRENT_LIMIT, preambleLength=settings.PREAMBLE_LEN,
+                        implicit=False, implicitLen=0xFF, crcOn=settings.CRC_ON, txIq=False, rxIq=False,
+                        tcxoVoltage=settings.TCXO_VOLTAGE, useRegulatorLDO=settings.USE_LDO
+                    )
+                    await debug_print(f'lora: retry begin {status}', 'LORA')
+                except Exception as re:
+                    await debug_print(f'LoRa retry exception: {re}', 'ERROR')
+            except Exception as exc:
+                await debug_print(f'LoRa chip-not-found diagnostics failed: {exc}', 'ERROR')
+                await log_error(f'LoRa chip-not-found diagnostics failed: {exc}')
+                lora = None
+                return False
         if status == 0:
             # Configure non-blocking operation and verify it succeeded
             rc = lora.setBlockingCallback(False)
@@ -1802,7 +1888,7 @@ async def init_lora():
                 from _sx126x import SX126X_PACKET_TYPE_LORA
                 pkt_type = lora.getPacketType()
                 if pkt_type != SX126X_PACKET_TYPE_LORA:
-                    await debug_print "lora: init verify pkt_type mismatch", "ERROR")
+                    await debug_print("lora: init verify pkt_type mismatch", "ERROR")
                     await log_error(f"LoRa init verify failed: packet type={pkt_type}")
                     await free_pins()
                     lora = None
@@ -1852,7 +1938,7 @@ async def init_lora():
         try:
             _deinit_spi_if_any(lora)
         except Exception:
-                       pass
+            pass
         await free_pins()
         lora = None
         return False

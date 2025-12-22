@@ -221,6 +221,40 @@ async def send_settings_to_wp():
                     await debug_print(f'wprest: send_settings {p} -> {code} ({body_snip[:200]})', 'HTTP')
                     if code in (200, 201):
                         return True
+                    # If 403 (forbidden), try alternate auth headers that some Admin/UC deployments expect
+                    if code == 403:
+                        await debug_print(f'wprest: send_settings {p} returned 403, trying hub/read auth fallbacks', 'WARN')
+                        try:
+                            # Try 'hub' header (X-TMON-HUB)
+                            fb = _auth_headers('hub')
+                            try:
+                                r2 = requests.post(target, json=payload, headers=fb, timeout=8)
+                            except TypeError:
+                                r2 = requests.post(target, json=payload, headers=fb)
+                            c2 = getattr(r2, 'status_code', 0)
+                            b2 = (getattr(r2, 'text', '') or '')[:400]
+                            if r2: r2.close()
+                            await debug_print(f'wprest: send_settings hub attempt {p} -> {c2} ({b2[:200]})', 'HTTP')
+                            if c2 in (200,201):
+                                return True
+                        except Exception as e:
+                            await debug_print(f'wprest: hub auth attempt failed: {e}', 'ERROR')
+                        try:
+                            # Try 'read' token variant
+                            fr = _auth_headers('read')
+                            try:
+                                r3 = requests.post(target, json=payload, headers=fr, timeout=8)
+                            except TypeError:
+                                r3 = requests.post(target, json=payload, headers=fr)
+                            c3 = getattr(r3, 'status_code', 0)
+                            b3 = (getattr(r3, 'text', '') or '')[:400]
+                            if r3: r3.close()
+                            await debug_print(f'wprest: send_settings read-token attempt {p} -> {c3} ({b3[:200]})', 'HTTP')
+                            if c3 in (200,201):
+                                return True
+                        except Exception as e:
+                            await debug_print(f'wprest: read-token attempt failed: {e}', 'ERROR')
+                        # fallthrough to continue trying other paths/candidates
                     if code == 401:
                         # Diagnostic: did we send Authorization? do we have app-pass configured?
                         auth_sent = bool(hdrs.get('Authorization'))
@@ -248,16 +282,6 @@ async def send_settings_to_wp():
                                     return True
                             except Exception as e:
                                 await debug_print(f'wprest: fallback Basic auth attempt failed: {e}', 'ERROR')
-                    # continue to next candidate on non-success
-                except Exception as e:
-                    await debug_print(f'wprest: send_settings attempt {p} exception: {e}', 'ERROR')
-            # If we reach here, none succeeded. Queue for retry to avoid data loss.
-            await debug_print('wprest: send_settings all attempts failed; queuing payload', 'WARN')
-            try:
-                append_to_backlog({'type': 'settings', 'payload': payload, 'ts': int(time.time())})
-            except Exception:
-                pass
-            return False
         except Exception as e:
             await debug_print(f'wprest: send_settings exc {e}', 'ERROR')
             try:
