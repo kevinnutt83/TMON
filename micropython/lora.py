@@ -542,20 +542,54 @@ async def init_lora():
                     # conservative attach attempt
                     try:
                         if machine and hasattr(machine, 'SPI') and getattr(settings, 'CLK_PIN', None) is not None:
+                            spi = None
+                            # Try constructor with keyword args (common on many ports)
                             try:
-                                spi = machine.SPI(settings.SPI_BUS, baudrate=getattr(settings, 'LORA_SPI_BAUD', 1000000),
-                                                  sck=machine.Pin(settings.CLK_PIN),
-                                                  mosi=machine.Pin(settings.MOSI_PIN),
-                                                  miso=machine.Pin(settings.MISO_PIN))
-                                # Small shim to ensure the LoRa driver finds 'write' (and other) methods.
+                                spi = machine.SPI(
+                                    settings.SPI_BUS,
+                                    baudrate=getattr(settings, 'LORA_SPI_BAUD', 1000000),
+                                    sck=machine.Pin(settings.CLK_PIN),
+                                    mosi=machine.Pin(settings.MOSI_PIN),
+                                    miso=machine.Pin(settings.MISO_PIN)
+                                )
+                            except TypeError:
+                                # Some ports require SPI(...); then .init(...)
+                                try:
+                                    spi = machine.SPI(settings.SPI_BUS)
+                                    try:
+                                        spi.init(
+                                            baudrate=getattr(settings, 'LORA_SPI_BAUD', 1000000),
+                                            sck=machine.Pin(settings.CLK_PIN),
+                                            mosi=machine.Pin(settings.MOSI_PIN),
+                                            miso=machine.Pin(settings.MISO_PIN)
+                                        )
+                                    except TypeError:
+                                        # best-effort: keep spi instance even if specific init params unsupported
+                                        pass
+                                except Exception as se:
+                                    await debug_print(f"lora: machine.SPI construct/init failed: {se}", "ERROR")
+                                    spi = None
+                            except Exception as se:
+                                await debug_print(f"lora: machine.SPI creation failed: {se}", "ERROR")
+                                spi = None
+
+                            if spi:
+                                # Robust shim that delegates unknown attributes to the underlying SPI,
+                                # and implements the common methods the SX1262 driver expects.
                                 class _SPIShim:
                                     def __init__(self, spi_obj):
                                         self._spi = spi_obj
+                                    def __getattr__(self, name):
+                                        return getattr(self._spi, name)
+                                    def init(self, *a, **kw):
+                                        try:
+                                            return self._spi.init(*a, **kw)
+                                        except Exception:
+                                            return None
                                     def write(self, buf):
                                         try:
                                             return self._spi.write(buf)
                                         except Exception:
-                                            # Fallback to write_readinto when available (best-effort)
                                             try:
                                                 if hasattr(self._spi, 'write_readinto'):
                                                     dummy = bytearray(len(buf))
@@ -566,18 +600,15 @@ async def init_lora():
                                             return None
                                     def read(self, nbytes):
                                         try:
-                                            # Most SPI implementations provide read(n)
                                             if hasattr(self._spi, 'read'):
                                                 return self._spi.read(nbytes)
                                         except Exception:
                                             pass
-                                        # Fallback: use readinto into buffer
                                         try:
                                             buf = bytearray(nbytes)
                                             if hasattr(self._spi, 'readinto'):
                                                 self._spi.readinto(buf)
                                                 return bytes(buf)
-                                            # As last resort, try write_readinto with dummy out
                                             if hasattr(self._spi, 'write_readinto'):
                                                 out = bytes([0]*nbytes)
                                                 self._spi.write_readinto(out, buf)
@@ -604,8 +635,8 @@ async def init_lora():
                                         return None
                                 lo.spi = _SPIShim(spi)
                                 await debug_print("lora: attached machine.SPI shim and retrying begin", "LORA")
-                            except Exception as se:
-                                await debug_print(f"lora: manual SPI attach failed: {se}", "ERROR")
+                            else:
+                                await debug_print("lora: no usable machine.SPI instance available", "ERROR")
                     except Exception:
                         pass
                     try:
@@ -1493,20 +1524,54 @@ async def init_lora():
                     # conservative attach attempt
                     try:
                         if machine and hasattr(machine, 'SPI') and getattr(settings, 'CLK_PIN', None) is not None:
+                            spi = None
+                            # Try constructor with keyword args (common on many ports)
                             try:
-                                spi = machine.SPI(settings.SPI_BUS, baudrate=getattr(settings, 'LORA_SPI_BAUD', 1000000),
-                                                  sck=machine.Pin(settings.CLK_PIN),
-                                                  mosi=machine.Pin(settings.MOSI_PIN),
-                                                  miso=machine.Pin(settings.MISO_PIN))
-                                # Small shim to ensure the LoRa driver finds 'write' (and other) methods.
+                                spi = machine.SPI(
+                                    settings.SPI_BUS,
+                                    baudrate=getattr(settings, 'LORA_SPI_BAUD', 1000000),
+                                    sck=machine.Pin(settings.CLK_PIN),
+                                    mosi=machine.Pin(settings.MOSI_PIN),
+                                    miso=machine.Pin(settings.MISO_PIN)
+                                )
+                            except TypeError:
+                                # Some ports require SPI(...); then .init(...)
+                                try:
+                                    spi = machine.SPI(settings.SPI_BUS)
+                                    try:
+                                        spi.init(
+                                            baudrate=getattr(settings, 'LORA_SPI_BAUD', 1000000),
+                                            sck=machine.Pin(settings.CLK_PIN),
+                                            mosi=machine.Pin(settings.MOSI_PIN),
+                                            miso=machine.Pin(settings.MISO_PIN)
+                                        )
+                                    except TypeError:
+                                        # best-effort: keep spi instance even if specific init params unsupported
+                                        pass
+                                except Exception as se:
+                                    await debug_print(f"lora: machine.SPI construct/init failed: {se}", "ERROR")
+                                    spi = None
+                            except Exception as se:
+                                await debug_print(f"lora: machine.SPI creation failed: {se}", "ERROR")
+                                spi = None
+
+                            if spi:
+                                # Robust shim that delegates unknown attributes to the underlying SPI,
+                                # and implements the common methods the SX1262 driver expects.
                                 class _SPIShim:
                                     def __init__(self, spi_obj):
                                         self._spi = spi_obj
+                                    def __getattr__(self, name):
+                                        return getattr(self._spi, name)
+                                    def init(self, *a, **kw):
+                                        try:
+                                            return self._spi.init(*a, **kw)
+                                        except Exception:
+                                            return None
                                     def write(self, buf):
                                         try:
                                             return self._spi.write(buf)
                                         except Exception:
-                                            # Fallback to write_readinto when available (best-effort)
                                             try:
                                                 if hasattr(self._spi, 'write_readinto'):
                                                     dummy = bytearray(len(buf))
@@ -1517,18 +1582,15 @@ async def init_lora():
                                             return None
                                     def read(self, nbytes):
                                         try:
-                                            # Most SPI implementations provide read(n)
                                             if hasattr(self._spi, 'read'):
                                                 return self._spi.read(nbytes)
                                         except Exception:
                                             pass
-                                        # Fallback: use readinto into buffer
                                         try:
                                             buf = bytearray(nbytes)
                                             if hasattr(self._spi, 'readinto'):
                                                 self._spi.readinto(buf)
                                                 return bytes(buf)
-                                            # As last resort, try write_readinto with dummy out
                                             if hasattr(self._spi, 'write_readinto'):
                                                 out = bytes([0]*nbytes)
                                                 self._spi.write_readinto(out, buf)
@@ -1555,8 +1617,8 @@ async def init_lora():
                                         return None
                                 lo.spi = _SPIShim(spi)
                                 await debug_print("lora: attached machine.SPI shim and retrying begin", "LORA")
-                            except Exception as se:
-                                await debug_print(f"lora: manual SPI attach failed: {se}", "ERROR")
+                            else:
+                                await debug_print("lora: no usable machine.SPI instance available", "ERROR")
                     except Exception:
                         pass
                     try:
