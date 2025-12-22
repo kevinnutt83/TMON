@@ -1,4 +1,4 @@
-# Firmware Version: v2.03.0
+# Firmware Version: v2.06.0
 
 import sdata
 import settings

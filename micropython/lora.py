@@ -1,4 +1,4 @@
-# Firmware Version: v2.05.0
+# Firmware Version: v2.06.0
 # Utility to print remote node info
 def print_remote_nodes():
     import settings

@@ -1,4 +1,4 @@
-# Firmware Version: v2.05.0
+# Firmware Version: v2.06.0
 # wprest.py
 # Handles WordPress REST API communication for TMON MicroPython device
 

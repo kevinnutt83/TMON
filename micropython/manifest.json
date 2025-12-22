@@ -96,5 +96,5 @@
     "wprest.py": "sha256:3ee9cc5b7e282074b78b09a7569145ea291a2a22946091e04e54db4bbb64a010"
   },
   "name": "tmon-micropython",
-  "version": "v2.05.0"
+  "version": "v2.06.0"
 }

@@ -1,4 +1,4 @@
-# TMON MicroPython Device (v2.04.0)
+# TMON MicroPython Device (v2.06.0)
 
 ## Quick Start
 1. Flash the firmware and configure `settings.py`.
