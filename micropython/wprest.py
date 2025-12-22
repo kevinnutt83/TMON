@@ -213,13 +213,14 @@ async def send_settings_to_wp():
                 except Exception:
                     pass
 
-        # Prefer legacy admin path first, then admin-scoped, then device path
+        # Prefer admin-scoped endpoint first (Unit Connector v2), then device path, then legacy hub path.
         candidate_paths = [
-            '/wp-json/tmon-admin/v1/device/settings',
             '/wp-json/tmon/v1/admin/device/settings',
-            '/wp-json/tmon/v1/device/settings'
+            '/wp-json/tmon/v1/device/settings',
+            '/wp-json/tmon-admin/v1/device/settings'
         ]
-        auth_modes = [None, 'basic', 'hub', 'read', 'none']
+        # Try credentialed/basic auth modes before unauthenticated attempts (admin routes usually require auth)
+        auth_modes = ['basic', 'hub', 'admin', 'read', None, 'none']
 
         last_response = None
         for p in candidate_paths:
@@ -375,29 +376,85 @@ async def poll_device_commands():
             if resp: resp.close()
         except Exception:
             pass
+        base = settings.WORDPRESS_API_URL.rstrip('/')
+        post_url = base + '/wp-json/tmon/v1/device/commands'
+        get_url = post_url + '?unit_id=' + unit
+        # Prefer POST {unit_id} (UC implementations often expect POST), fall back to GET
+        data = None; code = 0; body = ''
+        tried = []
+        try:
+            hdrs = _auth_headers()
+        except Exception:
+            hdrs = {}
+        # Try POST
+        try:
+            try:
+                resp = requests.post(post_url, json={'unit_id': unit}, headers=hdrs, timeout=8)
+            except TypeError:
+                resp = requests.post(post_url, json={'unit_id': unit}, headers=hdrs)
+            code = getattr(resp, 'status_code', 0)
+            body = getattr(resp, 'text', '') or ''
+            tried.append(('POST', post_url, code))
+            try:
+                data = json.loads(body) if body else None
+            except Exception:
+                data = None
+            try:
+                if resp: resp.close()
+            except Exception:
+                pass
+        except Exception as e:
+            await debug_print(f"wprest: poll_device_commands POST err: {e}", 'ERROR')
+            data = None; code = 0
+        # If POST didn't give usable data, try GET
+        if not (isinstance(data, (list, dict)) and code in (200,201)):
+            try:
+                try:
+                    resp = requests.get(get_url, headers=hdrs, timeout=8)
+                except TypeError:
+                    resp = requests.get(get_url, headers=hdrs)
+                code = getattr(resp, 'status_code', 0)
+                body = getattr(resp, 'text', '') or ''
+                tried.append(('GET', get_url, code))
+                try:
+                    data = json.loads(body) if body else None
+                except Exception:
+                    data = None
+                try:
+                    if resp: resp.close()
+                except Exception:
+                    pass
+            except Exception as e:
+                await debug_print(f"wprest: poll_device_commands GET err: {e}", 'ERROR')
+                data = None; code = 0
+        await debug_print(f"wprest: poll_device_commands attempts: {tried}", "HTTP")
+        # Now 'data' may be a list or dict {'commands': [...]}
+        try:
+            pass
+        except Exception:
+            pass
         commands = []
         if code in (200,201):
-            # Accept either {commands:[...]} or top-level array
             if isinstance(data, dict) and isinstance(data.get('commands'), list):
                 commands = data.get('commands')
             elif isinstance(data, list):
                 commands = data
-            # handle them best-effort
-            for c in (commands or []):
-                try:
-                    # Try to call local handler (if implemented elsewhere)
-                    from commands import handle_command as _hc
-                    try:
-                        await _hc(c)
-                    except Exception:
-                        pass
-                except Exception:
-                    # No local handler; queue confirm attempt as pending
-                    try:
-                        # best-effort confirm as received
-                        await _queue_command_confirm({'job_id': c.get('id') if isinstance(c, dict) else None, 'ok': True, 'result': 'handled_locally_not_implemented'})
-                    except Exception:
-                        pass
+             # handle them best-effort
+             for c in (commands or []):
+                 try:
+                     # Try to call local handler (if implemented elsewhere)
+                     from commands import handle_command as _hc
+                     try:
+                         await _hc(c)
+                     except Exception:
+                         pass
+                 except Exception:
+                     # No local handler; queue confirm attempt as pending
+                     try:
+                         # best-effort confirm as received
+                         await _queue_command_confirm({'job_id': c.get('id') if isinstance(c, dict) else None, 'ok': True, 'result': 'handled_locally_not_implemented'})
+                     except Exception:
+                         pass
             return commands
         return []
     except Exception as e:
