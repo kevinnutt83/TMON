@@ -53,7 +53,6 @@ try:
     register_with_wp = getattr(_wp, 'register_with_wp', None)
     send_data_to_wp = getattr(_wp, 'send_data_to_wp', None)
     send_settings_to_wp = getattr(_wp, 'send_settings_to_wp', None)
-    # Note: fetch_settings_from_wp is optional; the module provides a local implementation below if needed.
     fetch_settings_from_wp = getattr(_wp, 'fetch_settings_from_wp', None)
     send_file_to_wp = getattr(_wp, 'send_file_to_wp', None)
     request_file_from_wp = getattr(_wp, 'request_file_from_wp', None)
@@ -191,18 +190,21 @@ def save_gps_state(lat=None, lng=None, alt=None, acc=None, ts=None):
     except Exception:
         pass
 
-# Import all WordPress REST API functions from wprest.py
-from wprest import (
-    register_with_wp,
-    send_data_to_wp,
-    send_settings_to_wp,
-    fetch_settings_from_wp,
-    send_file_to_wp,
-    request_file_from_wp,
-    heartbeat_ping,
-    poll_ota_jobs,
-    handle_ota_job
-)
+# Import all WordPress REST API functions from wprest.py (guarded - tolerate missing names)
+try:
+    import wprest as _wp
+    register_with_wp = getattr(_wp, 'register_with_wp', None)
+    send_data_to_wp = getattr(_wp, 'send_data_to_wp', None)
+    send_settings_to_wp = getattr(_wp, 'send_settings_to_wp', None)
+    fetch_settings_from_wp = getattr(_wp, 'fetch_settings_from_wp', None)
+    send_file_to_wp = getattr(_wp, 'send_file_to_wp', None)
+    request_file_from_wp = getattr(_wp, 'request_file_from_wp', None)
+    heartbeat_ping = getattr(_wp, 'heartbeat_ping', None)
+    poll_ota_jobs = getattr(_wp, 'poll_ota_jobs', None)
+    handle_ota_job = getattr(_wp, 'handle_ota_job', None)
+except Exception:
+    register_with_wp = send_data_to_wp = send_settings_to_wp = fetch_settings_from_wp = None
+    send_file_to_wp = request_file_from_wp = heartbeat_ping = poll_ota_jobs = handle_ota_job = None
 
 # Periodic sync with WordPress (settings, data, OTA jobs)
 async def periodic_wp_sync():
