@@ -27,17 +27,49 @@ WORDPRESS_PASSWORD = getattr(settings, 'WORDPRESS_PASSWORD', None)
 # Minimal async HTTP client wrappers are not necessary when using urequests synchronously,
 # but we wrap calls with try/except and timeouts where possible for safety.
 
-def _auth_headers():
+def _auth_headers(mode=None):
+    """Return headers for different auth modes:
+       mode=None or 'auto' => prefer app-password Basic if configured.
+       'none' => no auth
+       'basic' => Basic auth using FIELD_DATA_APP_USER / FIELD_DATA_APP_PASS or WORDPRESS_USERNAME/PASSWORD
+       'hub' => X-TMON-HUB header using any available hub shared key setting
+       'read' => read token as X-TMON-READ or Bearer authorization
+    """
     headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
-    # Basic auth via app password if configured
     try:
-        if getattr(settings, 'FIELD_DATA_USE_APP_PASSWORD', False) and getattr(settings, 'FIELD_DATA_APP_USER','') and getattr(settings, 'FIELD_DATA_APP_PASS',''):
-            import ubinascii as _ub
-            creds = (getattr(settings,'FIELD_DATA_APP_USER','') + ':' + getattr(settings,'FIELD_DATA_APP_PASS','')).encode('utf-8')
-            b64 = _ub.b2a_base64(creds).decode('ascii').strip()
-            headers['Authorization'] = 'Basic ' + b64
+        # no auth requested
+        if mode == 'none':
+            return headers
+        # Basic app password / username fallback
+        if mode in (None, 'auto', 'basic'):
+            user = getattr(settings, 'FIELD_DATA_APP_USER', '') or getattr(settings, 'WORDPRESS_USERNAME', '') or ''
+            pwd  = getattr(settings, 'FIELD_DATA_APP_PASS', '') or getattr(settings, 'WORDPRESS_PASSWORD', '') or ''
+            if user and pwd:
+                try:
+                    import ubinascii as _ub
+                    creds = (str(user) + ':' + str(pwd)).encode('utf-8')
+                    b64 = _ub.b2a_base64(creds).decode('ascii').strip()
+                    h = dict(headers)
+                    h['Authorization'] = 'Basic ' + b64
+                    return h
+                except Exception:
+                    pass
+            # if mode explicitly 'basic' and no creds, fall back to no auth
+            if mode == 'basic':
+                return headers
+        # Hub shared key header
+        if mode == 'hub':
+            hub_key = getattr(settings, 'TMON_HUB_SHARED_KEY', None) or getattr(settings, 'TMON_HUB_KEY', None) or getattr(settings, 'WORDPRESS_HUB_KEY', None)
+            if hub_key:
+                h = dict(headers); h['X-TMON-HUB'] = str(hub_key); return h
+        # Read token header (bearer or x-tmon-read)
+        if mode == 'read':
+            read = getattr(settings, 'TMON_HUB_READ_TOKEN', None) or getattr(settings, 'WORDPRESS_READ_TOKEN', None)
+            if read:
+                h = dict(headers); h['X-TMON-READ'] = str(read); h['Authorization'] = 'Bearer ' + str(read); return h
     except Exception:
         pass
+    # default: return headers w/o auth
     return headers
 
 async def register_with_wp():
