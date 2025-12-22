@@ -259,7 +259,7 @@ add_action('admin_enqueue_scripts', function($hook){
 // AJAX handler for per-site device count refresh
 add_action('wp_ajax_tmon_refresh_site_count', function(){
 	if (!current_user_can('manage_options')) {
-		wp_send_json_error('Permission denied', 403);
+		wp_send_json_error('Forbidden', 403);
 	}
 
 	$nonce = $_REQUEST['_wpnonce'] ?? '';
@@ -273,25 +273,90 @@ add_action('wp_ajax_tmon_refresh_site_count', function(){
 		wp_send_json_error('Invalid site URL', 400);
 	}
 
-	// Query the remote site for device count
+	// Build auth headers from pairing metadata where available
+	$headers = ['timeout' => 10];
+	$pairings = get_option('tmon_admin_uc_sites', []);
+	if (is_array($pairings) && isset($pairings[$site_url])) {
+		$meta = $pairings[$site_url];
+		// Prefer explicit read token (Bearer) if present
+		if (!empty($meta['read_token'])) {
+			$headers['headers'] = ['Authorization' => 'Bearer ' . $meta['read_token']];
+		} elseif (!empty($meta['uc_key'])) {
+			$headers['headers'] = ['X-TMON-HUB' => $meta['uc_key']];
+		} elseif (!empty($meta['hub_key'])) {
+			$headers['headers'] = ['X-TMON-HUB' => $meta['hub_key']];
+		}
+	} else {
+		// Try global hub key fallback
+		$hub_key = get_option('tmon_admin_hub_shared_key', '');
+		if ($hub_key) {
+			$headers['headers'] = ['X-TMON-HUB' => $hub_key];
+		}
+	}
+
+	// Candidate endpoints (try multiple common variants to avoid 404)
+	$candidates = [
+		'/wp-json/tmon/v1/admin/site/devices',
+		'/wp-json/tmon/v1/admin/site/devices-count',
+		'/wp-json/tmon-admin/v1/site/devices',
+		'/wp-json/tmon-admin/v1/site/devices-count',
+		'/wp-json/tmon/v1/site/devices',
+		'/wp-json/tmon-admin/v1/site/devices?count=1'
+	];
+
 	$count = null;
-	$endpoint = rtrim($site_url, '/') . '/wp-json/tmon/v1/admin/site/devices';
-	$remote = wp_remote_get($endpoint, ['timeout' => 10]);
-	if (!is_wp_error($remote) && in_array(intval(wp_remote_retrieve_response_code($remote)), [200,201], true)) {
-		$body = wp_remote_retrieve_body($remote);
-		$j = json_decode($body, true);
-		if (is_array($j)) {
-			if (isset($j['count'])) $count = intval($j['count']);
-			elseif (isset($j['devices']) && is_array($j['devices'])) $count = count($j['devices']);
-			elseif (array_values($j) === $j) $count = count($j);
+	$errors = [];
+	foreach ($candidates as $path) {
+		$endpoint = rtrim($site_url, '/') . $path;
+		$remote = wp_remote_get($endpoint, $headers);
+		$code = intval(wp_remote_retrieve_response_code($remote));
+		if (in_array($code, [200,201], true)) {
+			$body = wp_remote_retrieve_body($remote);
+			$parsed = null;
+			// Try to decode JSON
+			if ($body) {
+				$json = json_decode($body, true);
+				if (json_last_error() === JSON_ERROR_NONE) {
+					$parsed = $json;
+				}
+			}
+			// Accept multiple shapes
+			if (is_array($parsed)) {
+				// {count: n}
+				if (isset($parsed['count']) && is_numeric($parsed['count'])) {
+					$count = intval($parsed['count']);
+				}
+				// {total: n}
+				elseif (isset($parsed['total']) && is_numeric($parsed['total'])) {
+					$count = intval($parsed['total']);
+				}
+				// {devices: [...]}
+				elseif (isset($parsed['devices']) && is_array($parsed['devices'])) {
+					$count = count($parsed['devices']);
+				}
+				// top-level array
+				elseif (array_values($parsed) === $parsed) {
+					$count = count($parsed);
+				}
+			}
+			// Fall back: server may return plain integer in text
+			if ($count === null && is_numeric(trim($body))) {
+				$count = intval(trim($body));
+			}
+			if ($count !== null) {
+				break;
+			}
+			// If we have a 200 but cannot parse, record and continue trying other endpoints
+			$errors[] = "200 but unknown body at {$endpoint}";
+		} else {
+			$errors[] = "HTTP {$code} at {$endpoint}";
 		}
 	}
 
 	if ($count !== null) {
-		// Success
 		wp_send_json_success(['count' => $count]);
 	} else {
-		// Failure
-		wp_send_json_error('Unable to retrieve device count', 500);
+		// Return helpful debug info
+		wp_send_json_error(['message' => 'Failed to fetch device count', 'errors' => array_values($errors)], 502);
 	}
 });
