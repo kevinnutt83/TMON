@@ -55,7 +55,8 @@ from wprest import (
     request_file_from_wp,
     heartbeat_ping,
     poll_ota_jobs,
-    handle_ota_job
+    handle_ota_job,
+    _auth_headers  # <-- add auth helper import
 )
 
 async def user_input_listener():
@@ -227,7 +228,12 @@ async def check_suspend_remove():
     try:
         import settings
         import urequests as requests
-        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/settings/{settings.UNIT_ID}')
+        headers = {}
+        try:
+            headers = _auth_headers()
+        except Exception:
+            headers = {}
+        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/settings/{settings.UNIT_ID}', headers=headers)
         if resp.status_code == 200:
             settings_data = resp.json().get('settings', {})
             if settings_data.get('suspended'):
@@ -339,7 +345,12 @@ async def send_settings_to_wp():
         'settings': {k: getattr(settings, k) for k in dir(settings) if not k.startswith('__') and not callable(getattr(settings, k))}
     }
     try:
-        resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/settings', headers={'Authorization': f'Bearer {WORDPRESS_API_KEY}'}, json=data)
+        hdrs = {}
+        try:
+            hdrs = _auth_headers()
+        except Exception:
+            hdrs = {}
+        resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/settings', headers=hdrs, json=data)
         await debug_print(f'Sent settings to WP: {resp.status_code}', 'HTTP')
     except Exception as e:
         await debug_print(f'Failed to send settings to WP: {e}', 'ERROR')
@@ -349,7 +360,12 @@ async def fetch_settings_from_wp():
         await debug_print('No WordPress API URL set', 'ERROR')
         return
     try:
-        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/settings/{settings.UNIT_ID}', headers={'Authorization': f'Bearer {WORDPRESS_API_KEY}'})
+        hdrs = {}
+        try:
+            hdrs = _auth_headers()
+        except Exception:
+            hdrs = {}
+        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/settings/{settings.UNIT_ID}', headers=hdrs)
         if resp.status_code == 200:
             new_settings = resp.json().get('settings', {})
             # Also update company, site, zone, cluster if present
@@ -372,7 +388,12 @@ async def send_file_to_wp(filepath):
     try:
         with open(filepath, 'rb') as f:
             files = {'file': (os.path.basename(filepath), f.read())}
-            resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/file', headers={'Authorization': f'Bearer {WORDPRESS_API_KEY}'}, files=files)
+            hdrs = {}
+            try:
+                hdrs = _auth_headers()
+            except Exception:
+                hdrs = {}
+            resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/file', headers=hdrs, files=files)
             await debug_print(f'Sent file to WP: {resp.status_code}', 'HTTP')
     except Exception as e:
         await debug_print(f'Failed to send file to WP: {e}', 'ERROR')
@@ -382,7 +403,12 @@ async def request_file_from_wp(filename):
         await debug_print('No WordPress API URL set', 'ERROR')
         return
     try:
-        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/file/{settings.UNIT_ID}/{filename}', headers={'Authorization': f'Bearer {WORDPRESS_API_KEY}'})
+        hdrs = {}
+        try:
+            hdrs = _auth_headers()
+        except Exception:
+            hdrs = {}
+        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/file/{settings.UNIT_ID}/{filename}', headers=hdrs)
         if resp.status_code == 200:
             with open(filename, 'wb') as f:
                 f.write(resp.content)
@@ -1177,7 +1203,12 @@ async def send_settings_to_wp():
         'settings': {k: getattr(settings, k) for k in dir(settings) if not k.startswith('__') and not callable(getattr(settings, k))}
     }
     try:
-        resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/settings', headers={'Authorization': f'Bearer {WORDPRESS_API_KEY}'}, json=data)
+        hdrs = {}
+        try:
+            hdrs = _auth_headers()
+        except Exception:
+            hdrs = {}
+        resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/settings', headers=hdrs, json=data)
         await debug_print(f'Sent settings to WP: {resp.status_code}', 'HTTP')
     except Exception as e:
         await debug_print(f'Failed to send settings to WP: {e}', 'ERROR')
@@ -1187,7 +1218,12 @@ async def fetch_settings_from_wp():
         await debug_print('No WordPress API URL set', 'ERROR')
         return
     try:
-        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/settings/{settings.UNIT_ID}', headers={'Authorization': f'Bearer {WORDPRESS_API_KEY}'})
+        hdrs = {}
+        try:
+            hdrs = _auth_headers()
+        except Exception:
+            hdrs = {}
+        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/settings/{settings.UNIT_ID}', headers=hdrs)
         if resp.status_code == 200:
             new_settings = resp.json().get('settings', {})
             # Also update company, site, zone, cluster if present
@@ -1210,7 +1246,12 @@ async def send_file_to_wp(filepath):
     try:
         with open(filepath, 'rb') as f:
             files = {'file': (os.path.basename(filepath), f.read())}
-            resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/file', headers={'Authorization': f'Bearer {WORDPRESS_API_KEY}'}, files=files)
+            hdrs = {}
+            try:
+                hdrs = _auth_headers()
+            except Exception:
+                hdrs = {}
+            resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/file', headers=hdrs, files=files)
             await debug_print(f'Sent file to WP: {resp.status_code}', 'HTTP')
     except Exception as e:
         await debug_print(f'Failed to send file to WP: {e}', 'ERROR')
@@ -1220,7 +1261,12 @@ async def request_file_from_wp(filename):
         await debug_print('No WordPress API URL set', 'ERROR')
         return
     try:
-        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/file/{settings.UNIT_ID}/{filename}', headers={'Authorization': f'Bearer {WORDPRESS_API_KEY}'})
+        hdrs = {}
+        try:
+            hdrs = _auth_headers()
+        except Exception:
+            hdrs = {}
+        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/file/{settings.UNIT_ID}/{filename}', headers=hdrs)
         if resp.status_code == 200:
             with open(filename, 'wb') as f:
                 f.write(resp.content)

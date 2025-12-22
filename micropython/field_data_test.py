@@ -19,8 +19,9 @@ async def test_field_data_once():
         'bar': 1012.3,
     }
     try:
-        token = get_jwt_token()
-        headers = {'Authorization': f'Bearer {token}'}
+        # Use same auth builder as device requests (Application Password / Basic)
+        from wprest import _auth_headers
+        headers = _auth_headers() if callable(_auth_headers) else {}
         print('[TEST] POST /device/field-data ...')
         resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/field-data', headers=headers, json=payload, timeout=10)
         try:
