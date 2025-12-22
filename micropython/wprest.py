@@ -213,11 +213,10 @@ async def send_settings_to_wp():
                 except Exception:
                     pass
 
-        # Prefer UC/Admin-style endpoint first, then device endpoint, then legacy hub endpoint.
-        # Use settings constants if available for consistency with server-side config.
+        # Prefer UC/Admin-style endpoint first (many deployments require X-TMON-ADMIN header),
+        # then device endpoint, then legacy hub-style endpoint.
         candidate_paths = []
         try:
-            # try explicit admin settings path from settings first
             candidate_paths.append(getattr(settings, 'ADMIN_SETTINGS_PATH', '/wp-json/tmon/v1/admin/device/settings'))
         except Exception:
             candidate_paths.append('/wp-json/tmon/v1/admin/device/settings')
@@ -225,8 +224,8 @@ async def send_settings_to_wp():
             '/wp-json/tmon/v1/device/settings',
             '/wp-json/tmon-admin/v1/device/settings'
         ])
-        # For admin-scoped endpoints try admin/credentialed headers first
-        auth_modes = ['basic', 'admin', 'hub', 'read', None, 'none']
+        # Try admin confirm header first, then Basic/App Password, then hub/read/none.
+        auth_modes = ['admin', 'basic', 'hub', 'read', None, 'none']
 
         last_response = None
         for p in candidate_paths:
@@ -254,7 +253,8 @@ async def send_settings_to_wp():
                     # On 403, try targeted header fallbacks for admin-style endpoints before continuing
                     if code == 403:
                         await debug_print(f"wprest: {p} -> 403, trying header fallbacks", 'WARN')
-                        for hdr_mode in ('hub', 'admin', 'api_key', 'read', 'basic'):
+                        # Try likely header modes (preserve original order but ensure we cover typical server expectations)
+                        for hdr_mode in ('admin', 'hub', 'api_key', 'read', 'basic'):
                             try:
                                 fb = _auth_headers(hdr_mode)
                             except Exception:
@@ -367,15 +367,16 @@ async def poll_device_commands():
         unit = getattr(settings, 'UNIT_ID', '') or ''
         if not unit:
             return []
-        # Try several candidate command endpoints (some UC deployments expose admin-scoped route)
+        # Try several candidate command endpoints (admin-scoped first, then device, then legacy)
         base = settings.WORDPRESS_API_URL.rstrip('/')
         candidate_paths = []
         try:
-            candidate_paths.append(getattr(settings, 'WPREST_COMMANDS_PATH', '/wp-json/tmon/v1/device/commands'))
+            # prefer admin-scoped commands path when available on UC deployments
+            candidate_paths.append('/wp-json/tmon/v1/admin/device/commands')
         except Exception:
-            candidate_paths.append('/wp-json/tmon/v1/device/commands')
+            candidate_paths.append('/wp-json/tmon/v1/admin/device/commands')
+        candidate_paths.append(getattr(settings, 'WPREST_COMMANDS_PATH', '/wp-json/tmon/v1/device/commands'))
         candidate_paths.extend([
-            '/wp-json/tmon/v1/admin/device/commands',
             '/wp-json/tmon-admin/v1/device/commands'
         ])
         hdrs = {}
