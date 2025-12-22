@@ -41,40 +41,64 @@ def _auth_headers():
     return headers
 
 async def register_with_wp():
-    """Register/check-in device with the configured WordPress/TMON Admin hub (best-effort)."""
+    """Register/check-in device with the configured WordPress/TMON Admin hub (best-effort).
+    Tries multiple known admin endpoints to work around differing hub API routes.
+    """
     try:
-        if not getattr(settings, 'WORDPRESS_API_URL', ''):
-            await debug_print('wprest: no WP url', 'WARN')
+        base = getattr(settings, 'TMON_ADMIN_API_URL', '') or getattr(settings, 'WORDPRESS_API_URL', '')
+        if not base:
+            await debug_print('wprest: no Admin hub URL configured', 'WARN')
             return False
         payload = {
-            'unit_id': getattr(settings, 'UNIT_ID', ''),
-            'unit_name': getattr(settings, 'UNIT_Name', ''),
+            'unit_id': getattr(settings, 'UNIT_ID', '') or '',
+            'unit_name': getattr(settings, 'UNIT_Name', '') or '',
             'machine_id': get_machine_id() or '',
-            'firmware_version': getattr(settings, 'FIRMWARE_VERSION', ''),
-            'node_type': getattr(settings, 'NODE_TYPE', ''),
+            'firmware_version': getattr(settings, 'FIRMWARE_VERSION', '') or '',
+            'node_type': getattr(settings, 'NODE_TYPE', '') or '',
         }
-        url = settings.WORDPRESS_API_URL.rstrip('/') + '/wp-json/tmon-admin/v1/device/register'
-        hdrs = _auth_headers()
-        # Best-effort POST
+        # Candidate register endpoints (order is intentional: legacy -> v2)
+        candidates = []
         try:
-            resp = requests.post(url, json=payload, headers=hdrs, timeout=8)
-        except TypeError:
-            resp = requests.post(url, json=payload, headers=hdrs)
-        status = getattr(resp, 'status_code', 0)
-        text = ''
-        try:
-            text = getattr(resp, 'text', '') or ''
+            candidates.append(getattr(settings, 'ADMIN_REGISTER_PATH', '/wp-json/tmon-admin/v1/device/register'))
+            # Common check-in alternative used in other code
+            candidates.append('/wp-json/tmon-admin/v1/device/check-in')
+            # Versioned admin checkin
+            candidates.append(getattr(settings, 'ADMIN_V2_CHECKIN_PATH', '/wp-json/tmon-admin/v2/device/checkin'))
         except Exception:
-            pass
-        try:
-            if resp:
-                resp.close()
-        except Exception:
-            pass
-        if status in (200, 201):
-            await debug_print('wprest: register ok', 'INFO')
-            return True
-        await debug_print(f'wprest: register failed {status} {text[:200]}', 'WARN')
+            candidates = ['/wp-json/tmon-admin/v1/device/register', '/wp-json/tmon-admin/v1/device/check-in', '/wp-json/tmon-admin/v2/device/checkin']
+
+        hdrs = _auth_headers() if callable(_auth_headers) else {}
+        for path in candidates:
+            try:
+                url = base.rstrip('/') + path
+                try:
+                    resp = requests.post(url, json=payload, headers=hdrs, timeout=8)
+                except TypeError:
+                    resp = requests.post(url, json=payload, headers=hdrs)
+                status = getattr(resp, 'status_code', 0)
+                body_snip = ''
+                try:
+                    body_snip = (getattr(resp, 'text', '') or '')[:400]
+                except Exception:
+                    body_snip = ''
+                try:
+                    if resp:
+                        resp.close()
+                except Exception:
+                    pass
+                if status in (200, 201):
+                    await debug_print(f'wprest: register ok via {path}', 'INFO')
+                    return True
+                # Log diagnostic per-candidate
+                if status == 404:
+                    await debug_print(f'wprest: register endpoint {path} not found (404)', 'WARN')
+                elif status == 401:
+                    await debug_print(f'wprest: register endpoint {path} returned 401 Unauthorized. Check FIELD_DATA_APP_PASS / credentials.', 'WARN')
+                else:
+                    await debug_print(f'wprest: register failed {status} for {path} ({body_snip})', 'WARN')
+            except Exception as e:
+                await debug_print(f'wprest: register attempt {path} exception: {e}', 'ERROR')
+        await debug_print('wprest: register_all_attempts_failed', 'ERROR')
         return False
     except Exception as e:
         await debug_print(f'wprest: register exception {e}', 'ERROR')
@@ -88,7 +112,6 @@ async def send_data_to_wp():
         if not getattr(settings, 'WORDPRESS_API_URL', ''):
             await debug_print('wprest: no WP url', 'WARN')
             return False
-        # If there's backlog persisted, try to flush it (append_to_backlog is used by utils)
         backlog = read_backlog()
         if not backlog:
             return False
@@ -102,12 +125,20 @@ async def send_data_to_wp():
             try:
                 resp = requests.post(url, data=js, headers=hdrs, timeout=10)
                 code = getattr(resp, 'status_code', 0)
+                body = ''
+                try:
+                    body = (getattr(resp, 'text', '') or '')[:400]
+                except Exception:
+                    pass
                 if resp: resp.close()
                 if code in (200,201):
-                    # On success, clear the backlog (utils will rotate)
                     clear_backlog()
                     await debug_print('wprest: field data posted', 'INFO')
                     return True
+                if code == 401:
+                    await debug_print('wprest: field data POST returned 401 Unauthorized. Verify FIELD_DATA_APP_PASS / credentials for the site.', 'WARN')
+                else:
+                    await debug_print(f'wprest: send_field_data failed {code} {body}', 'WARN')
             except Exception as e:
                 await debug_print(f'wprest: send_field_data err {e}', 'ERROR')
         return False
@@ -175,6 +206,42 @@ async def fetch_staged_settings():
         return None
     except Exception as e:
         await debug_print(f'wprest: fetch_staged_settings exc {e}', 'ERROR')
+        return None
+
+# New helper: fetch applied settings from WP (used by lora.py)
+async def fetch_settings_from_wp():
+    """GET applied device settings from WP (best-effort). Returns dict or None."""
+    try:
+        if not getattr(settings, 'WORDPRESS_API_URL', ''):
+            return None
+        unit = getattr(settings, 'UNIT_ID', '') or ''
+        if not unit:
+            return None
+        url = settings.WORDPRESS_API_URL.rstrip('/') + '/wp-json/tmon/v1/device/settings/' + unit
+        try:
+            resp = requests.get(url, headers=_auth_headers(), timeout=8)
+        except TypeError:
+            resp = requests.get(url, headers=_auth_headers())
+        code = getattr(resp, 'status_code', 0)
+        body = getattr(resp, 'text', '') or ''
+        try:
+            data = json.loads(body) if body else None
+        except Exception:
+            data = None
+        try:
+            if resp: resp.close()
+        except Exception:
+            pass
+        if code in (200,201) and isinstance(data, dict):
+            await debug_print('wprest: fetched settings', 'INFO')
+            return data.get('settings', data) if isinstance(data, dict) else None
+        if code == 401:
+            await debug_print('wprest: fetch_settings returned 401 Unauthorized. Check configured credentials (FIELD_DATA_APP_PASS).', 'WARN')
+        else:
+            await debug_print(f'wprest: fetch_settings failed {code}', 'WARN')
+        return None
+    except Exception as e:
+        await debug_print(f'wprest: fetch_settings exc {e}', 'ERROR')
         return None
 
 async def poll_device_commands():
@@ -408,6 +475,6 @@ async def _post_command_confirm(payload):
 # expose small stable names
 __all__ = [
     'register_with_wp', 'send_data_to_wp', 'send_settings_to_wp',
-    'fetch_staged_settings', 'poll_device_commands', 'poll_ota_jobs',
+    'fetch_staged_settings', 'fetch_settings_from_wp', 'poll_device_commands', 'poll_ota_jobs',
     'send_file_to_wp', 'request_file_from_wp', 'heartbeat_ping'
 ]
