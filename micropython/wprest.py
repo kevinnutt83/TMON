@@ -213,14 +213,20 @@ async def send_settings_to_wp():
                 except Exception:
                     pass
 
-        # Prefer admin-scoped endpoint first (Unit Connector v2), then device path, then legacy hub path.
-        candidate_paths = [
-            '/wp-json/tmon/v1/admin/device/settings',
+        # Prefer UC/Admin-style endpoint first, then device endpoint, then legacy hub endpoint.
+        # Use settings constants if available for consistency with server-side config.
+        candidate_paths = []
+        try:
+            # try explicit admin settings path from settings first
+            candidate_paths.append(getattr(settings, 'ADMIN_SETTINGS_PATH', '/wp-json/tmon/v1/admin/device/settings'))
+        except Exception:
+            candidate_paths.append('/wp-json/tmon/v1/admin/device/settings')
+        candidate_paths.extend([
             '/wp-json/tmon/v1/device/settings',
             '/wp-json/tmon-admin/v1/device/settings'
-        ]
-        # Try credentialed/basic auth modes before unauthenticated attempts (admin routes usually require auth)
-        auth_modes = ['basic', 'hub', 'admin', 'read', None, 'none']
+        ])
+        # For admin-scoped endpoints try admin/credentialed headers first
+        auth_modes = ['basic', 'admin', 'hub', 'read', None, 'none']
 
         last_response = None
         for p in candidate_paths:
@@ -361,54 +367,51 @@ async def poll_device_commands():
         unit = getattr(settings, 'UNIT_ID', '') or ''
         if not unit:
             return []
-        url = settings.WORDPRESS_API_URL.rstrip('/') + '/wp-json/tmon/v1/device/commands?unit_id=' + unit
-        try:
-            resp = requests.get(url, headers=_auth_headers(), timeout=8)
-        except TypeError:
-            resp = requests.get(url, headers=_auth_headers())
-        code = getattr(resp, 'status_code', 0)
-        body = getattr(resp, 'text', '') or ''
-        try:
-            data = json.loads(body) if body else None
-        except Exception:
-            data = None
-        try:
-            if resp: resp.close()
-        except Exception:
-            pass
+        # Try several candidate command endpoints (some UC deployments expose admin-scoped route)
         base = settings.WORDPRESS_API_URL.rstrip('/')
-        post_url = base + '/wp-json/tmon/v1/device/commands'
-        get_url = post_url + '?unit_id=' + unit
-        # Prefer POST {unit_id} (UC implementations often expect POST), fall back to GET
-        data = None; code = 0; body = ''
-        tried = []
+        candidate_paths = []
+        try:
+            candidate_paths.append(getattr(settings, 'WPREST_COMMANDS_PATH', '/wp-json/tmon/v1/device/commands'))
+        except Exception:
+            candidate_paths.append('/wp-json/tmon/v1/device/commands')
+        candidate_paths.extend([
+            '/wp-json/tmon/v1/admin/device/commands',
+            '/wp-json/tmon-admin/v1/device/commands'
+        ])
+        hdrs = {}
         try:
             hdrs = _auth_headers()
         except Exception:
             hdrs = {}
-        # Try POST
-        try:
+        data = None; code = 0
+        tried = []
+        # For each candidate, prefer POST {unit_id} then GET fallback
+        for p in candidate_paths:
+            post_url = base + p
             try:
-                resp = requests.post(post_url, json={'unit_id': unit}, headers=hdrs, timeout=8)
-            except TypeError:
-                resp = requests.post(post_url, json={'unit_id': unit}, headers=hdrs)
-            code = getattr(resp, 'status_code', 0)
-            body = getattr(resp, 'text', '') or ''
-            tried.append(('POST', post_url, code))
+                try:
+                    resp = requests.post(post_url, json={'unit_id': unit}, headers=hdrs, timeout=8)
+                except TypeError:
+                    resp = requests.post(post_url, json={'unit_id': unit}, headers=hdrs)
+                code = getattr(resp, 'status_code', 0)
+                body = getattr(resp, 'text', '') or ''
+                tried.append(('POST', post_url, code))
+                try:
+                    data = json.loads(body) if body else None
+                except Exception:
+                    data = None
+                try:
+                    if resp: resp.close()
+                except Exception:
+                    pass
+                await debug_print(f"wprest: poll_device_commands POST {p} -> {code}", "HTTP")
+                if code in (200,201) and isinstance(data, (dict, list)):
+                    break
+            except Exception as e:
+                await debug_print(f"wprest: poll_device_commands POST {p} err: {e}", "ERROR")
+            # try GET fallback for same path
             try:
-                data = json.loads(body) if body else None
-            except Exception:
-                data = None
-            try:
-                if resp: resp.close()
-            except Exception:
-                pass
-        except Exception as e:
-            await debug_print(f"wprest: poll_device_commands POST err: {e}", 'ERROR')
-            data = None; code = 0
-        # If POST didn't give usable data, try GET
-        if not (isinstance(data, (list, dict)) and code in (200,201)):
-            try:
+                get_url = base + p + ('?unit_id=' + unit if '?' not in p else '&unit_id=' + unit)
                 try:
                     resp = requests.get(get_url, headers=hdrs, timeout=8)
                 except TypeError:
@@ -424,15 +427,13 @@ async def poll_device_commands():
                     if resp: resp.close()
                 except Exception:
                     pass
+                await debug_print(f"wprest: poll_device_commands GET {p} -> {code}", "HTTP")
+                if code in (200,201) and isinstance(data, (dict, list)):
+                    break
             except Exception as e:
-                await debug_print(f"wprest: poll_device_commands GET err: {e}", 'ERROR')
-                data = None; code = 0
+                await debug_print(f"wprest: poll_device_commands GET {p} err: {e}", "ERROR")
         await debug_print(f"wprest: poll_device_commands attempts: {tried}", "HTTP")
         # Now 'data' may be a list or dict {'commands': [...]}
-        try:
-            pass
-        except Exception:
-            pass
         commands = []
         if code in (200,201):
             if isinstance(data, dict) and isinstance(data.get('commands'), list):
@@ -460,7 +461,7 @@ async def poll_device_commands():
     except Exception as e:
         await debug_print(f'wprest: poll_device_commands exc {e}', 'ERROR')
         return []
-
+    
 async def poll_ota_jobs():
     """Basic poll for OTA jobs; returns list or [] (no-op default)."""
     try:
