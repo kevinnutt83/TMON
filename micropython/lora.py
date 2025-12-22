@@ -621,9 +621,20 @@ async def init_lora():
         _deinit_spi_if_any(lora)
         # Guarded begin: retry and attempt to attach a machine.SPI instance if the driver
         # throws an AttributeError referencing a missing 'write' (common when SPI wasn't bound).
-        async def _attempt_begin(lo, attempts=2):
+        async def _attempt_begin(lo, attempts=3):
+            # Try proactively attaching a shim (helps drivers that expect spi already present)
+            try:
+                shim = _attach_spi_shim()
+                if shim and not getattr(lo, 'spi', None):
+                    lo.spi = shim
+                    await debug_print("lora: pre-attached machine.SPI shim before begin attempts", "LORA")
+            except Exception:
+                pass
+
+            # Try several begin invocation patterns to handle differing driver signatures
             for i in range(attempts):
                 try:
+                    # Preferred / full signature first
                     status = lo.begin(
                         freq=settings.FREQ, bw=settings.BW, sf=settings.SF, cr=settings.CR,
                         syncWord=settings.SYNC_WORD, power=settings.POWER,
@@ -633,13 +644,12 @@ async def init_lora():
                     )
                     return status
                 except AttributeError as ae:
-                    # If AES/spi write missing, try to provide a SPI object and retry once
+                    # Missing attribute on underlying SPI/native binding: attach shim and retry
                     try:
                         msg = str(ae)
                     except Exception:
                         msg = ''
                     await debug_print(f"lora.begin AttributeError: {msg}", "ERROR")
-                    # concise attach attempt using helper
                     try:
                         shim = _attach_spi_shim()
                         if shim:
@@ -649,6 +659,52 @@ async def init_lora():
                             await debug_print("lora: no usable machine.SPI instance available", "ERROR")
                     except Exception:
                         pass
+                    try:
+                        _time.sleep_ms(120)
+                    except Exception:
+                        pass
+                    continue
+                except TypeError as te:
+                    # Some ports/drivers may raise TypeError (unexpected keyword arg). Try fallback signatures.
+                    try:
+                        msg = str(te)
+                    except Exception:
+                        msg = ''
+                    await debug_print(f"lora.begin TypeError: {msg} (attempt {i+1})", "WARN")
+                    # Try reduced signatures one-by-one
+                    tried = False
+                    try:
+                        # Minimal kwargs
+                        status = lo.begin(freq=settings.FREQ, power=settings.POWER)
+                        return status
+                    except Exception:
+                        tried = True
+                    try:
+                        # Positional: freq, bw, sf
+                        status = lo.begin(settings.FREQ, settings.BW, settings.SF)
+                        return status
+                    except Exception:
+                        pass
+                    # Try attaching a fresh SPI shim and re-instantiating driver with spi object if constructor allows
+                    try:
+                        shim = _attach_spi_shim()
+                        if shim:
+                            try:
+                                # Some SX1262 wrappers accept a pre-constructed SPI instance as first argument
+                                try:
+                                    lo2 = SX1262(shim, settings.CS_PIN, settings.IRQ_PIN, settings.RST_PIN, settings.BUSY_PIN)
+                                except Exception:
+                                    # Try keyword form
+                                    lo2 = SX1262(spi=shim, cs=settings.CS_PIN, irq=settings.IRQ_PIN, rst=settings.RST_PIN, busy=settings.BUSY_PIN)
+                                # swap and retry begin
+                                lo = lo2
+                                status = lo.begin(freq=settings.FREQ)
+                                return status
+                            except Exception as re:
+                                await debug_print(f"lora: re-instantiation with SPI shim failed: {re}", "ERROR")
+                    except Exception:
+                        pass
+                    # Give a small settle time and try again outer loop
                     try:
                         _time.sleep_ms(120)
                     except Exception:
@@ -698,7 +754,7 @@ async def init_lora():
                 from _sx126x import SX126X_PACKET_TYPE_LORA
                 pkt_type = lora.getPacketType()
                 if pkt_type != SX126X_PACKET_TYPE_LORA:
-                    await debug_print("lora: init verify pkt_type mismatch", "ERROR")
+                    await debug_print "lora: init verify pkt_type mismatch", "ERROR")
                     await log_error(f"LoRa init verify failed: packet type={pkt_type}")
                     await free_pins()
                     lora = None
@@ -1613,9 +1669,20 @@ async def init_lora():
         _deinit_spi_if_any(lora)
         # Guarded begin: retry and attempt to attach a machine.SPI instance if the driver
         # throws an AttributeError referencing a missing 'write' (common when SPI wasn't bound).
-        async def _attempt_begin(lo, attempts=2):
+        async def _attempt_begin(lo, attempts=3):
+            # Try proactively attaching a shim (helps drivers that expect spi already present)
+            try:
+                shim = _attach_spi_shim()
+                if shim and not getattr(lo, 'spi', None):
+                    lo.spi = shim
+                    await debug_print("lora: pre-attached machine.SPI shim before begin attempts", "LORA")
+            except Exception:
+                pass
+
+            # Try several begin invocation patterns to handle differing driver signatures
             for i in range(attempts):
                 try:
+                    # Preferred / full signature first
                     status = lo.begin(
                         freq=settings.FREQ, bw=settings.BW, sf=settings.SF, cr=settings.CR,
                         syncWord=settings.SYNC_WORD, power=settings.POWER,
@@ -1625,13 +1692,12 @@ async def init_lora():
                     )
                     return status
                 except AttributeError as ae:
-                    # If AES/spi write missing, try to provide a SPI object and retry once
+                    # Missing attribute on underlying SPI/native binding: attach shim and retry
                     try:
                         msg = str(ae)
                     except Exception:
                         msg = ''
                     await debug_print(f"lora.begin AttributeError: {msg}", "ERROR")
-                    # concise attach attempt using helper
                     try:
                         shim = _attach_spi_shim()
                         if shim:
@@ -1641,6 +1707,52 @@ async def init_lora():
                             await debug_print("lora: no usable machine.SPI instance available", "ERROR")
                     except Exception:
                         pass
+                    try:
+                        _time.sleep_ms(120)
+                    except Exception:
+                        pass
+                    continue
+                except TypeError as te:
+                    # Some ports/drivers may raise TypeError (unexpected keyword arg). Try fallback signatures.
+                    try:
+                        msg = str(te)
+                    except Exception:
+                        msg = ''
+                    await debug_print(f"lora.begin TypeError: {msg} (attempt {i+1})", "WARN")
+                    # Try reduced signatures one-by-one
+                    tried = False
+                    try:
+                        # Minimal kwargs
+                        status = lo.begin(freq=settings.FREQ, power=settings.POWER)
+                        return status
+                    except Exception:
+                        tried = True
+                    try:
+                        # Positional: freq, bw, sf
+                        status = lo.begin(settings.FREQ, settings.BW, settings.SF)
+                        return status
+                    except Exception:
+                        pass
+                    # Try attaching a fresh SPI shim and re-instantiating driver with spi object if constructor allows
+                    try:
+                        shim = _attach_spi_shim()
+                        if shim:
+                            try:
+                                # Some SX1262 wrappers accept a pre-constructed SPI instance as first argument
+                                try:
+                                    lo2 = SX1262(shim, settings.CS_PIN, settings.IRQ_PIN, settings.RST_PIN, settings.BUSY_PIN)
+                                except Exception:
+                                    # Try keyword form
+                                    lo2 = SX1262(spi=shim, cs=settings.CS_PIN, irq=settings.IRQ_PIN, rst=settings.RST_PIN, busy=settings.BUSY_PIN)
+                                # swap and retry begin
+                                lo = lo2
+                                status = lo.begin(freq=settings.FREQ)
+                                return status
+                            except Exception as re:
+                                await debug_print(f"lora: re-instantiation with SPI shim failed: {re}", "ERROR")
+                    except Exception:
+                        pass
+                    # Give a small settle time and try again outer loop
                     try:
                         _time.sleep_ms(120)
                     except Exception:
@@ -1690,7 +1802,7 @@ async def init_lora():
                 from _sx126x import SX126X_PACKET_TYPE_LORA
                 pkt_type = lora.getPacketType()
                 if pkt_type != SX126X_PACKET_TYPE_LORA:
-                    await debug_print("lora: init verify pkt_type mismatch", "ERROR")
+                    await debug_print "lora: init verify pkt_type mismatch", "ERROR")
                     await log_error(f"LoRa init verify failed: packet type={pkt_type}")
                     await free_pins()
                     lora = None
@@ -1740,7 +1852,7 @@ async def init_lora():
         try:
             _deinit_spi_if_any(lora)
         except Exception:
-            pass
+                       pass
         await free_pins()
         lora = None
         return False
