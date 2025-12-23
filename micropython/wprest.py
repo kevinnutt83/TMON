@@ -73,7 +73,15 @@ def _auth_headers(mode=None):
         if mode == 'admin':
             token = getattr(settings, 'TMON_ADMIN_CONFIRM_TOKEN', None) or getattr(settings, 'WORDPRESS_ADMIN_TOKEN', None)
             if token:
-                h = dict(headers); h[getattr(settings, 'REST_HEADER_ADMIN_KEY', 'X-TMON-ADMIN')] = str(token); return h
+                h = dict(headers)
+                # Provide both common header names and a Bearer form to maximize compatibility with different plugin expectations
+                admin_key = getattr(settings, 'REST_HEADER_ADMIN_KEY', 'X-TMON-ADMIN')
+                confirm_key = getattr(settings, 'REST_HEADER_CONFIRM', 'X-TMON-CONFIRM')
+                h[admin_key] = str(token)
+                h[confirm_key] = str(token)
+                # also include Authorization Bearer fallback
+                h['Authorization'] = 'Bearer ' + str(token)
+                return h
         # Generic API key header
         if mode == 'api_key':
             apik = getattr(settings, 'WORDPRESS_API_KEY', None) or getattr(settings, 'TMON_API_KEY', None)
@@ -220,10 +228,20 @@ async def send_settings_to_wp():
             candidate_paths.append(getattr(settings, 'UC_SETTINGS_APPLIED_PATH', '/wp-json/tmon/v1/admin/device/settings-applied'))
         except Exception:
             candidate_paths.append('/wp-json/tmon/v1/admin/device/settings-applied')
+
+        # Additional common variants to cover different plugin naming and versions
+        candidate_paths.extend([
+            '/wp-json/tmon/v1/device/settings-applied',
+            '/wp-json/unit-connector/v1/device/settings-applied',
+            '/wp-json/tmon-unit-connector/v1/device/settings-applied',
+        ])
+
         try:
             candidate_paths.append(getattr(settings, 'ADMIN_SETTINGS_PATH', '/wp-json/tmon/v1/admin/device/settings'))
         except Exception:
             candidate_paths.append('/wp-json/tmon/v1/admin/device/settings')
+
+        # Device-level and legacy fallbacks
         candidate_paths.extend([
             '/wp-json/tmon/v1/device/settings',
             '/wp-json/tmon-admin/v1/device/settings'
@@ -260,22 +278,29 @@ async def send_settings_to_wp():
                         # Try likely header modes (preserve original order but ensure we cover typical server expectations)
                         for hdr_mode in ('admin', 'hub', 'api_key', 'read', 'basic'):
                             try:
-                                fb = _auth_headers(hdr_mode)
-                            except Exception:
-                                fb = {}
-                            try:
                                 try:
-                                    r2 = requests.post(target, json=payload, headers=fb, timeout=8)
-                                except TypeError:
-                                    r2 = requests.post(target, json=payload, headers=fb)
-                                c2 = getattr(r2, 'status_code', 0)
-                                b2 = (getattr(r2, 'text', '') or '')[:300]
-                                if r2: r2.close()
-                                await debug_print(f"wprest: send_settings fallback {hdr_mode} {p} -> {c2} ({b2})", 'HTTP')
-                                if c2 in (200,201):
+                                    fb_hdrs = _auth_headers(hdr_mode)
+                                except Exception:
+                                    fb_hdrs = {}
+                                try:
+                                    try:
+                                        resp2 = requests.post(target, json=payload, headers=fb_hdrs, timeout=8)
+                                    except TypeError:
+                                        resp2 = requests.post(target, json=payload, headers=fb_hdrs)
+                                except Exception as e:
+                                    await debug_print(f"wprest: header-fallback {hdr_mode} exception: {e}", 'WARN')
+                                    resp2 = None
+                                code2 = getattr(resp2, 'status_code', 0) if resp2 else 0
+                                body2 = (getattr(resp2, 'text', '') or '')[:200] if resp2 else ''
+                                try:
+                                    if resp2: resp2.close()
+                                except Exception:
+                                    pass
+                                await debug_print(f"wprest: header-fallback {hdr_mode} -> {code2} ({body2[:160]})", 'HTTP')
+                                if code2 in (200, 201):
                                     return True
-                            except Exception as e:
-                                await debug_print(f"wprest: send_settings fallback {hdr_mode} exception: {e}", 'ERROR')
+                            except Exception:
+                                pass
                         # fell through, continue trying other candidate paths
                 except Exception as e:
                     await debug_print(f'wprest: send_settings attempt {p} auth={mode} exception: {e}', 'ERROR')
@@ -379,8 +404,11 @@ async def poll_device_commands():
             candidate_paths.append('/wp-json/tmon/v1/admin/device/commands')
         except Exception:
             candidate_paths.append('/wp-json/tmon/v1/admin/device/commands')
-        candidate_paths.append(getattr(settings, 'WPREST_COMMANDS_PATH', '/wp-json/tmon/v1/device/commands'))
+        # Add common vendor/plugin name variants
         candidate_paths.extend([
+            '/wp-json/unit-connector/v1/device/commands',
+            '/wp-json/tmon-unit-connector/v1/device/commands',
+            getattr(settings, 'WPREST_COMMANDS_PATH', '/wp-json/tmon/v1/device/commands'),
             '/wp-json/tmon-admin/v1/device/commands'
         ])
         hdrs = {}
@@ -647,3 +675,25 @@ __all__ = [
     'fetch_staged_settings', 'fetch_settings_from_wp', 'poll_device_commands', 'poll_ota_jobs',
     'send_file_to_wp', 'request_file_from_wp', 'heartbeat_ping'
 ]
+
+async def heartbeat_ping():
+    """Best-effort heartbeat POST to the server's heartbeat endpoint."""
+    try:
+        wp = getattr(settings, 'WORDPRESS_API_URL', '') or ''
+        if not wp:
+            return False
+        url = wp.rstrip('/') + '/wp-json/tmon/v1/device/heartbeat'
+        payload = {'unit_id': getattr(settings, 'UNIT_ID', ''), 'machine_id': get_machine_id()}
+        hdrs = _auth_headers()
+        try:
+            resp = requests.post(url, json=payload, headers=hdrs, timeout=6)
+        except TypeError:
+            resp = requests.post(url, json=payload, headers=hdrs)
+        code = getattr(resp, 'status_code', 0)
+        try:
+            if resp: resp.close()
+        except Exception:
+            pass
+        return code in (200, 201)
+    except Exception:
+        return False
