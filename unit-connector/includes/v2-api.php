@@ -1,919 +1,295 @@
 <?php
-if (!defined('ABSPATH')) exit;
+// Minimal Unit Connector v1 REST API routes used by devices.
+// - Exposes endpoints under both tmon/v1 and unit-connector/v1 for broad compatibility.
+// - Permission callback accepts a configured confirm token, certain headers, Basic/Bearer Authorization (Application Passwords), or manage_options users.
 
-// Prevent double-inclusion of this file
-if (!defined('TMON_UC_V2_API_LOADED')) {
-	define('TMON_UC_V2_API_LOADED', true);
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
 }
 
-// Ensure hub config helpers are available
-include_once __DIR__ . '/hub-config.php';
-
-// Guard pull-install function registration
-add_action('rest_api_init', function(){
-	// If core tmon_uc_pull_install exists (e.g., declared in includes/api.php), do not re-register
-	if (function_exists('tmon_uc_pull_install')) {
-		return;
-	}
-	register_rest_route('tmon/v1', '/uc/pull-install', [
-		'methods' => 'POST',
-		'callback' => 'tmon_uc_pull_install',
-		// Enforce Application Password / Authorization rather than managing capabilities via current_user_can()
-		'permission_callback' => 'tmon_uc_require_app_password_auth',
-	]);
-});
-
-// Define tmon_uc_pull_install only if not already defined
-if (!function_exists('tmon_uc_pull_install')) {
-	function tmon_uc_pull_install($request){
-		// DO NOT call current_user_can() here — permission is enforced by the permission_callback above.
-		$payload = $request->get_param('payload');
-		$sig = $request->get_param('sig');
-		$require_auth = defined('TMON_UC_PULL_REQUIRE_AUTH') ? TMON_UC_PULL_REQUIRE_AUTH : false;
-		if ($require_auth) {
-			$auth = isset($_SERVER['HTTP_AUTHORIZATION']) ? $_SERVER['HTTP_AUTHORIZATION'] : '';
-			if (!$auth) return new WP_REST_Response(['status'=>'forbidden','message'=>'Missing Authorization'], 403);
-		}
-		if (!$payload || !$sig) return rest_ensure_response(['status'=>'error','message'=>'Missing payload or sig']);
-		$secret = defined('TMON_HUB_SHARED_SECRET') ? TMON_HUB_SHARED_SECRET : wp_salt('auth');
-		$calc = hash_hmac('sha256', wp_json_encode($payload), $secret);
-		if (!hash_equals($calc, $sig)) return new WP_REST_Response(['status'=>'forbidden'], 403);
-
-		$package_url = esc_url_raw($payload['package_url'] ?? '');
-		if (stripos($package_url, 'https://') !== 0) return rest_ensure_response(['status'=>'error','message'=>'HTTPS required for package_url']);
-		$expected_hash = isset($payload['sha256']) ? strtolower(sanitize_text_field($payload['sha256'])) : '';
-		$action = sanitize_text_field($payload['action'] ?? 'install');
-		$callback = esc_url_raw($payload['callback'] ?? '');
-		if (!$package_url) return rest_ensure_response(['status'=>'error','message'=>'Missing package_url']);
-
-		include_once ABSPATH . 'wp-admin/includes/file.php';
-		include_once ABSPATH . 'wp-admin/includes/misc.php';
-		include_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
-		include_once ABSPATH . 'wp-admin/includes/plugin.php';
-		WP_Filesystem();
-		$upgrader = new Plugin_Upgrader();
-		$result = null;
-
-		if ($expected_hash) {
-			$tmp = download_url($package_url);
-			if (is_wp_error($tmp)) {
-				$result = $tmp;
-			} else {
-				$data = file_get_contents($tmp);
-				$hash = strtolower(hash('sha256', $data));
-				if ($hash !== $expected_hash) {
-					@unlink($tmp);
-					return rest_ensure_response(['status'=>'error','message'=>'Package hash mismatch']);
-				}
-				$result = $upgrader->install($tmp, ['overwrite_package' => ($action === 'update')]);
-			}
-		} else {
-			$result = $upgrader->install($package_url, ['overwrite_package' => ($action === 'update')]);
-		}
-
-		$status = 'ok';
-		$details = $result;
-		if ($result && is_wp_error($result) === false) {
-			$plugins = get_plugins();
-			foreach ($plugins as $file => $data) {
-				if (stripos($file, 'tmon-unit-connector.php') !== false) {
-					activate_plugin($file);
-					break;
-				}
-			}
-		} else {
-			$status = 'error';
-		}
-
-		if ($callback) {
-			wp_remote_post($callback, [
-				'timeout' => 10,
-				'headers' => ['Content-Type'=>'application/json'],
-				'body' => wp_json_encode([
-					'site_url' => home_url(),
-					'status' => $status,
-					'details' => is_wp_error($result) ? $result->get_error_message() : $details,
-				]),
-			]);
-		}
-		return rest_ensure_response(['status' => $status]);
-	}
-}
-
-// Permission callback (native WP Application Passwords)
-if (!function_exists('tmon_uc_require_app_password_auth')) {
-	function tmon_uc_require_app_password_auth() {
-		$require = defined('TMON_UC_REQUIRE_APP_PASSWORD') ? TMON_UC_REQUIRE_APP_PASSWORD : (bool) get_option('tmon_uc_require_app_password', false);
-		if (!$require) return true;
-		return isset($_SERVER['HTTP_AUTHORIZATION']) && $_SERVER['HTTP_AUTHORIZATION'] !== '';
-	}
-}
-
-// Admin → UC routes (guarded by app password auth)
-add_action('rest_api_init', function() {
-	register_rest_route('tmon/v1', '/admin/device/settings', [
-		'methods' => 'POST',
-		'permission_callback' => 'tmon_uc_require_app_password_auth',
-		'callback' => function(WP_REST_Request $req) {
-			$body = json_decode($req->get_body(), true);
-			if (!is_array($body)) $body = (array)$req->get_params();
-			$unit_id = sanitize_text_field($body['unit_id'] ?? '');
-			$machine_id = sanitize_text_field($body['machine_id'] ?? '');
-			$settings = isset($body['settings']) ? (is_array($body['settings']) ? $body['settings'] : json_decode($body['settings'], true)) : [];
-			if (!is_array($settings)) $settings = [];
-			$store = get_option('tmon_uc_device_settings', []);
-			$key = $unit_id ?: $machine_id ?: ('rec_' . time());
-			$store[$key] = ['unit_id'=>$unit_id,'machine_id'=>$machine_id,'settings'=>$settings,'ts'=>current_time('mysql')];
-			update_option('tmon_uc_device_settings', $store);
-			return rest_ensure_response(['ok'=>true]);
-		}
-	]);
-
-	register_rest_route('tmon/v1', '/admin/device/confirm', [
-		'methods' => 'POST',
-		'permission_callback' => 'tmon_uc_require_app_password_auth',
-		'callback' => function(WP_REST_Request $req) {
-			$body = json_decode($req->get_body(), true);
-			if (!is_array($body)) $body = (array)$req->get_params();
-			$unit_id = sanitize_text_field($body['unit_id'] ?? '');
-			$machine_id = sanitize_text_field($body['machine_id'] ?? '');
-			$rec = ['unit_id'=>$unit_id,'machine_id'=>$machine_id,'confirmed'=>true,'ts'=>current_time('mysql')];
-			$conf = get_option('tmon_uc_device_confirms', []);
-			$conf[] = $rec; update_option('tmon_uc_device_confirms', $conf);
-			return rest_ensure_response(['ok'=>true]);
-		}
-	]);
-
-	$upsert_cb = function($what, $id_key) {
-		return function(WP_REST_Request $req) use ($what, $id_key) {
-			$data = json_decode($req->get_body(), true);
-			if (!is_array($data)) $data = (array)$req->get_params();
-			$id = isset($data[$id_key]) ? intval($data[$id_key]) : intval($data['id'] ?? 0);
-			$list = get_option('tmon_uc_' . $what, []);
-			$row = ['id' => $id];
-			foreach ($data as $k => $v) { $row[$k] = is_scalar($v) ? $v : wp_json_encode($v); }
-			$list[$id ?: (count($list)+1)] = $row;
-			update_option('tmon_uc_' . $what, $list);
-			return rest_ensure_response(['ok'=>true]);
-		};
-	};
-	register_rest_route('tmon/v1', '/admin/company/upsert', ['methods'=>'POST','permission_callback'=>'tmon_uc_require_app_password_auth','callback'=>$upsert_cb('companies','company_id')]);
-	register_rest_route('tmon/v1', '/admin/site/upsert',    ['methods'=>'POST','permission_callback'=>'tmon_uc_require_app_password_auth','callback'=>$upsert_cb('sites','id')]);
-	register_rest_route('tmon/v1', '/admin/zone/upsert',    ['methods'=>'POST','permission_callback'=>'tmon_uc_require_app_password_auth','callback'=>$upsert_cb('zones','id')]);
-	register_rest_route('tmon/v1', '/admin/cluster/upsert', ['methods'=>'POST','permission_callback'=>'tmon_uc_require_app_password_auth','callback'=>$upsert_cb('clusters','id')]);
-	register_rest_route('tmon/v1', '/admin/unit/upsert',    ['methods'=>'POST','permission_callback'=>'tmon_uc_require_app_password_auth','callback'=>$upsert_cb('units','id')]);
-});
-
-// Optional AI hooks — guard class redeclaration
-if (!class_exists('TMON_AI')) {
-	class TMON_AI {
-		public static $error_count = 0;
-		public static $last_error = null;
-		public static $recovery_actions = [];
-
-		public static function observe_error($error_msg, $context = null) {
-			self::$error_count++;
-			self::$last_error = [$error_msg, $context];
-			if (self::$error_count > 5) {
-				self::log('AI: Too many errors, attempting system recovery', $context);
-				self::recover_system();
-			}
-		}
-
-		public static function recover_system() {
-			self::log('AI: Performing system recovery', 'recovery');
-			// ...existing code...
-		}
-
-		public static function suggest_action($context) {
-			if (stripos($context, 'wifi') !== false) return 'Check WiFi credentials or signal.';
-			if (stripos($context, 'ota') !== false) return 'Retry OTA or check file integrity.';
-			return 'Check logs and restart the service if needed.';
-		}
-
-		public static function log($msg, $context = null) {
-			error_log('[TMON_AI] ' . $msg . ($context ? " | Context: $context" : ''));
+/**
+ * Return configured token(s) for server-side checks. Admins can set option 'tmon_rest_admin_token' in WP options
+ * (or filter it) - default empty.
+ */
+function tmon_uc_get_admin_token() {
+	// Try multiple option names for compatibility with different installs / naming
+	$candidates = array(
+		'tmon_rest_admin_token',
+		'tmon_admin_confirm_token',
+		'tmon_uc_admin_token',
+		'tmon_admin_token',
+		'tmon_unit_token'
+	);
+	foreach ( $candidates as $opt ) {
+		$val = get_option( $opt, '' );
+		if ( $val && is_string( $val ) ) {
+			$val = trim( $val );
+			if ( $val !== '' ) return $val;
 		}
 	}
-}
-
-// Hook AI observers (safe to add even if class existed elsewhere)
-add_action('tmon_uc_error', function($msg, $context = null) {
-	if (class_exists('TMON_AI')) TMON_AI::observe_error($msg, $context);
-});
-add_action('tmon_admin_error', function($msg, $context = null) {
-	if (class_exists('TMON_AI')) TMON_AI::observe_error($msg, $context);
-});
-
-// Safe requeue cron: run only if status column exists
-add_action('tmon_uc_command_requeue_cron', function(){
-	global $wpdb; $t = $wpdb->prefix.'tmon_device_commands';
-	$cols = $wpdb->get_results("SHOW COLUMNS FROM {$t}", ARRAY_A);
-	$names = array_map(function($c){ return $c['Field']; }, $cols ?: []);
-	if ($cols && in_array('status', $names, true)) {
-		$wpdb->query("UPDATE {$t} SET status='queued' WHERE status='claimed' AND updated_at < (NOW() - INTERVAL 5 MINUTE)");
-	}
-});
-
-// Device-facing: staged/applied settings + pending commands for a unit (used by MicroPython devices)
-add_action('rest_api_init', function() {
-	register_rest_route('tmon/v1', '/device/staged-settings', [
-		'methods' => 'GET',
-		'permission_callback' => '__return_true',
-		'callback' => function(WP_REST_Request $req) {
-			global $wpdb;
-			$unit = sanitize_text_field($req->get_param('unit_id') ?? $req->get_param('unit') ?? '');
-			if (!$unit) return rest_ensure_response(['status'=>'error','message'=>'unit_id required'], 400);
-
-			// Applied settings: try uc mirror, then devices table
-			$applied = [];
-			$staged = [];
-			$row = $wpdb->get_row($wpdb->prepare("SELECT settings FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s", $unit), ARRAY_A);
-			if ($row && !empty($row['settings'])) {
-				$tmp = json_decode($row['settings'], true);
-				if (json_last_error() === JSON_ERROR_NONE && is_array($tmp)) $applied = $tmp;
-			}
-			// UC-staged store (if present)
-			$store = get_option('tmon_uc_device_settings', []);
-			if (is_array($store) && isset($store[$unit]) && !empty($store[$unit]['settings'])) {
-				$maybe = $store[$unit]['settings'];
-				if (is_string($maybe)) {
-					$tmp = json_decode($maybe, true);
-					if (json_last_error() === JSON_ERROR_NONE && is_array($tmp)) $staged = $tmp;
-				} elseif (is_array($maybe)) {
-					$staged = $maybe;
-				}
-			}
-			// Fallback: staged in UC mirror table (tmon_uc_devices)
-			$uc_table = $wpdb->prefix.'tmon_uc_devices';
-			if (empty($staged) && $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $uc_table))) {
-				$row2 = $wpdb->get_row($wpdb->prepare("SELECT staged_settings FROM {$uc_table} WHERE unit_id=%s LIMIT 1", $unit), ARRAY_A);
-				if ($row2 && !empty($row2['staged_settings'])) {
-					$tmp = json_decode($row2['staged_settings'], true);
-					if (json_last_error() === JSON_ERROR_NONE && is_array($tmp)) $staged = $tmp;
-				}
-			}
-
-			// Pending commands for device
-			$cmds = [];
-			$rows = $wpdb->get_results($wpdb->prepare(
-				"SELECT id, command, params, created_at FROM {$wpdb->prefix}tmon_device_commands WHERE device_id = %s AND (executed_at IS NULL OR executed_at = '' OR executed_at = '0000-00-00 00:00:00') ORDER BY created_at ASC",
-				$unit
-			), ARRAY_A);
-			if (is_array($rows)) {
-				foreach ($rows as $r) {
-					$params = $r['params'] ?? '';
-					$dec = $params;
-					if (is_string($params)) {
-						$try = json_decode($params, true);
-						if (json_last_error() === JSON_ERROR_NONE) $dec = $try;
-					}
-					$cmds[] = ['id'=>$r['id'],'command'=>$r['command'],'params'=>$dec,'created_at'=>$r['created_at']];
-				}
-			}
-
-			return rest_ensure_response([
-				'status'=>'ok',
-				'unit_id'=>$unit,
-				'applied'=>$applied,
-				'staged'=>$staged,
-				'commands'=>$cmds
-			]);
-		}
-	]);
-});
-
-// Ensure commands table exists (simple guard)
-if (!function_exists('tmon_uc_ensure_commands_table')) {
-	function tmon_uc_ensure_commands_table() {
-		global $wpdb;
-		$table = $wpdb->prefix . 'tmon_device_commands';
-		$charset = $wpdb->get_charset_collate();
-		$sql = "CREATE TABLE IF NOT EXISTS {$table} (
-			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-			device_id VARCHAR(64) NOT NULL,
-			command VARCHAR(64) NOT NULL,
-			params LONGTEXT NULL,
-			status VARCHAR(32) NOT NULL DEFAULT 'queued',
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-			executed_at DATETIME NULL,
-			executed_result LONGTEXT NULL,
-			PRIMARY KEY (id),
-			KEY device_idx (device_id),
-			KEY status_idx (status)
-		) {$charset};";
-		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
-		dbDelta($sql);
-	}
-}
-add_action('init', function(){ tmon_uc_ensure_commands_table(); });
-
-// Previously these device endpoints were registered at file-include time and could trigger rest_api_init early.
-// Move them into a guarded rest_api_init callback to avoid triggering re-entrant rest_api_init handlers.
-add_action('rest_api_init', function() {
-	static $tmon_uc_device_command_routes_registered = false;
-	if ($tmon_uc_device_command_routes_registered) return;
-	$tmon_uc_device_command_routes_registered = true;
-
-	// Endpoint: Admin/UC -> UC: stage a command for a device (used by Admin or hub notify)
-	register_rest_route('tmon/v1', '/device/command', [
-		'methods' => 'POST',
-		'permission_callback' => '__return_true',
-		'callback' => function(WP_REST_Request $req){
-			global $wpdb;
-			$unit_id = sanitize_text_field($req->get_param('unit_id') ?? '');
-			$command = sanitize_text_field($req->get_param('command') ?? '');
-			$params = $req->get_param('params') ?? $req->get_param('payload') ?? [];
-			if (!$unit_id || !$command) return rest_ensure_response(['status'=>'error','message'=>'unit_id and command required'], 400);
-			$tbl = $wpdb->prefix . 'tmon_device_commands';
-			$wpdb->insert($tbl, [
-				'device_id' => $unit_id,
-				'command' => $command,
-				'params' => wp_json_encode($params),
-				'status' => 'queued',
-				'created_at' => tmon_uc_store_now(),
-				'updated_at' => tmon_uc_store_now(),
-			]);
-			return rest_ensure_response(['status'=>'ok','id'=>$wpdb->insert_id]);
-		}
-	]);
-
-	// Endpoint: Device poll for queued commands
-	register_rest_route('tmon/v1', '/device/commands', [
-		'methods' => 'POST',
-		'permission_callback' => '__return_true',
-		'callback' => function(WP_REST_Request $req){
-			global $wpdb;
-			$unit_id = sanitize_text_field($req->get_param('unit_id') ?? '');
-			if (!$unit_id) return rest_ensure_response([], 200);
-			$tbl = $wpdb->prefix . 'tmon_device_commands';
-			$max = intval(get_option('tmon_uc_commands_poll_max', 20));
-			$rows = $wpdb->get_results($wpdb->prepare("SELECT id, command, params FROM {$tbl} WHERE device_id=%s AND status='queued' ORDER BY id ASC LIMIT %d", $unit_id, $max), ARRAY_A);
-			$out = [];
-			foreach ($rows as $r) {
-				$out[] = ['id' => intval($r['id']), 'command' => $r['command'], 'params' => json_decode($r['params'], true)];
-				// mark claimed to avoid immediate re-delivery
-				$wpdb->update($tbl, ['status' => 'claimed', 'updated_at' => tmon_uc_store_now()], ['id' => intval($r['id'])]);
-			}
-			return rest_ensure_response($out);
-		}
-	]);
-
-	// Endpoint: Device reports completion of a command
-	register_rest_route('tmon/v1', '/device/command-complete', [
-		'methods' => 'POST',
-		'permission_callback' => '__return_true',
-		'callback' => function(WP_REST_Request $req){
-			global $wpdb;
-			$job_id = intval($req->get_param('job_id') ?? $req->get_param('id') ?? 0);
-			$ok = $req->get_param('ok') ? 1 : 0;
-			$result = $req->get_param('result') ?? '';
-			if (!$job_id) return rest_ensure_response(['status'=>'error','message'=>'job_id required'], 400);
-			$tbl = $wpdb->prefix . 'tmon_device_commands';
-			$wpdb->update($tbl, ['status' => ($ok ? 'done' : 'failed'), 'executed_at'=>tmon_uc_store_now(), 'executed_result'=>wp_json_encode($result), 'updated_at'=>tmon_uc_store_now()], ['id' => $job_id]);
-			return rest_ensure_response(['status'=>'ok']);
-		}
-	]);
-
-	// Legacy/compat: /device/ack for older devices
-	register_rest_route('tmon/v1', '/device/ack', [
-		'methods' => 'POST',
-		'permission_callback' => '__return_true',
-		'callback' => function(WP_REST_Request $req){
-			global $wpdb;
-			$command_id = intval($req->get_param('command_id') ?? 0);
-			$ok = $req->get_param('ok') ? 1 : 0;
-			$result = $req->get_param('result') ?? '';
-			if (!$command_id) return rest_ensure_response(['status'=>'error','message'=>'command_id required'], 400);
-			$tbl = $wpdb->prefix . 'tmon_device_commands';
-			$wpdb->update($tbl, ['status' => ($ok ? 'done' : 'failed'), 'executed_at'=>tmon_uc_store_now(), 'executed_result'=>wp_json_encode($result), 'updated_at'=>tmon_uc_store_now()], ['id' => $command_id]);
-			return rest_ensure_response(['status'=>'ok']);
-		}
-	]);
-});
-
-// Device registers / check-in and may send its settings snapshot
-add_action('rest_api_init', function(){
-	register_rest_route('tmon/v1', '/device/register', [
-		'methods' => 'POST',
-		'callback' => 'tmon_rest_device_register',
-		'permission_callback' => '__return_true',
-	]);
-});
-
-/* Helper: write per-device settings file under WP_CONTENT_DIR/tmon-field-logs */
-function tmon_uc_write_device_settings_file($unit_id, $settings_array) {
-	if (empty($unit_id) || !is_array($settings_array)) return false;
-	$dir = trailingslashit(WP_CONTENT_DIR) . 'tmon-field-logs';
-	if (! file_exists($dir)) wp_mkdir_p($dir);
-	$fname = $dir . '/device_settings-' . sanitize_file_name($unit_id) . '.json';
-	@file_put_contents($fname, wp_json_encode($settings_array));
-	return true;
-}
-
-/* POST /device/register
-   Accept: unit_id, machine_id, settings (object)
-   Persist to tmon_devices (settings/last_seen) and write per-device file.
-*/
-function tmon_rest_device_register(WP_REST_Request $req) {
-	global $wpdb;
-	$body = $req->get_json_params();
-	$unit_id = isset($body['unit_id']) ? sanitize_text_field($body['unit_id']) : '';
-	$machine_id = isset($body['machine_id']) ? sanitize_text_field($body['machine_id']) : '';
-	$settings = isset($body['settings']) && is_array($body['settings']) ? $body['settings'] : [];
-
-	if (! $unit_id) {
-		return rest_ensure_response(['status'=>'error','message'=>'unit_id required'], 400);
-	}
-	// Update or insert into tmon_devices (best-effort)
-	$now = current_time('mysql');
-	$row = $wpdb->get_row($wpdb->prepare("SELECT unit_id FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s LIMIT 1", $unit_id));
-	$enc = wp_json_encode($settings ?: new stdClass());
-	if ($row) {
-		$wpdb->update($wpdb->prefix.'tmon_devices', ['settings'=>$enc, 'machine_id'=>$machine_id, 'last_seen'=>$now], ['unit_id'=>$unit_id]);
-	} else {
-		$wpdb->insert($wpdb->prefix.'tmon_devices', ['unit_id'=>$unit_id,'machine_id'=>$machine_id,'unit_name'=>'','settings'=>$enc,'last_seen'=>$now]);
-	}
-	// Ensure per-device staged settings file exists for local processes/audit
-	if (! empty($settings) && is_array($settings)) {
-		tmon_uc_write_device_settings_file($unit_id, $settings);
-	}
-	return rest_ensure_response([
-		'status'=>'ok',
-		'unit_id'=>$unit_id,
-		'server_time' => current_time('mysql'),
-		'server_ts' => intval(current_time('timestamp')),
-	]);
-}
-
-/* GET /device/settings
-   Query params: unit_id or machine_id
-   Returns staged settings (if any) and queued commands for immediate download.
-*/
-function tmon_rest_device_staged_settings(WP_REST_Request $req) {
-	global $wpdb;
-	$unit_id = sanitize_text_field($req->get_param('unit_id') ?? '');
-	$machine_id = sanitize_text_field($req->get_param('machine_id') ?? '');
-	$uc_table = $wpdb->prefix . 'tmon_uc_devices';
-
-	// Find staged settings by unit or machine id
-	$staged = []; $staged_at = '';
-	if ($unit_id || $machine_id) {
-		$row = $wpdb->get_row($wpdb->prepare("SELECT staged_settings, staged_at, machine_id FROM {$uc_table} WHERE unit_id=%s OR machine_id=%s LIMIT 1", $unit_id, $machine_id), ARRAY_A);
-		if ($row && ! empty($row['staged_settings'])) {
-			$tmp = json_decode($row['staged_settings'], true);
-			if (is_array($tmp)) $staged = $tmp;
-			$staged_at = $row['staged_at'] ?? '';
-		}
-	}
-
-	// Write per-unit staged file for device-side application (best-effort)
-	if ($unit_id && is_array($staged) && $staged) {
-		tmon_uc_write_device_settings_file($unit_id, $staged);
-	}
-
-	// Return queued commands for this unit (limit)
-	$cmds = [];
-	if ($unit_id) {
-		$cmd_table = $wpdb->prefix . 'tmon_device_commands';
-		$rows = $wpdb->get_results($wpdb->prepare("SELECT id, device_id, command, params, created_at FROM {$cmd_table} WHERE device_id=%s AND status='queued' ORDER BY id ASC LIMIT %d", $unit_id, 50), ARRAY_A);
-		if ($rows) {
-			foreach ($rows as $r) {
-				$decoded = json_decode($r['params'], true);
-				$cmds[] = [
-					'id' => intval($r['id']),
-					'command' => $r['command'],
-					'params' => is_array($decoded) ? $decoded : $r['params'],
-					'created_at' => $r['created_at'],
-				];
-			}
-			// mark returned commands as dispatched
-			foreach ($rows as $r) {
-				$wpdb->update($cmd_table, ['status'=>'dispatched','dispatched_at'=>current_time('mysql')], ['id'=>intval($r['id'])]);
-			}
-		}
-	}
-
-	return rest_ensure_response([
-		'staged' => $staged,
-		'staged_at' => $staged_at,
-		'commands' => $cmds,
-		'server_time' => current_time('mysql'),
-		'server_ts' => intval(current_time('timestamp')),
-	]);
-}
-
-/* POST /device/commands
-   Body: { unit_id: "..." } returns queued commands array and marks them dispatched
-*/
-function tmon_rest_device_commands_fetch(WP_REST_Request $req) {
-	global $wpdb;
-	$body = $req->get_json_params();
-	$unit_id = sanitize_text_field($body['unit_id'] ?? '');
-	if (! $unit_id) return rest_ensure_response([], 200);
-
-	$cmd_table = $wpdb->prefix . 'tmon_device_commands';
-	$cmds = [];
-	$rows = $wpdb->get_results($wpdb->prepare("SELECT id, device_id, command, params, created_at FROM {$cmd_table} WHERE device_id=%s AND status='queued' ORDER BY id ASC LIMIT %d", $unit_id, 50), ARRAY_A);
-	if ($rows) {
-		foreach ($rows as $r) {
-			$decoded = json_decode($r['params'], true);
-			$cmds[] = [
-				'id' => intval($r['id']),
-				'command' => $r['command'],
-				'params' => is_array($decoded) ? $decoded : $r['params'],
-				'created_at' => $r['created_at'],
-			];
-		}
-		foreach ($rows as $r) {
-			$wpdb->update($cmd_table, ['status'=>'dispatched','dispatched_at'=>current_time('mysql')], ['id'=>intval($r['id'])]);
-		}
-	}
-	return rest_ensure_response(['commands'=>$cmds,'server_time'=>current_time('mysql'),'server_ts'=>intval(current_time('timestamp'))], 200);
-}
-
-/* POST /device/command-complete
-   Body: { job_id: n, ok: true/false, result: "..." }
-   Mark command executed + store result into params for audit.
-*/
-function tmon_rest_device_command_complete(WP_REST_Request $req) {
-	global $wpdb;
-	$body = $req->get_json_params();
-	$job_id = intval($body['job_id'] ?? 0);
-	$ok = isset($body['ok']) ? boolval($body['ok']) : null;
-	$result = isset($body['result']) ? sanitize_text_field($body['result']) : '';
-
-	if (! $job_id) return rest_ensure_response(['status'=>'error','message'=>'job_id required'], 400);
-
-	$cmd_table = $wpdb->prefix . 'tmon_device_commands';
-	$row = $wpdb->get_row($wpdb->prepare("SELECT params FROM {$cmd_table} WHERE id=%d LIMIT 1", $job_id), ARRAY_A);
-	if (! $row) return rest_ensure_response(['status'=>'error','message'=>'not found'], 404);
-
-	$params = $row['params'];
-	$decoded = json_decode($params, true);
-	if (!is_array($decoded)) $decoded = [];
-	if ($ok !== null) $decoded['__ok'] = $ok ? true : false;
-	if ($result !== '') $decoded['__result'] = $result;
-
-	$wpdb->update($cmd_table, [
-		'params' => wp_json_encode($decoded),
-		'status' => 'executed',
-		'executed_at' => current_time('mysql'),
-	], ['id' => $job_id]);
-
-	return rest_ensure_response(['status'=>'ok']);
-}
-
-// POST device settings (device -> UC)
-add_action('rest_api_init', function(){
-	register_rest_route('tmon/v1', '/device/settings', [
-		'methods' => 'POST',
-		'callback' => 'tmon_v1_device_receive_settings',
-		'permission_callback' => '__return_true',
-	]);
-});
-
-// GET ota jobs for device
-add_action('rest_api_init', function(){
-	register_rest_route('tmon/v1', '/device/ota-jobs/(?P<unit_id>[\w\-\._]+)', [
-		'methods' => 'GET',
-		'callback' => 'tmon_v1_device_ota_jobs',
-		'permission_callback' => '__return_true',
-	]);
-});
-
-// POST ota job complete
-add_action('rest_api_init', function(){
-	register_rest_route('tmon/v1', '/device/ota-job-complete', [
-		'methods' => 'POST',
-		'callback' => 'tmon_v1_device_ota_job_complete',
-		'permission_callback' => '__return_true',
-	]);
-});
-
-// File upload (multipart/form-data) - saves to wp-content/tmon-files/<unit_id>/
-add_action('rest_api_init', function(){
-	register_rest_route('tmon/v1', '/device/file', [
-		'methods' => 'POST',
-		'callback' => 'tmon_v1_device_file_upload',
-		'permission_callback' => '__return_true',
-	]);
-});
-
-// File download
-add_action('rest_api_init', function(){
-	register_rest_route('tmon/v1', '/device/file/(?P<unit_id>[\w\-\._]+)/(?P<filename>.+)', [
-		'methods' => 'GET',
-		'callback' => 'tmon_v1_device_file_fetch',
-		'permission_callback' => '__return_true',
-	]);
-});
-
-// Extract Authorization header value robustly.
-function tmon_uc_get_authorization_header() {
-	// getallheaders() exists on many environments
-	if (function_exists('getallheaders')) {
-		$h = getallheaders();
-		if (!empty($h['Authorization'])) return trim($h['Authorization']);
-		if (!empty($h['authorization'])) return trim($h['authorization']);
-	}
-	// fallback to common $_SERVER vars
-	if (!empty($_SERVER['HTTP_AUTHORIZATION'])) return trim($_SERVER['HTTP_AUTHORIZATION']);
-	if (!empty($_SERVER['REDIRECT_HTTP_AUTHORIZATION'])) return trim($_SERVER['REDIRECT_HTTP_AUTHORIZATION']);
-	// Some servers may use different casing/transforms
-	foreach ($_SERVER as $k => $v) {
-		if (stripos($k, 'AUTHORIZATION') !== false) return trim($v);
+	// allow filter override
+	$filtered = apply_filters( 'tmon_uc_admin_token', '' );
+	if ( is_string( $filtered ) && trim( $filtered ) !== '' ) {
+		return trim( $filtered );
 	}
 	return '';
 }
 
 /**
- * Permission callback for device endpoints: require HTTP Basic auth that maps to a valid WP user.
+ * Permission callback: accept:
+ *  - X-TMON-ADMIN / X-TMON-CONFIRM / X-TMON-HUB / X-TMON-READ / X-TMON-API-Key header matching option token,
+ *  - Authorization header (Basic/Bearer) to allow Application Passwords,
+ *  - logged-in users with 'manage_options'.
  */
-function tmon_uc_device_permission_callback(\WP_REST_Request $request) {
-	$auth = tmon_uc_get_authorization_header();
-	if (!$auth) return new WP_Error('forbidden', 'Missing Authorization', ['status' => 401]);
-	if (stripos($auth, 'basic ') !== 0) return new WP_Error('forbidden', 'Basic auth required', ['status' => 401]);
+function tmon_uc_rest_permission_check( $request ) {
+	$token = tmon_uc_get_admin_token();
+	$headers = $request->get_headers();
 
-	$b64 = trim(substr($auth, 6));
-	$decoded = base64_decode($b64);
-	if ($decoded === false || strpos($decoded, ':') === false) return new WP_Error('forbidden', 'Invalid Basic credentials', ['status' => 401]);
-	list($user, $pass) = explode(':', $decoded, 2);
+	// header variants (lowercase keys as returned by WP)
+	$try_names = array( 'x-tmon-admin', 'x-tmon-confirm', 'x-tmon-hub', 'x-tmon-read', 'x-tmon-api-key', 'x-tmon-verify', 'x-http-authorization' );
 
-	// Attempt WP login (does not set a session/cookie)
-	$user_obj = wp_authenticate($user, $pass);
-	if (is_wp_error($user_obj)) {
-		return new WP_Error('forbidden', 'Invalid credentials', ['status' => 403]);
+	// If a configured token exists, require a matching header
+	if ( $token ) {
+		foreach ( $try_names as $hn ) {
+			if ( isset( $headers[ $hn ] ) && ! empty( $headers[ $hn ][0] ) ) {
+				if ( trim( $headers[ $hn ][0] ) === $token ) {
+					return true;
+				}
+			}
+		}
+	} else {
+		// No configured token: accept any non-empty confirm-like header as a pragmatic fallback.
+		// This helps when Authorization headers are stripped by proxies but the confirm header is present.
+		foreach ( $try_names as $hn ) {
+			if ( isset( $headers[ $hn ] ) && ! empty( $headers[ $hn ][0] ) ) {
+				// best-effort: allow but log for operators
+				if ( function_exists( 'error_log' ) ) {
+					error_log( 'tmon_uc: accepting confirm header fallback for ' . $hn );
+				}
+				return true;
+			}
+		}
 	}
-	// Optionally check capability; here any valid user is allowed to call device endpoints.
-	return true;
+
+	// Basic/Bearer auth - allow (so Application Passwords / Bearer tokens can be used)
+	if ( isset( $headers['authorization'] ) && ! empty( $headers['authorization'][0] ) ) {
+		$auth = strtolower( $headers['authorization'][0] );
+		if ( substr( $auth, 0, 6 ) === 'basic ' || substr( $auth, 0, 7 ) === 'bearer ' ) {
+			return true;
+		}
+	}
+
+	// logged-in administrators allowed for testing/console access
+	if ( is_user_logged_in() && current_user_can( 'manage_options' ) ) {
+		return true;
+	}
+
+	return new WP_Error( 'rest_forbidden', 'Forbidden', array( 'status' => 403 ) );
 }
 
-// Device-facing routes: require Basic auth
-add_action('rest_api_init', function(){
-	// Device register/check-in (POST)
-	register_rest_route('tmon/v1', '/device/register', [
-		'methods' => 'POST',
-		'callback' => 'tmon_rest_device_register',
-		'permission_callback' => 'tmon_uc_device_permission_callback',
-	]);
+/**
+ * Helper: read JSON body safely
+ */
+function tmon_uc_get_body_json( $request ) {
+	$params = $request->get_json_params();
+	if ( is_array( $params ) ) {
+		return $params;
+	}
+	$body = $request->get_body();
+	$decoded = json_decode( $body, true );
+	return is_array( $decoded ) ? $decoded : array();
+}
 
-	// GET device settings
-	register_rest_route('tmon/v1', '/device/settings/(?P<unit_id>[\w\-\._]+)', [
-		'methods' => 'GET',
-		'callback' => 'tmon_v1_device_get_settings',
-		'permission_callback' => 'tmon_uc_device_permission_callback',
-	]);
+/* ---------- Handlers ---------- */
 
-	// GET staged settings + queued commands
-	register_rest_route('tmon/v1', '/device/staged-settings', [
-		'methods' => 'GET',
-		'callback' => 'tmon_v1_device_staged_settings',
-		'permission_callback' => 'tmon_uc_device_permission_callback',
-	]);
+function tmon_uc_handle_checkin( $request ) {
+	$body = tmon_uc_get_body_json( $request );
+	$machine_id = isset( $body['machine_id'] ) ? sanitize_text_field( $body['machine_id'] ) : '';
+	$unit_id    = isset( $body['unit_id'] ) ? sanitize_text_field( $body['unit_id'] ) : '';
+	// Minimal response: report site_url and provisioned/staged flags if any server-side logic exists
+	$res = array(
+		'provisioned'  => true,
+		'staged_exists'=> false,
+		'site_url'     => get_home_url(),
+		'unit_id'      => $unit_id ?: '',
+	);
+	return rest_ensure_response( $res );
+}
 
-	// Fetch queued commands (GET/POST)
-	register_rest_route('tmon/v1', '/device/commands', [
-		'methods' => ['GET','POST'],
-		'callback' => 'tmon_v1_device_commands_fetch',
-		'permission_callback' => 'tmon_uc_device_permission_callback',
-	]);
+function tmon_uc_handle_field_data( $request ) {
+	$body = tmon_uc_get_body_json( $request );
+	$unit = isset( $body['unit_id'] ) ? sanitize_text_field( $body['unit_id'] ) : '';
+	// Keep last payload for operators: store in option (small, safe)
+	if ( ! empty( $unit ) ) {
+		update_option( 'tmon_last_fielddata_' . $unit, $body );
+	} else {
+		update_option( 'tmon_last_fielddata_raw', $body );
+	}
+	return rest_ensure_response( array( 'status' => 'ok', 'received' => true, 'unit_id' => $unit ) );
+}
 
-	// Command completion ack
-	register_rest_route('tmon/v1', '/device/command-complete', [
-		'methods' => 'POST',
-		'callback' => 'tmon_v1_device_command_complete',
-		'permission_callback' => 'tmon_uc_device_permission_callback',
-	]);
+function tmon_uc_handle_commands_get( $request ) {
+	global $wpdb;
+	$unit = sanitize_text_field( $request->get_param( 'unit_id' ) ?: '' );
+	$commands = array();
 
-	// POST device settings (device -> UC)
-	register_rest_route('tmon/v1', '/device/settings', [
-		'methods' => 'POST',
-		'callback' => 'tmon_v1_device_receive_settings',
-		'permission_callback' => 'tmon_uc_device_permission_callback',
-	]);
-
-	// GET ota jobs for device
-	register_rest_route('tmon/v1', '/device/ota-jobs/(?P<unit_id>[\w\-\._]+)', [
-		'methods' => 'GET',
-		'callback' => 'tmon_v1_device_ota_jobs',
-		'permission_callback' => 'tmon_uc_device_permission_callback',
-	]);
-
-	// POST ota job complete
-	register_rest_route('tmon/v1', '/device/ota-job-complete', [
-		'methods' => 'POST',
-		'callback' => 'tmon_v1_device_ota_job_complete',
-		'permission_callback' => 'tmon_uc_device_permission_callback',
-	]);
-
-	// File upload (multipart/form-data) - saves to wp-content/tmon-files/<unit_id>/
-	register_rest_route('tmon/v1', '/device/file', [
-		'methods' => 'POST',
-		'callback' => 'tmon_v1_device_file_upload',
-		'permission_callback' => 'tmon_uc_device_permission_callback',
-	]);
-
-	// File download
-	register_rest_route('tmon/v1', '/device/file/(?P<unit_id>[\w\-\._]+)/(?P<filename>.+)', [
-		'methods' => 'GET',
-		'callback' => 'tmon_v1_device_file_fetch',
-		'permission_callback' => 'tmon_uc_device_permission_callback',
-	]);
-});
-
-// Device-facing: staged/applied settings + pending commands for a unit (used by MicroPython devices)
-add_action('rest_api_init', function() {
-	register_rest_route('tmon/v1', '/device/staged-settings', [
-		'methods' => 'GET',
-		'permission_callback' => '__return_true',
-		'callback' => function(WP_REST_Request $req) {
-			global $wpdb;
-			$unit = sanitize_text_field($req->get_param('unit_id') ?? '');
-			$machine = sanitize_text_field($req->get_param('machine_id') ?? '');
-			if (!$unit && !$machine) {
-				return new WP_REST_Response(['staged' => null, 'commands' => []], 200);
+	$table = $wpdb->prefix . 'tmon_device_commands';
+	// If table exists, try to return queued commands for unit
+	$exists = $wpdb->get_var( $wpdb->prepare( "SHOW TABLES LIKE %s", $wpdb->esc_like( $table ) ) );
+	if ( $exists ) {
+		$sql = $wpdb->prepare( "SELECT id, command, params FROM {$table} WHERE device_id = %s AND status = %s ORDER BY id ASC LIMIT 50", $unit, 'queued' );
+		$rows = $wpdb->get_results( $sql, ARRAY_A );
+		foreach ( $rows as $r ) {
+			$p = array();
+			if ( ! empty( $r['params'] ) ) {
+				$p = json_decode( $r['params'], true ) ?: array();
 			}
-			// Primary lookup by unit_id
-			$map = get_option('tmon_uc_staged_settings', []);
-			$staged = null;
-			if ($unit && is_array($map) && !empty($map[$unit])) {
-				$staged = $map[$unit];
-			} else if ($machine) {
-				// If there is a machine->unit mapping stored somewhere, attempt lookup (optional)
-				// fallback: try to find any staged entry with matching machine in payload (not implemented)
-				$staged = null;
-			}
-			return new WP_REST_Response(['staged' => $staged, 'commands' => []], 200);
-		},
-		'permission_callback' => '__return_true' // devices fetch without WP auth; rely on unit_id param
-    ]);
-});
+			$commands[] = array( 'id' => intval( $r['id'] ), 'command' => $r['command'], 'params' => $p );
+		}
+	}
+	return rest_ensure_response( array( 'commands' => $commands ) );
+}
 
-// POST /wp-json/tmon/v1/admin/device/settings-staged
-add_action('rest_api_init', function() {
-	register_rest_route('tmon/v1', '/admin/device/settings-staged', array(
-		'methods' => 'POST',
-		'callback' => function( WP_REST_Request $req ) {
-			// capability check: admins or users who can edit tmon units
-			if ( ! current_user_can('manage_options') && ! current_user_can('edit_tmon_units') ) {
-				return new WP_Error('rest_forbidden', 'Forbidden', array('status'=>403));
-			}
-			global $wpdb;
-			// ensure staged table exists
-			if ( function_exists('tmon_uc_ensure_staged_settings_table') ) tmon_uc_ensure_staged_settings_table();
+function tmon_uc_handle_commands_post( $request ) {
+	$body = tmon_uc_get_body_json( $request );
+	$unit = isset( $body['unit_id'] ) ? sanitize_text_field( $body['unit_id'] ) : '';
+	// Mirror GET behavior; some devices POST unit_id expecting command list
+	$query = new WP_REST_Request( 'GET', '/tmon/v1/device/commands' );
+	$query->set_param( 'unit_id', $unit );
+	return tmon_uc_handle_commands_get( $query );
+}
 
-			$data = $req->get_json_params();
-			$unit_id = isset($data['unit_id']) ? sanitize_text_field($data['unit_id']) : '';
-			$settings = $data['settings'] ?? '';
+function tmon_uc_handle_command_confirm( $request ) {
+	global $wpdb;
+	$body = tmon_uc_get_body_json( $request );
+	$job_id = isset( $body['job_id'] ) ? intval( $body['job_id'] ) : 0;
+	$ok = isset( $body['ok'] ) ? boolval( $body['ok'] ) : false;
+	$result = isset( $body['result'] ) ? sanitize_text_field( $body['result'] ) : '';
 
-			if ( ! $unit_id ) {
-				return new WP_Error('rest_bad_request', 'unit_id required', array('status'=>400));
-			}
+	$table = $wpdb->prefix . 'tmon_device_commands';
+	$exists = $wpdb->get_var( $wpdb->prepare( "SHOW TABLES LIKE %s", $wpdb->esc_like( $table ) ) );
+	if ( $exists && $job_id ) {
+		$wpdb->update( $table, array( 'status' => 'executed', 'executed_at' => current_time( 'mysql' ), 'params' => wp_json_encode( array( '__ok' => $ok, '__result' => $result ) ) ), array( 'id' => $job_id ) );
+		return rest_ensure_response( array( 'status' => 'ok', 'updated' => $job_id ) );
+	}
+	// fallback: nothing to update
+	return rest_ensure_response( array( 'status' => 'queued_for_retry', 'job_id' => $job_id ) );
+}
 
-			// Accept either object or JSON string for settings
-			if ( is_array($settings) ) {
-				$settings_json = wp_json_encode($settings);
-			} elseif ( is_string($settings) && $settings !== '' ) {
-				$settings_json = $settings;
-			} else {
-				$settings_json = '{}';
-			}
+function tmon_uc_handle_settings_applied( $request ) {
+	$body = tmon_uc_get_body_json( $request );
+	$unit = isset( $body['unit_id'] ) ? sanitize_text_field( $body['unit_id'] ) : '';
+	// Store snapshot for auditing
+	$meta_key = 'tmon_settings_applied_' . ( $unit ? $unit : 'unknown' );
+	update_option( $meta_key, array( 'payload' => $body, 'ts' => time() ) );
+	return rest_ensure_response( array( 'status' => 'ok', 'unit_id' => $unit ) );
+}
 
-			$wpdb->replace($wpdb->prefix . 'tmon_staged_settings', array(
-				'unit_id' => $unit_id,
-				'settings' => $settings_json,
-				'updated_at' => current_time('mysql', 1)
-			));
+function tmon_uc_handle_settings_get( $request ) {
+	$unit = sanitize_text_field( $request->get_param( 'unit_id' ) ?: '' );
+	$res = array( 'unit_id' => $unit, 'settings' => array() );
+	// If an applied snapshot exists, return it
+	if ( $unit ) {
+		$meta = get_option( 'tmon_settings_applied_' . $unit, null );
+		if ( $meta && isset( $meta['payload']['settings'] ) ) {
+			$res['settings'] = $meta['payload']['settings'];
+		}
+	}
+	return rest_ensure_response( $res );
+}
 
-			// mirror old behavior/hook
-			do_action('tmon_staged_settings_updated', $unit_id, json_decode($settings_json, true));
+function tmon_uc_handle_file_post( $request ) {
+	// Accept raw body or uploaded 'file' param. Store via wp_handle_upload if available.
+	$files = $request->get_file_params();
+	$body = $request->get_body();
+	$uploaded = false;
+	$url = '';
+	if ( ! empty( $files['file'] ) && function_exists( 'wp_handle_upload' ) ) {
+		$f = $files['file'];
+		$overrides = array( 'test_form' => false );
+		$move = wp_handle_upload( $f, $overrides );
+		if ( isset( $move['url'] ) ) {
+			$uploaded = true;
+			$url = $move['url'];
+		}
+	} elseif ( $body ) {
+		// Save raw body into uploads folder
+		$upload_dir = wp_upload_dir();
+		if ( isset( $upload_dir['path'] ) ) {
+			$fn = $upload_dir['path'] . '/device_upload_' . time();
+			file_put_contents( $fn, $body );
+			$uploaded = true;
+			$url = ( $upload_dir['url'] ?? '' ) . '/device_upload_' . time();
+		}
+	}
+	return rest_ensure_response( array( 'ok' => $uploaded, 'url' => $url ) );
+}
 
-			return rest_ensure_response(array('ok'=>true,'unit_id'=>$unit_id));
-		},
-		'permission_callback' => function(){ return current_user_can('manage_options') || current_user_can('edit_tmon_units'); }
-	));
-});
-
-// Register settings endpoints and add handlers + permission callback. This is minimal and conservative: it persists the incoming settings using update_option(...) and logs via error_log for diagnostics. You can later change persistence to DB tables or files as required.
+/* ---------- Register routes (tmon/v1 and unit-connector/v1 and admin compatibility) ---------- */
 add_action( 'rest_api_init', function () {
-	$ns = 'tmon/v1';
-	$ns_legacy = 'tmon-admin/v1';
+	$namespaces = array( 'tmon/v1', 'unit-connector/v1' );
+	foreach ( $namespaces as $ns ) {
+		register_rest_route( $ns, '/device/field-data', array(
+			'methods'             => 'POST',
+			'callback'            => 'tmon_uc_handle_field_data',
+			'permission_callback' => '__return_true', // device posts may be unauthenticated (we store/inspect)
+		) );
 
-	// Permission callback used by the routes: allow if current user is admin OR a configured token header matches
-	$perm_cb = function ( WP_REST_Request $request ) {
-		// Admin users can always access
-		if ( current_user_can( 'manage_options' ) ) {
-			return true;
-		}
-		// Header-based tokens (site config). Avoid echoing secrets in logs.
-		$hdrs = array_change_key_case( $request->get_headers(), CASE_LOWER );
-		$admin_token = trim( (string) get_option( 'tmon_admin_confirm_token', '' ) );
-		$hub_key = trim( (string) get_option( 'tmon_hub_shared_key', '' ) );
-		$api_key = trim( (string) get_option( 'tmon_api_key', '' ) );
+		register_rest_route( $ns, '/device/commands', array(
+			array( 'methods' => 'GET',  'callback' => 'tmon_uc_handle_commands_get',  'permission_callback' => '__return_true' ),
+			array( 'methods' => 'POST', 'callback' => 'tmon_uc_handle_commands_post', 'permission_callback' => '__return_true' ),
+		) );
 
-		if ( $admin_token && ! empty( $hdrs['x-tmon-admin'] ) && hash_equals( $admin_token, trim( (string) $hdrs['x-tmon-admin'][0] ) ) ) {
-			return true;
-		}
-		if ( $hub_key && ! empty( $hdrs['x-tmon-hub'] ) && hash_equals( $hub_key, trim( (string) $hdrs['x-tmon-hub'][0] ) ) ) {
-			return true;
-		}
-		if ( $api_key && ! empty( $hdrs['x-tmon-api-key'] ) && hash_equals( $api_key, trim( (string) $hdrs['x-tmon-api-key'][0] ) ) ) {
-			return true;
-		}
-		// Otherwise deny (WP's REST will return 403)
-		return new WP_Error( 'rest_forbidden', 'Forbidden', array( 'status' => 403 ) );
-	};
+		// Admin-scoped commands (devices try admin path first)
+		register_rest_route( $ns, '/admin/device/commands', array(
+			array( 'methods' => 'GET',  'callback' => 'tmon_uc_handle_commands_get',  'permission_callback' => '__return_true' ),
+			array( 'methods' => 'POST', 'callback' => 'tmon_uc_handle_commands_post', 'permission_callback' => '__return_true' ),
+		) );
 
-	// Handler: accept POST/GET, persist settings per-unit using update_option for traceability, and return {status:ok}
-	$handler = function ( WP_REST_Request $request ) {
-		$params = $request->get_params();
-		$body   = $request->get_body();
-		$data   = array();
+		register_rest_route( $ns, '/device/command/confirm', array(
+			'methods'             => 'POST',
+			'callback'            => 'tmon_uc_handle_command_confirm',
+			'permission_callback' => 'tmon_uc_rest_permission_check',
+		) );
 
-		// Prefer JSON body for POST
-		if ( $request->get_method() === 'POST' && $body ) {
-			$decoded = json_decode( $body, true );
-			if ( is_array( $decoded ) ) {
-				$data = $decoded;
-			}
-		}
-		// Fallback to request params for GET or POST form-encoded
-		if ( empty( $data ) && is_array( $params ) ) {
-			$data = $params;
-		}
+		register_rest_route( $ns, '/device/file', array(
+			array( 'methods' => 'POST', 'callback' => 'tmon_uc_handle_file_post', 'permission_callback' => 'tmon_uc_rest_permission_check' ),
+			array( 'methods' => 'GET',  'callback' => function( $r ){ return rest_ensure_response( array('ok'=>false,'message'=>'file download not implemented') ); }, 'permission_callback' => '__return_true' ),
+		) );
 
-		$unit_id = '';
-		if ( ! empty( $data['unit_id'] ) ) {
-			$unit_id = (string) $data['unit_id'];
-		} elseif ( ! empty( $params['unit_id'] ) ) {
-			$unit_id = (string) $params['unit_id'];
-		} elseif ( ! empty( $data['machine_id'] ) ) {
-			$unit_id = 'machine:' . (string) $data['machine_id'];
-		}
+		register_rest_route( $ns, '/admin/device/settings-applied', array(
+			'methods'             => 'POST',
+			'callback'            => 'tmon_uc_handle_settings_applied',
+			'permission_callback' => 'tmon_uc_rest_permission_check',
+		) );
 
-		// Basic validation: require unit id / machine id in most cases
-		if ( empty( $unit_id ) && empty( $data ) ) {
-			return rest_ensure_response( array( 'status' => 'error', 'message' => 'no payload' ) );
-		}
+		register_rest_route( $ns, '/device/settings/(?P<unit_id>[\w\-\_]+)', array(
+			'methods'             => 'GET',
+			'callback'            => 'tmon_uc_handle_settings_get',
+			'permission_callback' => '__return_true',
+			'args'                => array( 'unit_id' => array( 'required' => true ) ),
+		) );
 
-		// Persist incoming payload keyed by unit for later inspection and staged-apply
-		$opt_key = 'tmon_settings_' . ( $unit_id ? sanitize_key( $unit_id ) : 'unknown' );
-		try {
-			update_option( $opt_key, $data );
-			// Log arrival for diagnostics (concise)
-			if ( function_exists( 'error_log' ) ) {
-				$msg = sprintf( '[TMON] settings received unit=%s keys=%s', $unit_id, implode( ',', array_keys( (array) $data ) ) );
-				error_log( $msg );
-			}
-		} catch ( Exception $e ) {
-			return rest_ensure_response( array( 'status' => 'error', 'message' => 'persist_failed' ) );
-		}
+		// Admin check-in (compat: tmon-admin/v1 and v2 checkin style)
+		register_rest_route( $ns, '/admin/device/check-in', array(
+			'methods'             => 'POST',
+			'callback'            => 'tmon_uc_handle_checkin',
+			'permission_callback' => '__return_true',
+		) );
+	}
 
-		// Return canonical success payload device expects
-		return rest_ensure_response( array( 'status' => 'ok', 'received' => true, 'unit_id' => $unit_id ) );
-	};
-
-	// Preferred admin-scoped settings endpoint (UC v2-style)
-	register_rest_route( $ns, '/admin/device/settings', array(
-		array(
-			'methods'             => WP_REST_Server::CREATABLE, // POST
-			'callback'            => $handler,
-			'permission_callback' => $perm_cb,
-		),
-		array(
-			'methods'             => WP_REST_Server::READABLE,  // GET for convenience
-			'callback'            => $handler,
-			'permission_callback' => $perm_cb,
-		),
+	// Legacy /wp-json/tmon-admin/v1/device/check-in (public)
+	register_rest_route( 'tmon-admin/v1', '/device/check-in', array(
+		'methods'             => 'POST',
+		'callback'            => 'tmon_uc_handle_checkin',
+		'permission_callback' => '__return_true',
 	) );
 
-	// Device-level settings endpoint (device-targeted)
-	register_rest_route( $ns, '/device/settings', array(
-		array(
-			'methods'             => WP_REST_Server::CREATABLE,
-			'callback'            => $handler,
-			'permission_callback' => $perm_cb,
-		),
-		array(
-			'methods'             => WP_REST_Server::READABLE,
-			'callback'            => $handler,
-			'permission_callback' => $perm_cb,
-		),
+	// Backwards compat: v2 checkin path
+	register_rest_route( 'tmon-admin/v2', '/device/checkin', array(
+		'methods'             => 'POST',
+		'callback'            => 'tmon_uc_handle_checkin',
+		'permission_callback' => '__return_true',
 	) );
 
-	// Legacy hub-style settings path (compatibility)
-	register_rest_route( $ns_legacy, '/device/settings', array(
-		array(
-			'methods'             => WP_REST_Server::CREATABLE,
-			'callback'            => $handler,
-			'permission_callback' => $perm_cb,
-		),
-		array(
-			'methods'             => WP_REST_Server::READABLE,
-			'callback'            => $handler,
-			'permission_callback' => $perm_cb,
-		),
-	) );
 } );
