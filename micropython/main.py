@@ -12,7 +12,7 @@ from sampling import sampleEnviroment
 from utils import free_pins, checkLogDirectory, debug_print, periodic_field_data_send, load_persisted_unit_id, persist_unit_id, get_machine_id, periodic_provision_check
 from lora import connectLora, log_error, TMON_AI
 from ota import check_for_update, apply_pending_update
-from oled import update_display
+from oled import update_display, display_message
 from settings_apply import load_applied_settings_on_boot, settings_apply_loop
 try:
     from engine_controller import engine_loop
@@ -302,6 +302,11 @@ async def first_boot_provision():
                         settings.UNIT_ID = str(new_uid).strip()
                         persist_unit_id(settings.UNIT_ID)
                         await debug_print('first_boot_provision: UNIT_ID persisted', 'PROVISION')
+            except Exception:
+                pass
+            # User-friendly OLED notice
+            try:
+                await display_message("Provisioned", 2)
             except Exception:
                 pass
             # Restore: persist provisioning metadata (site_url → WORDPRESS_API_URL) and soft reset once
