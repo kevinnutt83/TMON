@@ -1,4 +1,4 @@
-# Firmware Version: v2.06.0 
+# Firmware Version: v2.06.0
 import ujson
 import uasyncio as asyncio
 import os
@@ -1100,3 +1100,4 @@ __all__ = [
     'persist_node_type',
     'load_persisted_node_type'
 ]
+
