@@ -110,6 +110,12 @@ async def connectToWifiNetwork():
 		_refresh_rssi(wlan)
 		sdata.WIFI_CONNECTED = True
 		await debug_print("wifi: already connected", "WIFI")
+		# Friendly OLED notice
+		try:
+			from oled import display_message
+			await display_message("WiFi Connected", 1.5)
+		except Exception:
+			pass
 		return
 	await debug_print("wifi: scanning", "WIFI")
 	try:
@@ -126,6 +132,11 @@ async def connectToWifiNetwork():
 			pass
 	if not target_found:
 		await debug_print("wifi: ssid not found", "WARN")
+		try:
+			from oled import display_message
+			await display_message("SSID Not Found", 2)
+		except Exception:
+			pass
 		return
 	await debug_print(f"wifi: connect {getattr(s, 'WIFI_SSID', '')}", "WIFI")
 	retries = int(getattr(s, 'WIFI_CONN_RETRIES', 5))
@@ -159,6 +170,11 @@ async def connectToWifiNetwork():
 	# all attempts failed
 	sdata.WIFI_CONNECTED = False
 	await debug_print("wifi: connect failed", "ERROR")
+	try:
+		from oled import display_message
+		await display_message("WiFi Failed", 2)
+	except Exception:
+		pass
 
 async def scanToWifiNetwork():
 	# ...existing code...
