@@ -808,6 +808,22 @@ async def init_lora():
                 await free_pins()
                 lora = None
                 return False
+        if status == 0:
+            await debug_print("lora: initialized", "LORA")
+            try:
+                from oled import display_message
+                await display_message("LoRa Ready", 2)
+            except Exception:
+                pass
+            print_remote_nodes()
+            # Ensure base starts in RX mode to listen for remotes
+            try:
+                if getattr(settings, 'NODE_TYPE', 'base') == 'base' and lora is not None:
+                    lora.setOperatingMode(lora.MODE_RX)
+            except Exception:
+                pass
+            print('[DEBUG] init_lora: completed successfully')
+            return True
         if status != 0:
             # Map error code to readable name
             try:
@@ -817,6 +833,11 @@ async def init_lora():
                 err_name = 'UNKNOWN'
             error_msg = f"LoRa initialization failed with status: {status} ({err_name})"
             await debug_print(error_msg, "ERROR")
+            try:
+                from oled import display_message
+                await display_message("LoRa Error", 2)
+            except Exception:
+                pass
             await log_error(error_msg)
             # On persistent failure, try to put pins into a safe input state so a soft reboot starts clean
             try:
@@ -842,6 +863,11 @@ async def init_lora():
         error_msg = f"Exception in init_lora: {e}"
         print(error_msg)
         await debug_print(error_msg, "ERROR")
+        try:
+            from oled import display_message
+            await display_message("LoRa Error", 2)
+        except Exception:
+            pass
         await log_error(error_msg)
         # Ensure we deinit spi/pins when exceptional abort happens
         try:
@@ -1831,6 +1857,7 @@ async def init_lora():
 
                 # Try to reinstantiate driver using a shim (some ports accept an SPI instance in constructor)
                 try:
+                   
                     shim = _attach_spi_shim()
                     if shim:
                         await debug_print("lora: attempting re-instantiation with SPI shim", "LORA")
@@ -1899,6 +1926,22 @@ async def init_lora():
                 await free_pins()
                 lora = None
                 return False
+        if status == 0:
+            await debug_print("lora: initialized", "LORA")
+            try:
+                from oled import display_message
+                await display_message("LoRa Ready", 2)
+            except Exception:
+                pass
+            print_remote_nodes()
+            # Ensure base starts in RX mode to listen for remotes
+            try:
+                if getattr(settings, 'NODE_TYPE', 'base') == 'base' and lora is not None:
+                    lora.setOperatingMode(lora.MODE_RX)
+            except Exception:
+                pass
+            print('[DEBUG] init_lora: completed successfully')
+            return True
         if status != 0:
             # Map error code to readable name
             try:
@@ -1908,6 +1951,11 @@ async def init_lora():
                 err_name = 'UNKNOWN'
             error_msg = f"LoRa initialization failed with status: {status} ({err_name})"
             await debug_print(error_msg, "ERROR")
+            try:
+                from oled import display_message
+                await display_message("LoRa Error", 2)
+            except Exception:
+                pass
             await log_error(error_msg)
             # On persistent failure, try to put pins into a safe input state so a soft reboot starts clean
             try:
@@ -1933,6 +1981,11 @@ async def init_lora():
         error_msg = f"Exception in init_lora: {e}"
         print(error_msg)
         await debug_print(error_msg, "ERROR")
+        try:
+            from oled import display_message
+            await display_message("LoRa Error", 2)
+        except Exception:
+            pass
         await log_error(error_msg)
         # Ensure we deinit spi/pins when exceptional abort happens
         try:
