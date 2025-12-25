@@ -1,0 +1,21 @@
+/* TMON plugin admin and user UI styles */
+.tmon-admin-page {
+    background: none;
+    font-family: inherit;
+}
+.tmon-admin-page h1, .tmon-admin-page h2 {
+    color: inherit;
+    font-weight: 600;
+}
+.tmon-admin-page table.form-table th {
+    width: 300px;
+}
+.tmon-admin-page input[type="text"],
+.tmon-admin-page textarea,
+.tmon-admin-page select {
+    width: 100%;
+    max-width: 500px;
+}
+.tmon-admin-page .button {
+    margin-top: 10px;
+}

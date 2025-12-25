@@ -1,0 +1,7 @@
+.tmon-claim { max-width: 480px; }
+.tmon-claim-form p { margin: 0 0 12px; }
+.tmon-claim-form input[type="text"] { width: 100%; box-sizing: border-box; }
+.tmon-claim-submit { padding: 6px 12px; }
+.tmon-claim-result { min-height: 1.2em; color: inherit; }
+.tmon-field-msg { display: block; font-size: 12px; color: #cc0000; margin-top: 4px; }
+.tmon-invalid { border-color: #cc0000 !important; outline-color: #cc0000 !important; }

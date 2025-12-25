@@ -1,0 +1,58 @@
+/* Compact core styles for TMON v2.00m */
+
+/* Card and Grid Layouts */
+.tmon-card{background:#fff;border:1px solid #ddd;border-radius:5px;padding:20px;margin-bottom:20px;box-shadow:0 1px 3px rgba(0,0,0,0.1)}
+.tmon-grid{display:grid;gap:20px;grid-template-columns:1fr}
+.tmon-grid-2{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.tmon-grid-3{grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
+.tmon-grid-4{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+@media (min-width:768px){.tmon-grid-2{grid-template-columns:repeat(2,1fr)}}
+@media (min-width:1024px){.tmon-grid-3{grid-template-columns:repeat(3,1fr)}.tmon-grid-4{grid-template-columns:repeat(4,1fr)}}
+
+/* Status Badges */
+.tmon-status-badge{display:inline-block;padding:4px 10px;border-radius:3px;font-size:12px;font-weight:500;text-transform:uppercase;line-height:1.5}
+.tmon-status-active{background:#46b450;color:#fff}
+.tmon-status-inactive{background:#999;color:#fff}
+.tmon-status-pending{background:#ffb900;color:#000}
+.tmon-status-warning{background:#ff8c00;color:#fff}
+.tmon-status-critical{background:#dc3232;color:#fff}
+.tmon-status-online{background:#46b450;color:#fff}
+.tmon-status-offline{background:#999;color:#fff}
+
+/* Tables and Responsive Elements */
+.tmon-responsive-table{overflow-x:auto;-webkit-overflow-scrolling:touch}
+
+/* Buttons and Alerts */
+.tmon-button-group{display:flex;gap:10px;margin:15px 0;flex-wrap:wrap}
+.tmon-touch-button{min-height:44px;min-width:44px;padding:12px 20px}
+.tmon-alert{padding:12px 15px;border-left:4px solid;margin:15px 0;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,0.05)}
+.tmon-alert-info{border-color:#0073aa;background:#f0f6fc}
+.tmon-alert-success{border-color:#46b450;background:#f0f9f0}
+.tmon-alert-warning{border-color:#ffb900;background:#fff8e5}
+.tmon-alert-error{border-color:#dc3232;background:#fef7f7}
+
+/* Loaders and Modals */
+.tmon-loader{border:3px solid #f3f3f3;border-top:3px solid #0073aa;border-radius:50%;width:30px;height:30px;animation:tmon-spin 1s linear infinite;margin:20px auto}
+@keyframes tmon-spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
+.tmon-modal{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);display:none;align-items:center;justify-content:center;z-index:100000;padding:20px}
+.tmon-modal.active{display:flex}
+.tmon-modal-content{background:#fff;padding:20px;max-width:90%;max-height:90vh;overflow-y:auto;border-radius:5px;box-shadow:0 5px 25px rgba(0,0,0,0.3);position:relative}
+.tmon-modal-close{position:absolute;top:10px;right:10px;background:none;border:none;font-size:24px;cursor:pointer;color:#999;padding:5px 10px;line-height:1}
+.tmon-modal-close:hover{color:#333}
+
+/* Provisioning Styles */
+.tmon-provision-container{max-width:1200px;margin:0 auto;padding:20px 10px 10px 10px}
+.tmon-provision-wrap{padding-top:20px;position:relative;z-index:1}
+/* Modal on top but not hiding menu content containers */
+#tmon-action-modal{position:fixed;z-index:100001}
+.tmon-provision-grid{display:grid;grid-template-columns:1fr 380px;gap:18px;align-items:start}
+.tmon-provision-card{background:#fff;border:1px solid #e1e1e1;padding:12px;border-radius:6px;box-shadow:0 1px 0 rgba(0,0,0,0.03)}
+.tmon-provision-card h3{margin:0 0 8px 0;font-size:1.05rem}
+.tmon-provision-compact .form-table td{padding:6px 8px}
+.tmon-tooltip{display:inline-block;margin-left:6px;color:#666;cursor:help}
+#tmon-queue-grid,#tmon-provisioned-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;margin-bottom:18px}
+.tmon-queue-card{cursor:default}
+.tmon-queue-card:focus{outline:3px solid #6ea3ff}
+.tmon-queue-card .button{font-size:0.85rem}
+.tmon-status-panel .notice{margin:0 0 6px 0}
+@media(max-width:980px){.tmon-provision-grid{grid-template-columns:1fr}}
