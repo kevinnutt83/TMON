@@ -28,6 +28,11 @@ async def sampleTemp():
 async def sampleBME280():
     if settings.ENABLE_sensorBME280:
         from utils import led_status_flash
+        try:
+            from oled import display_message
+            await display_message("Sampling", 1)
+        except Exception:
+            pass
         import lora as lora_module
         # Deinit LoRa and free pins before using BME280
         async with lora_module.pin_lock:
@@ -63,6 +68,11 @@ async def sampleBME280():
                     "sample:BME p:%7.2f t:%-6.2f h:%6.2f" % (data[0], data[1], data[2]),
                     "DEBUG TEMP"
                 )
+                try:
+                    from oled import display_message
+                    await display_message("Sample OK", 1.5)
+                except Exception:
+                    pass
         except Exception as e:
             if settings.DEBUG and settings.DEBUG_TEMP:
                 await debug_print(f"sample:BME err: {e}", "SAMPLE ERROR TEMP")
