@@ -108,16 +108,15 @@ async def register_with_wp():
             'firmware_version': getattr(settings, 'FIRMWARE_VERSION', '') or '',
             'node_type': getattr(settings, 'NODE_TYPE', '') or '',
         }
-        # Candidate register endpoints (order is intentional: legacy -> v2)
+        # Candidate register endpoints (order tuned for common server implementations)
         candidates = []
         try:
-            candidates.append(getattr(settings, 'ADMIN_REGISTER_PATH', '/wp-json/tmon-admin/v1/device/register'))
-            # Common check-in alternative used in other code
+            # Prefer check-in path first (many hubs implement check-in but not legacy /register)
             candidates.append('/wp-json/tmon-admin/v1/device/check-in')
-            # Versioned admin checkin
+            candidates.append(getattr(settings, 'ADMIN_REGISTER_PATH', '/wp-json/tmon-admin/v1/device/register'))
             candidates.append(getattr(settings, 'ADMIN_V2_CHECKIN_PATH', '/wp-json/tmon-admin/v2/device/checkin'))
         except Exception:
-            candidates = ['/wp-json/tmon-admin/v1/device/register', '/wp-json/tmon-admin/v1/device/check-in', '/wp-json/tmon-admin/v2/device/checkin']
+            candidates = ['/wp-json/tmon-admin/v1/device/check-in', '/wp-json/tmon-admin/v1/device/register', '/wp-json/tmon-admin/v2/device/checkin']
 
         hdrs = _auth_headers() if callable(_auth_headers) else {}
         for path in candidates:
@@ -140,6 +139,11 @@ async def register_with_wp():
                     pass
                 if status in (200, 201):
                     await debug_print(f'wprest: register ok via {path}', 'INFO')
+                    try:
+                        from oled import display_message
+                        await display_message("Registered", 2)
+                    except Exception:
+                        pass
                     return True
                 # Log diagnostic per-candidate
                 if status == 404:
@@ -151,6 +155,11 @@ async def register_with_wp():
             except Exception as e:
                 await debug_print(f'wprest: register attempt {path} exception: {e}', 'ERROR')
         await debug_print('wprest: register_all_attempts_failed', 'ERROR')
+        try:
+            from oled import display_message
+            await display_message("Register Failed", 2)
+        except Exception:
+            pass
         return False
     except Exception as e:
         await debug_print(f'wprest: register exception {e}', 'ERROR')
@@ -221,15 +230,13 @@ async def send_settings_to_wp():
                 except Exception:
                     pass
 
-        # Prefer the newer Unit Connector "settings-applied" path first when present,
-        # then admin/scoped, then device, then legacy hub path.
+        # Candidate endpoint variants
         candidate_paths = []
         try:
             candidate_paths.append(getattr(settings, 'UC_SETTINGS_APPLIED_PATH', '/wp-json/tmon/v1/admin/device/settings-applied'))
         except Exception:
             candidate_paths.append('/wp-json/tmon/v1/admin/device/settings-applied')
 
-        # Additional common variants to cover different plugin naming and versions
         candidate_paths.extend([
             '/wp-json/tmon/v1/device/settings-applied',
             '/wp-json/unit-connector/v1/device/settings-applied',
@@ -241,13 +248,14 @@ async def send_settings_to_wp():
         except Exception:
             candidate_paths.append('/wp-json/tmon/v1/admin/device/settings')
 
-        # Device-level and legacy fallbacks
         candidate_paths.extend([
             '/wp-json/tmon/v1/device/settings',
             '/wp-json/tmon-admin/v1/device/settings'
         ])
-        # Try admin confirm header first, then Basic/App Password, then hub/read/none.
-        auth_modes = ['admin', 'basic', 'hub', 'read', None, 'none']
+
+        # Reorder auth modes: try Basic (App Password) first (common for device endpoints),
+        # then admin token, then hub/read/none. This reduces 403 when admin token isn't set.
+        auth_modes = ['basic', 'admin', 'hub', 'read', None, 'none']
 
         last_response = None
         for p in candidate_paths:
@@ -271,11 +279,16 @@ async def send_settings_to_wp():
                     await debug_print(f'wprest: send_settings try {p} auth={mode} -> {code} ({body[:200]})', 'HTTP')
                     last_response = (code, body, mode, p)
                     if code in (200, 201):
+                        await debug_print(f'wprest: send_settings succeeded via {p} auth={mode}', 'INFO')
+                        try:
+                            from oled import display_message
+                            await display_message("Settings Sent", 2)
+                        except Exception:
+                            pass
                         return True
                     # On 403, try targeted header fallbacks for admin-style endpoints before continuing
                     if code == 403:
                         await debug_print(f"wprest: {p} -> 403, trying header fallbacks", 'WARN')
-                        # Try likely header modes (preserve original order but ensure we cover typical server expectations)
                         for hdr_mode in ('admin', 'hub', 'api_key', 'read', 'basic'):
                             try:
                                 try:
@@ -298,6 +311,7 @@ async def send_settings_to_wp():
                                     pass
                                 await debug_print(f"wprest: header-fallback {hdr_mode} -> {code2} ({body2[:160]})", 'HTTP')
                                 if code2 in (200, 201):
+                                    await debug_print(f'wprest: send_settings succeeded via header-fallback {hdr_mode} on {p}', 'INFO')
                                     return True
                             except Exception:
                                 pass
@@ -305,8 +319,12 @@ async def send_settings_to_wp():
                 except Exception as e:
                     await debug_print(f'wprest: send_settings attempt {p} auth={mode} exception: {e}', 'ERROR')
                     last_response = ('err', str(e), mode, p)
-        # If we reach here, all attempts failed; queue payload and log diagnostic
         await debug_print(f'wprest: send_settings all attempts failed; last={last_response}', 'WARN')
+        try:
+            from oled import display_message
+            await display_message("Settings Failed", 2)
+        except Exception:
+            pass
         try:
             append_to_backlog({'type': 'settings', 'payload': payload, 'ts': int(time.time())})
         except Exception:
@@ -314,6 +332,11 @@ async def send_settings_to_wp():
         return False
     except Exception as e:
         await debug_print(f'wprest: send_settings outer exc {e}', 'ERROR')
+        try:
+            from oled import display_message
+            await display_message("Settings Failed", 2)
+        except Exception:
+            pass
         try:
             append_to_backlog({'type': 'settings', 'payload': payload, 'ts': int(time.time())})
         except Exception:
