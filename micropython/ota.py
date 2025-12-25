@@ -100,11 +100,23 @@ async def check_for_update():
             if is_newer(remote_ver, getattr(settings, 'FIRMWARE_VERSION', '')):
                 await debug_print(f'ota: update {remote_ver} available', 'OTA')
                 try:
+                    from oled import display_message
+                    # concise user message
+                    import uasyncio
+                    await display_message("OTA Available", 2)
+                except Exception:
+                    pass
+                try:
                     write_text(getattr(settings, 'OTA_PENDING_FILE', '/logs/ota_pending.flag'), remote_ver)
                 except Exception:
                     pass
             else:
                 await debug_print('ota: up-to-date', 'OTA')
+                try:
+                    from oled import display_message
+                    await display_message("OTA Up-to-date", 1.5)
+                except Exception:
+                    pass
         else:
             await debug_print(f'ota: ver fetch {status}', 'ERROR')
         try:
