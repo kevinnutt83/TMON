@@ -372,6 +372,12 @@ async def send_field_data_log():
                                     pass
                                 delivered = True
                                 await debug_print(f'sfd: payload {idx+1} ok', 'DEBUG')
+                                # User-friendly OLED notice
+                                try:
+                                    from oled import display_message
+                                    await display_message("Field Data Sent", 1.5)
+                                except Exception:
+                                    pass
                                 break
                             else:
                                 err_txt = ''
@@ -637,12 +643,12 @@ async def debug_print(message, status):
         except Exception:
             timestamp = '0'
         print(f"[{timestamp}] [{status}] {safe_msg}")
-        try:
+        #try:
             # Gate OLED messages by ENABLE_OLED
-            if bool(getattr(settings, 'ENABLE_OLED', True)):
-                await display_message(safe_msg, 1.5)
-        except Exception:
-            pass
+           # if bool(getattr(settings, 'ENABLE_OLED', True)):
+                # await display_message(safe_msg, 1.5)
+       # except Exception:
+           # pass
     await asyncio.sleep(0)  # Yield control
 
 def led_status_flash(status):
