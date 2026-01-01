@@ -290,7 +290,7 @@ OTA_MANIFEST_SIG_URL = OTA_MANIFEST_URL + '.sig'  # Optional detached HMAC signa
 OTA_MANIFEST_HMAC_SECRET = ''             # If set, verify manifest with HMAC(secret, manifest_bytes)
 # Added OTA safety toggles
 OTA_ALLOW_DOWNGRADE = False              # block downgrades to avoid stale hashes
-OTA_SKIP_OLDER_VERSION = True            # skip applies when repo version < current
+OTA_SKIP_OLDER_VERSION = True            # skip applies when repo version <= current
 OTA_ABORT_ON_HASH_MISMATCH = False       # keep main loop running; do not abort on mismatch
 OTA_RETRY_ON_HASH_MISMATCH = True        # retry download when hash fails
 OTA_MAX_HASH_FAILURES = 3                # bounded retries before giving up
@@ -348,7 +348,7 @@ COMMAND_CONFIRM_DELAY_S = 0.2                # small delay before confirming bac
 APPLY_STAGED_SETTINGS_ON_BOOT = True         # if staged file exists, apply on boot
 APPLY_STAGED_SETTINGS_ON_SYNC = True         # re-check staged settings on each UC/Admin sync
 STAGED_SETTINGS_KEYS_ALLOW = [
-    'WORDPRESS_API_URL','TMON_ADMIN_API_URL','NODE_TYPE','UNIT_Name','PLAN',
+    'WORDPRESS_API_URL','TMON_ADMIN_API_URL','UNIT_Name','PLAN',
     'ENABLE_WIFI','ENABLE_LORA','ENABLE_OLED','DEVICE_SUSPENDED',
     'WIFI_SSID','WIFI_PASS','WIFI_CONN_RETRIES','WIFI_BACKOFF_S',
     'OTA_ENABLED','OTA_CHECK_INTERVAL_S','OTA_APPLY_INTERVAL_S',
@@ -358,13 +358,13 @@ STAGED_SETTINGS_KEYS_ALLOW = [
     'FIELD_DATA_HMAC_ENABLED','FIELD_DATA_HMAC_SECRET',
     'DEBUG','DEBUG_PROVISION','DEBUG_LORA','DEBUG_WIFI','DEBUG_OTA',
     # Added keys to support device feature toggles and engine/pin control
-    'ENGINE_ENABLED','ENGINE_FORCE_DISABLED','ENABLE_SENSORBME280',
+    'ENGINE_ENABLED','ENGINE_FORCE_DISABLED','ENABLE_sensorBME280',
     'RELAY_PIN1','RELAY_PIN2','RELAY_RUNTIME_LIMITS',
     'ENABLE_OLED','UNIT_Name'  # ensure these are accepted when staged
 ]
 # Optional denylist to prevent accidental overrides
 STAGED_SETTINGS_KEYS_DENY = [
-    'FIRMWARE_VERSION','MACHINE_ID'  # never override these from UC
+    'FIRMWARE_VERSION','MACHINE_ID', 'NODE_TYPE'  # never override these from UC
 ]
 
 # Command names expected from UC/Admin and their runtime aliases

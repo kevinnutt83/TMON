@@ -29,7 +29,7 @@ from wifi import disable_wifi, connectToWifiNetwork, wifi_rssi_monitor
 
 checkLogDirectory()
 
-# Apply any previously applied settings snapshot on boot
+# Apply any any previously applied settings snapshot on boot
 try:
     load_applied_settings_on_boot()
 except Exception:
