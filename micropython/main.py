@@ -93,12 +93,29 @@ def is_provisioned():
         _provision_warned = True
     return False
 
+# NEW: allow forcing provisioned state for lab/testing without Admin hub
+try:
+    if getattr(settings, 'FORCE_PROVISIONED', False):
+        settings.UNIT_PROVISIONED = True
+        try:
+            print('[BOOT] FORCE_PROVISIONED set: treating device as provisioned for testing')
+        except Exception:
+            pass
+except Exception:
+    pass
+
 # Load persisted NODE_TYPE if available before starting tasks
 try:
     from utils import load_persisted_node_type
     _nt = load_persisted_node_type()
     if _nt:
         settings.NODE_TYPE = _nt
+except Exception:
+    pass
+
+# NEW: always print node type on boot for clarity
+try:
+    print(f"[BOOT] Node Type: {getattr(settings, 'NODE_TYPE', '')}")
 except Exception:
     pass
 
@@ -470,11 +487,31 @@ async def periodic_uc_checkin_task():
     except Exception:
         register_with_wp = send_settings_to_wp = send_data_to_wp = poll_ota_jobs = fetch_staged_settings = poll_device_commands = None
     interval = int(getattr(settings, 'UC_CHECKIN_INTERVAL_S', 300))
+
+    # NEW: helpers for remote one-time HTTP/UC gating
+    try:
+        from utils import is_http_allowed_for_node
+    except Exception:
+        def is_http_allowed_for_node():
+            return True
+    try:
+        from config_persist import set_flag
+    except Exception:
+        def set_flag(path, enabled):
+            return False
+    remote_http_flag_path = getattr(settings, 'REMOTE_HTTP_ONETIME_FLAG_FILE', settings.LOG_DIR + '/remote_http_onetime.flag')
+
     while True:
         try:
             if not is_provisioned():
                 await asyncio.sleep(2)
                 continue
+
+            # NEW: honor per-node HTTP policy (remotes get a one-time UC window)
+            if not is_http_allowed_for_node():
+                await asyncio.sleep(interval)
+                continue
+
             wp = getattr(settings, 'WORDPRESS_API_URL', '')
             # Only run check-ins and related operations on nodes that have WP configured
             if wp and not getattr(settings, 'DEVICE_SUSPENDED', False):
@@ -507,6 +544,15 @@ async def periodic_uc_checkin_task():
                         await poll_device_commands()
                     except Exception as e:
                         await debug_print(f"Command poll error (checkin): {e}", "ERROR")
+
+                # NEW: mark remote one-time UC check-in as completed after a successful UC cycle
+                try:
+                    if str(getattr(settings, 'NODE_TYPE', '')).lower() == 'remote' and getattr(settings, 'UNIT_PROVISIONED', False):
+                        # Best-effort flag; utils.is_http_allowed_for_node() will stop future HTTP for remotes.
+                        set_flag(remote_http_flag_path, True)
+                except Exception:
+                    pass
+
         except Exception as e:
             await debug_print(f"uc: checkin err {e}", "ERROR")
         await asyncio.sleep(interval)
