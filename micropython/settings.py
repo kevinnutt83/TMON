@@ -2,18 +2,18 @@
 
 # Bootstrap critical variables before any reference
 try:
-	FIELD_DATA_APP_PASS
+    FIELD_DATA_APP_PASS
 except NameError:
-	FIELD_DATA_APP_PASS = ""  # default; overridden by persisted config later
+    FIELD_DATA_APP_PASS = ""  # default; overridden by persisted config later
 # Ensure claim-flow toggles exist before use
 try:
-	ENABLE_FIRST_CHECKIN_CLAIM
+    ENABLE_FIRST_CHECKIN_CLAIM
 except NameError:
-	ENABLE_FIRST_CHECKIN_CLAIM = False
+    ENABLE_FIRST_CHECKIN_CLAIM = False
 try:
-	CLAIM_CONFIRM_DELAY_S
+    CLAIM_CONFIRM_DELAY_S
 except NameError:
-	CLAIM_CONFIRM_DELAY_S = 0
+    CLAIM_CONFIRM_DELAY_S = 0
 
 # Move LOG_DIR and essential file paths near the top so other constants can reference them.
 LOG_DIR = '/logs'
@@ -227,8 +227,8 @@ ENABLE_RELAY6 = False
 ENABLE_RELAY7 = False
 ENABLE_RELAY8 = False
 RELAY_RUNTIME_LIMITS = {               # Per relay runtime cap (minutes) override; fallback to RELAY_SAFETY_MAX_RUNTIME_MIN
-	1: 720,
-	2: 720
+    1: 720,
+    2: 720
 }
 
 #Sampling Toggles
@@ -256,7 +256,7 @@ HEATWATCH_ACTION_TEMP = 110
 HEATWATCH_STANDDOWN_TEMP = 105
 
 # Waveshare Environmental / Sensor settings
-ENABLE_sensorBME280 = True              # Primary environmental sensor module
+ENABLE_SENSORBME280 = True              # Primary environmental sensor module
 i2cAddr_BME280 = 0x76
 light_i2c_address = 0x53
 motion_i2c_address = 0x68
@@ -284,7 +284,7 @@ OTA_APPLY_INTERVAL_S = 5                  # Check/apply pending update every few
 OTA_RESTORE_ON_FAIL = True                # Restore backups if any file verification/apply fails
 OTA_MAX_FILE_BYTES = 256*1024             # Safety cap per file download size
 OTA_FILES_ALLOWLIST = [                   # Limit which files can be updated via OTA
-	'main.py','lora.py','utils.py','sampling.py','settings.py','relay.py','oled.py','ota.py','wprest.py'
+    'main.py','lora.py','utils.py','sampling.py','settings.py','relay.py','oled.py','ota.py','wprest.py'
 ]
 OTA_MANIFEST_SIG_URL = OTA_MANIFEST_URL + '.sig'  # Optional detached HMAC signature (hex)
 OTA_MANIFEST_HMAC_SECRET = ''             # If set, verify manifest with HMAC(secret, manifest_bytes)
@@ -358,7 +358,7 @@ STAGED_SETTINGS_KEYS_ALLOW = [
     'FIELD_DATA_HMAC_ENABLED','FIELD_DATA_HMAC_SECRET',
     'DEBUG','DEBUG_PROVISION','DEBUG_LORA','DEBUG_WIFI','DEBUG_OTA',
     # Added keys to support device feature toggles and engine/pin control
-    'ENGINE_ENABLED','ENGINE_FORCE_DISABLED','ENABLE_sensorBME280',
+    'ENGINE_ENABLED','ENGINE_FORCE_DISABLED','ENABLE_SENSORBME280',
     'RELAY_PIN1','RELAY_PIN2','RELAY_RUNTIME_LIMITS',
     'ENABLE_OLED','UNIT_Name'  # ensure these are accepted when staged
 ]
@@ -521,7 +521,7 @@ LORA_CHUNK_MAX_RETRIES = 3       # attempts per chunk before deferring
 LORA_CHUNK_ACK_WAIT_MS = 1500    # ms to wait for per-chunk ACK before retry
 # LoRa payload safety: keep below SX126x limits and leave headroom for driver overhead.
 # Reasonable default chosen to avoid packet-too-long (-4) errors in the field.
-LORA_MAX_PAYLOAD = 50
+LORA_MAX_PAYLOAD = 255
 
 # NEW: control retries for single-frame sends before re-init (helps transient -1 cases)
 LORA_SINGLE_FRAME_RETRIES = 2
@@ -529,4 +529,3 @@ LORA_SINGLE_FRAME_RETRIES = 2
 # NEW: explicit lists for handling chunk send errors
 LORA_CHUNK_SHRINK_CODES = [-4]            # codes that indicate "packet too long" and should trigger chunk size shrink
 LORA_CHUNK_TRANSIENT_CODES = [86, 87, 89] # codes considered transient — retry the chunk rather than shrink
-
