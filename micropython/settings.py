@@ -4,12 +4,15 @@
 try:
     FIELD_DATA_APP_PASS
 except NameError:
-    FIELD_DATA_APP_PASS = ""  # default; overridden by persisted config later
+    # Default; overridden by persisted config later
+    FIELD_DATA_APP_PASS = ""
+
 # Ensure claim-flow toggles exist before use
 try:
     ENABLE_FIRST_CHECKIN_CLAIM
 except NameError:
     ENABLE_FIRST_CHECKIN_CLAIM = False
+
 try:
     CLAIM_CONFIRM_DELAY_S
 except NameError:
