@@ -9,8 +9,6 @@ from config_persist import write_text, read_json, set_flag, is_flag_set, write_j
 FIELD_DATA_BACKLOG = settings.LOG_DIR + '/field_data_backlog.log'
 UNIT_ID_FILE = settings.UNIT_ID_FILE if hasattr(settings, 'UNIT_ID_FILE') else (settings.LOG_DIR + '/unit_id.txt')
 SUSPENDED_FLAG = getattr(settings, 'DEVICE_SUSPENDED_FILE', settings.LOG_DIR + '/suspended.flag')
-# NEW: remote one-time HTTP/UC check-in flag (for NODE_TYPE == 'remote')
-REMOTE_HTTP_ONETIME_FLAG = getattr(settings, 'REMOTE_HTTP_ONETIME_FLAG_FILE', settings.LOG_DIR + '/remote_http_onetime.flag')
 
 def append_to_backlog(payload):
     checkLogDirectory()
@@ -1399,32 +1397,26 @@ def compute_bars(rssi, cuts=None):
 
 def is_http_allowed_for_node():
     """Return True if this device should perform HTTP REST calls (base/wifi behavior).
-       Remote nodes that are provisioned should only do HTTP until a one-time UC check-in is marked done.
+       Remote nodes that are provisioned should not do HTTP after registration.
     """
     try:
-        role = str(getattr(settings, 'NODE_TYPE', '')).lower()
-        # Base / WiFi nodes: always allowed (honor suspension elsewhere)
-        if role != 'remote':
-            return True
-
-        # Remote nodes:
-        # - While not provisioned: allow HTTP so they can talk to Admin/UC during provisioning.
-        if not bool(getattr(settings, 'UNIT_PROVISIONED', False)):
-            return True
-
-        # - Once provisioned: allow HTTP until one-time UC/HTTP check-in is completed.
-        try:
-            if is_flag_set(REMOTE_HTTP_ONETIME_FLAG):
-                # One-time remote HTTP window already used; skip further HTTP for remotes.
+        if getattr(settings, 'NODE_TYPE', '').lower() == 'remote':
+            # check for provisioned state / flag
+            if getattr(settings, 'UNIT_PROVISIONED', False):
                 return False
-        except Exception:
-            # If flag read fails, be conservative and allow (prevents being stuck).
-            return True
-
-        # No one-time flag yet → allow HTTP to perform the single UC check-in.
+            # Also check flag file if present (defensive)
+            try:
+                flag = getattr(settings, 'PROVISIONED_FLAG_FILE', settings.LOG_DIR + '/provisioned.flag')
+                import os
+                try:
+                    os.stat(flag)
+                    return False
+                except Exception:
+                    pass
+            except Exception:
+                pass
         return True
     except Exception:
-        # On any error, allow HTTP rather than hard-blocking.
         return True
 
 # Basic self-test for bar computation (run only in DEBUG to avoid overhead)

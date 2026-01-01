@@ -4,15 +4,12 @@
 try:
     FIELD_DATA_APP_PASS
 except NameError:
-    # Default; overridden by persisted config later
-    FIELD_DATA_APP_PASS = ""
-
+    FIELD_DATA_APP_PASS = ""  # default; overridden by persisted config later
 # Ensure claim-flow toggles exist before use
 try:
     ENABLE_FIRST_CHECKIN_CLAIM
 except NameError:
     ENABLE_FIRST_CHECKIN_CLAIM = False
-
 try:
     CLAIM_CONFIRM_DELAY_S
 except NameError:
@@ -107,8 +104,6 @@ DEBUG_PROVISION = True
 DEBUG_SAMPLING = True
 DEBUG_DISPLAY = True
 DEBUG_REMOTE = True
-# NEW: when True, lora.py will print current radio parameters after successful begin()
-DEBUG_PRINT_PARAMS = True
 
 # wifi settings
 WIFI_SSID = "house of nonsense"          # Provisioned or manually set SSID
@@ -131,14 +126,11 @@ FIELD_DATA_BACKOFF_S = 10          # retry backoff on HTTP failures
 FIELD_DATA_GZIP = True             # allow gzip payload when supported
 
 # --- LoRa sync & recovery ---
-# IMPORTANT: All nodes (base and remotes) must share identical LoRa settings below
-# (FREQ, BW, SF, CR, SYNC_WORD, PREAMBLE_LEN, CRC_ON, TCXO_VOLTAGE, POWER).
 nextLoraSync = 300                      # Remote next absolute sync epoch (assigned by base)
 LORA_SYNC_WINDOW = 2                    # seconds of minimum spacing between remote sync slots
 LORA_SLOT_SPACING_S = LORA_SYNC_WINDOW  # alias for clarity
 LORA_CHECK_IN_MINUTES = 5               # Default check-in cadence in minutes used when no explicit nextLoraSync is set
-# Increase init retry backoff to give radio more time between attempts
-LORA_INIT_RETRY_BACKOFF_S = 5      # small delay between init retries (was 1)
+LORA_INIT_RETRY_BACKOFF_S = 1      # small delay between init retries
 LORA_HARD_REBOOT_ERR_CODES = [-2]  # error codes that trigger hard reboot (e.g., ERR_CHIP_NOT_FOUND)
 LORA_ERR_PERSIST_REBOOTS = 2       # if persists this many times across reboots, stop rebooting and log
 ERROR_STATE_FILE = LOG_DIR + '/last_error.state'  # persist last error and reboot counters
@@ -151,24 +143,21 @@ LORA_HMAC_REJECT_UNSIGNED = True     # When enabled + HMAC active, reject frames
 LORA_HMAC_REPLAY_PROTECT = True      # Enforce strictly increasing counter (ctr) to prevent replay
 LORA_ENCRYPT_ENABLED = True         # Optional payload encryption (ChaCha20 stream cipher)
 LORA_ENCRYPT_SECRET = ''  
-# Core LoRa RF parameters — must match on all nodes
 FREQ = 868.0                               # Regional frequency (EU example); change per deployment
 BW = 125.0
-SF = 7                                     # Lower SF for easier bring-up/debug; set back to 12 for production range
+SF = 12
 CR = 7                                    # stronger coding rate (4/7)
 SYNC_WORD = 0xF4
-POWER = 22                                # Max power for testing; reduce if PSU can't handle ~140mA
+POWER = 14                                # default transmit power reduced for regulatory safety
 CURRENT_LIMIT = 140.0
 PREAMBLE_LEN = 12
 CRC_ON = True
-TCXO_VOLTAGE = 1.8  # Confirmed for Waveshare SX1262 (keep in sync with hardware)
+TCXO_VOLTAGE = 1.8  # Confirmed for Waveshare SX1262
 USE_LDO = True
 CAD_SYMBOLS = 8  # Symbols for CAD detection before TX
 # NEW: CAD backoff when channel busy (seconds)
 LORA_CAD_BACKOFF_S = 2       # Base backoff when CAD indicates busy
-LORA_CAD_BACKOFF_MAX_S = 60  # Maximum randomized backoff applied (increased for testing)
-# NEW: allow temporarily disabling CAD during troubleshooting
-DISABLE_CAD_FOR_TESTING = False
+LORA_CAD_BACKOFF_MAX_S = 30  # Maximum randomized backoff applied
 
 # --- Last error telemetry (include in sdata payloads) ---
 LAST_ERROR_CODE = 0
@@ -327,9 +316,6 @@ TLS_VERIFY = True
 
 DEVICE_SUSPENDED = False                  # Suspension flag set by Admin/UC commands; halts tasks but allows check-ins
 DEVICE_SUSPENDED_FILE = '/logs/suspended.flag'
-# NEW: testing helper to force-provision device without Admin hub (use only for lab/debug)
-FORCE_PROVISIONED = False
-
 LORA_NETWORK_NAME = 'tmon'                # Secure network name (provisioned for base & remotes)
 LORA_NETWORK_PASSWORD = '12345'           # Simple password handshake (strengthen later)
 REMOTE_CHECKIN_INTERVAL_S = 300           # Default remote -> base sync period
@@ -351,9 +337,6 @@ TMON_ADMIN_CONFIRM_TOKEN = ''  # Optional small secret to confirm applied settin
 PLAN = ""  # NEW: subscription plan (standard/pro/enterprise) applied via provisioning
 
 PROVISION_REBOOT_GUARD_FILE = LOG_DIR + '/provision_reboot.flag'  # Prevent repeated soft resets after provisioning
-
-# NEW: remote one-time HTTP/UC check-in flag file
-REMOTE_HTTP_ONETIME_FLAG_FILE = LOG_DIR + '/remote_http_onetime.flag'
 
 # --- UC Commands & Staged Settings Controls ---
 # Devices poll UC for staged commands; confirm after execution
@@ -535,9 +518,9 @@ def get_display_settings():
 # LoRa chunked transfer parameters (remote -> base)
 LORA_CHUNK_RAW_BYTES = 100        # raw bytes per chunk before base64 & JSON overhead (tune so final msg <= 230)
 LORA_CHUNK_MAX_RETRIES = 3       # attempts per chunk before deferring
-# Increase ACK window for better remote/base debug; remotes wait longer for base ACK
-LORA_CHUNK_ACK_WAIT_MS = 30000   # ms to wait for per-chunk ACK before retry (30s for testing)
+LORA_CHUNK_ACK_WAIT_MS = 1500    # ms to wait for per-chunk ACK before retry
 # LoRa payload safety: keep below SX126x limits and leave headroom for driver overhead.
+# Reasonable default chosen to avoid packet-too-long (-4) errors in the field.
 LORA_MAX_PAYLOAD = 230
 
 # NEW: control retries for single-frame sends before re-init (helps transient -1 cases)
