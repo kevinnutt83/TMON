@@ -1542,7 +1542,7 @@ async def connectLora():
                                                             sdata.lora_SigStr = lora.getRSSI()
                                                         if hasattr(lora, 'getSNR'):
                                                             sdata.lora_snr = lora.getSNR()
-                                                        sdata.last_message = ujson.dumps(obj2)[:32]
+                                                            sdata.last_message = ujson.dumps(obj2)[:32]
                                                     except Exception:
                                                         pass
                                                     # Adopt next sync
@@ -1556,8 +1556,8 @@ async def connectLora():
                                                             settings.nextLoraSync = int(time.time() + rel)
                                                         elif 'next' in obj2:
                                                             settings.nextLoraSync = int(obj2['next'])
-                                                        except Exception:
-                                                            pass
+                                                    except Exception:
+                                                        pass
                                                     # Adopt GPS
                                                     try:
                                                         if getattr(settings, 'GPS_ACCEPT_FROM_BASE', True):
@@ -1569,16 +1569,14 @@ async def connectLora():
                                                                 bts = obj2.get('gps_last_fix_ts')
                                                                 save_gps_state(blat, blng, balt, bacc, bts)
                                                                 await debug_print('lora: GPS adopted', 'LORA')
-                                                        except Exception:
-                                                            pass
-                                                        await debug_print(f"lora: next {getattr(settings, 'nextLoraSync', '')}", 'LORA')
-                                                        write_lora_log(f"Remote stored next sync epoch: {getattr(settings, 'nextLoraSync', '')}", 'INFO')
-                                                        led_status_flash('SUCCESS')
-                                                        break
-                                                except Exception:
-                                                    pass
-                                        await asyncio.sleep(0.01)
-                                return True
+                                                    except Exception:
+                                                        pass
+                                                    await debug_print(f"lora: next {getattr(settings, 'nextLoraSync', '')}", 'LORA')
+                                                    write_lora_log(f"Remote stored next sync epoch: {getattr(settings, 'nextLoraSync', '')}", 'INFO')
+                                                    led_status_flash('SUCCESS')
+                                                    break
+                                            except Exception:
+                                                pass
                             else:
                                 await debug_print(f"lora: single-frame (post-compact) failed: {st_code}", "WARN")
                                 # If it's a negative hardware-like code, attempt guarded re-init and fall through to chunk flow
@@ -1841,7 +1839,7 @@ async def connectLora():
                                                         break
                                                 except Exception:
                                                     pass
-                                        await asyncio.sleep(0.01)
+                                            await asyncio.sleep(0.01)
                                     break
                                 await debug_print(f"lora: last-resort single-frame failed ({st_last})", "ERROR")
                             await debug_print("lora: cannot shrink chunk size further", "ERROR")
