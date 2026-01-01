@@ -256,7 +256,7 @@ HEATWATCH_ACTION_TEMP = 110
 HEATWATCH_STANDDOWN_TEMP = 105
 
 # Waveshare Environmental / Sensor settings
-ENABLE_SENSORBME280 = True              # Primary environmental sensor module
+ENABLE_sensorBME280 = True              # Primary environmental sensor module
 i2cAddr_BME280 = 0x76
 light_i2c_address = 0x53
 motion_i2c_address = 0x68
