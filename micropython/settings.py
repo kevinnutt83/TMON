@@ -348,7 +348,7 @@ COMMAND_CONFIRM_DELAY_S = 0.2                # small delay before confirming bac
 APPLY_STAGED_SETTINGS_ON_BOOT = True         # if staged file exists, apply on boot
 APPLY_STAGED_SETTINGS_ON_SYNC = True         # re-check staged settings on each UC/Admin sync
 STAGED_SETTINGS_KEYS_ALLOW = [
-    'WORDPRESS_API_URL','TMON_ADMIN_API_URL','UNIT_Name','PLAN',
+    'WORDPRESS_API_URL','TMON_ADMIN_API_URL','NODE_TYPE','UNIT_Name','PLAN',
     'ENABLE_WIFI','ENABLE_LORA','ENABLE_OLED','DEVICE_SUSPENDED',
     'WIFI_SSID','WIFI_PASS','WIFI_CONN_RETRIES','WIFI_BACKOFF_S',
     'OTA_ENABLED','OTA_CHECK_INTERVAL_S','OTA_APPLY_INTERVAL_S',
@@ -364,7 +364,7 @@ STAGED_SETTINGS_KEYS_ALLOW = [
 ]
 # Optional denylist to prevent accidental overrides
 STAGED_SETTINGS_KEYS_DENY = [
-    'FIRMWARE_VERSION','MACHINE_ID', 'NODE_TYPE'  # never override these from UC
+    'FIRMWARE_VERSION','MACHINE_ID'  # never override these from UC
 ]
 
 # Command names expected from UC/Admin and their runtime aliases
@@ -516,12 +516,12 @@ def get_display_settings():
     }
 
 # LoRa chunked transfer parameters (remote -> base)
-LORA_CHUNK_RAW_BYTES = 150        # raw bytes per chunk before base64 & JSON overhead (tune so final msg <= 250)
+LORA_CHUNK_RAW_BYTES = 100        # raw bytes per chunk before base64 & JSON overhead (tune so final msg <= 230)
 LORA_CHUNK_MAX_RETRIES = 3       # attempts per chunk before deferring
 LORA_CHUNK_ACK_WAIT_MS = 1500    # ms to wait for per-chunk ACK before retry
 # LoRa payload safety: keep below SX126x limits and leave headroom for driver overhead.
 # Reasonable default chosen to avoid packet-too-long (-4) errors in the field.
-LORA_MAX_PAYLOAD = 255
+LORA_MAX_PAYLOAD = 230
 
 # NEW: control retries for single-frame sends before re-init (helps transient -1 cases)
 LORA_SINGLE_FRAME_RETRIES = 2

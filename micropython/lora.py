@@ -1021,6 +1021,24 @@ async def connectLora():
                                 # Was `continue` here (invalid outside loop) — exit handler cleanly.
                                 return True
 
+                        # NEW: decrypt if encrypted
+                        if isinstance(payload, dict) and 'enc' in payload:
+                            try:
+                                secret = getattr(settings, 'LORA_ENCRYPT_SECRET', '')
+                                if secret:
+                                    key = secret.encode()
+                                    if len(key) < 32:
+                                        key = (key + b'\x00'*32)[:32]
+                                    nonce_b64 = payload.get('nonce', '')
+                                    nonce = _ub.a2b_base64(nonce_b64)
+                                    ct_b64 = payload.get('ct', '')
+                                    ct = _ub.a2b_base64(ct_b64)
+                                    pt = chacha20_encrypt(key, nonce, 1, ct)  # symmetric
+                                    dec_payload = ujson.loads(pt.decode('utf-8', 'ignore'))
+                                    payload = dec_payload
+                            except Exception as de:
+                                await debug_print(f"lora: decrypt fail {de}", "ERROR")
+
                         # existing processing logic: persist record etc.
                         record = {'received_at': int(time.time()), 'source': 'remote', 'from_radio': True}
                         if isinstance(payload, dict):
@@ -1183,7 +1201,9 @@ async def connectLora():
                         nonce = derive_nonce(int(time.time()), int(payload.get('ctr', 0)))
                         pt = ujson.dumps(payload).encode('utf-8')
                         ct = chacha20_encrypt(key, nonce, 1, pt)
-                        env = {'enc': 1, 'nonce': ''.join('{:02x}'.format(b) for b in nonce), 'ct': ''.join('{:02x}'.format(b) for b in ct), 'net': payload.get('net'), 'key': payload.get('key')}
+                        nonce_b64 = _ub.b2a_base64(nonce).decode().strip()
+                        ct_b64 = _ub.b2a_base64(ct).decode().strip()
+                        env = {'enc': 1, 'nonce': nonce_b64, 'ct': ct_b64, 'net': payload.get('net'), 'key': payload.get('key')}
                         data = ujson.dumps(env).encode('utf-8')
                     except Exception:
                         data = ujson.dumps(payload).encode('utf-8')
@@ -1191,7 +1211,7 @@ async def connectLora():
                     data = ujson.dumps(payload).encode('utf-8')
 
                 # NEW: only chunk if data actually exceeds safe payload size
-                max_payload = int(getattr(settings, 'LORA_MAX_PAYLOAD', 255) or 255)
+                max_payload = int(getattr(settings, 'LORA_MAX_PAYLOAD', 230) or 230)
 
                 # Quick single-frame send when payload fits — avoids tiny chunk floods for modest payloads
                 if len(data) <= max_payload:
@@ -1386,9 +1406,6 @@ async def connectLora():
                     try:
                         if hasattr(lora, 'spi') and lora.spi:
                             lora.spi.deinit()
-                    except Exception:
-                        pass
-                    try:
                         _last_tx_exception_ms = time.ticks_ms()
                     except Exception:
                         pass
@@ -1408,12 +1425,12 @@ async def connectLora():
                 # Build a minimal template to estimate JSON overhead accurately
                 try:
                     tmpl = {'unit_id': getattr(settings, 'UNIT_ID', ''), 'chunked': 1, 'seq': 1, 'total': 1, 'b64': ''}
-                    overhead = len(ujson.dumps(tmpl).encode('utf-8'))
+                    overhead = len(ujson.dumps(tmpl).encode('utf-8')) + 10  # add headroom
                     avail_b64 = max_payload - overhead
                     raw_chunk_size = max(min_raw, int((avail_b64 * 3) // 4)) if avail_b64 > 0 else min_raw
                 except Exception:
                     # Fallback conservative size
-                    raw_chunk_size = max(min_raw, int(getattr(settings, 'LORA_CHUNK_RAW_BYTES', 50)))
+                    raw_chunk_size = max(min_raw, int(getattr(settings, 'LORA_CHUNK_RAW_BYTES', 100)))
 
                 # Helper to compact payload to minimal telemetry shapes
                 def _compact_payload_to_minimal(p):
@@ -1543,8 +1560,8 @@ async def connectLora():
                                                         if hasattr(lora, 'getSNR'):
                                                             sdata.lora_snr = lora.getSNR()
                                                             sdata.last_message = ujson.dumps(obj2)[:32]
-                                                    except Exception:
-                                                        pass
+                                                        except Exception:
+                                                            pass
                                                     # Adopt next sync
                                                     try:
                                                         if 'next_in' in obj2:
@@ -1556,8 +1573,8 @@ async def connectLora():
                                                             settings.nextLoraSync = int(time.time() + rel)
                                                         elif 'next' in obj2:
                                                             settings.nextLoraSync = int(obj2['next'])
-                                                    except Exception:
-                                                        pass
+                                                        except Exception:
+                                                            pass
                                                     # Adopt GPS
                                                     try:
                                                         if getattr(settings, 'GPS_ACCEPT_FROM_BASE', True):
@@ -1569,14 +1586,16 @@ async def connectLora():
                                                                 bts = obj2.get('gps_last_fix_ts')
                                                                 save_gps_state(blat, blng, balt, bacc, bts)
                                                                 await debug_print('lora: GPS adopted', 'LORA')
-                                                    except Exception:
-                                                        pass
-                                                    await debug_print(f"lora: next {getattr(settings, 'nextLoraSync', '')}", 'LORA')
-                                                    write_lora_log(f"Remote stored next sync epoch: {getattr(settings, 'nextLoraSync', '')}", 'INFO')
-                                                    led_status_flash('SUCCESS')
-                                                    break
-                                            except Exception:
-                                                pass
+                                                        except Exception:
+                                                            pass
+                                                        await debug_print(f"lora: next {getattr(settings, 'nextLoraSync', '')}", 'LORA')
+                                                        write_lora_log(f"Remote stored next sync epoch: {getattr(settings, 'nextLoraSync', '')}", 'INFO')
+                                                        led_status_flash('SUCCESS')
+                                                        break
+                                                except Exception:
+                                                    pass
+                                        await asyncio.sleep(0.01)
+                                return True
                             else:
                                 await debug_print(f"lora: single-frame (post-compact) failed: {st_code}", "WARN")
                                 # If it's a negative hardware-like code, attempt guarded re-init and fall through to chunk flow
@@ -1839,7 +1858,7 @@ async def connectLora():
                                                         break
                                                 except Exception:
                                                     pass
-                                            await asyncio.sleep(0.01)
+                                        await asyncio.sleep(0.01)
                                     break
                                 await debug_print(f"lora: last-resort single-frame failed ({st_last})", "ERROR")
                             await debug_print("lora: cannot shrink chunk size further", "ERROR")
