@@ -1605,8 +1605,6 @@ async def connectLora():
                                                         break
                                                 except Exception:
                                                     pass
-                                    except Exception:
-                                        pass
                             else:
                                 await debug_print(f"lora: single-frame (post-compact) failed: {st_code}", "WARN")
                                 # If it's a negative hardware-like code, attempt guarded re-init and fall through to chunk flow
@@ -1773,7 +1771,7 @@ async def connectLora():
                             try:
                                 if isinstance(resp, (tuple, list)) and len(resp) >= 2 and isinstance(resp[1], int):
                                     st_last = resp[1]
-                                elif isinstance(resp, int):
+                                                               elif isinstance(resp, int):
                                     st_last = resp
                                 else:
                                     try:
@@ -1965,8 +1963,6 @@ async def connectLora():
                                 write_lora_log(f"Remote stored next sync epoch: {getattr(settings, 'nextLoraSync', '')}", 'INFO')
                                 led_status_flash('SUCCESS')
                                 break
-                        except Exception:
-                            pass
             except Exception:
                 pass
             await asyncio.sleep(0.01)
