@@ -1,0 +1,826 @@
+<?php
+if (!defined('ABSPATH')) exit;
+
+// Ensure provisioned_devices table has expected columns even on older installs
+function tmon_admin_maybe_migrate_provisioned_devices() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'tmon_provisioned_devices';
+    $exists = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table));
+    if (!$exists) return; // created by installer elsewhere
+
+    $have = [];
+    $cols = $wpdb->get_results("SHOW COLUMNS FROM $table", ARRAY_A);
+    foreach (($cols?:[]) as $c) { $have[strtolower($c['Field'])] = true; }
+
+    // Add missing columns one by one (id/unit_id/machine_id assumed present)
+    if (empty($have['role'])) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN role VARCHAR(32) DEFAULT 'base'");
+    }
+    if (empty($have['company_id'])) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN company_id BIGINT UNSIGNED NULL");
+    }
+    if (empty($have['plan'])) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN plan VARCHAR(64) DEFAULT 'standard'");
+    }
+    if (empty($have['status'])) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN status VARCHAR(32) DEFAULT 'active'");
+    }
+    if (empty($have['notes'])) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN notes TEXT");
+    }
+    if (empty($have['created_at'])) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP");
+    }
+    if (empty($have['updated_at'])) {
+        // Some MySQL variants require separate ADD then MODIFY for ON UPDATE
+        $wpdb->query("ALTER TABLE $table ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP");
+        $wpdb->query("ALTER TABLE $table MODIFY COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP");
+    }
+    if (empty($have['site_url'])) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN site_url VARCHAR(255) DEFAULT ''");
+    }
+    if (empty($have['unit_name'])) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN unit_name VARCHAR(128) DEFAULT ''");
+    }
+	if (empty($have['provisioned'])) {
+		$wpdb->query("ALTER TABLE $table ADD COLUMN provisioned TINYINT(1) DEFAULT 0");
+	}
+	if (empty($have['provisioned_at'])) {
+		$wpdb->query("ALTER TABLE $table ADD COLUMN provisioned_at DATETIME DEFAULT NULL");
+	}
+    // NEW: firmware metadata
+    if (empty($have['firmware'])) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN firmware VARCHAR(128) DEFAULT ''");
+    }
+    if (empty($have['firmware_url'])) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN firmware_url VARCHAR(255) DEFAULT ''");
+    }
+    if (empty($have['settings_staged'])) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN settings_staged TINYINT(1) DEFAULT 0");
+    }
+    // NEW: normalized machine/unit ids for consistent matching
+    if (empty($have['machine_id_norm'])) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN machine_id_norm VARCHAR(64) DEFAULT ''");
+    }
+    if (empty($have['unit_id_norm'])) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN unit_id_norm VARCHAR(64) DEFAULT ''");
+    }
+
+    // Backfill existing rows with normalized values (safe, idempotent)
+    $rows = $wpdb->get_results("SELECT id, machine_id, unit_id FROM {$table}", ARRAY_A);
+    if ($rows) {
+        foreach ($rows as $r) {
+            $norm_machine = '';
+            if (!empty($r['machine_id'])) $norm_machine = tmon_admin_normalize_mac($r['machine_id']);
+            $norm_unit = '';
+            if (!empty($r['unit_id'])) $norm_unit = tmon_admin_normalize_key($r['unit_id']);
+            if ($norm_machine || $norm_unit) {
+                $wpdb->update($table, ['machine_id_norm' => $norm_machine, 'unit_id_norm' => $norm_unit], ['id' => intval($r['id'])]);
+            }
+        }
+    }
+
+    // Ensure unique index on (unit_id, machine_id)
+    $indexes = $wpdb->get_results("SHOW INDEX FROM $table", ARRAY_A);
+    $hasUnitMachineIdx = false;
+    foreach (($indexes?:[]) as $idx) {
+        if (isset($idx['Key_name']) && $idx['Key_name'] === 'unit_machine') { $hasUnitMachineIdx = true; break; }
+    }
+    if (!$hasUnitMachineIdx) {
+        // Create named unique index if both columns exist
+        $colsCheck = $wpdb->get_col("SHOW COLUMNS FROM $table LIKE 'unit_id'");
+        $colsCheck2 = $wpdb->get_col("SHOW COLUMNS FROM $table LIKE 'machine_id'");
+        if (!empty($colsCheck) && !empty($colsCheck2)) {
+            $wpdb->query("ALTER TABLE $table ADD UNIQUE KEY unit_machine (unit_id, machine_id)");
+        }
+    }
+}
+
+add_action('admin_init', function() {
+    if (get_option('tmon_admin_schema_provisioned') !== '1') {
+        tmon_admin_install_schema();
+        update_option('tmon_admin_schema_provisioned', '1');
+    }
+    // Always run a lightweight migration to avoid 'Unknown column' errors on updated sites
+    tmon_admin_maybe_migrate_provisioned_devices();
+});
+
+// Migration: ensure tmon_devices has a provisioned column for device mirror status
+function tmon_admin_maybe_migrate_tmon_devices() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'tmon_devices';
+    $exists = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table));
+    if (!$exists) return;
+    $cols = $wpdb->get_col($wpdb->prepare("SHOW COLUMNS FROM $table LIKE %s", 'provisioned'));
+    if (empty($cols)) {
+        $wpdb->query("ALTER TABLE $table ADD COLUMN provisioned TINYINT(1) DEFAULT 0");
+    }
+}
+add_action('admin_init', function() {
+    // ...existing installation logic ...
+    tmon_admin_maybe_migrate_tmon_devices();
+});
+
+// DB migration for tmon_devices fields (provisioned/provisioned_at/wordpress_api_url)
+function tmon_admin_maybe_migrate_tmon_devices_columns() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'tmon_devices';
+    $exists = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table));
+    if (!$exists) return;
+    $cols = [];
+    foreach ($wpdb->get_results("SHOW COLUMNS FROM $table", ARRAY_A) as $c) { $cols[strtolower($c['Field'])] = true; }
+    if (empty($cols['provisioned'])) $wpdb->query("ALTER TABLE $table ADD COLUMN provisioned TINYINT(1) DEFAULT 0");
+    if (empty($cols['wordpress_api_url'])) $wpdb->query("ALTER TABLE $table ADD COLUMN wordpress_api_url VARCHAR(255) DEFAULT ''");
+    if (empty($cols['provisioned_at'])) $wpdb->query("ALTER TABLE $table ADD COLUMN provisioned_at DATETIME DEFAULT NULL");
+	if (empty($cols['role'])) $wpdb->query("ALTER TABLE $table ADD COLUMN role VARCHAR(32) DEFAULT 'base'");
+	if (empty($cols['plan'])) $wpdb->query("ALTER TABLE $table ADD COLUMN plan VARCHAR(64) DEFAULT 'standard'");
+}
+add_action('admin_init', 'tmon_admin_maybe_migrate_tmon_devices_columns');
+
+// Helper: Get all devices, provisioned and unprovisioned
+function tmon_admin_get_all_devices() {
+    global $wpdb;
+    $dev_table = $wpdb->prefix . 'tmon_devices';
+    $prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+	// Include provisioned site_url (fallback to d.wordpress_api_url when missing)
+	$sql = "SELECT d.id as device_id, d.unit_id, d.machine_id, d.unit_name, d.role as device_role, d.plan as device_plan, d.last_seen, d.wordpress_api_url,
+		   p.id as provision_id, p.role, p.company_id, p.plan, p.status, p.notes, p.created_at, p.updated_at,
+		   COALESCE(NULLIF(p.site_url,''), d.wordpress_api_url) AS site_url, d.wordpress_api_url AS original_api_url,
+		   p.provisioned, p.provisioned_at
+		   FROM $dev_table d
+		   LEFT JOIN $prov_table p ON d.unit_id = p.unit_id AND d.machine_id = p.machine_id
+		   ORDER BY d.id DESC";
+	return $wpdb->get_results($sql, ARRAY_A);
+}
+
+// Safe getter to avoid undefined index notices
+if (!function_exists('tmon_admin_arr_get')) {
+	function tmon_admin_arr_get($arr, $key, $default='') {
+		return (is_array($arr) && array_key_exists($key, $arr)) ? $arr[$key] : $default;
+	}
+}
+
+// Append to provision history (option-backed) with a DB fallback when available
+if (!function_exists('tmon_admin_append_provision_history')) {
+	function tmon_admin_append_provision_history(array $entry) {
+		// Prefer centralized helper if loaded
+		if (function_exists('tmon_admin_record_provision_history')) {
+			return tmon_admin_record_provision_history($entry);
+		}
+		$history = get_option('tmon_admin_provision_history', []);
+		if (!is_array($history)) { $history = []; }
+		$entry['ts'] = current_time('mysql');
+		if (!isset($entry['user'])) {
+			$entry['user'] = (function_exists('wp_get_current_user')) ? wp_get_current_user()->user_login : 'system';
+		}
+		$history[] = $entry;
+		if (count($history) > 500) { $history = array_slice($history, -500); }
+		update_option('tmon_admin_provision_history', $history);
+		return true;
+	}
+}
+
+// Notice renderer
+if (!function_exists('tmon_admin_render_provision_notice')) {
+	function tmon_admin_render_provision_notice() {
+		if (!current_user_can('manage_options')) return;
+		$state = isset($_GET['provision']) ? sanitize_text_field($_GET['provision']) : '';
+		if ($state === 'queued') { echo '<div class="notice notice-success"><p>Provisioning queued and saved.</p></div>'; }
+		if ($state === 'failed') { echo '<div class="notice notice-error"><p>Provisioning save failed.</p></div>'; }
+	}
+}
+
+// Primary Provisioning page renderer
+if (!function_exists('tmon_admin_provisioning_page')) {
+	function tmon_admin_provisioning_page() {
+		tmon_admin_render_provisioning_page();
+	}
+}
+if (!function_exists('tmon_admin_provisioned_devices_page')) {
+	function tmon_admin_provisioned_devices_page() {
+		if (function_exists('tmon_admin_render_provisioned_devices')) {
+			tmon_admin_render_provisioned_devices();
+		} else {
+			echo '<div class="wrap"><h1>Provisioned Devices</h1><p>Renderer not loaded.</p></div>';
+		}
+	}
+}
+if (!function_exists('tmon_admin_provisioning_activity_page')) {
+	function tmon_admin_provisioning_activity_page() {
+		echo '<div class="wrap"><h1>Provisioning Activity</h1><p>Queue and active jobs appear here.</p></div>';
+	}
+}
+if (!function_exists('tmon_admin_provisioning_history_page')) {
+	function tmon_admin_provisioning_history_page() {
+		echo '<div class="wrap"><h1>Provisioning History</h1><p>Recent provisioning events will render here.</p></div>';
+	}
+}
+
+// Safe content renderers (already guarded earlier; keep guards to avoid duplicates)
+if (!function_exists('tmon_admin_render_provisioning_page')) {
+	function tmon_admin_render_provisioning_page() {
+		$all_devices = tmon_admin_get_all_devices();
+		$has_devices = !empty($all_devices);
+		$site_options = [];
+		$known_units = [];
+		$unit_map = [];
+		$plan_options = [];
+		$role_options = [];
+		if ($has_devices) {
+			foreach ($all_devices as $row) {
+				if (!empty($row['site_url'])) $site_options[$row['site_url']] = true;
+				if (!empty($row['original_api_url'])) $site_options[$row['original_api_url']] = true;
+				if (!empty($row['unit_id'])) $known_units[$row['unit_id']] = true;
+				$uid = trim(tmon_admin_arr_get($row, 'unit_id', ''));
+				if ($uid) {
+					$unit_map[$uid] = [
+						'machine_id' => tmon_admin_arr_get($row, 'machine_id', ''),
+						'role' => tmon_admin_arr_get($row, 'role', tmon_admin_arr_get($row, 'device_role', '')),
+						'plan' => tmon_admin_arr_get($row, 'plan', tmon_admin_arr_get($row, 'device_plan', '')),
+					];
+					if (!empty($unit_map[$uid]['plan'])) { $plan_options[$unit_map[$uid]['plan']] = true; }
+					if (!empty($unit_map[$uid]['role'])) { $role_options[$unit_map[$uid]['role']] = true; }
+				}
+			}
+		}
+		$pairings = get_option('tmon_admin_uc_sites', []);
+		if (is_array($pairings)) {
+			foreach ($pairings as $purl => $info) { $site_options[$purl] = true; }
+		}
+		$rest_root = esc_url_raw(rest_url());
+		$rest_nonce = wp_create_nonce('wp_rest');
+		$table_id = 'tmon-provisioning-devices';
+		$form_action = admin_url('admin-post.php');
+		$nonce = wp_create_nonce('tmon_admin_provision_device');
+		$export_nonce = wp_create_nonce('tmon_admin_export_provision_history');
+
+		echo '<div class="wrap"><h1>Device Provisioning</h1>';
+		tmon_admin_render_provision_notice();
+		echo '<p class="description">Manage devices, stage settings, and send provisioning updates from a single view.</p>';
+		echo '<nav class="tmon-tabs"><a href="#tmon-prov-list">Devices</a> | <a href="#tmon-prov-form">Save & Provision</a> | <a href="#tmon-prov-history">History</a></nav>';
+
+		echo '<h2 id="tmon-prov-list">Devices</h2>';
+		echo '<p class="description">If registrations are missing, ensure devices table exists and mirrors provisioned records. This list includes staged/provisioned flags.</p>';
+		echo '<table class="wp-list-table widefat striped" id="'.esc_attr($table_id).'">';
+		echo '<thead><tr>';
+		echo '<th>ID</th><th>Unit ID</th><th>Machine ID</th><th>Name</th><th>Plan</th><th>Status</th><th>Site</th><th>Staged</th><th>Provisioned</th><th>Last Seen</th><th>Created</th><th>Updated</th>';
+		echo '</tr></thead><tbody>';
+		if ($has_devices) {
+			foreach ($all_devices as $r) {
+				$id          = tmon_admin_arr_get($r, 'id', 0);
+				$unit_id     = tmon_admin_arr_get($r, 'unit_id', '');
+				$machine_id  = tmon_admin_arr_get($r, 'machine_id', '');
+				$name        = tmon_admin_arr_get($r, 'unit_name', '');
+				$plan        = tmon_admin_arr_get($r, 'plan', tmon_admin_arr_get($r, 'device_plan', ''));
+				$status      = tmon_admin_arr_get($r, 'status', '');
+				$site_url    = tmon_admin_arr_get($r, 'site_url', '');
+				$staged_raw  = tmon_admin_arr_get($r, 'settings_staged', '');
+				$staged_flag = $staged_raw ? 'Yes' : 'No';
+				$prov_flag   = tmon_admin_arr_get($r, 'provisioned', 0) ? 'Yes' : 'No';
+				$last_seen   = tmon_admin_arr_get($r, 'last_seen', '');
+				$created_at  = tmon_admin_arr_get($r, 'created_at', '');
+				$updated_at  = tmon_admin_arr_get($r, 'updated_at', '');
+				echo '<tr>';
+				echo '<td>'.intval($id).'</td>';
+				echo '<td>'.esc_html($unit_id).'</td>';
+				echo '<td>'.esc_html($machine_id).'</td>';
+				echo '<td>'.esc_html($name).'</td>';
+				echo '<td>'.esc_html($plan).'</td>';
+				echo '<td>'.esc_html($status).'</td>';
+				echo '<td>'.esc_html($site_url).'</td>';
+				echo '<td>'.esc_html($staged_flag).'</td>';
+				echo '<td>'.esc_html($prov_flag).'</td>';
+				echo '<td>'.esc_html($last_seen).'</td>';
+				echo '<td>'.esc_html($created_at).'</td>';
+				echo '<td>'.esc_html($updated_at).'</td>';
+				echo '</tr>';
+			}
+		} else {
+			echo '<tr><td colspan="11"><em>No devices found. Use "Save & Provision" to add new devices.</em></td></tr>';
+		}
+		echo '</tbody></table>';
+
+		echo '<h2 id="tmon-prov-form">Save & Provision</h2>';
+		echo '<details open class="tmon-card"><summary>Enter device details</summary>';
+		echo '<form method="post" action="'.esc_url($form_action).'">';
+		echo '<input type="hidden" name="action" value="tmon_admin_provision_device">';
+		echo '<input type="hidden" name="_wpnonce" value="'.esc_attr($nonce).'">';
+		echo '<input type="hidden" name="id" value="">';
+		echo '<table class="form-table">';
+		echo '<tr><th scope="row"><label for="unit_id">Unit ID</label></th><td><select name="unit_id" id="unit_id" class="regular-text" required><option value="">Select a unit</option>';
+		foreach ($unit_map as $uid => $meta) { echo '<option value="'.esc_attr($uid).'">'.esc_html($uid).'</option>'; }
+		echo '</select><p class="description">Pick an existing unit to prefill machine/role/plan.</p></td></tr>';
+		echo '<tr><th scope="row"><label for="machine_id">Machine ID</label></th><td><input name="machine_id" type="text" id="machine_id" value="" class="regular-text" required><p class="description">Auto-filled when a unit is selected; can be overridden.</p></td></tr>';
+		echo '<tr><th scope="row"><label for="unit_name">Device Name</label></th><td><input name="unit_name" type="text" id="unit_name" value="" class="regular-text"></td></tr>';
+		echo '<tr><th scope="row"><label for="plan">Plan</label></th><td><select name="plan" id="plan" class="regular-text">';
+		echo '<option value="">Select a plan</option>';
+		foreach (array_keys($plan_options) as $p) { echo '<option value="'.esc_attr($p).'">'.esc_html($p).'</option>'; }
+		echo '</select></td></tr>';
+		echo '<tr><th scope="row"><label for="role">Device Type</label></th><td><select name="role" id="role" class="regular-text">';
+		echo '<option value="">Select a type</option>';
+		foreach (array_keys($role_options) as $p) { echo '<option value="'.esc_attr($p).'">'.esc_html($p).'</option>'; }
+		echo '</select></td></tr>';
+		echo '<tr><th scope="row"><label for="site_url">Site URL</label></th><td><input name="site_url" type="url" id="site_url" value="" class="regular-text" placeholder="https://example.com"></td></tr>';
+		echo '<tr><th scope="row"><label for="settings_staged">Stage settings</label></th><td><label><input name="settings_staged" type="checkbox" id="settings_staged" value="1"> Mark settings as staged for next push</label></td></tr>';
+		echo '</table>';
+		echo '<p class="submit"><input type="submit" name="save_provision" id="save_provision" class="button button-primary" value="Save & Provision"></p>';
+		echo '</form>';
+		echo '</details>';
+
+		echo '<h2 id="tmon-location-push">Push Device Location</h2>';
+		echo '<details class="tmon-card"><summary>Send GPS to device via Unit Connector</summary>';
+		echo '<p class="description">Use this when a device needs a manual GPS override. Fields validate locally, and autocomplete uses paired UC sites and known Unit IDs.</p>';
+		echo '<form id="tmon-location-push-form" class="tmon-location-form">';
+		echo '<table class="form-table">';
+		echo '<tr><th scope="row"><label for="loc_site_url">UC Site URL</label></th><td><input name="site_url" id="loc_site_url" type="url" class="regular-text" list="tmon-location-sites" placeholder="https://uc.example.com" required>';
+		echo '<datalist id="tmon-location-sites">';
+		foreach (array_keys($site_options) as $s) { echo '<option value="'.esc_attr($s).'"></option>'; }
+		echo '</datalist><p class="description">Must match a paired UC site; uses UC key or hub key for auth.</p></td></tr>';
+		echo '<tr><th scope="row"><label for="loc_unit_id">Unit ID</label></th><td><input name="unit_id" id="loc_unit_id" type="text" class="regular-text" list="tmon-location-units" placeholder="unit-123" required>';
+		echo '<datalist id="tmon-location-units">';
+		foreach (array_keys($known_units) as $uid) { echo '<option value="'.esc_attr($uid).'"></option>'; }
+		echo '</datalist></td></tr>';
+		echo '<tr><th scope="row"><label for="loc_gps_lat">Latitude</label></th><td><input name="gps_lat" id="loc_gps_lat" type="number" step="any" class="regular-text" required></td></tr>';
+		echo '<tr><th scope="row"><label for="loc_gps_lng">Longitude</label></th><td><input name="gps_lng" id="loc_gps_lng" type="number" step="any" class="regular-text" required></td></tr>';
+		echo '<tr><th scope="row"><label for="loc_gps_alt_m">Altitude (m)</label></th><td><input name="gps_alt_m" id="loc_gps_alt_m" type="number" step="any" class="regular-text"></td></tr>';
+		echo '<tr><th scope="row"><label for="loc_gps_accuracy_m">Accuracy (m)</label></th><td><input name="gps_accuracy_m" id="loc_gps_accuracy_m" type="number" step="any" class="regular-text"></td></tr>';
+		echo '</table>';
+		echo '<p class="submit"><button type="submit" class="button button-primary">Push Location via UC</button> <span id="tmon-location-status" class="tmon-inline-status" style="margin-left:8px;"></span></p>';
+		echo '</form>';
+		echo '</details>';
+
+		echo '<h2 id="tmon-prov-history">Provisioning History</h2>';
+		$export_url = add_query_arg([
+			'page' => 'tmon-admin-provisioning',
+			'export' => 'provision-history',
+			'export_nonce' => $export_nonce,
+		], admin_url('admin.php'));
+		echo '<p><a href="'.esc_url(admin_url('admin.php?page=tmon-admin-provisioning-history')).'" class="button">View Provisioning History</a> ';
+		echo '<a href="'.esc_url($export_url).'" class="button">Download CSV</a></p>';
+
+		echo '</div>';
+
+		add_action('admin_footer', function() use ($table_id, $rest_root, $rest_nonce, $unit_map) {
+			?>
+			<script>
+			jQuery(document).ready(function($) {
+				$('#<?php echo esc_js($table_id); ?>').DataTable({
+					order: [[0, 'desc']],
+					columnDefs: [{ visible: false, targets: [0] }]
+				});
+
+				// Prefill machine/role/plan when unit selected
+				const unitMap = <?php echo wp_json_encode($unit_map ?: []); ?>;
+				$('#unit_id').on('change', function(){
+					const uid = $(this).val();
+					const meta = unitMap[uid] || {};
+					$('#machine_id').val(meta.machine_id || '');
+					if (meta.role && !$('#role').val()) { $('#role').val(meta.role); }
+					if (meta.plan && !$('#plan').val()) { $('#plan').val(meta.plan); }
+				});
+			});
+
+			(function(){
+				var form = document.getElementById('tmon-location-push-form');
+				if (!form) return;
+				var statusEl = document.getElementById('tmon-location-status');
+				function setStatus(msg, type){
+					if (!statusEl) return;
+					statusEl.textContent = msg || '';
+					statusEl.style.color = (type === 'error') ? '#d63638' : (type === 'success' ? '#006500' : '#3c434a');
+				}
+				form.addEventListener('submit', async function(e){
+					e.preventDefault();
+					var site = (form.site_url.value || '').trim();
+					var unit = (form.unit_id.value || '').trim();
+					var lat = parseFloat(form.gps_lat.value);
+					var lng = parseFloat(form.gps_lng.value);
+					if (!site || !unit || isNaN(lat) || isNaN(lng)) { setStatus('Site URL, Unit ID, latitude, and longitude are required.', 'error'); return; }
+					if (lat < -90 || lat > 90 || lng < -180 || lng > 180) { setStatus('Latitude must be between -90 and 90, longitude between -180 and 180.', 'error'); return; }
+					var payload = { site_url: site, unit_id: unit, gps_lat: lat, gps_lng: lng };
+					if (form.gps_alt_m.value !== '') {
+						var alt = parseFloat(form.gps_alt_m.value);
+						if (isNaN(alt)) { setStatus('Altitude must be a number.', 'error'); return; }
+						payload.gps_alt_m = alt;
+					}
+					if (form.gps_accuracy_m.value !== '') {
+						var acc = parseFloat(form.gps_accuracy_m.value);
+						if (isNaN(acc)) { setStatus('Accuracy must be a number.', 'error'); return; }
+						payload.gps_accuracy_m = acc;
+					}
+					setStatus('Sending location…', 'info');
+					try {
+						var res = await fetch('<?php echo esc_js(untrailingslashit($rest_root)); ?>/tmon-admin/v1/device/gps-override', {
+							method: 'POST',
+							credentials: 'same-origin',
+							headers: {
+								'Content-Type': 'application/json',
+								'X-WP-Nonce': '<?php echo esc_js($rest_nonce); ?>'
+							},
+							body: JSON.stringify(payload)
+						});
+						var data = null;
+						try { data = await res.json(); } catch(e) {}
+						if (res.ok && data && data.success) {
+							setStatus('Location pushed (HTTP ' + (data.code || res.status) + ').', 'success');
+							form.reset();
+						} else {
+							var msg = (data && data.message) ? data.message : ('Push failed (HTTP ' + res.status + ').');
+							setStatus(msg, 'error');
+						}
+					} catch(err) {
+						setStatus('Push failed: ' + (err && err.message ? err.message : 'Unknown error'), 'error');
+					}
+				});
+			})();
+			</script>
+			<?php
+		});
+	}
+}
+if (!function_exists('tmon_admin_render_provisioned_devices')) {
+	function tmon_admin_render_provisioned_devices() {
+		// ...existing code...
+	}
+}
+if (!function_exists('tmon_admin_render_provisioning_activity')) {
+	function tmon_admin_render_provisioning_activity() {
+		$nonce = wp_create_nonce('tmon_admin_ajax');
+		// ...existing code...
+	}
+}
+if (!function_exists('tmon_admin_render_provisioning_history')) {
+	function tmon_admin_render_provisioning_history() {
+		$nonce = wp_create_nonce('tmon_admin_ajax');
+		// ...existing code...
+	}
+}
+
+// --- PATCH: Handle POST with redirect-after-POST pattern ---
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && function_exists('tmon_admin_verify_nonce') && tmon_admin_verify_nonce('tmon_admin_provision')) {
+    $action = sanitize_text_field($_POST['action'] ?? '');
+    $do_provision = isset($_POST['save_provision']);
+    $redirect_url = remove_query_arg(['provision'], wp_get_referer() ?: admin_url('admin.php?page=tmon-admin-provisioning'));
+	global $wpdb;
+	$prov_table = isset($wpdb) ? $wpdb->prefix . 'tmon_provisioned_devices' : '';
+	$dev_table  = isset($wpdb) ? $wpdb->prefix . 'tmon_devices' : '';
+
+    // --- UPDATE DEVICE ROW (table row form) ---
+    if ($action === 'update') {
+        $id = intval($_POST['id'] ?? 0);
+		// Load DB row early to provide fallback values for payloads & mirroring
+		$row_tmp = [];
+		if ($id > 0 && $prov_table && $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $prov_table))) {
+			$row_tmp = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$prov_table} WHERE id = %d LIMIT 1", $id), ARRAY_A) ?: [];
+		}
+		// Compute normalized or fallback ids for the row
+		$unit_id = sanitize_text_field($_POST['unit_id'] ?? $row_tmp['unit_id'] ?? '');
+		$machine_id = sanitize_text_field($_POST['machine_id'] ?? $row_tmp['machine_id'] ?? '');
+		$unit_name = sanitize_text_field($_POST['unit_name'] ?? $row_tmp['unit_name'] ?? '');
+		$plan = sanitize_text_field($_POST['plan'] ?? $row_tmp['plan'] ?? '');
+		$role = sanitize_text_field($_POST['role'] ?? $row_tmp['role'] ?? '');
+		$status = sanitize_text_field($_POST['status'] ?? $row_tmp['status'] ?? '');
+		$site_url = esc_url_raw($_POST['site_url'] ?? $row_tmp['site_url'] ?? '');
+		$notes = sanitize_textarea_field($_POST['notes'] ?? $row_tmp['notes'] ?? '');
+		$settings_staged_flag = !empty($_POST['settings_staged']) ? 1 : 0;
+		$unit_norm = tmon_admin_normalize_key($unit_id);
+		$mac_norm = tmon_admin_normalize_mac($machine_id);
+
+		// Always set these so later mirror updates have canonical id vars
+		$row_unit_id = $unit_id;
+		$row_machine_id = $machine_id;
+
+		// Update staged flags and core fields
+		if ($prov_table && ($unit_id || $machine_id) && $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $prov_table))) {
+			$where = [];
+			if (!empty($mac_norm)) {
+				$where['machine_id_norm'] = $mac_norm;
+			} elseif (!empty($unit_norm)) {
+				$where['unit_id_norm'] = $unit_norm;
+			}
+			$update_payload = [
+				'unit_id' => $unit_id,
+				'machine_id' => $machine_id,
+				'unit_name' => $unit_name,
+				'plan' => $plan,
+				'role' => $role,
+				'status' => $status ?: ($row_tmp['status'] ?? ''),
+				'site_url' => $site_url,
+				'notes' => $notes,
+				'updated_at' => current_time('mysql'),
+			];
+			if ($do_provision || $settings_staged_flag) {
+				$update_payload['settings_staged'] = 1;
+			}
+			// Update by normalized key or fallback to id if available
+			if ($where) {
+				$wpdb->update($prov_table, $update_payload, $where);
+			} elseif ($id > 0) {
+				$wpdb->update($prov_table, $update_payload, ['id' => $id]);
+			}
+		}
+
+		// Mirror basic fields to device table if present
+		if ($dev_table && $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+			$mirror = [
+				'unit_name' => $unit_name,
+				'plan' => $plan,
+				'role' => $role,
+				'wordpress_api_url' => $site_url,
+				'updated_at' => current_time('mysql'),
+			];
+			if (!empty($unit_id)) {
+				$wpdb->update($dev_table, $mirror, ['unit_id' => $unit_id]);
+			}
+			if (!empty($machine_id)) {
+				$wpdb->update($dev_table, $mirror, ['machine_id' => $machine_id]);
+			}
+		}
+
+        // --- INSERT/UPDATE DEVICE HISTORY RECORD ---
+        // Always log provisioning attempts, even for existing devices
+        $history_data = [
+            'unit_id' => $unit_id,
+            'machine_id' => $machine_id,
+            'action' => $do_provision ? 'save_provision' : 'update',
+            'user' => wp_get_current_user()->user_login,
+            'meta' => [
+                'plan' => sanitize_text_field($_POST['plan'] ?? ''),
+                'role' => sanitize_text_field($_POST['role'] ?? ''),
+                'site_url' => esc_url_raw($_POST['site_url'] ?? ''),
+                'settings_staged' => !empty($_POST['settings_staged']) ? 1 : 0,
+            ],
+        ];
+        tmon_admin_append_provision_history($history_data);
+
+        // --- REDIRECT AFTER SAVE ---
+        // Redirect to the same page with a success flag
+        wp_safe_redirect(add_query_arg(['provision' => 'saved'], $redirect_url));
+        exit;
+    }
+}
+
+// CSV export for provisioning history
+add_action('admin_init', function(){
+	if (!current_user_can('manage_options')) return;
+	if (isset($_GET['page']) && $_GET['page']==='tmon-admin-provisioning' && isset($_GET['export']) && $_GET['export']==='provision-history') {
+		$nonce = isset($_GET['export_nonce']) ? sanitize_text_field($_GET['export_nonce']) : '';
+		if (!$nonce || !wp_verify_nonce($nonce, 'tmon_admin_export_provision_history')) {
+			wp_die('Invalid export request', 'Error', 403);
+		}
+		global $wpdb;
+		$table = $wpdb->prefix . 'tmon_provision_history';
+		$rows = $wpdb->get_results("SELECT id, unit_id, machine_id, action, user, created_at FROM {$table} ORDER BY id DESC LIMIT 1000", ARRAY_A) ?: array();
+		header('Content-Type: text/csv');
+		header('Content-Disposition: attachment; filename="tmon-provision-history.csv"');
+		$out = fopen('php://output', 'w');
+		fputcsv($out, array('id','unit_id','machine_id','action','user','created_at'));
+		foreach ($rows as $r) { fputcsv($out, array($r['id'],$r['unit_id'],$r['machine_id'],$r['action'],$r['user'],$r['created_at'])); }
+		fclose($out);
+		exit;
+	}
+});
+
+// Ensure firmware metadata transients are set when manifest fetch succeeds
+add_action('wp_ajax_tmon_admin_fetch_github_manifest', function(){
+	if (!current_user_can('manage_options')) {
+		wp_send_json_error(['message' => 'forbidden'], 403);
+	}
+	check_ajax_referer('tmon_admin_manifest', 'nonce');
+	// ...existing fetch code...
+	// On success:
+	// set_transient('tmon_admin_firmware_version', $version, 12 * HOUR_IN_SECONDS);
+	// set_transient('tmon_admin_firmware_version_ts', current_time('mysql'), 12 * HOUR_IN_SECONDS);
+	if (!empty($version) && !empty($manifest)) {
+		set_transient('tmon_admin_firmware_version', $version, 12 * HOUR_IN_SECONDS);
+		set_transient('tmon_admin_firmware_version_ts', current_time('mysql'), 12 * HOUR_IN_SECONDS);
+		wp_send_json_success(['version'=>$version,'manifest'=>$manifest]);
+	}
+	wp_send_json_error(['message'=>'Failed to fetch firmware metadata'], 400);
+});
+
+// Save & Provision — persist and log, then redirect with notice
+add_action('admin_post_tmon_admin_provision_device', function(){
+	if (!current_user_can('manage_options')) wp_die('Forbidden');
+	check_admin_referer('tmon_admin_provision_device');
+	global $wpdb;
+	if (!function_exists('tmon_admin_ensure_tables')) {
+		$maybe = dirname(__FILE__) . '/provisioned-devices.php';
+		if (file_exists($maybe)) {
+			require_once $maybe;
+		}
+	}
+	if (function_exists('tmon_admin_ensure_tables')) {
+		tmon_admin_ensure_tables();
+	}
+
+	$unit_id    = sanitize_text_field(isset($_POST['unit_id']) ? $_POST['unit_id'] : '');
+	$machine_id = sanitize_text_field(isset($_POST['machine_id']) ? $_POST['machine_id'] : '');
+	$unit_name  = sanitize_text_field(isset($_POST['unit_name']) ? $_POST['unit_name'] : '');
+	$plan       = sanitize_text_field(isset($_POST['plan']) ? $_POST['plan'] : '');
+	$role       = sanitize_text_field(isset($_POST['role']) ? $_POST['role'] : '');
+	$site_url   = esc_url_raw(isset($_POST['site_url']) ? $_POST['site_url'] : '');
+	$settings_staged = isset($_POST['settings_staged']) ? wp_unslash($_POST['settings_staged']) : '';
+
+	$ok = false;
+	if ($unit_id && $machine_id) {
+		$prov = $wpdb->prefix . 'tmon_provisioned_devices';
+		$wpdb->query($wpdb->prepare(
+			"INSERT INTO {$prov} (unit_id,machine_id,unit_name,plan,role,site_url,settings_staged,status,created_at,updated_at)
+			 VALUES (%s,%s,%s,%s,%s,%s,%s,'queued',NOW(),NOW())
+			 ON DUPLICATE KEY UPDATE unit_name=VALUES(unit_name), plan=VALUES(plan), role=VALUES(role),
+			 site_url=VALUES(site_url), settings_staged=VALUES(settings_staged), status='queued', updated_at=NOW()",
+			$unit_id, $machine_id, $unit_name, $plan, $role, $site_url, $settings_staged
+		));
+		$dev = $wpdb->prefix . 'tmon_devices';
+		$wpdb->query($wpdb->prepare(
+			"UPDATE {$dev} SET unit_name=%s, plan=%s, role=%s, wordpress_api_url=%s WHERE unit_id=%s OR machine_id=%s",
+			$unit_name, $plan, $role, $site_url, $unit_id, $machine_id
+		));
+		tmon_admin_append_provision_history(array(
+			'user' => wp_get_current_user()->user_login,
+			'unit_id' => $unit_id,
+			'machine_id' => $machine_id,
+			'action' => 'save_and_provision',
+			'meta' => array('unit_name'=>$unit_name,'plan'=>$plan,'role'=>$role,'site_url'=>$site_url),
+		));
+		$ok = true;
+	}
+
+	$redir = wp_get_referer() ?: admin_url('admin.php?page=tmon-admin-provisioning');
+	wp_safe_redirect(add_query_arg(array('provision' => $ok ? 'queued' : 'failed'), $redir));
+	exit;
+});
+
+// Admin REST — device confirm-applied: update records + history
+add_action('rest_api_init', function(){
+	register_rest_route('tmon-admin/v1', '/device/confirm-applied', array(
+		'methods' => 'POST',
+		'callback' => function($request){
+			$unit_id    = sanitize_text_field($request->get_param('unit_id'));
+			$machine_id = sanitize_text_field($request->get_param('machine_id'));
+			$site_url   = esc_url_raw($request->get_param('wordpress_api_url'));
+			$role       = sanitize_text_field($request->get_param('role'));
+			$plan       = sanitize_text_field($request->get_param('plan'));
+			$firmware   = sanitize_text_field($request->get_param('firmware_version'));
+			global $wpdb;
+			$dev_table  = $wpdb->prefix . 'tmon_devices';
+			$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+
+			// Mirror updates
+			if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $dev_table))) {
+				$mirror = array('provisioned'=>1, 'last_seen'=>current_time('mysql'));
+				if ($site_url) $mirror['wordpress_api_url'] = $site_url;
+				if ($plan)     $mirror['plan'] = $plan;
+				if ($role)     $mirror['role'] = $role;
+				$wpdb->update($dev_table, $mirror, array('unit_id' => $unit_id));
+				$wpdb->update($dev_table, $mirror, array('machine_id' => $machine_id));
+			}
+			if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $prov_table))) {
+				$upd = array('status'=>'active','site_url'=>$site_url,'updated_at'=>current_time('mysql'));
+				if ($plan)     $upd['plan'] = $plan;
+				if ($role)     $upd['role'] = $role;
+				if ($firmware) $upd['firmware'] = $firmware;
+				$wpdb->update($prov_table, $upd, array('unit_id' => $unit_id));
+				$wpdb->update($prov_table, $upd, array('machine_id' => $machine_id));
+			}
+
+			return rest_ensure_response(true);
+		},
+	));
+});
+
+// Guard undefined array keys when reading queue/device arrays
+function tmon_admin_arr_get($arr, $key, $default=''){ return isset($arr[$key]) ? $arr[$key] : $default; }
+
+// Use tmon_admin_arr_get() where provisioning code reads $row['id'] or $row['settings_staged']
+// Example:
+// $id = tmon_admin_arr_get($row, 'id', 0);
+// $staged = tmon_admin_arr_get($row, 'settings_staged', '{}');
+
+/**
+ * Return provisioning role options used by the UI.
+ * Filterable so other code can modify available roles.
+ *
+ * @return array
+ */
+function tmon_admin_get_role_options() {
+	$defaults = array( 'base', 'wifi', 'remote', 'gateway' );
+	$opts = apply_filters( 'tmon_admin_provision_role_options', $defaults );
+	// ensure uniqueness & stable order
+	$seen = array();
+	$out = array();
+	foreach ( (array) $opts as $v ) {
+		$vv = strtolower(trim((string)$v));
+		if ( $vv === '' ) continue;
+		if ( isset($seen[$vv]) ) continue;
+		$seen[$vv] = true;
+		$out[] = $vv;
+	}
+	return $out;
+}
+
+/**
+ * AJAX endpoint: return device info for a unit_id (machine_id, unit_name).
+ * POST params: unit_id, _wpnonce
+ * Capability: manage_options OR valid nonce 'tmon_admin_provision'
+ */
+add_action( 'wp_ajax_tmon_get_device_info', function() {
+	$nonce = $_REQUEST['_wpnonce'] ?? '';
+	if ( ! wp_verify_nonce( $nonce, 'tmon_admin_provision' ) && ! current_user_can( 'manage_options' ) ) {
+		wp_send_json_error( array( 'message' => 'Forbidden/invalid nonce' ), 403 );
+	}
+
+	$unit = sanitize_text_field( wp_unslash( $_REQUEST['unit_id'] ?? '' ) );
+	if ( empty( $unit ) ) {
+		wp_send_json_error( array( 'message' => 'Missing unit_id' ), 400 );
+	}
+
+	// Try high-level helper if available
+	$info = array( 'unit_id' => $unit, 'machine_id' => '', 'unit_name' => '' );
+	$found = false;
+	try {
+		if ( function_exists( 'tmon_admin_get_all_devices' ) ) {
+			$all = tmon_admin_get_all_devices();
+			if ( is_array( $all ) ) {
+				foreach ( $all as $r ) {
+					if ( ! empty( $r['unit_id'] ) && strval( $r['unit_id'] ) === strval( $unit ) ) {
+						$info['machine_id'] = $r['machine_id'] ?? $r['machine'] ?? $r['machine_id_hex'] ?? '';
+						$info['unit_name']  = $r['unit_name'] ?? $r['UNIT_Name'] ?? '';
+						$found = true;
+						break;
+					}
+				}
+			}
+		}
+	} catch ( Exception $e ) {
+		// ignore, fallback to DB
+	}
+
+	// DB fallback when helper not present
+	if ( ! $found && function_exists( 'get_option' ) ) {
+		global $wpdb;
+		$table = $wpdb->prefix . 'tmon_devices';
+		try {
+			if ( $wpdb && $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) ) {
+				$row = $wpdb->get_row( $wpdb->prepare( "SELECT machine_id, unit_name FROM {$table} WHERE unit_id=%s LIMIT 1", $unit ), ARRAY_A );
+				if ( is_array( $row ) && ! empty( $row ) ) {
+					$info['machine_id'] = $row['machine_id'] ?? '';
+					$info['unit_name']  = $row['unit_name'] ?? '';
+					$found = true;
+				}
+			}
+		} catch ( Exception $e ) {
+			// ignore DB errors
+		}
+	}
+
+	if ( $found ) {
+		wp_send_json_success( $info );
+	} else {
+		wp_send_json_error( array( 'message' => 'Not found' ), 404 );
+	}
+} );
+
+// Provisioning helpers: node role options & rendering helper
+
+if (!function_exists('tmon_admin_get_node_role_options')) {
+    /**
+     * Return canonical node role options for provisioning UI.
+     * Keep this stable and useable by templates and other code.
+     */
+    function tmon_admin_get_node_role_options() {
+        // Allow site override via option (array), otherwise use canonical three roles
+        $opts = get_option('tmon_admin_node_roles', null);
+        if (is_array($opts) && !empty($opts)) {
+            return $opts;
+        }
+        return array('base', 'wifi', 'remote');
+    }
+}
+
+if (!function_exists('tmon_admin_render_node_role_select')) {
+    /**
+     * Render a <select> for node role.
+     * Params:
+     *  - $name string: form field name (default 'role')
+     *  - $selected string: currently selected value
+     *  - $attrs array: additional attributes for <select>
+     */
+    function tmon_admin_render_node_role_select($name = 'role', $selected = '', $attrs = array()) {
+        $opts = tmon_admin_get_node_role_options();
+        $attr_str = '';
+        if (is_array($attrs)) {
+            foreach ($attrs as $k => $v) {
+                $attr_str .= ' ' . esc_attr($k) . '="' . esc_attr($v) . '"';
+            }
+        }
+        echo '<select name="'.esc_attr($name).'" id="'.esc_attr($name).'"'.$attr_str.'>';
+        echo '<option value="">Select a type</option>';
+        foreach ($opts as $o) {
+            $sel = ($o === $selected) ? ' selected' : '';
+            echo '<option value="'.esc_attr($o).'"'.$sel.'>'.esc_html($o).'</option>';
+        }
+        echo '</select>';
+    }
+}
