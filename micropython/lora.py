@@ -1343,7 +1343,6 @@ async def connectLora():
                 except Exception:
                     pass
 
-                # FIX: `if sent:` must be inside THIS try, and the except must align with it.
                 try:
                     # Build compact payload
                     payload = {
@@ -1485,7 +1484,7 @@ async def connectLora():
                                         if not busy:
                                             break
                                         # FIX: use ticks_ms()
-                                        if time.ticks_diff(time.ticks.ms(), busy_start) > 400:
+                                        if time.ticks_diff(time.ticks_ms(), busy_start) > 400:
                                             break
                                         await asyncio.sleep(0.01)
                                 except Exception:
@@ -1594,127 +1593,124 @@ async def connectLora():
                             await asyncio.sleep(0.05)
                             continue
 
-                # FIX: keep this inside the try-block
-                if sent:
-                    # wait for TX_DONE and optional ACK, then handle nextLoraSync/GPS/cmd
-                    try:
-                        tx_start = time.ticks_ms()
-                        await debug_print("lora remote: waiting for TX_DONE", "LORA")
-                    except Exception:
-                        tx_start = time.ticks_ms()
-                    # FIX: use ticks_ms()
-                    while time.ticks_diff(time.ticks.ms(), tx_start) < 10000:
+                    # FIX: keep this inside the try-block
+                    if sent:
+                        # wait for TX_DONE and optional ACK, then handle nextLoraSync/GPS/cmd
                         try:
-                            ev = lora._events()
+                            tx_start = time.ticks_ms()
+                            await debug_print("lora remote: waiting for TX_DONE", "LORA")
                         except Exception:
-                            ev = 0
-                        if TX_DONE_FLAG is not None and (ev & TX_DONE_FLAG):
+                            tx_start = time.ticks_ms()
+                        while time.ticks_diff(time.ticks_ms(), tx_start) < 10000:
                             try:
-                                await debug_print(f"lora remote: TX_DONE events=0x{ev:X}", "LORA")
+                                ev = lora._events()
                             except Exception:
-                                pass
-                            break
-                        await asyncio.sleep(0.01)
-                    try:
-                        lora.setOperatingMode(lora.MODE_RX)
-                        await debug_print("lora remote: MODE_RX set after TX", "LORA")
-                    except Exception:
-                        pass
-                    _last_send_ms = time.ticks_ms()
-                    _last_activity_ms = _last_send_ms
-                    # Wait for ACK
-                    ack_wait_ms = int(getattr(settings, 'LORA_CHUNK_ACK_WAIT_MS', 1500))
-                    start_wait = time.ticks_ms()
-                    try:
-                        await debug_print(f"lora remote: waiting for ACK up to {ack_wait_ms} ms", "LORA")
-                    except Exception:
-                        pass
-                    # FIX: use ticks_ms()
-                    while time.ticks_diff(time.ticks.ms(), start_wait) < ack_wait_ms:
-                        ev2 = 0
-                        try:
-                            ev2 = lora._events()
-                        except Exception:
-                            ev2 = 0
-                        if RX_DONE_FLAG is not None and (ev2 & RX_DONE_FLAG):
-                            try:
-                                msg2, err2 = lora._readData(0)
-                            except Exception:
-                                msg2 = None; err2 = -1
-                            if err2 == 0 and msg2:
+                                ev = 0
+                            if TX_DONE_FLAG is not None and (ev & TX_DONE_FLAG):
                                 try:
-                                    obj2 = None
-                                    txt2 = msg2.decode('utf-8', 'ignore') if isinstance(msg2, (bytes, bytearray)) else str(msg2)
-                                    try:
-                                        obj2 = ujson.loads(txt2)
-                                    except Exception:
-                                        obj2 = None
-                                    try:
-                                        await debug_print(
-                                            f"lora remote: ACK payload raw='{txt2[:80]}' parsed={bool(obj2)}",
-                                            "LORA",
-                                        )
-                                    except Exception:
-                                        pass
-                                    if isinstance(obj2, dict) and obj2.get('ack') == 'ok':
-                                        # adopt next sync
-                                        try:
-                                            if 'next_in' in obj2:
-                                                rel = int(obj2['next_in'])
-                                                if rel < 1:
-                                                    rel = 1
-                                                if rel > 24 * 3600:
-                                                    rel = 24 * 3600
-                                                settings.nextLoraSync = int(time.time() + rel)
-                                            elif 'next' in obj2:
-                                                settings.nextLoraSync = int(obj2['next'])
-                                        except Exception:
-                                            pass
-                                        # Adopt GPS from base if provided and allowed
-                                        try:
-                                            if getattr(settings, 'GPS_ACCEPT_FROM_BASE', True):
-                                                blat = obj2.get('gps_lat')
-                                                blng = obj2.get('gps_lng')
-                                                if (blat is not None) and (blng is not None):
-                                                    balt = obj2.get('gps_alt_m')
-                                                    bacc = obj2.get('gps_accuracy_m')
-                                                    bts = obj2.get('gps_last_fix_ts')
-                                                    save_gps_state(blat, blng, balt, bacc, bts)
-                                                    await debug_print('lora: GPS adopted', 'LORA')
-                                        except Exception:
-                                            pass
-
-                                        # NEW: handle optional relay command from ACK JSON
-                                        try:
-                                            cmd_str = obj2.get('cmd')
-                                            if cmd_str:
-                                                target = obj2.get('cmd_target', 'ALL')
-                                                if target == 'ALL' or str(target) == str(getattr(settings, 'UNIT_ID', '')):
-                                                    await _execute_command_string(cmd_str)
-                                        except Exception:
-                                            pass
-
-                                        await debug_print(f"lora: next {getattr(settings, 'nextLoraSync', '')}", 'LORA')
-                                        write_lora_log(
-                                            f"Remote stored next sync epoch: {getattr(settings, 'nextLoraSync', '')}",
-
-                                            'INFO'
-                                        )
-                                        led_status_flash('SUCCESS')
-                                        break
+                                    await debug_print(f"lora remote: TX_DONE events=0x{ev:X}", "LORA")
                                 except Exception:
                                     pass
-                        await asyncio.sleep(0.01)
+                                break
+                            await asyncio.sleep(0.01)
+                        try:
+                            lora.setOperatingMode(lora.MODE_RX)
+                            await debug_print("lora remote: MODE_RX set after TX", "LORA")
+                        except Exception:
+                            pass
+                        _last_send_ms = time.ticks_ms()
+                        _last_activity_ms = _last_send_ms
+                        ack_wait_ms = int(getattr(settings, 'LORA_CHUNK_ACK_WAIT_MS', 1500))
+                        start_wait = time.ticks_ms()
+                        try:
+                            await debug_print(f"lora remote: waiting for ACK up to {ack_wait_ms} ms", "LORA")
+                        except Exception:
+                            pass
+                        while time.ticks_diff(time.ticks_ms(), start_wait) < ack_wait_ms:
+                            ev2 = 0
+                            try:
+                                ev2 = lora._events()
+                            except Exception:
+                                ev2 = 0
+                            if RX_DONE_FLAG is not None and (ev2 & RX_DONE_FLAG):
+                                try:
+                                    msg2, err2 = lora._readData(0)
+                                except Exception:
+                                    msg2 = None; err2 = -1
+                                if err2 == 0 and msg2:
+                                    try:
+                                        obj2 = None
+                                        txt2 = msg2.decode('utf-8', 'ignore') if isinstance(msg2, (bytes, bytearray)) else str(msg2)
+                                        try:
+                                            obj2 = ujson.loads(txt2)
+                                        except Exception:
+                                            obj2 = None
+                                        try:
+                                            await debug_print(
+                                                f"lora remote: ACK payload raw='{txt2[:80]}' parsed={bool(obj2)}",
+                                                "LORA",
+                                            )
+                                        except Exception:
+                                            pass
+                                        if isinstance(obj2, dict) and obj2.get('ack') == 'ok':
+                                            # adopt next sync
+                                            try:
+                                                if 'next_in' in obj2:
+                                                    rel = int(obj2['next_in'])
+                                                    if rel < 1:
+                                                        rel = 1
+                                                    if rel > 24 * 3600:
+                                                        rel = 24 * 3600
+                                                    settings.nextLoraSync = int(time.time() + rel)
+                                                elif 'next' in obj2:
+                                                    settings.nextLoraSync = int(obj2['next'])
+                                            except Exception:
+                                                pass
+                                            # Adopt GPS from base if provided and allowed
+                                            try:
+                                                if getattr(settings, 'GPS_ACCEPT_FROM_BASE', True):
+                                                    blat = obj2.get('gps_lat')
+                                                    blng = obj2.get('gps_lng')
+                                                    if (blat is not None) and (blng is not None):
+                                                        balt = obj2.get('gps_alt_m')
+                                                        bacc = obj2.get('gps_accuracy_m')
+                                                        bts = obj2.get('gps_last_fix_ts')
+                                                        save_gps_state(blat, blng, balt, bacc, bts)
+                                                        await debug_print('lora: GPS adopted', 'LORA')
+                                            except Exception:
+                                                pass
+
+                                            # NEW: handle optional relay command from ACK JSON
+                                            try:
+                                                cmd_str = obj2.get('cmd')
+                                                if cmd_str:
+                                                    target = obj2.get('cmd_target', 'ALL')
+                                                    if target == 'ALL' or str(target) == str(getattr(settings, 'UNIT_ID', '')):
+                                                        await _execute_command_string(cmd_str)
+                                            except Exception:
+                                                pass
+
+                                            await debug_print(f"lora: next {getattr(settings, 'nextLoraSync', '')}", 'LORA')
+                                            write_lora_log(
+                                                f"Remote stored next sync epoch: {getattr(settings, 'nextLoraSync', '')}",
+
+                                                'INFO'
+                                            )
+                                            led_status_flash('SUCCESS')
+                                            break
+                                    except Exception:
+                                        pass
+                            await asyncio.sleep(0.01)
                     return True
 
-            # FIX: align except with the try above
-            except Exception as e:
-                await debug_print(f'lora: remote TX exception: {e}', 'ERROR')
-                try:
-                    _last_tx_exception_ms = time.ticks_ms()
-                except Exception:
-                    pass
-                return False
+                # FIX: align except with the try above
+                except Exception as e:
+                    await debug_print(f'lora: remote TX exception: {e}', 'ERROR')
+                    try:
+                        _last_tx_exception_ms = time.ticks_ms()
+                    except Exception:
+                        pass
+                    return False
 
     # --- Idle-time deinit for power saving ---
     try:
