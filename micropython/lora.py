@@ -1350,7 +1350,7 @@ async def connectLora():
                 if len(data) <= max_payload:
                     # Ensure radio present
                     if lora is None:
-                        await debug_print "lora: reinit before single-frame send", "LORA"
+                        await debug_print ("lora: reinit before single-frame send", "LORA")
                         async with pin_lock:
                             ok = await init_lora()
                         if not ok:
