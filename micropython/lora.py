@@ -1442,6 +1442,62 @@ async def connectLora():
                 else:
                     data = ujson.dumps(payload).encode('utf-8')
 
+                # NEW: inspect/compact payload *before* enforcing max payload
+                try:
+                    orig_len = len(data)
+                except Exception:
+                    orig_len = 0
+                max_payload = int(getattr(settings, 'LORA_MAX_PAYLOAD', 255) or 255)
+                try:
+                    await debug_print(
+                        f"lora remote: encoded payload len={orig_len} max={max_payload}",
+                        "LORA",
+                    )
+                except Exception:
+                    pass
+
+                if orig_len > max_payload:
+                    # Try to shrink to a compact essential payload (no encryption/HMAC) so we still transmit something.
+                    try:
+                        compact_keys = [
+                            'unit_id', 'name', 'ts',
+                            't_f', 't_c', 'hum', 'bar',
+                            'v', 'fm', 'net', 'key'
+                        ]
+                        compact = {}
+                        for k in compact_keys:
+                            if k in payload:
+                                compact[k] = payload.get(k)
+                        data = ujson.dumps(compact).encode('utf-8')
+                        try:
+                            await debug_print(
+                                f"lora remote: compacted payload len {orig_len}->{len(data)}",
+                                "LORA",
+                            )
+                        except Exception:
+                            pass
+                    except Exception as ce:
+                        try:
+                            await debug_print(
+                                f"lora remote: compact payload build failed: {ce}",
+                                "ERROR",
+                            )
+                        except Exception:
+                            pass
+                    # As a last resort, hard truncate to max_payload bytes (base will treat as raw if JSON is broken)
+                    try:
+                        if len(data) > max_payload:
+                            data = data[:max_payload]
+                            try:
+                                await debug_print(
+                                    f"lora remote: payload still >max, truncating to {len(data)}",
+                                    "WARN",
+                                )
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+
                 # NEW: only chunk if data actually exceeds safe payload size
                 max_payload = int(getattr(settings, 'LORA_MAX_PAYLOAD', 255) or 255)
 
@@ -1469,7 +1525,7 @@ async def connectLora():
                                     busy = gpio.value() if gpio and hasattr(gpio, 'value') else False
                                     if not busy:
                                         break
-                                    if time.ticks_diff(time.ticks_ms(), busy_start) > 400:
+                                    if time.ticks_diff(time.ticks.ms(), busy_start) > 400:
                                         break
                                     await asyncio.sleep(0.01)
                             except Exception:
