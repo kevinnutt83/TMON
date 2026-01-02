@@ -851,10 +851,12 @@ async def init_lora():
             try:
                 if getattr(settings, 'NODE_TYPE', 'base') == 'base' and lora is not None:
                     lora.setOperatingMode(lora.MODE_RX)
+                    await debug_print("init_lora: base set MODE_RX after begin", "LORA")
                 elif getattr(settings, 'NODE_TYPE', 'base') == 'remote' and lora is not None:
                     lora.setOperatingMode(lora.MODE_STDBY)
-            except Exception:
-                pass
+                    await debug_print("init_lora: remote set MODE_STDBY after begin", "LORA")
+            except Exception as e_mode:
+                await debug_print(f"init_lora: failed to set initial operating mode: {e_mode}", "ERROR")
             print('[DEBUG] init_lora: completed successfully')
             return True
         if status != 0:
@@ -933,6 +935,10 @@ async def connectLora():
 
     # Respect ENABLE_LORA flag like previous version
     if not getattr(settings, 'ENABLE_LORA', True):
+        try:
+            await debug_print("connectLora: ENABLE_LORA is False, skipping LoRa work", "LORA")
+        except Exception:
+            pass
         return False
 
     # --- INITIALIZE SHARED LOCALS TO AVOID UnboundLocalError ---
@@ -959,6 +965,15 @@ async def connectLora():
     RX_DONE_FLAG = getattr(SX1262, 'RX_DONE', None) if SX1262 is not None else None
 
     now = time.ticks_ms()
+    role = getattr(settings, 'NODE_TYPE', 'base')
+    try:
+        await debug_print(
+            f"connectLora: entry role={role} lora_is_none={lora is None} "
+            f"last_send_ms={_last_send_ms} last_activity_ms={_last_activity_ms}",
+            "LORA",
+        )
+    except Exception:
+        pass
 
     # Avoid hammering radio when recent TX exception occurred
     try:
@@ -973,19 +988,30 @@ async def connectLora():
     if lora is None:
         if _init_failures >= _MAX_INIT_FAILS:
             # Stop hammering if it keeps failing
+            try:
+                await debug_print("connectLora: max init failures reached, not reinitializing", "ERROR")
+            except Exception:
+                pass
             return False
         await debug_print("LoRa: initializing...", "LORA")
         async with pin_lock:
             ok = await init_lora()
         if not ok:
             _init_failures += 1
+            try:
+                await debug_print(f"connectLora: init_lora failed (count={_init_failures})", "ERROR")
+            except Exception:
+                pass
             return False
         _init_failures = 0
         _last_activity_ms = now
+        try:
+            await debug_print("connectLora: init_lora succeeded", "LORA")
+        except Exception:
+            pass
 
     # Choose behavior by role
-    role = getattr(settings, 'NODE_TYPE', 'base')
-
+    # (role already computed above)
     # --- Base: listen for remote messages and persist them ---
     if role == 'base':
         try:
@@ -995,9 +1021,23 @@ async def connectLora():
                 ev = lora._events()
             except Exception:
                 ev = 0
+            try:
+                await debug_print(
+                    f"lora base: _events=0x{ev:X} RX_DONE_FLAG={RX_DONE_FLAG}",
+                    "LORA",
+                )
+            except Exception:
+                pass
             if RX_DONE_FLAG is not None and (ev & RX_DONE_FLAG):
                 try:
                     msg_bytes, err = lora._readData(0)
+                    try:
+                        await debug_print(
+                            f"lora base: _readData err={err} len={len(msg_bytes) if msg_bytes else 0}",
+                            "LORA",
+                        )
+                    except Exception:
+                        pass
                 except Exception as rexc:
                     await debug_print(f"lora: _readData exception: {rexc}", "ERROR")
                     msg_bytes = None; err = -1
@@ -1201,17 +1241,39 @@ async def connectLora():
                                     try:
                                         # send ack (best-effort). Radio may need reconfig, so guard heavily.
                                         try:
+                                            await debug_print(
+                                                f"lora base: sending ACK to {uid}: {ack}",
+                                                "LORA",
+                                            )
+                                        except Exception:
+                                            pass
+                                        try:
                                             # Wait for not busy before mode change
                                             busy_start = time.ticks_ms()
-                                            while lora.gpio.value() and time.ticks_diff(time.ticks_ms(), busy_start) < 2000:
+                                            while lora.gpio.value() and time.ticks_diff(time.ticks.ms(), busy_start) < 2000:
                                                 await asyncio.sleep(0.01)
                                             lora.setOperatingMode(lora.MODE_TX)
+                                            try:
+                                                await debug_print("lora base: MODE_TX set for ACK", "LORA")
+                                            except Exception:
+                                                pass
                                             lora.send(ujson.dumps(ack).encode('utf-8'))
                                             # Wait briefly for TX_DONE then restore RX mode
                                             ack_start = time.ticks_ms()
-                                            while time.ticks_diff(time.ticks_ms(), ack_start) < 2000:
-                                                ev = lora._events()
-                                                if getattr(lora, 'TX_DONE', 0) and (ev & lora.TX_DONE):
+                                            while time.ticks_diff(time.ticks.ms(), ack_start) < 2000:
+                                                ev_ack = 0
+                                                try:
+                                                    ev_ack = lora._events()
+                                                except Exception:
+                                                    ev_ack = 0
+                                                if getattr(lora, 'TX_DONE', 0) and (ev_ack & lora.TX_DONE):
+                                                    try:
+                                                        await debug_print(
+                                                            f"lora base: ACK TX_DONE events=0x{ev_ack:X}",
+                                                            "LORA",
+                                                        )
+                                                    except Exception:
+                                                        pass
                                                     break
                                                 await asyncio.sleep(0.01)
                                             # Wait for not busy after TX_DONE
@@ -1219,14 +1281,31 @@ async def connectLora():
                                             while lora.gpio.value() and time.ticks_diff(time.ticks.ms(), busy_start) < 2000:
                                                 await asyncio.sleep(0.01)
                                             lora.setOperatingMode(lora.MODE_RX)
+                                            try:
+                                                await debug_print("lora base: MODE_RX restored after ACK", "LORA")
+                                            except Exception:
+                                                pass
                                         except Exception:
                                             # try a more direct sequence if the driver has explicit tx API
                                             try:
                                                 lora.setOperatingMode(lora.MODE_TX)
                                                 lora.send(ujson.dumps(ack).encode('utf-8'))
                                                 lora.setOperatingMode(lora.MODE_RX)
-                                            except Exception:
-                                                pass
+                                                try:
+                                                    await debug_print(
+                                                        "lora base: fallback ACK send sequence used",
+                                                        "LORA",
+                                                    )
+                                                except Exception:
+                                                    pass
+                                            except Exception as ack_exc:
+                                                try:
+                                                    await debug_print(
+                                                        f"lora base: ACK send failed: {ack_exc}",
+                                                        "ERROR",
+                                                    )
+                                                except Exception:
+                                                    pass
                                     except Exception:
                                         pass
                                 except Exception:
@@ -1257,10 +1336,30 @@ async def connectLora():
                     due = (_last_send_ms == 0) or (time.ticks_diff(now, _last_send_ms) >= probe_interval_ms)
             else:
                 due = (_last_send_ms == 0) or (time.ticks_diff(now, _last_send_ms) >= probe_interval_ms)
+            try:
+                await debug_print(
+                    f"lora remote: now_epoch={now_epoch} nextLoraSync={next_sync} "
+                    f"last_send_ms={_last_send_ms} due={due}",
+                    "LORA",
+                )
+            except Exception:
+                pass
         except Exception:
             due = (_last_send_ms == 0) or (time.ticks_diff(now, _last_send_ms) >= probe_interval_ms)
 
+        if not due:
+            # Light heartbeat so we know remote is evaluating but not sending yet
+            try:
+                if random.random() < 0.1:
+                    await debug_print("lora remote: not due to send this cycle", "LORA")
+            except Exception:
+                pass
+
         if due:
+            try:
+                await debug_print("lora remote: TX cycle starting (building payload)", "LORA")
+            except Exception:
+                pass
             try:
                 # Build compact payload
                 payload = {
@@ -1452,18 +1551,24 @@ async def connectLora():
                         # wait for TX_DONE and optional ACK same as chunk flow
                         try:
                             tx_start = time.ticks_ms()
-                            while time.ticks_diff(time.ticks_ms(), tx_start) < 10000:
-                                try:
-                                    ev = lora._events()
-                                except Exception:
-                                    ev = 0
-                                if TX_DONE_FLAG is not None and (ev & TX_DONE_FLAG):
-                                    break
-                                await asyncio.sleep(0.01)
+                            await debug_print("lora remote: waiting for TX_DONE", "LORA")
+                        except Exception:
+                            tx_start = time.ticks_ms()
+                        while time.ticks_diff(time.ticks.ms(), tx_start) < 10000:
                             try:
-                                lora.setOperatingMode(lora.MODE_RX)
+                                ev = lora._events()
                             except Exception:
-                                pass
+                                ev = 0
+                            if TX_DONE_FLAG is not None and (ev & TX_DONE_FLAG):
+                                try:
+                                    await debug_print(f"lora remote: TX_DONE events=0x{ev:X}", "LORA")
+                                except Exception:
+                                    pass
+                                break
+                            await asyncio.sleep(0.01)
+                        try:
+                            lora.setOperatingMode(lora.MODE_RX)
+                            await debug_print("lora remote: MODE_RX set after TX", "LORA")
                         except Exception:
                             pass
                         _last_send_ms = time.ticks_ms()
@@ -1471,12 +1576,23 @@ async def connectLora():
                         # Wait for ACK
                         ack_wait_ms = int(getattr(settings, 'LORA_CHUNK_ACK_WAIT_MS', 1500))
                         start_wait = time.ticks_ms()
-                        while time.ticks_diff(time.ticks_ms(), start_wait) < ack_wait_ms:
+                        try:
+                            await debug_print(f"lora remote: waiting for ACK up to {ack_wait_ms} ms", "LORA")
+                        except Exception:
+                            pass
+                        while time.ticks_diff(time.ticks.ms(), start_wait) < ack_wait_ms:
                             try:
                                 ev2 = lora._events()
                             except Exception:
                                 ev2 = 0
                             if RX_DONE_FLAG is not None and (ev2 & RX_DONE_FLAG):
+                                try:
+                                    await debug_print(
+                                        f"lora remote: RX_DONE for ACK events=0x{ev2:X}",
+                                        "LORA",
+                                    )
+                                except Exception:
+                                    pass
                                 try:
                                     msg2, err2 = lora._readData(0)
                                 except Exception:
@@ -1489,6 +1605,13 @@ async def connectLora():
                                             obj2 = ujson.loads(txt2)
                                         except Exception:
                                             obj2 = None
+                                        try:
+                                            await debug_print(
+                                                f"lora remote: ACK payload raw='{txt2[:80]}' parsed={bool(obj2)}",
+                                                "LORA",
+                                            )
+                                        except Exception:
+                                            pass
                                         if isinstance(obj2, dict) and obj2.get('ack') == 'ok':
                                             # Capture signal info
                                             try:
