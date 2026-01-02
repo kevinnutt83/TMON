@@ -364,7 +364,9 @@ STAGED_SETTINGS_KEYS_ALLOW = [
 ]
 # Optional denylist to prevent accidental overrides
 STAGED_SETTINGS_KEYS_DENY = [
-    'FIRMWARE_VERSION','MACHINE_ID'  # never override these from UC
+    'FIRMWARE_VERSION','MACHINE_ID',  # never override these from UC
+    # NEW: never allow remote/staged settings to shrink LoRa payload limits to nonsense values
+    'LORA_MAX_PAYLOAD','LORA_CHUNK_RAW_BYTES','LORA_IDLE_TIMEOUT_MS','LORA_IDLE_TIMEOUT_MS_BASE','LORA_IDLE_TIMEOUT_MS_REMOTE'
 ]
 
 # Command names expected from UC/Admin and their runtime aliases
@@ -522,6 +524,14 @@ LORA_CHUNK_ACK_WAIT_MS = 1500    # ms to wait for per-chunk ACK before retry
 # LoRa payload safety: keep below SX126x limits and leave headroom for driver overhead.
 # Reasonable default chosen to avoid packet-too-long (-4) errors in the field.
 LORA_MAX_PAYLOAD = 160           # was 230; reduce to keep driver from returning -1 for ~200‑byte frames
+
+# NEW: guardrails (runtime clamps happen in lora.py; these are the intended bounds/defaults)
+LORA_MAX_PAYLOAD_MIN = 96
+LORA_MAX_PAYLOAD_MAX = 160
+
+# NEW: role-specific idle timeout defaults (base should not deinit RX radio just for being "idle")
+LORA_IDLE_TIMEOUT_MS_BASE = 0           # 0 = disable idle deinit for base (recommended)
+LORA_IDLE_TIMEOUT_MS_REMOTE = 300000    # 5 minutes for remote
 
 # NEW: control retries for single-frame sends before re-init (helps transient -1 cases)
 LORA_SINGLE_FRAME_RETRIES = 2

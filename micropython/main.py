@@ -35,6 +35,19 @@ try:
 except Exception:
     pass
 
+# NEW: boot-time LoRa config diagnostics (helps catch bad staged/applied overrides like LORA_MAX_PAYLOAD=8)
+try:
+    print(
+        "[BOOT] LoRa cfg:",
+        "NODE_TYPE=", getattr(settings, "NODE_TYPE", None),
+        "LORA_MAX_PAYLOAD=", getattr(settings, "LORA_MAX_PAYLOAD", None),
+        "LORA_CHUNK_RAW_BYTES=", getattr(settings, "LORA_CHUNK_RAW_BYTES", None),
+        "LORA_IDLE_TIMEOUT_MS_BASE=", getattr(settings, "LORA_IDLE_TIMEOUT_MS_BASE", None),
+        "LORA_IDLE_TIMEOUT_MS_REMOTE=", getattr(settings, "LORA_IDLE_TIMEOUT_MS_REMOTE", None),
+    )
+except Exception:
+    pass
+
 script_start_time = time.ticks_ms()
 
 # Detect and persist MACHINE_ID on first boot if missing
