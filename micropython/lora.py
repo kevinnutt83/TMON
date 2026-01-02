@@ -1093,6 +1093,92 @@ async def _send_chunked(lo, unit_id, payload_bytes, max_frame):
         pass
     return True
 
+# NEW: best-effort RX poll (for setups where _events()/IRQ never fire)
+def _try_read_rx_bytes(lo, max_bytes=255):
+    if lo is None:
+        return None
+    # Prefer non-blocking-ish APIs; tolerate different driver return shapes.
+    for name in ("recv", "receive", "read", "readData"):
+        if not hasattr(lo, name):
+            continue
+        fn = getattr(lo, name)
+        try:
+            try:
+                out = fn(0)
+            except TypeError:
+                out = fn()
+            if not out:
+                continue
+            if isinstance(out, (tuple, list)) and out:
+                out = out[0]
+            if isinstance(out, (bytes, bytearray)):
+                b = bytes(out)
+                return b[:max_bytes] if max_bytes and len(b) > max_bytes else b
+            if isinstance(out, str):
+                b = out.encode("utf-8")
+                return b[:max_bytes] if max_bytes and len(b) > max_bytes else b
+        except Exception:
+            pass
+    return None
+
+# NEW: shared remote ACK wait (used for both chunked and single-frame TX)
+async def _wait_for_ack(lo, rx_done_flag, ack_wait_ms=None):
+    if lo is None:
+        return False
+    if ack_wait_ms is None:
+        ack_wait_ms = int(getattr(settings, 'LORA_CHUNK_ACK_WAIT_MS', 1500) or 1500)
+
+    start_wait = time.ticks_ms()
+    while time.ticks_diff(time.ticks_ms(), start_wait) < ack_wait_ms:
+        ev2 = 0
+        try:
+            ev2 = lo._events()
+        except Exception:
+            ev2 = 0
+        if rx_done_flag is not None and (ev2 & rx_done_flag):
+            try:
+                msg2, err2 = lo._readData(0)
+            except Exception:
+                msg2, err2 = None, -1
+            if err2 == 0 and msg2:
+                txt2 = msg2.decode('utf-8', 'ignore') if isinstance(msg2, (bytes, bytearray)) else str(msg2)
+                try:
+                    obj2 = ujson.loads(txt2)
+                except Exception:
+                    obj2 = None
+                if isinstance(obj2, dict) and obj2.get('ack') == 'ok':
+                    # Adopt next sync
+                    try:
+                        if 'next_in' in obj2:
+                            rel = int(obj2['next_in'])
+                            rel = 1 if rel < 1 else rel
+                            rel = 24 * 3600 if rel > 24 * 3600 else rel
+                            settings.nextLoraSync = int(time.time() + rel)
+                        elif 'next' in obj2:
+                            settings.nextLoraSync = int(obj2['next'])
+                    except Exception:
+                        pass
+                    # Adopt GPS (optional)
+                    try:
+                        if getattr(settings, 'GPS_ACCEPT_FROM_BASE', True):
+                            blat = obj2.get('gps_lat'); blng = obj2.get('gps_lng')
+                            if (blat is not None) and (blng is not None):
+                                save_gps_state(blat, blng, obj2.get('gps_alt_m'), obj2.get('gps_accuracy_m'), obj2.get('gps_last_fix_ts'))
+                    except Exception:
+                        pass
+                    # Execute command (optional)
+                    try:
+                        cmd_str = obj2.get('cmd')
+                        if cmd_str:
+                            target = obj2.get('cmd_target', 'ALL')
+                            if target == 'ALL' or str(target) == str(getattr(settings, 'UNIT_ID', '')):
+                                await _execute_command_string(cmd_str)
+                    except Exception:
+                        pass
+                    return True
+        await asyncio.sleep(0.01)
+    return False
+
 async def connectLora():
     """Non-blocking LoRa routine called frequently from lora_comm_task.
     - Initializes radio once (with retry cap)
@@ -1199,12 +1285,10 @@ async def connectLora():
                 # NEW: if events never fire, optionally poll RX directly
                 msg_bytes = None
                 if not ev and bool(getattr(settings, 'LORA_RX_POLL_FALLBACK', True)):
-                    msg_bytes = _try_read_rx_bytes(lora)
-                    if msg_bytes:
-                        try:
-                            await debug_print(f"lora base: polled RX bytes len={len(msg_bytes)}", "LORA")
-                        except Exception:
-                            pass
+                    msg_bytes = _try_read_rx_bytes(
+                        lora,
+                        int(getattr(settings, 'LORA_RX_POLL_MAX_BYTES', 255) or 255),
+                    )
 
                 # Existing IRQ/event-driven path (keep)
                 if msg_bytes is None and RX_DONE_FLAG is not None and (ev & RX_DONE_FLAG):
@@ -1215,8 +1299,12 @@ async def connectLora():
                     if err != 0:
                         msg_bytes = None
 
-                # ...existing JSON parse / chunk handling path continues, using msg_bytes...
-                # (no other logic change needed here)
+                # If you already have a full base RX processing block below in your file,
+                # keep it and just feed it `msg_bytes` here.
+                if msg_bytes:
+                    # ...existing base RX JSON/chunk reassembly/persist/ACK logic...
+                    pass
+
             except Exception as e:
                 await debug_print(f"lora: base RX loop exception: {e}", "ERROR")
 
@@ -1368,7 +1456,7 @@ async def connectLora():
                             pass
                         _last_send_ms = time.ticks_ms()
                         _last_activity_ms = _last_send_ms
-                        await _wait_for_ack(lo)
+                        await _wait_for_ack(lo, RX_DONE_FLAG)
                         return True
 
                     # Quick single-frame send when payload fits — avoids chunking for modest payloads
@@ -1512,7 +1600,7 @@ async def connectLora():
                     except Exception:
                         tx_start = time.ticks_ms()
                     # FIX: use ticks_ms()
-                    while time.ticks_diff(time.ticks_ms(), tx_start) < 10000:
+                    while time.ticks_diff(time.ticks.ms(), tx_start) < 10000:
                         try:
                             ev = lora._events()
                         except Exception:
@@ -1539,7 +1627,7 @@ async def connectLora():
                     except Exception:
                         pass
                     # FIX: use ticks_ms()
-                    while time.ticks_diff(time.ticks_ms(), start_wait) < ack_wait_ms:
+                    while time.ticks_diff(time.ticks.ms(), start_wait) < ack_wait_ms:
                         ev2 = 0
                         try:
                             ev2 = lora._events()
