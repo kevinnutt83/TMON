@@ -1342,6 +1342,8 @@ async def connectLora():
                     await debug_print("lora remote: TX cycle starting (building payload)", "LORA")
                 except Exception:
                     pass
+
+                # FIX: `if sent:` must be inside THIS try, and the except must align with it.
                 try:
                     # Build compact payload
                     payload = {
