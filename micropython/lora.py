@@ -1203,13 +1203,13 @@ async def connectLora():
                                         try:
                                             # Wait for not busy before mode change
                                             busy_start = time.ticks_ms()
-                                            while lora.gpio.value() and time.ticks_diff(time.ticks.ms(), busy_start) < 2000:
+                                            while lora.gpio.value() and time.ticks_diff(time.ticks_ms(), busy_start) < 2000:
                                                 await asyncio.sleep(0.01)
                                             lora.setOperatingMode(lora.MODE_TX)
                                             lora.send(ujson.dumps(ack).encode('utf-8'))
                                             # Wait briefly for TX_DONE then restore RX mode
                                             ack_start = time.ticks_ms()
-                                            while time.ticks_diff(time.ticks.ms(), ack_start) < 2000:
+                                            while time.ticks_diff(time.ticks_ms(), ack_start) < 2000:
                                                 ev = lora._events()
                                                 if getattr(lora, 'TX_DONE', 0) and (ev & lora.TX_DONE):
                                                     break
@@ -1370,7 +1370,7 @@ async def connectLora():
                                     busy = gpio.value() if gpio and hasattr(gpio, 'value') else False
                                     if not busy:
                                         break
-                                    if time.ticks_diff(time.ticks.ms(), busy_start) > 400:
+                                    if time.ticks_diff(time.ticks_ms(), busy_start) > 400:
                                         break
                                     await asyncio.sleep(0.01)
                             except Exception:
@@ -1452,7 +1452,7 @@ async def connectLora():
                         # wait for TX_DONE and optional ACK same as chunk flow
                         try:
                             tx_start = time.ticks_ms()
-                            while time.ticks_diff(time.ticks.ms(), tx_start) < 10000:
+                            while time.ticks_diff(time.ticks_ms(), tx_start) < 10000:
                                 try:
                                     ev = lora._events()
                                 except Exception:
@@ -1471,7 +1471,7 @@ async def connectLora():
                         # Wait for ACK
                         ack_wait_ms = int(getattr(settings, 'LORA_CHUNK_ACK_WAIT_MS', 1500))
                         start_wait = time.ticks_ms()
-                        while time.ticks_diff(time.ticks.ms(), start_wait) < ack_wait_ms:
+                        while time.ticks_diff(time.ticks_ms(), start_wait) < ack_wait_ms:
                             try:
                                 ev2 = lora._events()
                             except Exception:
