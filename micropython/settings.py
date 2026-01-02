@@ -539,3 +539,10 @@ LORA_SINGLE_FRAME_RETRIES = 2
 # NEW: explicit lists for handling chunk send errors
 LORA_CHUNK_SHRINK_CODES = [-4]            # codes that indicate "packet too long" and should trigger chunk size shrink
 LORA_CHUNK_TRANSIENT_CODES = [86, 87, 89] # codes considered transient — retry the chunk rather than shrink
+
+# NEW: Base RX reliability (use driver polling if IRQ/events never fire)
+LORA_RX_POLL_FALLBACK = True     # if True, base will try recv()/receive() each cycle when _events() stays 0
+LORA_RX_POLL_MAX_BYTES = 255     # safety cap when using polling APIs
+
+# NEW: Remote idle operating mode (helps if you want remotes to be able to receive commands/ACKs when not TXing)
+LORA_REMOTE_IDLE_MODE = 'rx'     # 'rx' or 'standby'

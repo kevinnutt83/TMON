@@ -44,6 +44,9 @@ try:
         "LORA_CHUNK_RAW_BYTES=", getattr(settings, "LORA_CHUNK_RAW_BYTES", None),
         "LORA_IDLE_TIMEOUT_MS_BASE=", getattr(settings, "LORA_IDLE_TIMEOUT_MS_BASE", None),
         "LORA_IDLE_TIMEOUT_MS_REMOTE=", getattr(settings, "LORA_IDLE_TIMEOUT_MS_REMOTE", None),
+        # NEW:
+        "LORA_RX_POLL_FALLBACK=", getattr(settings, "LORA_RX_POLL_FALLBACK", None),
+        "LORA_REMOTE_IDLE_MODE=", getattr(settings, "LORA_REMOTE_IDLE_MODE", None),
     )
 except Exception:
     pass
