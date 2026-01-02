@@ -988,11 +988,11 @@ async def _send_chunked(lo, unit_id, payload_bytes, max_frame):
     # Build chunks so that JSON envelope stays <= max_frame.
     # Envelope: {"chunked":1,"unit_id":"...","seq":1,"total":N,"b64":"..."}
     if lo is None:
-        try:
-            await debug_print("lora: chunked send called with lo=None (radio not initialized)", "ERROR")
-        except Exception:
-            pass
         return False
+    ok_codes = set(getattr(settings, 'LORA_CHUNK_OK_CODES', [-1, -2]) or [-1, -2])
+    transient_codes = set(getattr(settings, 'LORA_CHUNK_TRANSIENT_CODES', [86, 87, 89, -705, -707]) or [86, 87, 89, -705, -707])
+    chunk_retries = int(getattr(settings, 'LORA_CHUNK_RETRIES', 2) or 2)
+    tx_done_flag = getattr(SX1262, 'TX_DONE', None) if SX1262 else None
 
     # Compute a conservative raw chunk size given max_frame and base64 overhead.
     try:
@@ -1053,40 +1053,61 @@ async def _send_chunked(lo, unit_id, payload_bytes, max_frame):
             return False
 
         # TX
-        try:
-            lo.setOperatingMode(lo.MODE_TX)
-        except Exception:
-            pass
-        await asyncio.sleep(0.02)
-
-        resp = None
-        try:
-            resp = lo.send(frame)
-        except Exception as e:
-            await debug_print(f"lora: chunk send exception seq={seq}: {e}", "ERROR")
-            return False
-
-        # Normalize resp like your single-frame path
-        st_code = -999
-        try:
-            if isinstance(resp, (tuple, list)) and len(resp) >= 2:
-                size, code = resp[0], resp[1]
-                st_code = 0 if (code == -1 and size == len(frame)) else int(code)
-            elif isinstance(resp, int):
-                st_code = resp
-            else:
-                st_code = int(resp)
-        except Exception:
+        send_ok = False
+        for attempt in range(1, chunk_retries + 1):
+            # Busy wait similar to single-frame path
+            try:
+                busy_start = time.ticks_ms()
+                while True:
+                    gpio = getattr(lo, 'gpio', None)
+                    busy = gpio.value() if gpio and hasattr(gpio, 'value') else False
+                    if not busy or time.ticks_diff(time.ticks_ms(), busy_start) > 400:
+                        break
+                    await asyncio.sleep(0.01)
+            except Exception:
+                pass
+            try:
+                lo.setOperatingMode(lo.MODE_TX)
+            except Exception:
+                pass
+            await asyncio.sleep(0.02)
+            resp = None
+            try:
+                resp = lo.send(frame)
+            except Exception as e:
+                await debug_print(f"lora: chunk send exception seq={seq}: {e}", "ERROR")
+                resp = -999
             st_code = -999
-
-        if st_code != 0:
+            try:
+                if isinstance(resp, (tuple, list)) and len(resp) >= 2:
+                    size, code = resp[0], resp[1]
+                    st_code = 0 if (size == len(frame) and code in ok_codes) else int(code)
+                elif isinstance(resp, int):
+                    st_code = resp
+                else:
+                    st_code = int(resp)
+            except Exception:
+                st_code = -999
+            if st_code == 0:
+                try:
+                    tx_start = time.ticks_ms()
+                    while tx_done_flag and time.ticks_diff(time.ticks_ms(), tx_start) < 800:
+                        ev = lo._events()
+                        if ev & tx_done_flag:
+                            break
+                        await asyncio.sleep(0.01)
+                except Exception:
+                    pass
+                send_ok = True
+                break
+            if st_code in transient_codes:
+                await asyncio.sleep(0.05 + random.random() * 0.05)
+                continue
             await debug_print(f"lora: chunk send failed seq={seq} resp={resp} code={st_code}", "ERROR")
+            break
+        if not send_ok:
             return False
-
-        # Brief settle between chunks
         await asyncio.sleep(0.05)
-
-    # Return to RX for final ACK window
     try:
         lo.setOperatingMode(lo.MODE_RX)
     except Exception:
@@ -1446,18 +1467,20 @@ async def connectLora():
 
                     # If payload doesn't fit, do chunked send (do NOT truncate to garbage)
                     if len(data) > hw_max:
+                        if lora is None:
+                            async with pin_lock:
+                                await init_lora()
                         ok = await _send_chunked(lora, getattr(settings, 'UNIT_ID', ''), data, hw_max)
                         if not ok:
                             await debug_print("lora remote: chunked send failed", "ERROR")
                             return False
-                        # After chunked TX, always go to RX and wait for final ACK (previously missing)
                         try:
-                            lo.setOperatingMode(lo.MODE_RX)
+                            lora.setOperatingMode(lora.MODE_RX)
                         except Exception:
                             pass
                         _last_send_ms = time.ticks_ms()
                         _last_activity_ms = _last_send_ms
-                        await _wait_for_ack(lo, RX_DONE_FLAG)
+                        await _wait_for_ack(lora, RX_DONE_FLAG)
                         return True
 
                     # Quick single-frame send when payload fits — avoids chunking for modest payloads
