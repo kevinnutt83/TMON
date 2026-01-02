@@ -1483,7 +1483,7 @@ async def connectLora():
                                         if not busy:
                                             break
                                         # FIX: use ticks_ms()
-                                        if time.ticks_diff(time.ticks_ms(), busy_start) > 400:
+                                        if time.ticks_diff(time.ticks.ms(), busy_start) > 400:
                                             break
                                         await asyncio.sleep(0.01)
                                 except Exception:
@@ -1592,6 +1592,7 @@ async def connectLora():
                             await asyncio.sleep(0.05)
                             continue
 
+                # FIX: keep this inside the try-block
                 if sent:
                     # wait for TX_DONE and optional ACK, then handle nextLoraSync/GPS/cmd
                     try:
@@ -1704,6 +1705,7 @@ async def connectLora():
                         await asyncio.sleep(0.01)
                     return True
 
+            # FIX: align except with the try above
             except Exception as e:
                 await debug_print(f'lora: remote TX exception: {e}', 'ERROR')
                 try:
