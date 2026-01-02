@@ -1442,22 +1442,27 @@ async def connectLora():
                 else:
                     data = ujson.dumps(payload).encode('utf-8')
 
-                # NEW: inspect/compact payload *before* enforcing max payload
+                # NEW: inspect and clamp payload against hardware-safe maximum
                 try:
                     orig_len = len(data)
                 except Exception:
                     orig_len = 0
-                max_payload = int(getattr(settings, 'LORA_MAX_PAYLOAD', 255) or 255)
+                try:
+                    cfg_max = int(getattr(settings, 'LORA_MAX_PAYLOAD', 255) or 255)
+                except Exception:
+                    cfg_max = 255
+                # SX1262 binding starts returning -1 for ~200-byte frames; keep strict headroom here.
+                hw_max = cfg_max if cfg_max <= 160 else 160
                 try:
                     await debug_print(
-                        f"lora remote: encoded payload len={orig_len} max={max_payload}",
+                        f"lora remote: encoded payload len={orig_len} cfg_max={cfg_max} hw_max={hw_max}",
                         "LORA",
                     )
                 except Exception:
                     pass
 
-                if orig_len > max_payload:
-                    # Try to shrink to a compact essential payload (no encryption/HMAC) so we still transmit something.
+                if orig_len > hw_max:
+                    # Try to shrink to essentials (unencrypted) first
                     try:
                         compact_keys = [
                             'unit_id', 'name', 'ts',
@@ -1484,13 +1489,13 @@ async def connectLora():
                             )
                         except Exception:
                             pass
-                    # As a last resort, hard truncate to max_payload bytes (base will treat as raw if JSON is broken)
+                    # Hard truncate to hardware-safe max if still too large
                     try:
-                        if len(data) > max_payload:
-                            data = data[:max_payload]
+                        if len(data) > hw_max:
+                            data = data[:hw_max]
                             try:
                                 await debug_print(
-                                    f"lora remote: payload still >max, truncating to {len(data)}",
+                                    f"lora remote: payload still >hw_max, truncating to {len(data)}",
                                     "WARN",
                                 )
                             except Exception:
@@ -1498,21 +1503,17 @@ async def connectLora():
                     except Exception:
                         pass
 
-                # NEW: only chunk if data actually exceeds safe payload size
-                max_payload = int(getattr(settings, 'LORA_MAX_PAYLOAD', 255) or 255)
-
-                # Quick single-frame send when payload fits — avoids tiny chunk floods for modest payloads
-                if len(data) <= max_payload:
+                # Quick single-frame send when payload fits — avoids chunking for modest payloads
+                if len(data) <= hw_max:
                     # Ensure radio present
                     if lora is None:
-                        await debug_print ("lora: reinit before single-frame send", "LORA")
+                        await debug_print("lora: reinit before single-frame send", "LORA")
                         async with pin_lock:
                             ok = await init_lora()
                         if not ok:
                             await debug_print("lora: single-frame send aborted, radio unavailable", "ERROR")
                             return False
 
-                    # NEW: ensure TX mode and wait for not-busy; perform bounded retry loop on transient codes
                     single_retries = int(getattr(settings, 'LORA_SINGLE_FRAME_RETRIES', 2))
                     sent = False
                     for sr in range(1, single_retries + 1):
@@ -1551,7 +1552,7 @@ async def connectLora():
                             try:
                                 resp = lora.send(data)
                             except Exception as send_exc:
-                                await debug_print(f"lora: single-frame send() raised: {send_exc}", 'ERROR')
+                                await debug_print(f"lora: single-frame send() raised: {send_exc}", "ERROR")
                                 resp = -999
 
                             # normalize status
@@ -1582,29 +1583,36 @@ async def connectLora():
                                 ev_post = lora._events()
                             except Exception:
                                 ev_post = None
-                            await debug_print(f"lora: single-frame resp={resp} code={st_code} events_post={ev_post}", "LORA")
+                            await debug_print(
+                                f"lora: single-frame resp={resp} code={st_code} events_post={ev_post}",
+                                "LORA",
+                            )
 
                             if st_code == 0:
                                 sent = True
                                 break
 
-                            # On transient negative or known transient codes, retry locally first
-                            transient_codes = set(getattr(settings, 'LORA_CHUNK_TRANSIENT_CODES', [86, 87, 89]) or [86,87,89])
+                            transient_codes = set(getattr(settings, 'LORA_CHUNK_TRANSIENT_CODES', [86, 87, 89]) or [86, 87, 89])
                             if (st_code in transient_codes) or (st_code == -1) or (st_code == -999):
-                                await debug_print(f"lora: single-frame transient err {st_code} (attempt {sr}/{single_retries})", "WARN")
+                                await debug_print(
+                                    f"lora: single-frame transient err {st_code} (attempt {sr}/{single_retries})",
+                                    "WARN",
+                                )
                                 await asyncio.sleep(0.06 + random.random() * 0.06)
-                                # loop to retry
                                 continue
 
-                            # otherwise treat as severe and break to re-init handling below
                             await debug_print(f"lora: single-frame error {st_code} (fatal)", "ERROR")
                             break
-                        except Exception:
+                        except Exception as loop_exc:
+                            try:
+                                await debug_print(f"lora: single-frame loop exception on attempt {sr}: {loop_exc}", "ERROR")
+                            except Exception:
+                                pass
                             await asyncio.sleep(0.05)
                             continue
 
                     if sent:
-                        # wait for TX_DONE and optional ACK same as chunk flow
+                        # wait for TX_DONE and optional ACK, then handle nextLoraSync/GPS/cmd
                         try:
                             tx_start = time.ticks_ms()
                             await debug_print("lora remote: waiting for TX_DONE", "LORA")

@@ -521,7 +521,7 @@ LORA_CHUNK_MAX_RETRIES = 3       # attempts per chunk before deferring
 LORA_CHUNK_ACK_WAIT_MS = 1500    # ms to wait for per-chunk ACK before retry
 # LoRa payload safety: keep below SX126x limits and leave headroom for driver overhead.
 # Reasonable default chosen to avoid packet-too-long (-4) errors in the field.
-LORA_MAX_PAYLOAD = 230
+LORA_MAX_PAYLOAD = 160           # was 230; reduce to keep driver from returning -1 for ~200‑byte frames
 
 # NEW: control retries for single-frame sends before re-init (helps transient -1 cases)
 LORA_SINGLE_FRAME_RETRIES = 2
