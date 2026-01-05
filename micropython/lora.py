@@ -400,18 +400,18 @@ def _effective_lora_max_payload(role):
     return eff
 
 # NEW: base RX helper (different SX1262 ports/drivers vary; try common "start RX" entrypoints)
-def _ensure_base_rx(lo):
-    if lo is None:
+def _ensure_base_rx(lora):
+    if lora is None:
         return
     try:
-        lo.setOperatingMode(lo.MODE_RX)
+        lora.setOperatingMode(lora.MODE_RX)
     except Exception:
         pass
     # Try to explicitly start RX if driver requires it
     for m in ('startReceive', 'start_receive', 'receive', 'recv', 'listen', 'startRx', 'setRx'):
         try:
-            if hasattr(lo, m):
-                fn = getattr(lo, m)
+            if hasattr(lora, m):
+                fn = getattr(lora, m)
                 try:
                     fn()
                 except TypeError:
@@ -425,12 +425,12 @@ def _ensure_base_rx(lo):
             pass
 
 # NEW: remote TX helper for chunked send (uses base-side reassembly already present)
-async def _send_chunked(lo, unit_id, payload_bytes, max_frame):
+async def _send_chunked(lora, unit_id, payload_bytes, max_frame):
     # Build chunks so that JSON envelope stays <= max_frame.
     # Envelope: {"chunked":1,"unit_id":"...","seq":1,"total":N,"b64":"..."}
-    if lo is None:
+    if lora is None:
         try:
-            await debug_print("lora: chunked send called with lo=None (radio not initialized)", "ERROR")
+            await debug_print("lora: chunked send called with lora=None (radio not initialized)", "ERROR")
         except Exception:
             pass
         return False
@@ -495,14 +495,14 @@ async def _send_chunked(lo, unit_id, payload_bytes, max_frame):
 
         # TX
         try:
-            lo.setOperatingMode(lo.MODE_TX)
+            lora.setOperatingMode(lora.MODE_TX)
         except Exception:
             pass
         await asyncio.sleep(0.02)
 
         resp = None
         try:
-            resp = lo.send(frame)
+            resp = lora.send(frame)
         except Exception as e:
             await debug_print(f"lora: chunk send exception seq={seq}: {e}", "ERROR")
             return False
@@ -529,20 +529,20 @@ async def _send_chunked(lo, unit_id, payload_bytes, max_frame):
 
     # Return to RX for final ACK window
     try:
-        lo.setOperatingMode(lo.MODE_RX)
+        lora.setOperatingMode(lora.MODE_RX)
     except Exception:
         pass
     return True
 
 # NEW: best-effort RX poll (for setups where _events()/IRQ never fire)
-def _try_read_rx_bytes(lo, max_bytes=255):
-    if lo is None:
+def _try_read_rx_bytes(lora, max_bytes=255):
+    if lora is None:
         return None
     # Prefer non-blocking-ish APIs; tolerate different driver return shapes.
     for name in ("recv", "receive", "read", "readData"):
-        if not hasattr(lo, name):
+        if not hasattr(lora, name):
             continue
-        fn = getattr(lo, name)
+        fn = getattr(lora, name)
         try:
             try:
                 out = fn(0)
@@ -563,8 +563,8 @@ def _try_read_rx_bytes(lo, max_bytes=255):
     return None
 
 # NEW: shared remote ACK wait (used for both chunked and single-frame TX)
-async def _wait_for_ack(lo, rx_done_flag, ack_wait_ms=None):
-    if lo is None:
+async def _wait_for_ack(lora, rx_done_flag, ack_wait_ms=None):
+    if lora is None:
         return False
     if ack_wait_ms is None:
         ack_wait_ms = int(getattr(settings, 'LORA_CHUNK_ACK_WAIT_MS', 1500) or 1500)
@@ -573,12 +573,12 @@ async def _wait_for_ack(lo, rx_done_flag, ack_wait_ms=None):
     while time.ticks_diff(time.ticks_ms(), start_wait) < ack_wait_ms:
         ev2 = 0
         try:
-            ev2 = lo._events()
+            ev2 = lora._events()
         except Exception:
             ev2 = 0
         if rx_done_flag is not None and (ev2 & rx_done_flag):
             try:
-                msg2, err2 = lo._readData(0)
+                msg2, err2 = lora._readData(0)
             except Exception:
                 msg2, err2 = None, -1
             if err2 == 0 and msg2:
@@ -821,6 +821,11 @@ async def connectLora():
             if time.ticks_diff(now, _last_send_ms) < check_in_ms:
                 return True  # Initialized and not yet due
 
+            # Ensure radio still present before TX
+            if lora is None:
+                await debug_print("lora: remote TX aborted (radio not initialized)", "ERROR")
+                return False
+
             # NEW: collect payload and send chunked if needed
             data = {}
             try:
@@ -839,14 +844,17 @@ async def connectLora():
                 # Single-frame send
                 frame = ujson.dumps(data).encode('utf-8')
                 try:
-                    lo.setOperatingMode(lo.MODE_TX)
+                    lora.setOperatingMode(lora.MODE_TX)
                 except Exception:
                     pass
                 await asyncio.sleep(0.02)
 
                 resp = None
                 try:
-                    resp = lo.send(frame)
+                    if lora is None:
+                        await debug_print("lora: remote TX aborted (radio lost before send)", "ERROR")
+                        return False
+                    resp = lora.send(frame)
                 except Exception as e:
                     await debug_print(f"lora: remote TX exception: {e}", "ERROR")
                     return False
@@ -869,6 +877,9 @@ async def connectLora():
                     return False
 
             # Wait for ACK (shared for chunked/single)
+            if lora is None:
+                await debug_print("lora: remote TX aborted (radio lost before ACK wait)", "ERROR")
+                return False
             ack_ok = await _wait_for_ack(lora, RX_DONE_FLAG)
 
             # Update last send (even on failure to avoid thrashing)
@@ -892,8 +903,14 @@ async def connectLora():
 
 file_lock = asyncio.Lock()
 pin_lock = asyncio.Lock()
-# NEW: prevent re-entrancy / mid-send races if connectLora ever gets called from more than one task
 _connect_lock = asyncio.Lock()
+
+# --- NEW: initialize LoRa state globals ---
+_MAX_INIT_FAILS = getattr(settings, 'LORA_MAX_INIT_FAILS', 3) or 3
+_init_failures = 0
+_last_send_ms = 0
+_last_activity_ms = 0
+_last_tx_exception_ms = 0
 
 lora = None
 
@@ -1117,12 +1134,12 @@ async def init_lora():
         _deinit_spi_if_any(lora)
         # Guarded begin: retry and attempt to attach a machine.SPI instance if the driver
         # throws an AttributeError referencing a missing 'write' (common when SPI wasn't bound).
-        async def _attempt_begin(lo, attempts=3):
+        async def _attempt_begin(lora, attempts=3):
             # Try proactively attaching a shim (helps drivers that expect spi already present)
             try:
                 shim = _attach_spi_shim()
-                if shim and not getattr(lo, 'spi', None):
-                    lo.spi = shim
+                if shim and not getattr(lora, 'spi', None):
+                    lora.spi = shim
                     await debug_print("lora: pre-attached machine.SPI shim before begin attempts", "LORA")
             except Exception:
                 pass
@@ -1131,7 +1148,7 @@ async def init_lora():
             for i in range(attempts):
                 try:
                     # Preferred / full signature first
-                    status = lo.begin(
+                    status = lora.begin(
                         freq=settings.FREQ, bw=settings.BW, sf=settings.SF, cr=settings.CR,
                         syncWord=settings.SYNC_WORD, power=settings.POWER,
                         currentLimit=settings.CURRENT_LIMIT, preambleLength=settings.PREAMBLE_LEN,
@@ -1149,7 +1166,7 @@ async def init_lora():
                     try:
                         shim = _attach_spi_shim()
                         if shim:
-                            lo.spi = shim
+                            lora.spi = shim
                             await debug_print("lora: attached machine.SPI shim and retrying begin", "LORA")
                         else:
                             await debug_print("lora: no usable machine.SPI instance available", "ERROR")
@@ -1171,13 +1188,13 @@ async def init_lora():
                     tried = False
                     try:
                         # Minimal kwargs
-                        status = lo.begin(freq=settings.FREQ, power=settings.POWER)
+                        status = lora.begin(freq=settings.FREQ, power=settings.POWER)
                         return status
                     except Exception:
                         tried = True
                     try:
                         # Positional: freq, bw, sf
-                        status = lo.begin(settings.FREQ, settings.BW, settings.SF)
+                        status = lora.begin(settings.FREQ, settings.BW, settings.SF)
                         return status
                     except Exception:
                         pass
@@ -1193,8 +1210,8 @@ async def init_lora():
                                     # Try keyword form
                                     lo2 = SX1262(spi=shim, cs=settings.CS_PIN, irq=settings.IRQ_PIN, rst=settings.RST_PIN, busy=settings.BUSY_PIN)
                                 # swap and retry begin
-                                lo = lo2
-                                status = lo.begin(freq=settings.FREQ)
+                                lora = lo2
+                                status = lora.begin(freq=settings.FREQ)
                                 return status
                             except Exception as re:
                                 await debug_print(f"lora: re-instantiation with SPI shim failed: {re}", "ERROR")
