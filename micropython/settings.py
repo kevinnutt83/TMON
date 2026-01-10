@@ -38,7 +38,7 @@ FIELD_DATA_DELIVERED_LOG = LOG_DIR + '/field_data.delivered.log'
 # Then other vars
 UNIT_ID = "None"              # 6-digit assigned by Admin after first check-in (persisted locally)
 UNIT_Name = "No Device Name"    # Human-friendly name (provisioned)
-NODE_TYPE = 'base'             # 'base','wifi', or 'remote'; base can host LoRa network & WiFi; remote uses LoRa primarily
+NODE_TYPE = 'remote'             # 'base','wifi', or 'remote'; base can host LoRa network & WiFi; remote uses LoRa primarily
 #NODE_TYPE = 'remote'          # Uncomment for remote role during flashing
 
 FIRMWARE_VERSION = "v2.06.0"    # Bumped from v2.05.0
@@ -130,7 +130,7 @@ nextLoraSync = 300                      # Remote next absolute sync epoch (assig
 LORA_SYNC_WINDOW = 2                    # seconds of minimum spacing between remote sync slots
 LORA_SLOT_SPACING_S = LORA_SYNC_WINDOW  # alias for clarity
 LORA_CHECK_IN_MINUTES = 5               # Default check-in cadence in minutes used when no explicit nextLoraSync is set
-LORA_INIT_RETRY_BACKOFF_S = 1      # small delay between init retries
+LORA_INIT_RETRY_BACKOFF_S = 5      # small delay between init retries (increased)
 LORA_HARD_REBOOT_ERR_CODES = [-2]  # error codes that trigger hard reboot (e.g., ERR_CHIP_NOT_FOUND)
 LORA_ERR_PERSIST_REBOOTS = 2       # if persists this many times across reboots, stop rebooting and log
 ERROR_STATE_FILE = LOG_DIR + '/last_error.state'  # persist last error and reboot counters
@@ -148,13 +148,13 @@ BW = 125.0
 SF = 7
 CR = 5                                    # stronger coding rate (4/7)
 SYNC_WORD = 0xF4
-POWER = 20                                # default transmit power reduced for regulatory safety
+POWER = 14                                # default transmit power reduced for regulatory safety
 CURRENT_LIMIT = 140.0
 PREAMBLE_LEN = 12
 CRC_ON = True
 TCXO_VOLTAGE = 1.8  # Confirmed for Waveshare SX1262
 USE_LDO = True
-CAD_SYMBOLS = 8  # Symbols for CAD detection before TX
+CAD_SYMBOLS = 4  # Symbols for CAD detection before TX (reduced for faster checks)
 # NEW: CAD backoff when channel busy (seconds)
 LORA_CAD_BACKOFF_S = 2       # Base backoff when CAD indicates busy
 LORA_CAD_BACKOFF_MAX_S = 30  # Maximum randomized backoff applied

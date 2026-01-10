@@ -118,6 +118,12 @@ try:
 except Exception:
     pass
 
+# NEW: confirm effective role at boot
+try:
+    print(f"[BOOT] Effective NODE_TYPE: {getattr(settings, 'NODE_TYPE', None)}")
+except Exception:
+    pass
+
 def get_script_runtime():
     now = time.ticks_ms()
     return (now - script_start_time) // 1000

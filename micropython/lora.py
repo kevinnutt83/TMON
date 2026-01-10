@@ -820,13 +820,7 @@ async def connectLora():
             check_in_ms = getattr(settings, 'LORA_CHECK_IN_MINUTES', 5) * 60 * 1000
             if time.ticks_diff(now, _last_send_ms) < check_in_ms:
                 return True  # Initialized and not yet due
-
-            # Ensure radio still present before TX
-            if lora is None:
-                await debug_print("lora: remote TX aborted (radio not initialized)", "ERROR")
-                return False
-
-            # NEW: collect payload and send chunked if needed
+            # Remote: collect data and send
             data = {}
             try:
                 data = sdata.toDict()
@@ -841,7 +835,6 @@ async def connectLora():
                 chunk_sent = await _send_chunked(lora, settings.UNIT_ID, payload, max_frame)
             else:
                 chunk_sent = False
-                # Single-frame send
                 frame = ujson.dumps(data).encode('utf-8')
                 try:
                     lora.setOperatingMode(lora.MODE_TX)
@@ -856,7 +849,15 @@ async def connectLora():
                         return False
                     resp = lora.send(frame)
                 except Exception as e:
-                    await debug_print(f"lora: remote TX exception: {e}", "ERROR")
+                    err_msg = f"lora: remote TX aborted ({type(e).__name__}: {e})"
+                    await debug_print(err_msg, "ERROR")
+                    try:
+                        write_lora_log(f"[ERROR] {err_msg}")
+                        print(f"[DEBUG] TX exception type: {type(e).__name__}, msg: {e}")
+                    except Exception:
+                        pass
+                    # Force re-init next loop
+                    lora = None
                     return False
 
                 # Normalize resp
