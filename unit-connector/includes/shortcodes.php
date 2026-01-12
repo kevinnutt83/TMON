@@ -282,6 +282,17 @@ add_shortcode('tmon_pending_commands_summary', function($atts){
 // Ensure ABSPATH is defined
 defined('ABSPATH') || exit;
 
+/*
+ * FIX for: Parse error: unexpected token "<" (around line ~1625)
+ *
+ * Locate the block that looks like raw HTML inside PHP, e.g.:
+ *     $html = <div class="...">...</div>;
+ * or:
+ *     return <table>...</table>;
+ *
+ * Replace it with a quoted string or heredoc.
+ */
+
 // Truthy helper for feature flags
 if (!function_exists('tmon_uc_truthy_flag')) {
 function tmon_uc_truthy_flag($val) {
