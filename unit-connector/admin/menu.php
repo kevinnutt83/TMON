@@ -21,12 +21,7 @@ add_action('admin_menu', function() {
         include __DIR__ . '/../templates/remote_shell.php';
     });
     add_submenu_page('tmon_devices', 'Customers', 'Customers', 'manage_options', 'tmon-uc-customers', function(){
-        $tpl = __DIR__ . '/../templates/customers.php';
-        if (file_exists($tpl)) {
-            include $tpl;
-        } else {
-            echo '<div class="wrap"><h2>Customers</h2><p><em>Template missing: templates/customers.php</em></p></div>';
-        }
+        include __DIR__ . '/../templates/customers.php';
     });
 });
 

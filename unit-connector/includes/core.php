@@ -1,30 +1,4 @@
 <?php
-if (!defined('ABSPATH')) exit;
-
-/**
- * Core helpers loaded very early.
- * Keep this file dependency-light: it must load before REST route registration.
- */
-
-if (!function_exists('tmon_uc_device_permission_cb')) {
-	function tmon_uc_device_permission_cb(\WP_REST_Request $req): bool {
-		// Admin users always allowed.
-		if (is_user_logged_in()) {
-			return current_user_can('manage_options');
-		}
-
-		// Device-key auth (optional, but prevents open polling if configured)
-		$k = $req->get_header('x-tmon-device-key');
-		$expected = (string) get_option('tmon_uc_device_key', '');
-		if ($expected !== '' && is_string($k) && hash_equals($expected, $k)) {
-			return true;
-		}
-
-		// Allow integrators to open this temporarily (e.g., during bring-up).
-		return (bool) apply_filters('tmon_uc_allow_unauth_device_rest', false, $req);
-	}
-}
-
 // REST API for company and device management
 add_action('rest_api_init', function() {
     register_rest_route('tmon/v1', '/company', [
@@ -149,7 +123,7 @@ add_action('wp_ajax_tmon_uc_relay_command', function(){
     }
     $ok = tmon_uc_enqueue_relay_job($unit_id, $relay_num, $state, $runtime_min);
     if ($ok) wp_send_json_success(['scheduled' => false]);
-    wp_send_json_error(['message' => 'enqueue failed', 'unit_id' => $unit_id, 'relay_num' => $relay_num, 'state' => $state, 'runtime_min' => $runtime_min], 500);
+    wp_send_json_error(['message' => 'enqueue failed'], 500);
 });
 
 // Helper to enqueue a toggle_relay job into device command queue

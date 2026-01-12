@@ -282,17 +282,6 @@ add_shortcode('tmon_pending_commands_summary', function($atts){
 // Ensure ABSPATH is defined
 defined('ABSPATH') || exit;
 
-/*
- * FIX for: Parse error: unexpected token "<" (around line ~1625)
- *
- * Locate the block that looks like raw HTML inside PHP, e.g.:
- *     $html = <div class="...">...</div>;
- * or:
- *     return <table>...</table>;
- *
- * Replace it with a quoted string or heredoc.
- */
-
 // Truthy helper for feature flags
 if (!function_exists('tmon_uc_truthy_flag')) {
 function tmon_uc_truthy_flag($val) {
@@ -540,22 +529,22 @@ add_shortcode('tmon_device_status', function($atts) {
                 var d = res.data || {}; var msg = d.scheduled ? "Scheduled" : "Queued"; alert(msg+" relay "+relay+" "+state+ (runtime_min? (" for "+runtime_min+" min"): "") );
             }).catch(function(){ btn.textContent = old; btn.disabled=false; alert("Network error"); });
          });
-        // Auto-refresh device status tbody periodically (admin context)
-        (function(){
-            var tbl = document.getElementById("tmon-device-status-table");
-            if (!tbl) return;
-            function refreshStatus(){
-                fetch("'.esc_js($ajax_url).'?action=tmon_device_status_refresh&_wpnonce='.$status_nonce.'")
-                    .then(r=>r.json()).then(function(res){
-                        if (res && res.success && res.data && res.data.html){
-                            var tb = tbl.tBodies[0];
-                            if (tb) tb.innerHTML = res.data.html;
-                        }
-                    }).catch(function(e){ console.error("status refresh", e); });
-            }
-            refreshStatus();
-            setInterval(refreshStatus, 30000);
-        })();
++        // Auto-refresh device status tbody periodically (admin context)
++        (function(){
++            var tbl = document.getElementById("tmon-device-status-table");
++            if (!tbl) return;
++            function refreshStatus(){
++                fetch("'.esc_js($ajax_url).'?action=tmon_device_status_refresh&_wpnonce='.$status_nonce.'")
++                    .then(r=>r.json()).then(function(res){
++                        if (res && res.success && res.data && res.data.html){
++                            var tb = tbl.tBodies[0];
++                            if (tb) tb.innerHTML = res.data.html;
++                        }
++                    }).catch(function(e){ console.error("status refresh", e); });
++            }
++            refreshStatus();
++            setInterval(refreshStatus, 30000);
++        })();
      })();</script>';
     return ob_get_clean();
 });
@@ -1587,170 +1576,3 @@ add_action('wp_ajax_tmon_device_status_refresh', function(){
     wp_send_json_success(['html'=>$html]);
 });
 add_action('wp_ajax_nopriv_tmon_device_status_refresh', function(){ wp_send_json_error(['message'=>'not_authenticated'], 403); });
-
-// AJAX: Relay control (used by device status buttons)
-add_action('wp_ajax_tmon_uc_relay_command', function() {
-	check_ajax_referer('tmon_uc_relay', 'nonce');
-	if (!current_user_can('manage_options') && !current_user_can('edit_tmon_units')) {
-		wp_send_json_error(['message' => 'forbidden'], 403);
-	}
-	$unit   = sanitize_text_field($_POST['unit_id'] ?? '');
-	$relay  = max(1, intval($_POST['relay_num'] ?? 0));
-	$state  = (($_POST['state'] ?? '') === 'off') ? 'off' : 'on';
-	$runtime_min = max(0, intval($_POST['runtime_min'] ?? 0));
-	$schedule_at = sanitize_text_field($_POST['schedule_at'] ?? '');
-
-	if (!$unit) wp_send_json_error(['message' => 'unit_id required'], 400);
-
-	$payload = ['relay' => $relay, 'state' => $state];
-	if ($runtime_min > 0) { $payload['duration_s'] = $runtime_min * 60; }
-	if ($schedule_at) {
-		$ts = strtotime($schedule_at);
-		if ($ts) { $payload['schedule_at'] = $ts; }
-	}
-
-	// Prefer hub forwarder; fallback to local queue
-	if (function_exists('tmon_uc_send_command')) {
-		$res = tmon_uc_send_command($unit, '', 'relay_ctrl', $payload);
-		if (is_wp_error($res)) {
-			wp_send_json_error(['message' => $res->get_error_message()], 500);
-		}
-	} else {
-		global $wpdb;
-		$table = $wpdb->prefix . 'tmon_device_commands';
-		$wpdb->insert($table, [
-			'device_id'  => $unit,
-			'command'    => 'relay_ctrl',
-			'params'     => wp_json_encode($payload),
-			'status'     => 'queued',
-			'created_at' => current_time('mysql'),
-			'updated_at' => current_time('mysql'),
-		]);
-	}
-	wp_send_json_success(['success' => true, 'scheduled' => !empty($payload['schedule_at'])]);
-});
-add_action('wp_ajax_nopriv_tmon_uc_relay_command', function() {
-	wp_send_json_error(['message' => 'not_authenticated'], 403);
-});
-
-<?php
-if (!defined('ABSPATH')) exit;
-
-/**
- * Shortcodes + AJAX refresh endpoints used by dashboards/Elementor blocks.
- * Keep handlers defensive: never fatal inside a shortcode render.
- */
-
-if (!function_exists('tmon_uc_register_shortcodes')) {
-	function tmon_uc_register_shortcodes(): void {
-		// Common shortcode names (keep aliases so older pages continue to work).
-		add_shortcode('tmon_device_status_table', 'tmon_uc_sc_device_status_table');
-		add_shortcode('tmon_device_status', 'tmon_uc_sc_device_status_table');
-
-		add_shortcode('tmon_pending_commands_summary', 'tmon_uc_sc_pending_commands_summary');
-	}
-	add_action('init', 'tmon_uc_register_shortcodes');
-}
-
-if (!function_exists('tmon_uc_sc_device_status_table')) {
-	function tmon_uc_sc_device_status_table($atts = []): string {
-		try {
-			// If the codebase already has a richer renderer, prefer it.
-			if (function_exists('tmon_uc_render_device_status_table')) {
-				return (string) tmon_uc_render_device_status_table($atts);
-			}
-
-			// Minimal fallback so the shortcode never hard-fails (Elementor-safe).
-			ob_start();
-			?>
-			<div class="tmon-device-status-wrap" data-tmon-ajax="tmon_device_status_refresh">
-				<div class="tmon-text-muted">Device status is loading…</div>
-			</div>
-			<?php
-			// Lightweight inline refresher (no extra asset dependencies).
-			wp_enqueue_script('jquery');
-			wp_add_inline_script('jquery', "
-				(function($){
-					function refreshTMON(){
-						$('.tmon-device-status-wrap').each(function(){
-							var el = this;
-							$.get(window.ajaxurl || '" . esc_js(admin_url('admin-ajax.php')) . "', { action: 'tmon_device_status_refresh' })
-								.done(function(r){ if(r && r.success && r.data && r.data.html){ $(el).html(r.data.html); } });
-						});
-					}
-					$(document).ready(refreshTMON);
-				})(jQuery);
-			");
-			return (string) ob_get_clean();
-		} catch (\Throwable $e) {
-			return '<div class="tmon-text-muted">Device status unavailable.</div>';
-		}
-	}
-}
-
-if (!function_exists('tmon_uc_sc_pending_commands_summary')) {
-	function tmon_uc_sc_pending_commands_summary($atts = []): string {
-		try {
-			if (function_exists('tmon_uc_render_pending_commands_summary')) {
-				return (string) tmon_uc_render_pending_commands_summary($atts);
-			}
-
-			ob_start();
-			?>
-			<div class="tmon-pending-commands-wrap" data-tmon-ajax="tmon_pending_commands_summary_refresh">
-				<div class="tmon-text-muted">Pending commands are loading…</div>
-			</div>
-			<?php
-			wp_enqueue_script('jquery');
-			wp_add_inline_script('jquery', "
-				(function($){
-					function refreshTMONCmds(){
-						$('.tmon-pending-commands-wrap').each(function(){
-							var el = this;
-							$.get(window.ajaxurl || '" . esc_js(admin_url('admin-ajax.php')) . "', { action: 'tmon_pending_commands_summary_refresh' })
-								.done(function(r){ if(r && r.success && r.data && r.data.html){ $(el).html(r.data.html); } });
-						});
-					}
-					$(document).ready(refreshTMONCmds);
-				})(jQuery);
-			");
-			return (string) ob_get_clean();
-		} catch (\Throwable $e) {
-			return '<div class="tmon-text-muted">Pending commands unavailable.</div>';
-		}
-	}
-}
-
-/**
- * AJAX refresh endpoints (front-end pages may be unauthenticated).
- * Return JSON with an 'html' fragment so existing JS can drop it in.
- */
-if (!function_exists('tmon_uc_ajax_device_status_refresh')) {
-	function tmon_uc_ajax_device_status_refresh(): void {
-		// If the project already has an implementation, defer to it.
-		if (function_exists('tmon_device_status_refresh')) {
-			tmon_device_status_refresh();
-			return;
-		}
-
-		// Minimal safe output.
-		$html = '<div class="tmon-text-muted">No device status renderer is currently registered.</div>';
-		wp_send_json_success(['html' => $html]);
-	}
-	add_action('wp_ajax_tmon_device_status_refresh', 'tmon_uc_ajax_device_status_refresh');
-	add_action('wp_ajax_nopriv_tmon_device_status_refresh', 'tmon_uc_ajax_device_status_refresh');
-}
-
-if (!function_exists('tmon_uc_ajax_pending_commands_summary_refresh')) {
-	function tmon_uc_ajax_pending_commands_summary_refresh(): void {
-		if (function_exists('tmon_pending_commands_summary_refresh')) {
-			tmon_pending_commands_summary_refresh();
-			return;
-		}
-
-		$html = '<div class="tmon-text-muted">No pending-commands renderer is currently registered.</div>';
-		wp_send_json_success(['html' => $html]);
-	}
-	add_action('wp_ajax_tmon_pending_commands_summary_refresh', 'tmon_uc_ajax_pending_commands_summary_refresh');
-	add_action('wp_ajax_nopriv_tmon_pending_commands_summary_refresh', 'tmon_uc_ajax_pending_commands_summary_refresh');
-}

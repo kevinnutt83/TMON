@@ -73,9 +73,3 @@
 .tmon-status-ok { color: #2ecc71; }
 .tmon-status-err { color: #e74c3c; }
 .tmon-status-info { color: #6b7280; }
-
-.tmon-relay-btn.is-loading {
-	opacity: 0.6;
-	cursor: default;
-	pointer-events: none;
-}

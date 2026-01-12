@@ -10,23 +10,21 @@ function uc_devices_ensure_table() {
 	global $wpdb;
 	$table = $wpdb->prefix . 'tmon_uc_devices';
 	$charset = $wpdb->get_charset_collate();
-	$sql = "CREATE TABLE IF NOT EXISTS {$table} (
+	$sql = "CREATE TABLE IF NOT EXISTS $table (
 		id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
-		unit_id VARCHAR(64) NOT NULL,
-		machine_id VARCHAR(64) DEFAULT '',
-		unit_name VARCHAR(191) DEFAULT '',
-		role VARCHAR(64) DEFAULT '',
-		assigned TINYINT(1) DEFAULT 0,
+		unit_id VARCHAR(16) NOT NULL,
+		machine_id VARCHAR(64) NOT NULL,
+		unit_name VARCHAR(128) NULL,
+		role VARCHAR(32) NULL,
+		assigned TINYINT(1) NOT NULL DEFAULT 0,
+		wordpress_api_url VARCHAR(255) NULL,
 		staged_settings LONGTEXT NULL,
 		staged_at DATETIME NULL,
-		wordpress_api_url VARCHAR(255) DEFAULT '',
-		updated_at DATETIME NOT NULL,
+		updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 		PRIMARY KEY (id),
-		UNIQUE KEY uniq_unit (unit_id),
-		KEY idx_machine (machine_id),
-		KEY idx_assigned (assigned),
-		KEY idx_updated (updated_at)
-	) {$charset};";
+		UNIQUE KEY uniq_unit_machine (unit_id, machine_id),
+		KEY idx_assigned (assigned)
+	) $charset;";
 	require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 	dbDelta($sql);
 }
@@ -35,19 +33,16 @@ function uc_devices_upsert_row($row) {
 	global $wpdb;
 	uc_devices_ensure_table();
 	$table = $wpdb->prefix . 'tmon_uc_devices';
-	$unit_id    = isset($row['unit_id']) ? sanitize_text_field($row['unit_id']) : '';
-	$machine_id = isset($row['machine_id']) ? sanitize_text_field($row['machine_id']) : '';
-	if (!$unit_id) { return false; }
+	$unit_id   = isset($row['unit_id']) ? sanitize_text_field($row['unit_id']) : '';
+	$machine_id= isset($row['machine_id']) ? sanitize_text_field($row['machine_id']) : '';
+	if (!$unit_id || !$machine_id) { return false; }
 	$wpdb->replace($table, array(
-		'unit_id'           => $unit_id,
-		'machine_id'        => $machine_id,
-		'unit_name'         => isset($row['unit_name']) ? sanitize_text_field($row['unit_name']) : '',
-		'role'              => isset($row['role']) ? sanitize_text_field($row['role']) : '',
-		'assigned'          => !empty($row['assigned']) ? 1 : 0,
-		'staged_settings'   => isset($row['staged_settings']) ? $row['staged_settings'] : null,
-		'staged_at'         => isset($row['staged_at']) ? $row['staged_at'] : null,
+		'unit_id' => $unit_id,
+		'machine_id' => $machine_id,
+		'unit_name' => isset($row['unit_name']) ? sanitize_text_field($row['unit_name']) : '',
+		'role'      => isset($row['role']) ? sanitize_text_field($row['role']) : '',
+		'assigned'  => !empty($row['assigned']) ? 1 : 0,
 		'wordpress_api_url' => home_url(),
-		'updated_at'        => current_time('mysql', true),
 	));
 	return true;
 }
@@ -99,16 +94,10 @@ function uc_devices_refresh_from_admin() {
 	if (is_wp_error($resp)) { return array(); }
 	$data = json_decode(wp_remote_retrieve_body($resp), true);
 	if (!is_array($data)) { return array(); }
+	global $wpdb;
+	$table = $wpdb->prefix . 'tmon_uc_devices';
 	foreach ($data as $d) {
-		uc_devices_upsert_row(array(
-			'unit_id'         => $d['unit_id'] ?? '',
-			'machine_id'      => $d['machine_id'] ?? '',
-			'unit_name'       => $d['unit_name'] ?? '',
-			'role'            => $d['role'] ?? '',
-			'assigned'        => $d['assigned'] ?? ($d['assigned_to_uc'] ?? 0),
-			'staged_settings' => isset($d['staged_settings']) ? wp_json_encode($d['staged_settings']) : null,
-			'staged_at'       => $d['staged_at'] ?? null,
-		));
+		uc_devices_upsert_row($d);
 	}
 	return $data;
 }
@@ -121,18 +110,13 @@ function uc_devices_refresh_from_local_mirror() {
 	global $wpdb;
 	uc_devices_ensure_table();
 	$source = $wpdb->prefix . 'tmon_devices';
-	if (!$wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $source))) { return 0; }
-	$cols = $wpdb->get_col("SHOW COLUMNS FROM {$source}", 0);
-	$has_role = in_array('role', $cols, true);
-	$has_assigned = in_array('assigned_to_uc', $cols, true);
-	$select = "unit_id, machine_id, unit_name" . ($has_role ? ", role" : "") . ($has_assigned ? ", assigned_to_uc AS assigned" : "");
-	$rows = $wpdb->get_results("SELECT {$select} FROM {$source} ORDER BY id DESC LIMIT 500", ARRAY_A);
+	if (!$wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $source))) {
+		return 0;
+	}
+	$rows = $wpdb->get_results("SELECT unit_id, machine_id, unit_name, role, assigned_to_uc AS assigned FROM {$source} ORDER BY id DESC LIMIT 500", ARRAY_A);
 	$count = 0;
 	foreach ($rows as $r) {
-		if (!isset($r['role'])) { $r['role'] = ''; }
-		if (!isset($r['assigned'])) { $r['assigned'] = 0; }
-		uc_devices_upsert_row($r);
-		$count++;
+		if (uc_devices_upsert_row($r)) { $count++; }
 	}
 	return $count;
 }

@@ -609,16 +609,6 @@ add_action('rest_api_init', function() {
             return rest_ensure_response(['ok'=>true,'customers'=>$rows]);
         }
     ]);
-
-    register_rest_route('tmon-admin/v1', '/customers', [
-        'methods' => 'GET',
-        'permission_callback' => 'tmon_admin_rest_permission_cb',
-        'callback' => function () {
-            return new \WP_REST_Response([
-                'customers' => tmon_admin_get_customers(),
-            ], 200);
-        },
-    ]);
 });
 
 // Authorization: decide if a device is allowed to post data (fee-for-service, provisioning, etc.)
