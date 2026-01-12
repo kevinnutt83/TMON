@@ -387,45 +387,60 @@ add_action('rest_api_init', function() {
         }
     ]);
 
-	register_rest_route('tmon/v1', '/device/commands', [
-		'methods' => 'GET',
-		'permission_callback' => 'tmon_uc_device_permission_cb',
-		'callback' => function (\WP_REST_Request $req) {
-			$unit_id = sanitize_text_field((string) $req->get_param('unit_id'));
-			if ($unit_id === '') {
-				return new \WP_REST_Response(['error' => 'missing_unit_id'], 400);
-			}
+	if (!function_exists('tmon_uc_register_rest_routes')) {
+		function tmon_uc_register_rest_routes(): void {
+			$perm = function (\WP_REST_Request $req): bool {
+				// Use the guaranteed core callback.
+				return function_exists('tmon_uc_device_permission_cb') ? tmon_uc_device_permission_cb($req) : false;
+			};
 
-			// Pop exactly one command per poll (device loop already polls frequently).
-			$cmd = tmon_uc_dequeue_next_command($unit_id);
-			return new \WP_REST_Response([
-				'unit_id' => $unit_id,
-				'server_time' => time(),
-				'commands' => $cmd ? [$cmd] : [],
-			], 200);
-		},
-	]);
+			register_rest_route('tmon/v1', '/device/commands', [
+				'methods' => 'GET',
+				'permission_callback' => $perm,
+				'callback' => function (\WP_REST_Request $req) {
+					$unit_id = sanitize_text_field((string) $req->get_param('unit_id'));
+					if ($unit_id === '') {
+						return new \WP_REST_Response(['error' => 'missing_unit_id'], 400);
+					}
 
-	register_rest_route('tmon/v1', '/device/command-complete', [
-		'methods' => 'POST',
-		'permission_callback' => 'tmon_uc_device_permission_cb',
-		'callback' => function (\WP_REST_Request $req) {
-			$body = $req->get_json_params();
-			if (!is_array($body)) $body = [];
+					if (!function_exists('tmon_uc_dequeue_next_command')) {
+						return new \WP_REST_Response(['error' => 'commands_module_missing'], 500);
+					}
 
-			$unit_id = sanitize_text_field((string)($body['unit_id'] ?? ''));
-			$cmd_id  = sanitize_text_field((string)($body['command_id'] ?? ''));
+					$cmd = tmon_uc_dequeue_next_command($unit_id);
 
-			if ($unit_id === '' || $cmd_id === '') {
-				return new \WP_REST_Response(['error' => 'missing_params'], 400);
-			}
-
-			tmon_uc_mark_command_complete($unit_id, $cmd_id, [
-				'status'  => sanitize_text_field((string)($body['status'] ?? 'ok')),
-				'message' => sanitize_text_field((string)($body['message'] ?? '')),
+					return new \WP_REST_Response([
+						'unit_id' => $unit_id,
+						'server_time' => time(),
+						'commands' => $cmd ? [$cmd] : [],
+					], 200);
+				},
 			]);
 
-			return new \WP_REST_Response(['ok' => true], 200);
-		},
-	]);
+			register_rest_route('tmon/v1', '/device/command-complete', [
+				'methods' => 'POST',
+				'permission_callback' => $perm,
+				'callback' => function (\WP_REST_Request $req) {
+					$body = $req->get_json_params();
+					if (!is_array($body)) $body = [];
+
+					$unit_id = sanitize_text_field((string)($body['unit_id'] ?? ''));
+					$cmd_id  = sanitize_text_field((string)($body['command_id'] ?? ''));
+
+					if ($unit_id === '' || $cmd_id === '') {
+						return new \WP_REST_Response(['error' => 'missing_params'], 400);
+					}
+
+					if (function_exists('tmon_uc_mark_command_complete')) {
+						tmon_uc_mark_command_complete($unit_id, $cmd_id, [
+							'status'  => sanitize_text_field((string)($body['status'] ?? 'ok')),
+							'message' => sanitize_text_field((string)($body['message'] ?? '')),
+						]);
+					}
+
+					return new \WP_REST_Response(['ok' => true], 200);
+				},
+			]);
+		}
+	}
 });

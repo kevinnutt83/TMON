@@ -1,16 +1,43 @@
 <?php
 if (!defined('ABSPATH')) exit;
 
-define('TMON_UC_VERSION', '0.1.0');
-define('TMON_UC_DIR', __DIR__);
-define('TMON_UC_URL', plugin_dir_url(__FILE__));
+/**
+ * Plugin Name: TMON Unit Connector
+ * Description: Connects TMON devices to WordPress.
+ * Version: 0.1.0
+ * Author: TMON
+ */
 
+// Ensure constants exist (safe even if already defined).
+if (!defined('TMON_UC_VERSION')) define('TMON_UC_VERSION', '0.1.0');
+if (!defined('TMON_UC_DIR')) define('TMON_UC_DIR', __DIR__);
+if (!defined('TMON_UC_URL')) define('TMON_UC_URL', plugin_dir_url(__FILE__));
+
+// Load core first so shared callbacks (like REST permission) always exist.
+require_once TMON_UC_DIR . '/includes/core.php';
+
+// Load remaining modules (guarded by require_once).
+require_once TMON_UC_DIR . '/includes/settings.php';
+require_once TMON_UC_DIR . '/includes/schema.php';
 require_once TMON_UC_DIR . '/includes/commands.php';
 require_once TMON_UC_DIR . '/includes/api.php';
+require_once TMON_UC_DIR . '/includes/v2-api.php';
+require_once TMON_UC_DIR . '/includes/shortcodes.php';
+require_once TMON_UC_DIR . '/includes/provisioning.php';
+require_once TMON_UC_DIR . '/includes/field-data-api.php';
+require_once TMON_UC_DIR . '/includes/hierarchy-api.php';
+require_once TMON_UC_DIR . '/includes/hub-config.php';
+require_once TMON_UC_DIR . '/includes/notify.php';
+require_once TMON_UC_DIR . '/includes/audit.php';
+require_once TMON_UC_DIR . '/includes/ai.php';
 
+// Register REST routes (both v1/v2 if present)
 add_action('rest_api_init', function () {
 	if (function_exists('tmon_uc_register_rest_routes')) {
 		tmon_uc_register_rest_routes();
+	}
+	if (function_exists('tmon_uc_register_v2_rest_routes')) {
+		tmon_uc_register_v2_rest_routes();
 	}
 });
 

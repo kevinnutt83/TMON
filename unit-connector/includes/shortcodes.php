@@ -1621,3 +1621,125 @@ add_action('wp_ajax_tmon_uc_relay_command', function() {
 add_action('wp_ajax_nopriv_tmon_uc_relay_command', function() {
 	wp_send_json_error(['message' => 'not_authenticated'], 403);
 });
+
+<?php
+if (!defined('ABSPATH')) exit;
+
+/**
+ * Shortcodes + AJAX refresh endpoints used by dashboards/Elementor blocks.
+ * Keep handlers defensive: never fatal inside a shortcode render.
+ */
+
+if (!function_exists('tmon_uc_register_shortcodes')) {
+	function tmon_uc_register_shortcodes(): void {
+		// Common shortcode names (keep aliases so older pages continue to work).
+		add_shortcode('tmon_device_status_table', 'tmon_uc_sc_device_status_table');
+		add_shortcode('tmon_device_status', 'tmon_uc_sc_device_status_table');
+
+		add_shortcode('tmon_pending_commands_summary', 'tmon_uc_sc_pending_commands_summary');
+	}
+	add_action('init', 'tmon_uc_register_shortcodes');
+}
+
+if (!function_exists('tmon_uc_sc_device_status_table')) {
+	function tmon_uc_sc_device_status_table($atts = []): string {
+		try {
+			// If the codebase already has a richer renderer, prefer it.
+			if (function_exists('tmon_uc_render_device_status_table')) {
+				return (string) tmon_uc_render_device_status_table($atts);
+			}
+
+			// Minimal fallback so the shortcode never hard-fails (Elementor-safe).
+			ob_start();
+			?>
+			<div class="tmon-device-status-wrap" data-tmon-ajax="tmon_device_status_refresh">
+				<div class="tmon-text-muted">Device status is loading…</div>
+			</div>
+			<?php
+			// Lightweight inline refresher (no extra asset dependencies).
+			wp_enqueue_script('jquery');
+			wp_add_inline_script('jquery', "
+				(function($){
+					function refreshTMON(){
+						$('.tmon-device-status-wrap').each(function(){
+							var el = this;
+							$.get(window.ajaxurl || '" . esc_js(admin_url('admin-ajax.php')) . "', { action: 'tmon_device_status_refresh' })
+								.done(function(r){ if(r && r.success && r.data && r.data.html){ $(el).html(r.data.html); } });
+						});
+					}
+					$(document).ready(refreshTMON);
+				})(jQuery);
+			");
+			return (string) ob_get_clean();
+		} catch (\Throwable $e) {
+			return '<div class="tmon-text-muted">Device status unavailable.</div>';
+		}
+	}
+}
+
+if (!function_exists('tmon_uc_sc_pending_commands_summary')) {
+	function tmon_uc_sc_pending_commands_summary($atts = []): string {
+		try {
+			if (function_exists('tmon_uc_render_pending_commands_summary')) {
+				return (string) tmon_uc_render_pending_commands_summary($atts);
+			}
+
+			ob_start();
+			?>
+			<div class="tmon-pending-commands-wrap" data-tmon-ajax="tmon_pending_commands_summary_refresh">
+				<div class="tmon-text-muted">Pending commands are loading…</div>
+			</div>
+			<?php
+			wp_enqueue_script('jquery');
+			wp_add_inline_script('jquery', "
+				(function($){
+					function refreshTMONCmds(){
+						$('.tmon-pending-commands-wrap').each(function(){
+							var el = this;
+							$.get(window.ajaxurl || '" . esc_js(admin_url('admin-ajax.php')) . "', { action: 'tmon_pending_commands_summary_refresh' })
+								.done(function(r){ if(r && r.success && r.data && r.data.html){ $(el).html(r.data.html); } });
+						});
+					}
+					$(document).ready(refreshTMONCmds);
+				})(jQuery);
+			");
+			return (string) ob_get_clean();
+		} catch (\Throwable $e) {
+			return '<div class="tmon-text-muted">Pending commands unavailable.</div>';
+		}
+	}
+}
+
+/**
+ * AJAX refresh endpoints (front-end pages may be unauthenticated).
+ * Return JSON with an 'html' fragment so existing JS can drop it in.
+ */
+if (!function_exists('tmon_uc_ajax_device_status_refresh')) {
+	function tmon_uc_ajax_device_status_refresh(): void {
+		// If the project already has an implementation, defer to it.
+		if (function_exists('tmon_device_status_refresh')) {
+			tmon_device_status_refresh();
+			return;
+		}
+
+		// Minimal safe output.
+		$html = '<div class="tmon-text-muted">No device status renderer is currently registered.</div>';
+		wp_send_json_success(['html' => $html]);
+	}
+	add_action('wp_ajax_tmon_device_status_refresh', 'tmon_uc_ajax_device_status_refresh');
+	add_action('wp_ajax_nopriv_tmon_device_status_refresh', 'tmon_uc_ajax_device_status_refresh');
+}
+
+if (!function_exists('tmon_uc_ajax_pending_commands_summary_refresh')) {
+	function tmon_uc_ajax_pending_commands_summary_refresh(): void {
+		if (function_exists('tmon_pending_commands_summary_refresh')) {
+			tmon_pending_commands_summary_refresh();
+			return;
+		}
+
+		$html = '<div class="tmon-text-muted">No pending-commands renderer is currently registered.</div>';
+		wp_send_json_success(['html' => $html]);
+	}
+	add_action('wp_ajax_tmon_pending_commands_summary_refresh', 'tmon_uc_ajax_pending_commands_summary_refresh');
+	add_action('wp_ajax_nopriv_tmon_pending_commands_summary_refresh', 'tmon_uc_ajax_pending_commands_summary_refresh');
+}
