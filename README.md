@@ -174,3 +174,30 @@ If you see OTA hash mismatches, regenerate the manifest (recommended workflow):
 - Run locally: python scripts/generate_manifest.py
 - To create an HMAC signature file (manifest.json.sig), set OTA_MANIFEST_HMAC_SECRET in env before running.
 - There's a manual GitHub Action: .github/workflows/compute-manifest.yml (run "Run workflow" and it will compute and commit the manifest).
+
+# TMON
+
+This repo contains:
+
+- `micropython/` device firmware (wifi/base/remote roles)
+- `unit-connector/` WordPress plugin (customer site) for device management + telemetry ingest
+- `tmon-admin/` WordPress plugin (hub site) for global registry + customers + UC associations
+
+## Relay controls (Unit Connector admin)
+
+Relay buttons queue a device command:
+
+1. UC admin UI buttons (`.tmon-relay-btn`) call `admin-ajax.php?action=tmon_uc_toggle_relay`
+2. UC enqueues a `toggle_relay` command for `unit_id`
+3. Device polls `GET /wp-json/tmon/v1/device/commands?unit_id=...`
+4. Device executes (firmware: `relay.toggle_relay(relay_num, state, runtime)`)
+5. Device ACKs via `POST /wp-json/tmon/v1/device/command-complete`
+
+## Dev notes
+
+- WordPress REST endpoints:
+  - UC: `/wp-json/tmon/v1/device/commands`
+  - UC: `/wp-json/tmon/v1/device/command-complete`
+  - Admin: `/wp-json/tmon-admin/v1/customers` (admin-only placeholder)
+
+See `micropython/README.md` for firmware behavior.

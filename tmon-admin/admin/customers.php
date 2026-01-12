@@ -179,3 +179,14 @@ function tmon_admin_customers_page(){
     echo '</div>';
 }
 
+if (!defined('ABSPATH')) exit;
+
+function tmon_admin_render_customers_page(): void {
+	$template = TMON_ADMIN_DIR . '/templates/customers.php';
+	if (file_exists($template)) {
+		require $template;
+		return;
+	}
+	echo '<div class="wrap"><h1>Customers</h1><p>Missing template: templates/customers.php</p></div>';
+}
+

@@ -229,3 +229,31 @@ Testing & QA
     - Graph legend cookie persistence and toggling across AJAX refreshes.
     - Frost/heat watch shortcode output.
   - Add manual QA checklist for release.
+
+# TMON TODO
+
+## Fixed / Implemented
+- Unit Connector relay buttons now enqueue `toggle_relay` commands via admin-ajax.
+- Unit Connector REST endpoints added:
+  - `GET /wp-json/tmon/v1/device/commands`
+  - `POST /wp-json/tmon/v1/device/command-complete`
+- TMON Admin “Customers” template added (basic CRUD; option-backed model).
+- Admin REST: `GET /wp-json/tmon-admin/v1/customers` (admin-only placeholder).
+
+## Next (required by original scope)
+- Secure UC↔Admin shared key lifecycle:
+  - Admin generates “Shared Key for UC Integration”
+  - UC can request/refresh/register key via Admin endpoints (button-driven)
+  - Use shared key to authorize UC→Admin lookups
+- Device registry on Admin (machine_id ↔ 6-digit unit_id), and confirm-applied pipeline:
+  - Ensure unit_id is exactly 6 digits and immutable association with machine_id
+  - Ensure Admin is single source of truth across all UCs
+- Customer hierarchy (Admin):
+  - locations → zones → groups models + assignment of devices to customers
+  - UC pulls only devices assigned to its customer profile
+- UC telemetry ingest + parsing:
+  - Base node field_data.log lines include remotes and must be distinguishable on UC
+- UI polish:
+  - show relay state (from latest sdata) and disable invalid actions when device offline
+- Documentation:
+  - fill in root `COMMANDS.md`, plugin READMEs, and hub/UC install guides
