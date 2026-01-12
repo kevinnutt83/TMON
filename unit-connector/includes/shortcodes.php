@@ -1576,3 +1576,48 @@ add_action('wp_ajax_tmon_device_status_refresh', function(){
     wp_send_json_success(['html'=>$html]);
 });
 add_action('wp_ajax_nopriv_tmon_device_status_refresh', function(){ wp_send_json_error(['message'=>'not_authenticated'], 403); });
+
+// AJAX: Relay control (used by device status buttons)
+add_action('wp_ajax_tmon_uc_relay_command', function() {
+	check_ajax_referer('tmon_uc_relay', 'nonce');
+	if (!current_user_can('manage_options') && !current_user_can('edit_tmon_units')) {
+		wp_send_json_error(['message' => 'forbidden'], 403);
+	}
+	$unit   = sanitize_text_field($_POST['unit_id'] ?? '');
+	$relay  = max(1, intval($_POST['relay_num'] ?? 0));
+	$state  = (($_POST['state'] ?? '') === 'off') ? 'off' : 'on';
+	$runtime_min = max(0, intval($_POST['runtime_min'] ?? 0));
+	$schedule_at = sanitize_text_field($_POST['schedule_at'] ?? '');
+
+	if (!$unit) wp_send_json_error(['message' => 'unit_id required'], 400);
+
+	$payload = ['relay' => $relay, 'state' => $state];
+	if ($runtime_min > 0) { $payload['duration_s'] = $runtime_min * 60; }
+	if ($schedule_at) {
+		$ts = strtotime($schedule_at);
+		if ($ts) { $payload['schedule_at'] = $ts; }
+	}
+
+	// Prefer hub forwarder; fallback to local queue
+	if (function_exists('tmon_uc_send_command')) {
+		$res = tmon_uc_send_command($unit, '', 'relay_ctrl', $payload);
+		if (is_wp_error($res)) {
+			wp_send_json_error(['message' => $res->get_error_message()], 500);
+		}
+	} else {
+		global $wpdb;
+		$table = $wpdb->prefix . 'tmon_device_commands';
+		$wpdb->insert($table, [
+			'device_id'  => $unit,
+			'command'    => 'relay_ctrl',
+			'params'     => wp_json_encode($payload),
+			'status'     => 'queued',
+			'created_at' => current_time('mysql'),
+			'updated_at' => current_time('mysql'),
+		]);
+	}
+	wp_send_json_success(['success' => true, 'scheduled' => !empty($payload['schedule_at'])]);
+});
+add_action('wp_ajax_nopriv_tmon_uc_relay_command', function() {
+	wp_send_json_error(['message' => 'not_authenticated'], 403);
+});
