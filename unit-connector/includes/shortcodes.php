@@ -529,22 +529,22 @@ add_shortcode('tmon_device_status', function($atts) {
                 var d = res.data || {}; var msg = d.scheduled ? "Scheduled" : "Queued"; alert(msg+" relay "+relay+" "+state+ (runtime_min? (" for "+runtime_min+" min"): "") );
             }).catch(function(){ btn.textContent = old; btn.disabled=false; alert("Network error"); });
          });
-+        // Auto-refresh device status tbody periodically (admin context)
-+        (function(){
-+            var tbl = document.getElementById("tmon-device-status-table");
-+            if (!tbl) return;
-+            function refreshStatus(){
-+                fetch("'.esc_js($ajax_url).'?action=tmon_device_status_refresh&_wpnonce='.$status_nonce.'")
-+                    .then(r=>r.json()).then(function(res){
-+                        if (res && res.success && res.data && res.data.html){
-+                            var tb = tbl.tBodies[0];
-+                            if (tb) tb.innerHTML = res.data.html;
-+                        }
-+                    }).catch(function(e){ console.error("status refresh", e); });
-+            }
-+            refreshStatus();
-+            setInterval(refreshStatus, 30000);
-+        })();
+        // Auto-refresh device status tbody periodically (admin context)
+        (function(){
+            var tbl = document.getElementById("tmon-device-status-table");
+            if (!tbl) return;
+            function refreshStatus(){
+                fetch("'.esc_js($ajax_url).'?action=tmon_device_status_refresh&_wpnonce='.$status_nonce.'")
+                    .then(r=>r.json()).then(function(res){
+                        if (res && res.success && res.data && res.data.html){
+                            var tb = tbl.tBodies[0];
+                            if (tb) tb.innerHTML = res.data.html;
+                        }
+                    }).catch(function(e){ console.error("status refresh", e); });
+            }
+            refreshStatus();
+            setInterval(refreshStatus, 30000);
+        })();
      })();</script>';
     return ob_get_clean();
 });
