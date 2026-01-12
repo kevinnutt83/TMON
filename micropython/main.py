@@ -29,25 +29,9 @@ from wifi import disable_wifi, connectToWifiNetwork, wifi_rssi_monitor
 
 checkLogDirectory()
 
-# Apply any any previously applied settings snapshot on boot
+# Apply any previously applied settings snapshot on boot
 try:
     load_applied_settings_on_boot()
-except Exception:
-    pass
-
-# NEW: boot-time LoRa config diagnostics (helps catch bad staged/applied overrides like LORA_MAX_PAYLOAD=8)
-try:
-    print(
-        "[BOOT] LoRa cfg:",
-        "NODE_TYPE=", getattr(settings, "NODE_TYPE", None),
-        "LORA_MAX_PAYLOAD=", getattr(settings, "LORA_MAX_PAYLOAD", None),
-        "LORA_CHUNK_RAW_BYTES=", getattr(settings, "LORA_CHUNK_RAW_BYTES", None),
-        "LORA_IDLE_TIMEOUT_MS_BASE=", getattr(settings, "LORA_IDLE_TIMEOUT_MS_BASE", None),
-        "LORA_IDLE_TIMEOUT_MS_REMOTE=", getattr(settings, "LORA_IDLE_TIMEOUT_MS_REMOTE", None),
-        # NEW:
-        "LORA_RX_POLL_FALLBACK=", getattr(settings, "LORA_RX_POLL_FALLBACK", None),
-        "LORA_REMOTE_IDLE_MODE=", getattr(settings, "LORA_REMOTE_IDLE_MODE", None),
-    )
 except Exception:
     pass
 
@@ -115,12 +99,6 @@ try:
     _nt = load_persisted_node_type()
     if _nt:
         settings.NODE_TYPE = _nt
-except Exception:
-    pass
-
-# NEW: confirm effective role at boot
-try:
-    print(f"[BOOT] Effective NODE_TYPE: {getattr(settings, 'NODE_TYPE', None)}")
 except Exception:
     pass
 

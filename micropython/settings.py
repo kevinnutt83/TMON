@@ -145,10 +145,10 @@ LORA_ENCRYPT_ENABLED = True         # Optional payload encryption (ChaCha20 stre
 LORA_ENCRYPT_SECRET = ''  
 FREQ = 915.0                               # Regional frequency (EU example); change per deployment
 BW = 125.0
-SF = 7
-CR = 5                                    # stronger coding rate (4/7)
+SF = 12
+CR = 7                                    # stronger coding rate (4/7)
 SYNC_WORD = 0xF4
-POWER = 20                                # default transmit power reduced for regulatory safety
+POWER = 14                                # default transmit power reduced for regulatory safety
 CURRENT_LIMIT = 140.0
 PREAMBLE_LEN = 12
 CRC_ON = True
@@ -290,7 +290,7 @@ OTA_MANIFEST_SIG_URL = OTA_MANIFEST_URL + '.sig'  # Optional detached HMAC signa
 OTA_MANIFEST_HMAC_SECRET = ''             # If set, verify manifest with HMAC(secret, manifest_bytes)
 # Added OTA safety toggles
 OTA_ALLOW_DOWNGRADE = False              # block downgrades to avoid stale hashes
-OTA_SKIP_OLDER_VERSION = True            # skip applies when repo version <= current
+OTA_SKIP_OLDER_VERSION = True            # skip applies when repo version < current
 OTA_ABORT_ON_HASH_MISMATCH = False       # keep main loop running; do not abort on mismatch
 OTA_RETRY_ON_HASH_MISMATCH = True        # retry download when hash fails
 OTA_MAX_HASH_FAILURES = 3                # bounded retries before giving up
@@ -358,15 +358,13 @@ STAGED_SETTINGS_KEYS_ALLOW = [
     'FIELD_DATA_HMAC_ENABLED','FIELD_DATA_HMAC_SECRET',
     'DEBUG','DEBUG_PROVISION','DEBUG_LORA','DEBUG_WIFI','DEBUG_OTA',
     # Added keys to support device feature toggles and engine/pin control
-    'ENGINE_ENABLED','ENGINE_FORCE_DISABLED','ENABLE_sensorBME280',
+    'ENGINE_ENABLED','ENGINE_FORCE_DISABLED','ENABLE_SENSORBME280',
     'RELAY_PIN1','RELAY_PIN2','RELAY_RUNTIME_LIMITS',
     'ENABLE_OLED','UNIT_Name'  # ensure these are accepted when staged
 ]
 # Optional denylist to prevent accidental overrides
 STAGED_SETTINGS_KEYS_DENY = [
-    'FIRMWARE_VERSION','MACHINE_ID',  # never override these from UC
-    # NEW: never allow remote/staged settings to shrink LoRa payload limits to nonsense values
-    'LORA_MAX_PAYLOAD','LORA_CHUNK_RAW_BYTES','LORA_IDLE_TIMEOUT_MS','LORA_IDLE_TIMEOUT_MS_BASE','LORA_IDLE_TIMEOUT_MS_REMOTE'
+    'FIRMWARE_VERSION','MACHINE_ID'  # never override these from UC
 ]
 
 # Command names expected from UC/Admin and their runtime aliases
@@ -518,20 +516,12 @@ def get_display_settings():
     }
 
 # LoRa chunked transfer parameters (remote -> base)
-LORA_CHUNK_RAW_BYTES = 100        # raw bytes per chunk before base64 & JSON overhead (tune so final msg <= 230)
+LORA_CHUNK_RAW_BYTES = 150        # raw bytes per chunk before base64 & JSON overhead (tune so final msg <= 250)
 LORA_CHUNK_MAX_RETRIES = 3       # attempts per chunk before deferring
 LORA_CHUNK_ACK_WAIT_MS = 1500    # ms to wait for per-chunk ACK before retry
 # LoRa payload safety: keep below SX126x limits and leave headroom for driver overhead.
 # Reasonable default chosen to avoid packet-too-long (-4) errors in the field.
-LORA_MAX_PAYLOAD = 160           # was 230; reduce to keep driver from returning -1 for ~200‑byte frames
-
-# NEW: guardrails (runtime clamps happen in lora.py; these are the intended bounds/defaults)
-LORA_MAX_PAYLOAD_MIN = 96
-LORA_MAX_PAYLOAD_MAX = 160
-
-# NEW: role-specific idle timeout defaults (base should not deinit RX radio just for being "idle")
-LORA_IDLE_TIMEOUT_MS_BASE = 0           # 0 = disable idle deinit for base (recommended)
-LORA_IDLE_TIMEOUT_MS_REMOTE = 300000    # 5 minutes for remote
+LORA_MAX_PAYLOAD = 255
 
 # NEW: control retries for single-frame sends before re-init (helps transient -1 cases)
 LORA_SINGLE_FRAME_RETRIES = 2
@@ -539,10 +529,3 @@ LORA_SINGLE_FRAME_RETRIES = 2
 # NEW: explicit lists for handling chunk send errors
 LORA_CHUNK_SHRINK_CODES = [-4]            # codes that indicate "packet too long" and should trigger chunk size shrink
 LORA_CHUNK_TRANSIENT_CODES = [86, 87, 89] # codes considered transient — retry the chunk rather than shrink
-
-# NEW: Base RX reliability (use driver polling if IRQ/events never fire)
-LORA_RX_POLL_FALLBACK = True     # if True, base will try recv()/receive() each cycle when _events() stays 0
-LORA_RX_POLL_MAX_BYTES = 255     # safety cap when using polling APIs
-
-# NEW: Remote idle operating mode (helps if you want remotes to be able to receive commands/ACKs when not TXing)
-LORA_REMOTE_IDLE_MODE = 'rx'     # 'rx' or 'standby'
