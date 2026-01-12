@@ -192,22 +192,6 @@ def save_gps_state(lat=None, lng=None, alt=None, acc=None, ts=None):
     except Exception:
         pass
 
-# Import all WordPress REST API functions from wprest.py (guarded - tolerate missing names)
-try:
-    import wprest as _wp
-    register_with_wp = getattr(_wp, 'register_with_wp', None)
-    send_data_to_wp = getattr(_wp, 'send_data_to_wp', None)
-    send_settings_to_wp = getattr(_wp, 'send_settings_to_wp', None)
-    fetch_settings_from_wp = getattr(_wp, 'fetch_settings_from_wp', None)
-    send_file_to_wp = getattr(_wp, 'send_file_to_wp', None)
-    request_file_from_wp = getattr(_wp, 'request_file_from_wp', None)
-    heartbeat_ping = getattr(_wp, 'heartbeat_ping', None)
-    poll_ota_jobs = getattr(_wp, 'poll_ota_jobs', None)
-    handle_ota_job = getattr(_wp, 'handle_ota_job', None)
-except Exception:
-    register_with_wp = send_data_to_wp = send_settings_to_wp = fetch_settings_from_wp = None
-    send_file_to_wp = request_file_from_wp = heartbeat_ping = poll_ota_jobs = handle_ota_job = None
-
 # Periodic sync with WordPress (settings, data, OTA jobs)
 async def periodic_wp_sync():
     if settings.NODE_TYPE != 'base':
@@ -787,21 +771,15 @@ async def init_lora():
             # Configure non-blocking operation and verify it succeeded
             rc = lora.setBlockingCallback(False)
             if rc != 0:
-                try:
-                    from _sx126x import ERROR as SXERR
-                    err_name = SXERR.get(rc, 'UNKNOWN')
-                except Exception:
-                    err_name = 'UNKNOWN'
                 await debug_print(f"lora: setBlockingCallback fail {rc}", "ERROR")
-                await log_error(f"LoRa setBlockingCallback failed: {rc} ({err_name})")
+                await log_error(f"LoRa setBlockingCallback failed: {rc}")
                 await free_pins()
                 lora = None
                 return False
             # Double-check radio packet type is LoRa
             try:
-                from _sx126x import SX126X_PACKET_TYPE_LORA
                 pkt_type = lora.getPacketType()
-                if pkt_type != SX126X_PACKET_TYPE_LORA:
+                if pkt_type != 1:  # assuming 1 is LORA mode, since import removed
                     await debug_print("lora: init verify pkt_type mismatch", "ERROR")
                     await log_error(f"LoRa init verify failed: packet type={pkt_type}")
                     await free_pins()
@@ -832,13 +810,7 @@ async def init_lora():
             print('[DEBUG] init_lora: completed successfully')
             return True
         if status != 0:
-            # Map error code to readable name
-            try:
-                from _sx126x import ERROR as SXERR
-                err_name = SXERR.get(status, 'UNKNOWN')
-            except Exception:
-                err_name = 'UNKNOWN'
-            error_msg = f"LoRa initialization failed with status: {status} ({err_name})"
+            error_msg = f"LoRa initialization failed with status: {status}"
             await debug_print(error_msg, "ERROR")
             try:
                 from oled import display_message
@@ -856,16 +828,6 @@ async def init_lora():
                 pass
             lora = None
             return False
-        await debug_print("lora: initialized", "LORA")
-        print_remote_nodes()
-        # Ensure base starts in RX mode to listen for remotes
-        try:
-            if getattr(settings, 'NODE_TYPE', 'base') == 'base' and lora is not None:
-                lora.setOperatingMode(lora.MODE_RX)
-        except Exception:
-            pass
-        print('[DEBUG] init_lora: completed successfully')
-        return True
     except Exception as e:
         error_msg = f"Exception in init_lora: {e}"
         print(error_msg)
@@ -943,7 +905,7 @@ async def connectLora():
     max_shrinks = 4
     max_shrink_retries = 3
     jitter_base = 0.02
-    max_payload = 255
+    max_payload = int(getattr(settings, 'LORA_MAX_PAYLOAD', 240) or 240)
     raw_chunk_size = 50
     transient_codes = [86, 87, 89]
     shrink_codes = [-4]
@@ -1021,6 +983,7 @@ async def connectLora():
                                 entry['parts'][seq] = raw_chunk
                                 entry['ts'] = int(time.time())
                                 _lora_incoming_chunks[uid] = entry
+                                await debug_print(f"lora: chunk {seq}/{total} for {uid}, parts: {len(entry['parts'])}", 'LORA')
                                 # If complete, reassemble and process as a single payload
                                 if len(entry['parts']) == entry['total']:
                                     try:
@@ -1031,6 +994,7 @@ async def connectLora():
                                             assembled_obj = {'raw': assembled.decode('utf-8', 'ignore')}
                                         # Replace payload with assembled and continue processing using existing branch
                                         payload = assembled_obj
+                                        await debug_print(f"lora: assembled for {uid}", 'LORA')
                                     finally:
                                         try:
                                             del _lora_incoming_chunks[uid]
@@ -1215,7 +1179,7 @@ async def connectLora():
                     data = ujson.dumps(payload).encode('utf-8')
 
                 # NEW: only chunk if data actually exceeds safe payload size
-                max_payload = int(getattr(settings, 'LORA_MAX_PAYLOAD', 255) or 255)
+                max_payload = int(getattr(settings, 'LORA_MAX_PAYLOAD', 240) or 240)
 
                 # Quick single-frame send when payload fits — avoids tiny chunk floods for modest payloads
                 if len(data) <= max_payload:
@@ -1367,7 +1331,7 @@ async def connectLora():
                                                     sdata.lora_SigStr = lora.getRSSI()
                                                 if hasattr(lora, 'getSNR'):
                                                     sdata.lora_snr = lora.getSNR()
-                                                sdata.last_message = ujson.dumps(obj2)[:32]
+                                                    sdata.last_message = ujson.dumps(obj2)[:32]
                                             except Exception:
                                                 pass
                                             # Adopt next sync if provided
@@ -1410,9 +1374,6 @@ async def connectLora():
                     try:
                         if hasattr(lora, 'spi') and lora.spi:
                             lora.spi.deinit()
-                    except Exception:
-                        pass
-                    try:
                         _last_tx_exception_ms = time.ticks_ms()
                     except Exception:
                         pass
@@ -1424,8 +1385,8 @@ async def connectLora():
                 max_parts_allowed = int(getattr(settings, 'LORA_CHUNK_MAX_PARTS', 8))
                 # Build a minimal template to estimate JSON overhead accurately
                 try:
-                    tmpl = {'unit_id': getattr(settings, 'UNIT_ID', ''), 'chunked': 1, 'seq': 1, 'total': 1, 'b64': ''}
-                    overhead = len(ujson.dumps(tmpl).encode('utf-8'))
+                    tmpl = {'unit_id': getattr(settings, 'UNIT_ID', ''), 'chunked': 1, 'seq': 999, 'total': 999, 'b64': ''}
+                    overhead = len(ujson.dumps(tmpl).encode('utf-8')) + 20  # safety margin
                     avail_b64 = max_payload - overhead
                     raw_chunk_size = max(min_raw, int((avail_b64 * 3) // 4)) if avail_b64 > 0 else min_raw
                 except Exception:
@@ -1559,7 +1520,7 @@ async def connectLora():
                                                             sdata.lora_SigStr = lora.getRSSI()
                                                         if hasattr(lora, 'getSNR'):
                                                             sdata.lora_snr = lora.getSNR()
-                                                        sdata.last_message = ujson.dumps(obj2)[:32]
+                                                            sdata.last_message = ujson.dumps(obj2)[:32]
                                                     except Exception:
                                                         pass
                                                     # Adopt next sync
@@ -1918,7 +1879,7 @@ async def connectLora():
                                             sdata.lora_SigStr = lora.getRSSI()
                                         if hasattr(lora, 'getSNR'):
                                             sdata.lora_snr = lora.getSNR()
-                                        sdata.last_message = ujson.dumps(obj2)[:32]
+                                            sdata.last_message = ujson.dumps(obj2)[:32]
                                     except Exception:
                                         pass
                                     # Adopt next sync if provided
