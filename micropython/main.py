@@ -641,7 +641,7 @@ async def startup():
 
 # If blocking tasks are added later, start them in a separate thread here
 import uasyncio as asyncio
-from utils import start_background_tasks, update_sys_voltage
+from utils import start_background_tasks, update_sys_voltage, runGC  # NEW: runGC import
 from oled import display_message
 
 async def main():
@@ -661,13 +661,28 @@ async def main():
         pass
 
     # Idle loop to update system metrics and keep loop alive
+    _last_gc_ms = time.ticks_ms()
+    _gc_interval_ms = 300 * 1000  # 300 seconds
+
     while True:
         try:
             try:
                 update_sys_voltage()
             except Exception:
                 pass
+
+            # ...existing code...
             await asyncio.sleep(10)
+
+            # NEW: end-of-loop GC every 300 seconds to reduce memory lock/fragmentation
+            try:
+                now_ms = time.ticks_ms()
+                if time.ticks_diff(now_ms, _last_gc_ms) >= _gc_interval_ms:
+                    await runGC()
+                    _last_gc_ms = now_ms
+            except Exception:
+                pass
+
         except Exception:
             await asyncio.sleep(5)
 

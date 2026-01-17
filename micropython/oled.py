@@ -236,6 +236,9 @@ def _render_signature(page):
             _safe_attr(sdata, 'cur_temp_f', None),
             _safe_attr(sdata, 'wifi_rssi', None),
             _safe_attr(sdata, 'lora_SigStr', None),
+            _safe_attr(sdata, 'lora_last_rx_ts', 0),     # NEW: refresh trigger
+            _safe_attr(sdata, 'lora_last_tx_ts', 0),     # NEW: refresh trigger
+            _safe_attr(sdata, 'LORA_CONNECTED', False),  # NEW: refresh trigger
             _safe_attr(sdata, 'last_message', ''),
             _safe_attr(sdata, 'free_mem', 0),
             _safe_attr(settings, 'UNIT_ID', ''),
@@ -306,14 +309,29 @@ async def _render_loop(page=0):
                     if getattr(settings, 'ENABLE_LORA', False):
                         lora_icon_w = _measure_text_w('L')
                         bars_w = 3 * 6
+
+                        # NEW: determine "connected" based on recent activity
+                        now_epoch = time.time()
+                        stale_s = int(getattr(settings, 'OLED_LORA_STALE_S', 120))
+                        last_rx = int(_safe_attr(sdata, 'lora_last_rx_ts', 0) or 0)
+                        last_tx = int(_safe_attr(sdata, 'lora_last_tx_ts', 0) or 0)
+                        recent = (last_rx and (now_epoch - last_rx) <= stale_s) or (last_tx and (now_epoch - last_tx) <= stale_s)
+                        connected = bool(_safe_attr(sdata, 'LORA_CONNECTED', False)) or recent
+
                         lrssi = _safe_attr(sdata, 'lora_SigStr', None)
-                        if lrssi is not None and int(lrssi) != 0:
+
+                        if connected:
+                            # Connected: show bars when RSSI known, otherwise show empty bars but no "Search"
+                            try:
+                                lb = _net_bars_from_rssi(int(lrssi), (-80, -100, -120)) if lrssi is not None else 0
+                            except Exception:
+                                lb = 0
                             ltext = ''
-                            lb = _net_bars_from_rssi(lrssi, (-80, -100, -120))
                         else:
                             node_role = str(getattr(settings, 'NODE_TYPE', '')).lower()
                             ltext = 'Search' if node_role == 'remote' else 'No Con'
                             lb = 0
+
                         text_w = _measure_text_w(ltext)
                         block_w = lora_icon_w + 2 + bars_w + (4 if text_w else 0) + text_w
                         blocks.append({'type': 'lora', 'w': block_w, 'icon': 'L', 'bars': lb, 'text': ltext})
