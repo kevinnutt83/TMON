@@ -17,6 +17,12 @@ lora_SigStr = 0
 # Added SNR for better signal info
 lora_snr = 0
 
+# NEW: LoRa activity/connection flags used by OLED header refresh logic
+LORA_CONNECTED = False
+lora_last_rx_ts = 0
+lora_last_tx_ts = 0
+lora_last_init_ts = 0
+
 # Engine controller metrics
 engine1_speed_rpm = 0
 engine2_speed_rpm = 0

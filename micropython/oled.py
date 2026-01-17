@@ -236,9 +236,10 @@ def _render_signature(page):
             _safe_attr(sdata, 'cur_temp_f', None),
             _safe_attr(sdata, 'wifi_rssi', None),
             _safe_attr(sdata, 'lora_SigStr', None),
-            _safe_attr(sdata, 'lora_last_rx_ts', 0),     # NEW: refresh trigger
-            _safe_attr(sdata, 'lora_last_tx_ts', 0),     # NEW: refresh trigger
-            _safe_attr(sdata, 'LORA_CONNECTED', False),  # NEW: refresh trigger
+            _safe_attr(sdata, 'lora_snr', None),          # NEW
+            _safe_attr(sdata, 'lora_last_rx_ts', 0),
+            _safe_attr(sdata, 'lora_last_tx_ts', 0),
+            _safe_attr(sdata, 'LORA_CONNECTED', False),
             _safe_attr(sdata, 'last_message', ''),
             _safe_attr(sdata, 'free_mem', 0),
             _safe_attr(settings, 'UNIT_ID', ''),

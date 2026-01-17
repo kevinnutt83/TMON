@@ -42,6 +42,8 @@ except ImportError:
     except ImportError:
         requests = None
 from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run, led_status_flash, write_lora_log, persist_unit_id
+from utils import enforce_log_caps  # NEW: log cap enforcement helper
+
 from relay import toggle_relay
 try:
     from encryption import chacha20_encrypt, derive_nonce
@@ -421,15 +423,20 @@ _lora_incoming_chunks = {}  # unit_id -> {'total': int, 'parts': {seq: bytes}, '
 
 # Asynchronous function to log errors
 async def log_error(error_msg):
-    ts = time.time()
-    log_line = f"{ts}: {error_msg}\n"
-    try:
-        async with file_lock:
-            with open(settings.ERROR_LOG_FILE, 'a') as f:
-                f.write(log_line)
-    except Exception as e:
-        print(f"[FATAL] Failed to log error: {e}")
-    await asyncio.sleep(0)
+	ts = time.time()
+	log_line = f"{ts}: {error_msg}\n"
+	try:
+		async with file_lock:
+			# NEW: cap non-field-data logs before write
+			try:
+				enforce_log_caps(settings.ERROR_LOG_FILE)
+			except Exception:
+				pass
+			with open(settings.ERROR_LOG_FILE, 'a') as f:
+				f.write(log_line)
+	except Exception as e:
+		print(f"[FATAL] Failed to log error: {e}")
+	await asyncio.sleep(0)
 
 command_handlers = {
     "toggle_relay": toggle_relay,
@@ -950,147 +957,115 @@ async def connectLora():
                 ev = lora._events()
             except Exception:
                 ev = 0
+
             if RX_DONE_FLAG is not None and (ev & RX_DONE_FLAG):
+                # NEW: console visibility for RX activity
+                try:
+                    await debug_print("lora: RX_DONE", "LORA_RX")
+                except Exception:
+                    pass
+
                 try:
                     msg_bytes, err = lora._readData(0)
                 except Exception as rexc:
                     await debug_print(f"lora: _readData exception: {rexc}", "ERROR")
-                    msg_bytes = None; err = -1
-                if err == 0 and msg_bytes:
-                    try:
-                        # Normalize to text for JSON parsing (bytes -> str)
-                        if isinstance(msg_bytes, (bytes, bytearray)):
-                            txt = msg_bytes.decode('utf-8', 'ignore')
-                        else:
-                            txt = str(msg_bytes)
-                        try:
-                            payload = ujson.loads(txt)
-                        except Exception:
-                            # not json; store raw
-                            payload = {'raw': txt}
-                        # Handle chunked messages
-                        if isinstance(payload, dict) and payload.get('chunked'):
-                            try:
-                                uid = str(payload.get('unit_id') or 'unknown')
-                                seq = int(payload.get('seq', 1))
-                                total = int(payload.get('total', 1))
-                                b64 = payload.get('b64', '') or ''
-                                if not b64:
-                                    raise ValueError('empty_chunk')
-                                raw_chunk = _ub.a2b_base64(b64)
-                                entry = _lora_incoming_chunks.get(uid, {'total': total, 'parts': {}, 'ts': int(time.time())})
-                                entry['total'] = total
-                                entry['parts'][seq] = raw_chunk
-                                entry['ts'] = int(time.time())
-                                _lora_incoming_chunks[uid] = entry
-                                await debug_print(f"lora: chunk {seq}/{total} for {uid}, parts: {len(entry['parts'])}", 'LORA')
-                                # If complete, reassemble and process as a single payload
-                                if len(entry['parts']) == entry['total']:
-                                    try:
-                                        assembled = b''.join(entry['parts'][i] for i in range(1, entry['total'] + 1))
-                                        try:
-                                            assembled_obj = ujson.loads(assembled.decode('utf-8', 'ignore'))
-                                        except Exception:
-                                            assembled_obj = {'raw': assembled.decode('utf-8', 'ignore')}
-                                        # Replace payload with assembled and continue processing using existing branch
-                                        payload = assembled_obj
-                                        await debug_print(f"lora: assembled for {uid}", 'LORA')
-                                    finally:
-                                        try:
-                                            del _lora_incoming_chunks[uid]
-                                        except Exception:
-                                            pass
-                                else:
-                                    # waiting for more parts; skip persistence until complete
-                                    # Was `continue` here (invalid outside loop) — return to caller instead.
-                                    return True
-                            except Exception as e:
-                                await debug_print(f"lora: chunk handling error: {e}", "ERROR")
-                                # Was `continue` here (invalid outside loop) — exit handler cleanly.
-                                return True
+                    msg_bytes = None
+                    err = -1
 
-                        # existing processing logic: persist record etc.
-                        record = {'received_at': int(time.time()), 'source': 'remote', 'from_radio': True}
-                        if isinstance(payload, dict):
-                            record.update(payload)
-                        else:
-                            record['data'] = payload
-                        # Persist to field data log so base later uploads remote telemetry via WPREST
+                # NEW: mark activity + update signal metrics for OLED
+                try:
+                    _mark_lora_activity(rx=True, tx=False)
+                    if hasattr(lora, 'getRSSI'):
+                        sdata.lora_SigStr = lora.getRSSI()
+                    if hasattr(lora, 'getSNR'):
+                        sdata.lora_snr = lora.getSNR()
+                except Exception:
+                    pass
+
+                # NEW: mark activity in sdata for OLED display
+                try:
+                    sdata.lora_last_rx_ts = int(time.time())
+                    sdata.LORA_CONNECTED = True
+                except Exception:
+                    pass
+
+                # NEW: also persist a minimal record of the raw message for diagnostics
+                try:
+                    checkLogDirectory()
+                    fd_path = getattr(settings, 'FIELD_DATA_LOG', settings.LOG_DIR + '/field_data.log')
+                    with open(fd_path, 'a') as f:
+                        f.write(ujson.dumps({'raw_message': msg_bytes.decode('utf-8', 'ignore')}) + '\n')
+                except Exception as e:
+                    await debug_print(f"lora: failed to persist remote line: {e}", "ERROR")
+
+                # update in-memory remote info and write file
+                try:
+                    uid = record.get('unit_id') or record.get('unit') or record.get('name')
+                    if uid:
+                        settings.REMOTE_NODE_INFO = getattr(settings, 'REMOTE_NODE_INFO', {})
+                        settings.REMOTE_NODE_INFO[str(uid)] = {'last_seen': int(time.time()), 'last_payload': record}
+                        save_remote_node_info()
+                        # If remote sent staged settings, persist to per-unit staged file for later apply/inspection
+                        if isinstance(payload, dict) and payload.get('settings'):
+                            try:
+                                staged_path = settings.LOG_DIR.rstrip('/') + f'/device_settings-{uid}.json'
+                                with open(staged_path, 'w') as sf:
+                                    ujson.dump(payload.get('settings'), sf)
+                                write_lora_log(f"Base: persisted staged settings for {uid}", 'INFO')
+                            except Exception:
+                                pass
+                        # Best-effort: ACK back to remote with next sync and optional GPS
                         try:
-                            checkLogDirectory()
-                            fd_path = getattr(settings, 'FIELD_DATA_LOG', settings.LOG_DIR + '/field_data.log')
-                            with open(fd_path, 'a') as f:
-                                f.write(ujson.dumps(record) + '\n')
-                        except Exception as e:
-                            await debug_print(f"lora: failed to persist remote line: {e}", "ERROR")
-                        # update in-memory remote info and write file
-                        try:
-                            uid = record.get('unit_id') or record.get('unit') or record.get('name')
-                            if uid:
-                                settings.REMOTE_NODE_INFO = getattr(settings, 'REMOTE_NODE_INFO', {})
-                                settings.REMOTE_NODE_INFO[str(uid)] = {'last_seen': int(time.time()), 'last_payload': record}
-                                save_remote_node_info()
-                                # If remote sent staged settings, persist to per-unit staged file for later apply/inspection
-                                if isinstance(payload, dict) and payload.get('settings'):
-                                    try:
-                                        staged_path = settings.LOG_DIR.rstrip('/') + f'/device_settings-{uid}.json'
-                                        with open(staged_path, 'w') as sf:
-                                            ujson.dump(payload.get('settings'), sf)
-                                        write_lora_log(f"Base: persisted staged settings for {uid}", 'INFO')
-                                    except Exception:
-                                        pass
-                                # Best-effort: ACK back to remote with next sync and optional GPS
+                            ack = {'ack': 'ok'}
+                            # schedule next_in seconds (base chooses cadence)
+                            next_in = getattr(settings, 'LORA_CHECK_IN_MINUTES', 5) * 60
+                            ack['next_in'] = next_in
+                            if getattr(settings, 'GPS_BROADCAST_TO_REMOTES', False):
                                 try:
-                                    ack = {'ack': 'ok'}
-                                    # schedule next_in seconds (base chooses cadence)
-                                    next_in = getattr(settings, 'LORA_CHECK_IN_MINUTES', 5) * 60
-                                    ack['next_in'] = next_in
-                                    if getattr(settings, 'GPS_BROADCAST_TO_REMOTES', False):
-                                        try:
-                                            ack['gps_lat'] = getattr(settings, 'GPS_LAT', None)
-                                            ack['gps_lng'] = getattr(settings, 'GPS_LNG', None)
-                                            ack['gps_alt_m'] = getattr(settings, 'GPS_ALT_M', None)
-                                            ack['gps_accuracy_m'] = getattr(settings, 'GPS_ACCURACY_M', None)
-                                        except Exception:
-                                            pass
-                                    try:
-                                        # send ack (best-effort). Radio may need reconfig, so guard heavily.
-                                        try:
-                                            # Wait for not busy before mode change
-                                            busy_start = time.ticks_ms()
-                                            while lora.gpio.value() and time.ticks_diff(time.ticks_ms(), busy_start) < 2000:
-                                                await asyncio.sleep(0.01)
-                                            lora.setOperatingMode(lora.MODE_TX)
-                                            lora.send(ujson.dumps(ack).encode('utf-8'))
-                                            # Wait briefly for TX_DONE then restore RX mode
-                                            ack_start = time.ticks_ms()
-                                            while time.ticks_diff(time.ticks_ms(), ack_start) < 2000:
-                                                ev = lora._events()
-                                                if getattr(lora, 'TX_DONE', 0) and (ev & lora.TX_DONE):
-                                                    break
-                                                await asyncio.sleep(0.01)
-                                            # Wait for not busy after TX_DONE
-                                            busy_start = time.ticks_ms()
-                                            while lora.gpio.value() and time.ticks_diff(time.ticks_ms(), busy_start) < 2000:
-                                                await asyncio.sleep(0.01)
-                                            lora.setOperatingMode(lora.MODE_RX)
-                                        except Exception:
-                                            # try a more direct sequence if the driver has explicit tx API
-                                            try:
-                                                lora.setOperatingMode(lora.MODE_TX)
-                                                lora.send(ujson.dumps(ack).encode('utf-8'))
-                                                lora.setOperatingMode(lora.MODE_RX)
-                                            except Exception:
-                                                pass
-                                    except Exception:
-                                        pass
+                                    ack['gps_lat'] = getattr(settings, 'GPS_LAT', None)
+                                    ack['gps_lng'] = getattr(settings, 'GPS_LNG', None)
+                                    ack['gps_alt_m'] = getattr(settings, 'GPS_ALT_M', None)
+                                    ack['gps_accuracy_m'] = getattr(settings, 'GPS_ACCURACY_M', None)
                                 except Exception:
                                     pass
+                            try:
+                                # send ack (best-effort). Radio may need reconfig, so guard heavily.
+                                try:
+                                    # Wait for not busy before mode change
+                                    busy_start = time.ticks_ms()
+                                    while lora.gpio.value() and time.ticks_diff(time.ticks_ms(), busy_start) < 2000:
+                                        await asyncio.sleep(0.01)
+                                    lora.setOperatingMode(lora.MODE_TX)
+                                    lora.send(ujson.dumps(ack).encode('utf-8'))
+                                    # Wait briefly for TX_DONE then restore RX mode
+                                    ack_start = time.ticks_ms()
+                                    while time.ticks_diff(time.ticks_ms(), ack_start) < 2000:
+                                        ev = lora._events()
+                                        if getattr(lora, 'TX_DONE', 0) and (ev & lora.TX_DONE):
+                                            break
+                                        await asyncio.sleep(0.01)
+                                    # Wait for not busy after TX_DONE
+                                    busy_start = time.ticks_ms()
+                                    while lora.gpio.value() and time.ticks_diff(time.ticks_ms(), busy_start) < 2000:
+                                        await asyncio.sleep(0.01)
+                                    lora.setOperatingMode(lora.MODE_RX)
+                                except Exception:
+                                    # try a more direct sequence if the driver has explicit tx API
+                                    try:
+                                        lora.setOperatingMode(lora.MODE_TX)
+                                        lora.send(ujson.dumps(ack).encode('utf-8'))
+                                        lora.setOperatingMode(lora.MODE_RX)
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
                         except Exception:
                             pass
-                        write_lora_log(f"Base received remote payload: {str(record)[:160]}", 'INFO')
-                    except Exception as e:
-                        await debug_print(f"lora: processing RX failed: {e}", "ERROR")
+                except Exception:
+                    pass
+                write_lora_log(f"Base received remote payload: {str(record)[:160]}", 'INFO')
+            except Exception as e:
+                await debug_print(f"lora: processing RX failed: {e}", "ERROR")
         except Exception as e:
             await debug_print(f"lora: base RX loop exception: {e}", "ERROR")
 
@@ -1555,8 +1530,6 @@ async def connectLora():
                                                     break
                                             except Exception:
                                                 pass
-                                    await asyncio.sleep(0.01)
-                                return True
                             else:
                                 await debug_print(f"lora: single-frame (post-compact) failed: {st_code}", "WARN")
                                 # If it's a negative hardware-like code, attempt guarded re-init and fall through to chunk flow
@@ -1815,7 +1788,8 @@ async def connectLora():
                                                         break
                                                 except Exception:
                                                     pass
-                                        await asyncio.sleep(0.01)
+                                            except Exception:
+                                                pass
                                     break
                                 await debug_print(f"lora: last-resort single-frame failed ({st_last})", "ERROR")
                             await debug_print("lora: cannot shrink chunk size further", "ERROR")
@@ -1823,6 +1797,7 @@ async def connectLora():
                         raw_chunk_size = new_raw
                         await debug_print(f"lora: shrinking raw_chunk to {raw_chunk_size} (attempt {shrink_attempt}/{max_shrinks})", "LORA")
                         # short backoff before retrying with smaller chunks
+                       
                         await asyncio.sleep(0.12 + random.random() * 0.08)
                         continue
                     # Success path
