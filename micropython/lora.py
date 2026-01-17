@@ -1,48 +1,51 @@
 # Firmware Version: v2.06.0
-# Utility to print remote node info
+
+# --- FIX: indentation + make sure settings is available inside this helper ---
 def print_remote_nodes():
-    import settings
-    remote_info = getattr(settings, 'REMOTE_NODE_INFO', {})
+    import settings as _settings
+    remote_info = getattr(_settings, 'REMOTE_NODE_INFO', {})
     for node_id, node_data in remote_info.items():
         print(f"[REMOTE NODE] {node_id}: {node_data}")
 
-# --- All imports at the top ---
+# --- FIX: restore imports that were accidentally blanked out (empty try-blocks are a SyntaxError) ---
 import ujson
 import os
 import uasyncio as asyncio
 import select
-import random  # Added for jitter/backoff
-import ubinascii as _ub  # NEW: base64 encode/decode for chunking
-from sampling import sampleEnviroment, findLowestTemp, findHighestTemp, findLowestBar, findHighestBar, findLowestHumid, findHighestHumid
+import random
+import ubinascii as _ub
+
 try:
     import machine
     import sys
 except ImportError:
     machine = None
     sys = None
+
 try:
     from sx1262 import SX1262
 except ImportError:
     SX1262 = None
-try:
-    import sdata
-    import settings
-except ImportError:
-    sdata = None
-    settings = None
+
+import sdata
+import settings
+
 try:
     import utime as time
 except ImportError:
     import time
+
 try:
     import urequests as requests
 except ImportError:
     try:
-        import requests
+        import requests  # type: ignore
     except ImportError:
         requests = None
+
 from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run, led_status_flash, write_lora_log, persist_unit_id
 from relay import toggle_relay
+
 try:
     from encryption import chacha20_encrypt, derive_nonce
 except Exception:
@@ -128,7 +131,6 @@ def load_remote_node_info():
                 _s.gps_last_fix_ts = gps.get('gps_last_fix_ts')
             except Exception:
                 pass
-            # also project to settings if allowed
             try:
                 if getattr(settings, 'GPS_OVERRIDE_ALLOWED', True):
                     if 'gps_lat' in gps: settings.GPS_LAT = gps.get('gps_lat')
@@ -220,14 +222,14 @@ async def check_suspend_remove():
     if not WORDPRESS_API_URL:
         return
     try:
-        import settings
-        import urequests as requests
+        import settings as _settings
+        import urequests as _requests
         headers = {}
         try:
-            headers = _auth_headers()
+            headers = _auth_headers() if callable(_auth_headers) else {}
         except Exception:
             headers = {}
-        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/settings/{settings.UNIT_ID}', headers=headers)
+        resp = _requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/settings/{_settings.UNIT_ID}', headers=headers)
         if resp.status_code == 200:
             settings_data = resp.json().get('settings', {})
             if settings_data.get('suspended'):
@@ -1081,20 +1083,20 @@ async def connectLora():
                                         try:
                                             # Wait for not busy before mode change
                                             busy_start = time.ticks_ms()
-                                            while lora.gpio.value() and time.ticks_diff(time.ticks_ms(), busy_start) < 2000:
+                                            while lora.gpio.value() and time.ticks_diff(time.ticks.ms(), busy_start) < 2000:
                                                 await asyncio.sleep(0.01)
                                             lora.setOperatingMode(lora.MODE_TX)
                                             lora.send(ujson.dumps(ack).encode('utf-8'))
                                             # Wait briefly for TX_DONE then restore RX mode
                                             ack_start = time.ticks_ms()
-                                            while time.ticks_diff(time.ticks_ms(), ack_start) < 2000:
+                                            while time.ticks_diff(time.ticks.ms(), ack_start) < 2000:
                                                 ev = lora._events()
                                                 if getattr(lora, 'TX_DONE', 0) and (ev & lora.TX_DONE):
                                                     break
                                                 await asyncio.sleep(0.01)
                                             # Wait for not busy after TX_DONE
                                             busy_start = time.ticks_ms()
-                                            while lora.gpio.value() and time.ticks_diff(time.ticks_ms(), busy_start) < 2000:
+                                            while lora.gpio.value() and time.ticks_diff(time.ticks.ms(), busy_start) < 2000:
                                                 await asyncio.sleep(0.01)
                                             lora.setOperatingMode(lora.MODE_RX)
                                         except Exception:
@@ -1228,7 +1230,7 @@ async def connectLora():
                                     busy = gpio.value() if gpio and hasattr(gpio, 'value') else False
                                     if not busy:
                                         break
-                                    if time.ticks_diff(time.ticks_ms(), busy_start) > 400:
+                                    if time.ticks_diff(time.ticks.ms(), busy_start) > 400:
                                         break
                                     await asyncio.sleep(0.01)
                             except Exception:
@@ -1310,7 +1312,7 @@ async def connectLora():
                         # wait for TX_DONE and optional ACK same as chunk flow
                         try:
                             tx_start = time.ticks_ms()
-                            while time.ticks_diff(time.ticks_ms(), tx_start) < 10000:
+                            while time.ticks_diff(time.ticks.ms(), tx_start) < 10000:
                                 try:
                                     ev = lora._events()
                                 except Exception:
@@ -1622,7 +1624,7 @@ async def connectLora():
                                         busy = gpio.value() if gpio and hasattr(gpio, 'value') else False
                                         if not busy:
                                             break
-                                        if time.ticks_diff(time.ticks_ms(), busy_start) > 800:
+                                        if time.ticks_diff(time.ticks.ms(), busy_start) > 800:
                                             break
                                         await asyncio.sleep(0.01)
                                 except Exception:
@@ -1953,87 +1955,4 @@ async def connectLora():
     # After sending all chunks, done for this cycle
     _last_send_ms = time.ticks_ms()
     _last_activity_ms = _last_send_ms
-    return True
-
-            except Exception as e:
-                # Unified exception handling for remote TX
-                # Special-case UnboundLocalError / "local variable referenced before assignment"
-                try:
-                    is_ule = isinstance(e, UnboundLocalError) or ('local variable referenced before assignment' in str(e).lower())
-                except Exception:
-                    is_ule = False
-                if is_ule:
-                    await debug_print("Remote TX encountered UnboundLocalError; aborting send and scheduling radio re-init", "ERROR")
-                    await log_error(f"Remote TX UnboundLocalError: {e}")
-                    # Force cooldown and clean hardware to avoid tight repeat attempts
-                    try:
-                        _last_tx_exception_ms = time.ticks_ms()
-                    except Exception:
-                        pass
-                    try:
-                        if lora and hasattr(lora, 'spi') and lora.spi:
-                            lora.spi.deinit()
-                    except Exception:
-                        pass
-                    try:
-                        await free_pins()
-                    except Exception:
-                        pass
-                    lora = None
-                    # Return False to let the caller perform an orderly retry/reinit
-                    return False
-
-                # Fallback: original generic exception handler (keeps existing behavior)
-                try:
-                    import sys
-                    try:
-                        import uio as io
-                    except Exception:
-                        import io
-                    buf = io.StringIO()
-                    try:
-                        sys.print_exception(e, buf)
-                        tb = buf.getvalue()
-                    except Exception:
-                        tb = str(e)
-                except Exception:
-                    tb = str(e)
-                try:
-                    msg = str(e)
-                except Exception:
-                    msg = repr(e)
-                if 'local variable referenced before assignment' in msg.lower() or 'unboundlocalerror' in msg.lower():
-                    await debug_print(f"Remote TX local-variable error detected: {msg}", "ERROR")
-                else:
-                    await debug_print(f"Remote TX exception: {msg}", "ERROR")
-                await log_error(f"Remote TX exception: {msg} | trace: {tb}")
-
-                # Best-effort locals snapshot (trimmed) for diagnostics
-                try:
-                    ls = {k: (str(v)[:160] if v is not None else None) for k, v in locals().items() if k in ('lora','state','resp','msg2','tx_start')}
-                    write_lora_log(f"Remote TX exception locals snapshot: {ls}", 'DEBUG')
-                except Exception:
-                    pass
-
-                try:
-                    _init_failures = min(_init_failures + 1, _MAX_INIT_FAILS)
-                except Exception:
-                    pass
-                try:
-                    _last_tx_exception_ms = time.ticks_ms()
-                except Exception:
-                    pass
-
-                # Cleanup hardware & state
-                try:
-                    if lora and hasattr(lora, 'spi') and lora.spi:
-                        lora.spi.deinit()
-                except Exception:
-                    pass
-                try:
-                    await free_pins()
-                except Exception:
-                    pass
-                lora = None
-                return False
     return True
