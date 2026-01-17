@@ -764,6 +764,48 @@ async def flash_led(num_flashes, interval, lightColor, pattern):
 
 ERROR_LOG_FILE = getattr(settings, 'ERROR_LOG_FILE', '/logs/lora_errors.log')
 
+# NEW: ensure provisioning log path exists before provisioning_log() is referenced
+PROVISION_LOG_FILE = getattr(settings, 'LOG_DIR', '/logs') + '/provisioning.log'
+
+# NEW: ensure this exists before log_error()/write_lora_log() call it
+# (If you already have a fuller implementation later in this file, that later one can overwrite this.)
+_LOG_MAX_BYTES = int(getattr(settings, 'LOG_MAX_BYTES', 3 * 1024 * 1024))
+_LOG_TRIM_KEEP_RATIO = 0.5
+
+def _enforce_log_caps_before_write(path: str):
+    try:
+        if not path:
+            return
+        # never trim field-data pipeline logs here
+        p = str(path)
+        if 'field_data' in p.lower():
+            return
+        st = os.stat(p)
+        size = st[6] if isinstance(st, (tuple, list)) else getattr(st, 'st_size', 0)
+        if not size or size <= _LOG_MAX_BYTES:
+            return
+        keep = int(_LOG_MAX_BYTES * _LOG_TRIM_KEEP_RATIO)
+        if keep < 256:
+            keep = 256
+        with open(p, 'rb') as f:
+            try:
+                f.seek(max(0, size - keep))
+            except Exception:
+                f.seek(0)
+            tail = f.read()
+        try:
+            nl = tail.find(b'\n')
+            if nl != -1 and nl + 1 < len(tail):
+                tail = tail[nl + 1:]
+        except Exception:
+            pass
+        with open(p, 'wb') as f:
+            f.write(tail)
+    except Exception:
+        pass
+
+ERROR_LOG_FILE = getattr(settings, 'ERROR_LOG_FILE', '/logs/lora_errors.log')
+
 async def log_error(error_msg, context=None):
     """Log error to persistent storage and optionally print to console."""
     try:
@@ -819,7 +861,6 @@ def provisioning_log(msg):
         print("[PROVISION] " + entry)
         try:
             checkLogDirectory()
-            # NEW: cap non-field-data logs before write
             _enforce_log_caps_before_write(PROVISION_LOG_FILE)
             with open(PROVISION_LOG_FILE, 'a') as f:
                 f.write(entry + '\n')
@@ -828,86 +869,107 @@ def provisioning_log(msg):
     except Exception:
         pass
 
-# --- Log size enforcement (non-field-data logs only) ---
-_LOG_MAX_BYTES = int(getattr(settings, 'LOG_MAX_BYTES', 3 * 1024 * 1024))  # 3MB default
-_LOG_TRIM_KEEP_RATIO = 0.5  # keep newest half
+# Persistent NODE_TYPE (role) file
+NODE_TYPE_FILE = getattr(settings, 'NODE_TYPE_FILE', settings.LOG_DIR + '/node_type.txt')
 
-def _is_field_data_related_log(path: str) -> bool:
-    """Exclude field-data related logs from the generic trimming logic (existing rotation/backlog handles them)."""
+def persist_node_type(role: str):
     try:
-        if not path:
-            return False
-        p = str(path)
-        # explicit known paths
-        if p == getattr(settings, 'FIELD_DATA_LOG', ''):
-            return True
-        if p == getattr(settings, 'DATA_HISTORY_LOG', ''):
-            return True
-        if p == getattr(settings, 'FIELD_DATA_DELIVERED_LOG', ''):
-            return True
-        # backlog is part of field-data delivery pipeline; exclude to preserve semantics
-        if p == globals().get('FIELD_DATA_BACKLOG', ''):
-            return True
-        # fallback substring check
-        if 'field_data' in p.lower():
-            return True
-    except Exception:
-        pass
-    return False
-
-def _trim_log_file_if_needed(path: str, max_bytes: int = _LOG_MAX_BYTES, keep_ratio: float = _LOG_TRIM_KEEP_RATIO) -> bool:
-    """If file exceeds max_bytes, drop oldest content until file is ~max_bytes*keep_ratio.
-    Keeps newest bytes and aligns to a newline boundary when possible.
-    """
-    try:
-        if not path or _is_field_data_related_log(path):
-            return False
-        st = os.stat(path)
-        size = st[6] if isinstance(st, (tuple, list)) else getattr(st, 'st_size', 0)
-        if not size or size <= max_bytes:
-            return False
-
-        keep = int(max_bytes * float(keep_ratio))
-        if keep < 256:
-            keep = 256
-
-        # Read tail and rewrite file with aligned newline start (best-effort)
-        with open(path, 'rb') as f:
-            try:
-                f.seek(max(0, size - keep))
-            except Exception:
-                # if seek unsupported, fall back to reading whole file (best-effort)
-                f.seek(0)
-            tail = f.read()
-
-        # Align to first newline to avoid partial line at head
+        if not role:
+            return
+        checkLogDirectory()
+        write_text(NODE_TYPE_FILE, str(role).strip())
         try:
-            nl = tail.find(b'\n')
-            if nl != -1 and nl + 1 < len(tail):
-                tail = tail[nl + 1:]
+            import settings as _s
+            _s.NODE_TYPE = str(role).strip()
         except Exception:
             pass
-
-        with open(path, 'wb') as f:
-            f.write(tail)
-        return True
-    except Exception:
-        return False
-
-def _enforce_log_caps_before_write(path: str):
-    """Call immediately before appending a new log entry."""
-    try:
-        _trim_log_file_if_needed(path)
+        # If role is remote, proactively disable WiFi (best-effort)
+        try:
+            if str(role).strip().lower() == 'remote':
+                try:
+                    from wifi import disable_wifi
+                    disable_wifi()
+                except Exception:
+                    pass
+                try:
+                    import settings as _s2
+                    _s2.ENABLE_WIFI = False
+                except Exception:
+                    pass
+        except Exception:
+            pass
     except Exception:
         pass
 
-# --- Compatibility alias: requested naming ---
-async def run_GC():
-    # Alias for requested 'run_GC' naming; keeps existing runGC implementation intact.
-    await runGC()
+def load_persisted_node_type():
+    try:
+        checkLogDirectory()
+        val = read_text(NODE_TYPE_FILE, None)
+        if not val:
+            return None
+        val = val.strip()
+        return val if val else None
+    except Exception:
+        return None
 
-# --- RESTORED: periodic provisioning poll (was removed) ---
-_provision_reboot_guard_written = False
+async def safe_run(coro, context=None):
+    """Run a coroutine and log any exceptions, never let them escape."""
+    try:
+        await coro
+    except Exception as e:
+        await log_error(str(e), context)
+
+class TMONAI:
+    """Basic AI for system operations, error response, and self-healing."""
+    def __init__(self):
+        self.error_count = 0
+        self.last_error = None
+        self.recovery_actions = []
+
+    async def observe_error(self, error_msg, context=None):
+        self.error_count += 1
+        self.last_error = (error_msg, context)
+        if self.error_count > 5:
+            await log_error('AI: Too many errors, attempting system recovery', context)
+            await self.recover_system()
+
+    async def recover_system(self):
+        try:
+            import machine
+            await log_error('AI: Performing soft reset', 'recovery')
+            machine.soft_reset()
+        except Exception as e:
+            await log_error(f'AI: Recovery failed: {e}', 'recovery')
+
+    async def suggest_action(self, context):
+        if 'wifi' in str(context).lower():
+            return 'Check WiFi credentials or signal.'
+        if 'ota' in str(context).lower():
+            return 'Retry OTA or check file integrity.'
+        return 'Check device logs and power cycle if needed.'
+
+# Singleton instance expected by main.py/lora.py
+TMON_AI = TMONAI()
+
+def get_machine_id():
+    try:
+        import machine as _m
+        try:
+            import ubinascii as _ub
+        except Exception:
+            import binascii as _ub
+        uid = _m.unique_id() if hasattr(_m, 'unique_id') else None
+        if uid is None:
+            return ''
+        return _ub.hexlify(uid).decode('utf-8')
+    except Exception:
+        return ''
+
+# Apply persisted unit name at import/boot so UI and telemetry show it early
+try:
+    load_persisted_unit_name()
+except Exception:
+    pass
 
 async def periodic_provision_check():
     """Poll Admin hub for staged provisioning metadata until provisioned.
@@ -1179,11 +1241,13 @@ def load_persisted_unit_name():
     except Exception:
         return None
 
-# Apply persisted unit name at import/boot so UI and telemetry show it early
-try:
-    load_persisted_unit_name()
-except Exception:
-    pass
+# --- Compatibility alias: requested naming ---
+async def run_GC():
+    # Alias for requested 'run_GC' naming; keeps existing runGC implementation intact.
+    await runGC()
+
+# --- RESTORED: periodic provisioning poll (was removed) ---
+_provision_reboot_guard_written = False
 
 async def periodic_provision_check():
     """Poll Admin hub for staged provisioning metadata until provisioned.
