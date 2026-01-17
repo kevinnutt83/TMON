@@ -1,51 +1,48 @@
 # Firmware Version: v2.06.0
-
-# --- FIX: indentation + make sure settings is available inside this helper ---
+# Utility to print remote node info
 def print_remote_nodes():
-    import settings as _settings
-    remote_info = getattr(_settings, 'REMOTE_NODE_INFO', {})
+    import settings
+    remote_info = getattr(settings, 'REMOTE_NODE_INFO', {})
     for node_id, node_data in remote_info.items():
         print(f"[REMOTE NODE] {node_id}: {node_data}")
 
-# --- FIX: restore imports that were accidentally blanked out (empty try-blocks are a SyntaxError) ---
+# --- All imports at the top ---
 import ujson
 import os
 import uasyncio as asyncio
 import select
-import random
-import ubinascii as _ub
-
+import random  # Added for jitter/backoff
+import ubinascii as _ub  # NEW: base64 encode/decode for chunking
+from sampling import sampleEnviroment, findLowestTemp, findHighestTemp, findLowestBar, findHighestBar, findLowestHumid, findHighestHumid
 try:
     import machine
     import sys
 except ImportError:
     machine = None
     sys = None
-
 try:
     from sx1262 import SX1262
 except ImportError:
     SX1262 = None
-
-import sdata
-import settings
-
+try:
+    import sdata
+    import settings
+except ImportError:
+    sdata = None
+    settings = None
 try:
     import utime as time
 except ImportError:
     import time
-
 try:
     import urequests as requests
 except ImportError:
     try:
-        import requests  # type: ignore
+        import requests
     except ImportError:
         requests = None
-
 from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run, led_status_flash, write_lora_log, persist_unit_id
 from relay import toggle_relay
-
 try:
     from encryption import chacha20_encrypt, derive_nonce
 except Exception:
@@ -131,6 +128,7 @@ def load_remote_node_info():
                 _s.gps_last_fix_ts = gps.get('gps_last_fix_ts')
             except Exception:
                 pass
+            # also project to settings if allowed
             try:
                 if getattr(settings, 'GPS_OVERRIDE_ALLOWED', True):
                     if 'gps_lat' in gps: settings.GPS_LAT = gps.get('gps_lat')
@@ -222,14 +220,14 @@ async def check_suspend_remove():
     if not WORDPRESS_API_URL:
         return
     try:
-        import settings as _settings
-        import urequests as _requests
+        import settings
+        import urequests as requests
         headers = {}
         try:
-            headers = _auth_headers() if callable(_auth_headers) else {}
+            headers = _auth_headers()
         except Exception:
             headers = {}
-        resp = _requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/settings/{_settings.UNIT_ID}', headers=headers)
+        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/settings/{settings.UNIT_ID}', headers=headers)
         if resp.status_code == 200:
             settings_data = resp.json().get('settings', {})
             if settings_data.get('suspended'):
@@ -795,13 +793,6 @@ async def init_lora():
                 return False
         if status == 0:
             await debug_print("lora: initialized", "LORA")
-            # NEW: mark connected + activity for OLED
-            try:
-                if sdata:
-                    sdata.LORA_CONNECTED = True
-                    sdata.lora_last_init_ts = int(time.time())
-            except Exception:
-                pass
             try:
                 from oled import display_message
                 await display_message("LoRa Ready", 2)
@@ -953,34 +944,18 @@ async def connectLora():
     # --- Base: listen for remote messages and persist them ---
     if role == 'base':
         try:
+            # Poll events briefly for incoming RX frames
             RX_DONE_FLAG = getattr(SX1262, 'RX_DONE', None)
             try:
                 ev = lora._events()
             except Exception:
                 ev = 0
             if RX_DONE_FLAG is not None and (ev & RX_DONE_FLAG):
-                # NEW: RX event debug
-                await debug_print("lora: RX_DONE detected", "LORA_RX")
                 try:
                     msg_bytes, err = lora._readData(0)
                 except Exception as rexc:
                     await debug_print(f"lora: _readData exception: {rexc}", "ERROR")
                     msg_bytes = None; err = -1
-
-                # NEW: capture RSSI/SNR for OLED when available
-                try:
-                    if sdata:
-                        sdata.lora_last_rx_ts = int(time.time())
-                        sdata.LORA_CONNECTED = True
-                        if hasattr(lora, 'getRSSI'):
-                            sdata.lora_SigStr = lora.getRSSI()
-                        if hasattr(lora, 'getSNR'):
-                            sdata.lora_snr = lora.getSNR()
-                except Exception:
-                    pass
-
-                await debug_print(f"lora: RX read err={err} bytes={len(msg_bytes) if msg_bytes else 0}", "LORA_RX")
-
                 if err == 0 and msg_bytes:
                     try:
                         # Normalize to text for JSON parsing (bytes -> str)
@@ -1083,20 +1058,20 @@ async def connectLora():
                                         try:
                                             # Wait for not busy before mode change
                                             busy_start = time.ticks_ms()
-                                            while lora.gpio.value() and time.ticks_diff(time.ticks.ms(), busy_start) < 2000:
+                                            while lora.gpio.value() and time.ticks_diff(time.ticks_ms(), busy_start) < 2000:
                                                 await asyncio.sleep(0.01)
                                             lora.setOperatingMode(lora.MODE_TX)
                                             lora.send(ujson.dumps(ack).encode('utf-8'))
                                             # Wait briefly for TX_DONE then restore RX mode
                                             ack_start = time.ticks_ms()
-                                            while time.ticks_diff(time.ticks.ms(), ack_start) < 2000:
+                                            while time.ticks_diff(time.ticks_ms(), ack_start) < 2000:
                                                 ev = lora._events()
                                                 if getattr(lora, 'TX_DONE', 0) and (ev & lora.TX_DONE):
                                                     break
                                                 await asyncio.sleep(0.01)
                                             # Wait for not busy after TX_DONE
                                             busy_start = time.ticks_ms()
-                                            while lora.gpio.value() and time.ticks_diff(time.ticks.ms(), busy_start) < 2000:
+                                            while lora.gpio.value() and time.ticks_diff(time.ticks_ms(), busy_start) < 2000:
                                                 await asyncio.sleep(0.01)
                                             lora.setOperatingMode(lora.MODE_RX)
                                         except Exception:
@@ -1230,7 +1205,7 @@ async def connectLora():
                                     busy = gpio.value() if gpio and hasattr(gpio, 'value') else False
                                     if not busy:
                                         break
-                                    if time.ticks_diff(time.ticks.ms(), busy_start) > 400:
+                                    if time.ticks_diff(time.ticks_ms(), busy_start) > 400:
                                         break
                                     await asyncio.sleep(0.01)
                             except Exception:
@@ -1312,7 +1287,7 @@ async def connectLora():
                         # wait for TX_DONE and optional ACK same as chunk flow
                         try:
                             tx_start = time.ticks_ms()
-                            while time.ticks_diff(time.ticks.ms(), tx_start) < 10000:
+                            while time.ticks_diff(time.ticks_ms(), tx_start) < 10000:
                                 try:
                                     ev = lora._events()
                                 except Exception:
@@ -1331,7 +1306,7 @@ async def connectLora():
                         # Wait for ACK
                         ack_wait_ms = int(getattr(settings, 'LORA_CHUNK_ACK_WAIT_MS', 1500))
                         start_wait = time.ticks_ms()
-                        while time.ticks_diff(time.ticks.ms(), start_wait) < ack_wait_ms:
+                        while time.ticks_diff(time.ticks_ms(), start_wait) < ack_wait_ms:
                             try:
                                 ev2 = lora._events()
                             except Exception:
@@ -1494,13 +1469,6 @@ async def connectLora():
                                             st_code = int(resp[0])
                                         except Exception:
                                             st_code = -999
-                                elif isinstance(resp, int):
-                                    st_code = resp
-                                else:
-                                    try:
-                                        st_code = int(resp)
-                                    except Exception:
-                                        st_code = -999
                             except Exception:
                                 st_code = -999
                             if st_code == 0:
@@ -1510,7 +1478,7 @@ async def connectLora():
                                 # Wait for TX_DONE and ACK
                                 try:
                                     tx_start = time.ticks_ms()
-                                    while time.ticks_diff(time.ticks.ms(), tx_start) < 10000:
+                                    while time.ticks_diff(time.ticks_ms(), tx_start) < 10000:
                                         try:
                                             ev = lora._events()
                                         except Exception:
@@ -1527,7 +1495,7 @@ async def connectLora():
                                 # Wait for ACK
                                 ack_wait_ms = int(getattr(settings, 'LORA_CHUNK_ACK_WAIT_MS', 1500))
                                 start_wait = time.ticks_ms()
-                                while time.ticks_diff(time.ticks.ms(), start_wait) < ack_wait_ms:
+                                while time.ticks_diff(time.ticks_ms(), start_wait) < ack_wait_ms:
                                     try:
                                         ev2 = lora._events()
                                     except Exception:
@@ -1587,6 +1555,8 @@ async def connectLora():
                                                     break
                                             except Exception:
                                                 pass
+                                    await asyncio.sleep(0.01)
+                                return True
                             else:
                                 await debug_print(f"lora: single-frame (post-compact) failed: {st_code}", "WARN")
                                 # If it's a negative hardware-like code, attempt guarded re-init and fall through to chunk flow
@@ -1624,7 +1594,7 @@ async def connectLora():
                                         busy = gpio.value() if gpio and hasattr(gpio, 'value') else False
                                         if not busy:
                                             break
-                                        if time.ticks_diff(time.ticks.ms(), busy_start) > 800:
+                                        if time.ticks_diff(time.ticks_ms(), busy_start) > 800:
                                             break
                                         await asyncio.sleep(0.01)
                                 except Exception:
@@ -1642,12 +1612,6 @@ async def connectLora():
                                 except Exception as exc_send:
                                     await debug_print(f"lora: chunk send exception: {exc_send}", "ERROR")
                                     resp = -999
-
-                                # NEW: per-chunk debug (rate-limited by your DEBUG flags)
-                                try:
-                                    await debug_print(f"lora: chunk {idx}/{total} resp={resp}", "LORA_TX")
-                                except Exception:
-                                    pass
 
                                 # Normalize status
                                 st_code = None
@@ -1677,7 +1641,7 @@ async def connectLora():
                                     # Wait for TX_DONE after successful send
                                     try:
                                         tx_start = time.ticks_ms()
-                                        while time.ticks_diff(time.ticks.ms(), tx_start) < 10000:
+                                        while time.ticks_diff(time.ticks_ms(), tx_start) < 10000:
                                             try:
                                                 ev = lora._events()
                                             except Exception:
@@ -1774,7 +1738,7 @@ async def connectLora():
                                     # Wait for TX_DONE and ACK
                                     try:
                                         tx_start = time.ticks_ms()
-                                        while time.ticks_diff(time.ticks.ms(), tx_start) < 10000:
+                                        while time.ticks_diff(time.ticks_ms(), tx_start) < 10000:
                                             try:
                                                 ev = lora._events()
                                             except Exception:
@@ -1791,7 +1755,7 @@ async def connectLora():
                                     # Wait for ACK
                                     ack_wait_ms = int(getattr(settings, 'LORA_CHUNK_ACK_WAIT_MS', 1500))
                                     start_wait = time.ticks_ms()
-                                    while time.ticks_diff(time.ticks.ms(), start_wait) < ack_wait_ms:
+                                    while time.ticks_diff(time.ticks_ms(), start_wait) < ack_wait_ms:
                                         try:
                                             ev2 = lora._events()
                                         except Exception:
@@ -1851,108 +1815,191 @@ async def connectLora():
                                                         break
                                                 except Exception:
                                                     pass
-                            await asyncio.sleep(0.01)
-                        break
-                    await debug_print(f"lora: last-resort single-frame failed ({st_last})", "ERROR")
-                await debug_print("lora: cannot shrink chunk size further", "ERROR")
-                break
-            raw_chunk_size = new_raw
-            await debug_print(f"lora: shrinking raw_chunk to {raw_chunk_size} (attempt {shrink_attempt}/{max_shrinks})", "LORA")
-            # short backoff before retrying with smaller chunks
-            await asyncio.sleep(0.12 + random.random() * 0.08)
-            continue
-        # Success path
-        sent_ok = True
+                                        await asyncio.sleep(0.01)
+                                    break
+                                await debug_print(f"lora: last-resort single-frame failed ({st_last})", "ERROR")
+                            await debug_print("lora: cannot shrink chunk size further", "ERROR")
+                            break
+                        raw_chunk_size = new_raw
+                        await debug_print(f"lora: shrinking raw_chunk to {raw_chunk_size} (attempt {shrink_attempt}/{max_shrinks})", "LORA")
+                        # short backoff before retrying with smaller chunks
+                        await asyncio.sleep(0.12 + random.random() * 0.08)
+                        continue
+                    # Success path
+                    sent_ok = True
 
-    if not sent_ok:
-        await debug_print("lora: chunk send failed after shrink attempts", "ERROR")
-        write_lora_log("Remote chunk send failed after shrink attempts", 'ERROR')
-        try:
-            _last_tx_exception_ms = time.ticks_ms()
-        except Exception:
-            pass
-        try:
-            if lora and hasattr(lora, 'spi') and lora.spi:
-                try:
-                    lora.spi.deinit()
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        lora = None
-        return False
-
-    # After sending all chunks, switch to RX and wait for ACK
-    try:
-        lora.setOperatingMode(lora.MODE_RX)
-    except Exception:
-        pass
-
-    ack_wait_ms = int(getattr(settings, 'LORA_CHUNK_ACK_WAIT_MS', 1500))
-    start_wait = time.ticks_ms()
-    while time.ticks_diff(time.ticks.ms(), start_wait) < ack_wait_ms:
-        try:
-            ev2 = lora._events()
-        except Exception:
-            ev2 = 0
-        if RX_DONE_FLAG is not None and (ev2 & RX_DONE_FLAG):
-            try:
-                msg2, err2 = lora._readData(0)
-            except Exception:
-                msg2 = None; err2 = -1
-            if err2 == 0 and msg2:
-                try:
-                    obj2 = None
-                    txt2 = msg2.decode('utf-8', 'ignore') if isinstance(msg2, (bytes, bytearray)) else str(msg2)
+                if not sent_ok:
+                    await debug_print("lora: chunk send failed after shrink attempts", "ERROR")
+                    write_lora_log("Remote chunk send failed after shrink attempts", 'ERROR')
                     try:
-                        obj2 = ujson.loads(txt2)
+                        _last_tx_exception_ms = time.ticks_ms()
                     except Exception:
-                        obj2 = None
-                    if isinstance(obj2, dict) and obj2.get('ack') == 'ok':
-                        # Capture signal info for display
-                        try:
-                            if hasattr(lora, 'getRSSI'):
-                                sdata.lora_SigStr = lora.getRSSI()
-                            if hasattr(lora, 'getSNR'):
-                                sdata.lora_snr = lora.getSNR()
-                                sdata.last_message = ujson.dumps(obj2)[:32]
-                        except Exception:
-                            pass
-                        # Adopt next sync if provided
-                        try:
-                            if 'next_in' in obj2:
-                                rel = int(obj2['next_in'])
-                                if rel < 1:
-                                    rel = 1
-                                if rel > 24 * 3600:
-                                    rel = 24 * 3600
-                                settings.nextLoraSync = int(time.time() + rel)
-                            elif 'next' in obj2:
-                                settings.nextLoraSync = int(obj2['next'])
-                        except Exception:
-                            pass
-                        # Adopt GPS from base if provided and allowed
-                        try:
-                            if getattr(settings, 'GPS_ACCEPT_FROM_BASE', True):
-                                blat = obj2.get('gps_lat')
-                                blng = obj2.get('gps_lng')
-                                if (blat is not None) and (blng is not None):
-                                    balt = obj2.get('gps_alt_m')
-                                    bacc = obj2.get('gps_accuracy_m')
-                                    bts = obj2.get('gps_last_fix_ts')
-                                    save_gps_state(blat, blng, balt, bacc, bts)
-                                    await debug_print('lora: GPS adopted', 'LORA')
-                        except Exception:
-                            pass
-                        await debug_print(f"lora: next {getattr(settings, 'nextLoraSync', '')}", 'LORA')
-                        write_lora_log(f"Remote stored next sync epoch: {getattr(settings, 'nextLoraSync', '')}", 'INFO')
-                        led_status_flash('SUCCESS')
-                        break
+                        pass
+                    try:
+                        if lora and hasattr(lora, 'spi') and lora.spi:
+                            try:
+                                lora.spi.deinit()
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    lora = None
+                    return False
+
+                # After sending all chunks, switch to RX and wait for ACK
+                try:
+                    lora.setOperatingMode(lora.MODE_RX)
                 except Exception:
                     pass
-        await asyncio.sleep(0.01)
 
-    # After sending all chunks, done for this cycle
-    _last_send_ms = time.ticks_ms()
-    _last_activity_ms = _last_send_ms
+                ack_wait_ms = int(getattr(settings, 'LORA_CHUNK_ACK_WAIT_MS', 1500))
+                start_wait = time.ticks_ms()
+                while time.ticks_diff(time.ticks_ms(), start_wait) < ack_wait_ms:
+                    try:
+                        ev2 = lora._events()
+                    except Exception:
+                        ev2 = 0
+                    if RX_DONE_FLAG is not None and (ev2 & RX_DONE_FLAG):
+                        try:
+                            msg2, err2 = lora._readData(0)
+                        except Exception:
+                            msg2 = None; err2 = -1
+                        if err2 == 0 and msg2:
+                            try:
+                                obj2 = None
+                                txt2 = msg2.decode('utf-8', 'ignore') if isinstance(msg2, (bytes, bytearray)) else str(msg2)
+                                try:
+                                    obj2 = ujson.loads(txt2)
+                                except Exception:
+                                    obj2 = None
+                                if isinstance(obj2, dict) and obj2.get('ack') == 'ok':
+                                    # Capture signal info for display
+                                    try:
+                                        if hasattr(lora, 'getRSSI'):
+                                            sdata.lora_SigStr = lora.getRSSI()
+                                        if hasattr(lora, 'getSNR'):
+                                            sdata.lora_snr = lora.getSNR()
+                                            sdata.last_message = ujson.dumps(obj2)[:32]
+                                    except Exception:
+                                        pass
+                                    # Adopt next sync if provided
+                                    try:
+                                        if 'next_in' in obj2:
+                                            rel = int(obj2['next_in'])
+                                            if rel < 1:
+                                                rel = 1
+                                            if rel > 24 * 3600:
+                                                rel = 24 * 3600
+                                            settings.nextLoraSync = int(time.time() + rel)
+                                        elif 'next' in obj2:
+                                            settings.nextLoraSync = int(obj2['next'])
+                                    except Exception:
+                                        pass
+                                    # Adopt GPS from base if provided and allowed
+                                    try:
+                                        if getattr(settings, 'GPS_ACCEPT_FROM_BASE', True):
+                                            blat = obj2.get('gps_lat')
+                                            blng = obj2.get('gps_lng')
+                                            if (blat is not None) and (blng is not None):
+                                                balt = obj2.get('gps_alt_m')
+                                                bacc = obj2.get('gps_accuracy_m')
+                                                bts = obj2.get('gps_last_fix_ts')
+                                                save_gps_state(blat, blng, balt, bacc, bts)
+                                                await debug_print('lora: GPS adopted', 'LORA')
+                                    except Exception:
+                                        pass
+                                    await debug_print(f"lora: next {getattr(settings, 'nextLoraSync', '')}", 'LORA')
+                                    write_lora_log(f"Remote stored next sync epoch: {getattr(settings, 'nextLoraSync', '')}", 'INFO')
+                                    led_status_flash('SUCCESS')
+                                    break
+                            except Exception:
+                                pass
+                    await asyncio.sleep(0.01)
+
+                # After sending all chunks, done for this cycle
+                _last_send_ms = time.ticks_ms()
+                _last_activity_ms = _last_send_ms
+                return True
+
+            except Exception as e:
+                # Unified exception handling for remote TX
+                # Special-case UnboundLocalError / "local variable referenced before assignment"
+                try:
+                    is_ule = isinstance(e, UnboundLocalError) or ('local variable referenced before assignment' in str(e).lower())
+                except Exception:
+                    is_ule = False
+                if is_ule:
+                    await debug_print("Remote TX encountered UnboundLocalError; aborting send and scheduling radio re-init", "ERROR")
+                    await log_error(f"Remote TX UnboundLocalError: {e}")
+                    # Force cooldown and clean hardware to avoid tight repeat attempts
+                    try:
+                        _last_tx_exception_ms = time.ticks_ms()
+                    except Exception:
+                        pass
+                    try:
+                        if lora and hasattr(lora, 'spi') and lora.spi:
+                            lora.spi.deinit()
+                    except Exception:
+                        pass
+                    try:
+                        await free_pins()
+                    except Exception:
+                        pass
+                    lora = None
+                    # Return False to let the caller perform an orderly retry/reinit
+                    return False
+
+                # Fallback: original generic exception handler (keeps existing behavior)
+                try:
+                    import sys
+                    try:
+                        import uio as io
+                    except Exception:
+                        import io
+                    buf = io.StringIO()
+                    try:
+                        sys.print_exception(e, buf)
+                        tb = buf.getvalue()
+                    except Exception:
+                        tb = str(e)
+                except Exception:
+                    tb = str(e)
+                try:
+                    msg = str(e)
+                except Exception:
+                    msg = repr(e)
+                if 'local variable referenced before assignment' in msg.lower() or 'unboundlocalerror' in msg.lower():
+                    await debug_print(f"Remote TX local-variable error detected: {msg}", "ERROR")
+                else:
+                    await debug_print(f"Remote TX exception: {msg}", "ERROR")
+                await log_error(f"Remote TX exception: {msg} | trace: {tb}")
+
+                # Best-effort locals snapshot (trimmed) for diagnostics
+                try:
+                    ls = {k: (str(v)[:160] if v is not None else None) for k, v in locals().items() if k in ('lora','state','resp','msg2','tx_start')}
+                    write_lora_log(f"Remote TX exception locals snapshot: {ls}", 'DEBUG')
+                except Exception:
+                    pass
+
+                try:
+                    _init_failures = min(_init_failures + 1, _MAX_INIT_FAILS)
+                except Exception:
+                    pass
+                try:
+                    _last_tx_exception_ms = time.ticks_ms()
+                except Exception:
+                    pass
+
+                # Cleanup hardware & state
+                try:
+                    if lora and hasattr(lora, 'spi') and lora.spi:
+                        lora.spi.deinit()
+                except Exception:
+                    pass
+                try:
+                    await free_pins()
+                except Exception:
+                    pass
+                lora = None
+                return False
     return True
