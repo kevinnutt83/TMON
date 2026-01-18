@@ -106,6 +106,50 @@ def get_script_runtime():
     now = time.ticks_ms()
     return (now - script_start_time) // 1000
 
+# NEW: boot check-in (runs in async context; avoids nested asyncio.run)
+async def boot_check_in():
+    try:
+        # Prefer WiFi only when enabled and node is not remote
+        node_role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
+        if node_role == 'remote':
+            return
+        if not bool(getattr(settings, 'ENABLE_WIFI', False)):
+            return
+        try:
+            await connectToWifiNetwork()
+        except Exception:
+            return
+        try:
+            from wifi import check_internet_connection
+            inet_ok = await check_internet_connection()
+            if not inet_ok:
+                return
+        except Exception:
+            return
+
+        try:
+            from wprest import register_with_wp, heartbeat_ping, send_settings_to_wp, fetch_settings_from_wp, send_data_to_wp, poll_ota_jobs
+        except Exception:
+            return
+
+        try: await register_with_wp()
+        except Exception: pass
+        try: await heartbeat_ping()
+        except Exception: pass
+        try: await send_settings_to_wp()
+        except Exception: pass
+        try: await fetch_settings_from_wp()
+        except Exception: pass
+        try: await send_data_to_wp()
+        except Exception: pass
+        try: await poll_ota_jobs()
+        except Exception: pass
+    finally:
+        try:
+            gc.collect()
+        except Exception:
+            pass
+
 class TaskManager:
     def __init__(self):
         self.tasks = []
@@ -129,6 +173,11 @@ class TaskManager:
             except Exception as e:
                 await debug_print(f"Task {t['name']} error: {e}", "ERROR")
                 await log_error(f"Task {t['name']} error: {e}")
+            # NEW: GC after each task run
+            try:
+                gc.collect()
+            except Exception:
+                pass
             t['last_run'] = time.ticks_ms()
             elapsed = (t['last_run'] - start) // 1000
             sleep_time = max(0, t['interval'] - elapsed)
@@ -210,6 +259,11 @@ async def sample_task():
     sdata.last_error = getattr(TMON_AI, 'last_error', '')
     # Shortened debug print; consider making it conditional on settings.DEBUG
     record_field_data()
+    # NEW: GC after record_field_data (file I/O + JSON)
+    try:
+        gc.collect()
+    except Exception:
+        pass
     await debug_print(f"sample: lr={sdata.loop_runtime}s sr={sdata.script_runtime}s mem={sdata.free_mem}", "INFO")
     led_status_flash('INFO')  # Always flash LED for info
 
@@ -636,6 +690,22 @@ async def startup():
             await debug_print('startup: engine_loop disabled', 'INFO')
     except Exception as e:
         await debug_print(f'startup: engine start fail: {e}', 'ERROR')
+
+    # NEW: periodic runGC task (log maintenance + gc)
+    async def _gc_task():
+        while True:
+            try:
+                from utils import runGC
+                await runGC()
+            except Exception:
+                pass
+            await asyncio.sleep(int(getattr(settings, 'GC_INTERVAL_S', 60)))
+
+    try:
+        import uasyncio as _agc
+        _agc.create_task(_gc_task())
+    except Exception:
+        pass
 
     await tm.run()
 

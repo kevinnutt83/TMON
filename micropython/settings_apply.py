@@ -1,27 +1,45 @@
 # Apply staged settings safely and persist applied snapshot
+
 try:
     import ujson as json
 except Exception:
-    import json
+    import json  # type: ignore
+
+import os
+try:
+    import utime as time
+except Exception:
+    import time  # type: ignore
 
 try:
-    import uos as os
+    import uasyncio as asyncio
 except Exception:
-    import os
+    asyncio = None
+
+try:
+    import gc
+except Exception:
+    gc = None
 
 import settings
+
 from config_persist import read_json, write_json
-from utils import debug_print, persist_suspension_state
+from utils import debug_print, persist_suspension_state, persist_unit_name, persist_node_type, persist_wordpress_api_url
+
+def _gc_collect():
+    try:
+        if gc:
+            gc.collect()
+    except Exception:
+        pass
 
 # Conservative allowlist: key -> coercion function
 def _to_bool(v):
     try:
         if isinstance(v, bool):
             return v
-        if isinstance(v, (int, float)):
-            return bool(v)
         s = str(v).strip().lower()
-        return s in ('1', 'true', 'yes', 'on')
+        return s in ('1', 'true', 'yes', 'on', 'y')
     except Exception:
         return False
 
@@ -57,13 +75,12 @@ ALLOWLIST = {
     'GPS_SOURCE': _to_str,
     'GPS_LAT': _to_float,
     'GPS_LNG': _to_float,
-    # Added allowlist entries for higher-level settings that must be applied
     'NODE_TYPE': _to_str,
     'UNIT_Name': _to_str,
     'WORDPRESS_API_URL': _to_str,
 }
 
-# WiFi credentials are sensitive; only allow if explicitly permitted and on base or unprovisioned
+# WiFi credentials are sensitive; only allow if explicitly permitted and on base/wifi or unprovisioned
 SENSITIVE = {
     'WIFI_SSID': _to_str,
     'WIFI_PASS': _to_str,
@@ -71,64 +88,56 @@ SENSITIVE = {
 
 def _can_apply_wifi_credentials():
     try:
-        if getattr(settings, 'NODE_TYPE', 'base') == 'base':
+        # allow base/wifi always; allow remote only if explicitly permitted AND not provisioned
+        role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
+        if role in ('base', 'wifi'):
             return True
-        # For remotes, only if not yet provisioned
-        return not bool(getattr(settings, 'UNIT_PROVISIONED', False))
+        if bool(getattr(settings, 'ALLOW_REMOTE_WIFI_CREDENTIALS', False)) and not bool(getattr(settings, 'UNIT_PROVISIONED', False)):
+            return True
     except Exception:
-        return False
+        pass
+    return False
 
 def _apply_key(k, v):
     try:
-        if k == 'DEVICE_SUSPENDED':
-            setattr(settings, k, bool(_to_bool(v)))
-            try:
-                persist_suspension_state(getattr(settings, k))
-            except Exception:
-                pass
+        # Sensitive keys
+        if k in SENSITIVE:
+            if not _can_apply_wifi_credentials():
+                return False
+            val = SENSITIVE[k](v)
+            setattr(settings, k, val)
             return True
-        # general allowlist
-        if k in ALLOWLIST:
-            coerced = ALLOWLIST[k](v)
-            setattr(settings, k, coerced)
-            # Special handling: NODE_TYPE changes should be persisted and may immediately alter behavior
-            if k == 'NODE_TYPE':
-                try:
-                    from utils import persist_node_type
-                    persist_node_type(coerced)
-                    # If role is remote, ensure WiFi disabled (best-effort)
-                    if str(coerced).lower() == 'remote':
-                        try:
-                            from wifi import disable_wifi
-                            disable_wifi()
-                            settings.ENABLE_WIFI = False
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-            # Special handling: WORDPRESS_API_URL should be persisted for device
-            if k == 'WORDPRESS_API_URL':
-                try:
-                    from utils import persist_wordpress_api_url
-                    persist_wordpress_api_url(coerced)
-                except Exception:
-                    pass
-            return True
-        # sensitive items
-        if k in SENSITIVE and _can_apply_wifi_credentials():
-            coerced = SENSITIVE[k](v)
-            setattr(settings, k, coerced)
-            return True
+
+        # Allowlisted keys
+        if k not in ALLOWLIST:
+            return False
+
+        val = ALLOWLIST[k](v)
+        setattr(settings, k, val)
+
+        # Side effects / persistence for higher-level settings
+        try:
+            if k == 'DEVICE_SUSPENDED':
+                persist_suspension_state(bool(val))
+            elif k == 'UNIT_Name':
+                persist_unit_name(val)
+            elif k == 'NODE_TYPE':
+                persist_node_type(val)
+            elif k == 'WORDPRESS_API_URL':
+                persist_wordpress_api_url(val)
+        except Exception:
+            pass
+
+        return True
     except Exception:
         return False
-    return False
 
 def _filter_and_apply(incoming: dict):
     applied = {}
     for k, v in (incoming or {}).items():
         try:
             if _apply_key(k, v):
-                applied[k] = getattr(settings, k)
+                applied[k] = getattr(settings, k, None)
         except Exception:
             pass
     return applied
@@ -136,231 +145,147 @@ def _filter_and_apply(incoming: dict):
 def load_applied_settings_on_boot():
     path = getattr(settings, 'REMOTE_SETTINGS_APPLIED_FILE', '/logs/remote_settings.applied.json')
     try:
-        data = read_json(path, None)
-        if isinstance(data, dict):
-            _filter_and_apply(data)
-            # If NODE_TYPE is remote, proactively disable WiFi on boot
-            try:
-                if getattr(settings, 'NODE_TYPE', '').lower() == 'remote':
-                    try:
-                        from wifi import disable_wifi
-                        disable_wifi()
-                        settings.ENABLE_WIFI = False
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+        snap = read_json(path, default=None)
+        if isinstance(snap, dict) and snap:
+            _filter_and_apply(snap)
     except Exception:
         pass
+    finally:
+        _gc_collect()
 
 def _post_command_confirm(payload):
     """Best-effort: POST a command-complete / ack to the configured WP URL."""
     try:
-        # import in-function to avoid circular deps on device
         try:
             import urequests as requests
         except Exception:
-            import requests
-        wp_url = getattr(settings, 'WORDPRESS_API_URL', '') or ''
-        if not wp_url:
+            requests = None
+        if not requests:
             return False
-        headers = {'Content-Type': 'application/json'}
-        # Try primary endpoint
+        wp = str(getattr(settings, 'WORDPRESS_API_URL', '') or '').rstrip('/')
+        if not wp:
+            return False
+        # Prefer new endpoint; fallback to legacy ack
         try:
-            resp = requests.post(wp_url.rstrip('/') + '/wp-json/tmon/v1/device/command-complete', headers=headers, json=payload, timeout=8)
-            ok = getattr(resp, 'status_code', 0) in (200, 201)
+            from wprest import _auth_headers
+            hdrs = _auth_headers() if callable(_auth_headers) else {}
+        except Exception:
+            hdrs = {}
+        r = None
+        try:
             try:
-                if resp: resp.close()
+                r = requests.post(wp + '/wp-json/tmon/v1/device/command-complete', headers=hdrs, json=payload, timeout=8)
+            except TypeError:
+                r = requests.post(wp + '/wp-json/tmon/v1/device/command-complete', headers=hdrs, json=payload)
+            sc = getattr(r, 'status_code', 0)
+            if sc == 404:
+                try:
+                    r.close()
+                except Exception:
+                    pass
+                r = requests.post(wp + '/wp-json/tmon/v1/device/ack', headers=hdrs, json=payload)
+            return True
+        finally:
+            try:
+                if r:
+                    r.close()
             except Exception:
                 pass
-            if ok:
-                return True
-        except Exception:
-            pass
-        # Fallback to legacy ack endpoint
-        try:
-            legacy = {'command_id': payload.get('job_id') or payload.get('command_id'), 'ok': payload.get('ok', False), 'result': payload.get('result','')}
-            resp2 = requests.post(wp_url.rstrip('/') + '/wp-json/tmon/v1/device/ack', headers=headers, json=legacy, timeout=8)
-            ok2 = getattr(resp2, 'status_code', 0) in (200, 201)
-            try:
-                if resp2: resp2.close()
-            except Exception:
-                pass
-            return ok2
-        except Exception:
-            return False
+            _gc_collect()
     except Exception:
         return False
 
 def _append_staged_audit(unit_id, action, details):
     """Append an audit line to LOG_DIR/staged_settings_audit.log for traceability."""
     try:
-        import utime as _t
-        ts = int(_t.time()) if hasattr(_t, 'time') else 0
-    except Exception:
-        ts = 0
-    try:
-        path = getattr(settings, 'LOG_DIR', '/logs').rstrip('/') + '/staged_settings_audit.log'
-        line = {'ts': ts, 'unit_id': str(unit_id), 'action': action, 'details': details}
-        try:
-            import ujson as _j
-            s = _j.dumps(line)
-        except Exception:
-            import json as _j
-            s = _j.dumps(line)
-        with open(path, 'a') as af:
-            af.write(s + '\n')
+        p = getattr(settings, 'LOG_DIR', '/logs').rstrip('/') + '/staged_settings_audit.log'
+        with open(p, 'a') as f:
+            f.write(json.dumps({
+                'ts': int(time.time()),
+                'unit_id': unit_id,
+                'action': action,
+                'details': details
+            }) + '\n')
     except Exception:
         pass
+    finally:
+        _gc_collect()
 
 async def apply_staged_settings_once():
+    """Apply staged settings file if present; persist applied snapshot; clear staged file."""
+    unit_id = str(getattr(settings, 'UNIT_ID', '') or '')
     staged_path = getattr(settings, 'REMOTE_SETTINGS_STAGED_FILE', '/logs/remote_settings.staged.json')
     applied_path = getattr(settings, 'REMOTE_SETTINGS_APPLIED_FILE', '/logs/remote_settings.applied.json')
+
     try:
-        # If no global staged file, check per-unit staged file written by UC/base
-        unit_staged = getattr(settings, 'LOG_DIR', '/logs') + '/device_settings-' + str(getattr(settings, 'UNIT_ID', '')) + '.json'
-        staged = None
+        # If a per-unit staged file exists (base behavior), move it into canonical path first
         try:
-            staged = read_json(staged_path, None)
-        except Exception:
-            staged = None
-        if not isinstance(staged, dict):
-            # Try unit-specific file
+            per_unit = getattr(settings, 'LOG_DIR', '/logs').rstrip('/') + f'/device_settings-{unit_id}.json'
             try:
-                staged_unit = read_json(unit_staged, None)
-                if isinstance(staged_unit, dict):
-                    # persist to canonical staged file to keep behavior consistent
+                os.stat(per_unit)
+                try:
+                    with open(per_unit, 'r') as f:
+                        doc = json.loads(f.read() or '{}')
+                    write_json(staged_path, doc)
                     try:
-                        write_json(staged_path, staged_unit)
+                        os.remove(per_unit)
                     except Exception:
                         pass
-                    staged = staged_unit
-            except Exception:
-                staged = None
-        if not isinstance(staged, dict):
-            return False
-        # Load previous applied snapshot for diffing (optional)
-        prev_applied_meta = read_json(applied_path, None)
-        prev_applied = {}
-        if isinstance(prev_applied_meta, dict) and isinstance(prev_applied_meta.get('applied'), dict):
-            prev_applied = prev_applied_meta.get('applied') or {}
-        # Snapshot previous settings for rollback
-        prev_snapshot = {}
-        for k in ALLOWLIST.keys():
-            if hasattr(settings, k):
-                prev_snapshot[k] = getattr(settings, k)
-        try:
-            write_json(getattr(settings,'REMOTE_SETTINGS_PREV_FILE','/logs/remote_settings.prev.json'), prev_snapshot)
-        except Exception:
-            pass
-        applied = _filter_and_apply(staged)
-        # Persist applied snapshot
-        meta = {
-            'applied': applied,
-            'ts': None,
-        }
-        try:
-            import utime as _t
-            meta['ts'] = int(_t.time())
-        except Exception:
-            pass
-        # Compute diff summary
-        try:
-            changed_keys = []
-            added_keys = []
-            for k, v in applied.items():
-                if k not in prev_applied:
-                    added_keys.append(k)
-                elif prev_applied.get(k) != v:
-                    changed_keys.append(k)
-            ignored_keys = [k for k in (staged or {}).keys() if k not in applied]
-            meta['changed_keys'] = changed_keys
-            meta['added_keys'] = added_keys
-            meta['ignored_keys'] = ignored_keys
-        except Exception:
-            pass
-        write_json(applied_path, meta)
-        # Remove staged file to prevent re-apply
-        try:
-            os.remove(staged_path)
-        except Exception:
-            pass
-
-        # NEW: Reboot policy: if applied included critical keys, perform a soft reset
-        try:
-            REBOOT_KEYS = set(['NODE_TYPE','WIFI_SSID','WIFI_PASS','RELAY_PIN1','RELAY_PIN2','ENGINE_ENABLED','ENABLE_OLED','ENABLE_LORA','ENABLE_WIFI'])
-            applied_keys = set(list(applied.keys()))
-            if applied_keys & REBOOT_KEYS:
-                await debug_print('Settings applied include critical keys; performing soft reset', 'PROVISION')
-                try:
-                    import machine
-                    # best-effort single soft reset
-                    machine.soft_reset()
-                except Exception:
-                    # if machine not available (desktop), skip
-                    pass
-        except Exception:
-            pass
-
-        # NEW: If staged included commands, attempt to confirm/clear them on the server
-        try:
-            cmds = staged.get('commands', []) if isinstance(staged, dict) else []
-            confirmed = 0
-            for c in (cmds or []):
-                try:
-                    job_id = c.get('id') or c.get('job_id') or c.get('command_id')
-                    payload = {'job_id': job_id, 'ok': True, 'result': 'applied_via_staged_settings'}
-                    if job_id:
-                        if _post_command_confirm(payload):
-                            confirmed += 1
-                        else:
-                            # best-effort only; log failure
-                            await debug_print(f'Failed to confirm staged command {job_id}', 'WARN')
-                except Exception:
-                    pass
-            # Append audit entry for applied settings + command confirms
-            try:
-                _append_staged_audit(getattr(settings, 'UNIT_ID', ''), 'apply', {'applied_keys': list(applied.keys()), 'commands_confirmed': confirmed, 'added': meta.get('added_keys',[]), 'changed': meta.get('changed_keys',[]), 'ignored': meta.get('ignored_keys',[])})
             except Exception:
                 pass
         except Exception:
             pass
 
         try:
-            msg = 'Settings applied: ' \
-                  + ('a=' + ','.join(meta.get('added_keys', [])) if meta.get('added_keys') else 'a=0') \
-                  + ' ' \
-                  + ('c=' + ','.join(meta.get('changed_keys', [])) if meta.get('changed_keys') else 'c=0') \
-                  + ' ' \
-                  + ('i=' + ','.join(meta.get('ignored_keys', [])) if meta.get('ignored_keys') else 'i=0')
+            os.stat(staged_path)
         except Exception:
-            msg = 'Settings: staged settings applied'
-        await debug_print(msg, 'INFO')
-        return True
-    except Exception as e:
-        # Rollback to previous snapshot
+            return False
+
+        incoming = read_json(staged_path, default=None)
+        if not isinstance(incoming, dict) or not incoming:
+            try:
+                os.remove(staged_path)
+            except Exception:
+                pass
+            return False
+
+        applied = _filter_and_apply(incoming)
+        if applied:
+            write_json(applied_path, applied)
+            _append_staged_audit(unit_id, 'applied', {'keys': list(applied.keys())})
+            await debug_print(f"settings_apply: applied {list(applied.keys())}", "INFO")
+            # Best-effort confirmation to server
+            try:
+                _post_command_confirm({'unit_id': unit_id, 'type': 'settings_applied', 'applied': list(applied.keys())})
+            except Exception:
+                pass
+
+        # Clear staged file after attempt
         try:
-            prev = read_json(getattr(settings,'REMOTE_SETTINGS_PREV_FILE','/logs/remote_settings.prev.json'), {})
-            if isinstance(prev, dict):
-                for k, v in prev.items():
-                    try:
-                        setattr(settings, k, v)
-                    except Exception:
-                        pass
+            os.remove(staged_path)
         except Exception:
             pass
-        await debug_print('Settings: apply failed, rollback executed: %s' % e, 'ERROR')
+
+        return bool(applied)
+    except Exception as e:
+        _append_staged_audit(unit_id, 'error', {'error': str(e)})
+        try:
+            await debug_print(f"settings_apply: error {e}", "ERROR")
+        except Exception:
+            pass
         return False
+    finally:
+        _gc_collect()
+        if asyncio:
+            await asyncio.sleep(0)
 
 async def settings_apply_loop(interval_s: int = 60):
-    # Periodically check for staged settings and apply
     while True:
         try:
             await apply_staged_settings_once()
         except Exception:
             pass
-        try:
-            import uasyncio as _a
-            await _a.sleep(int(interval_s))
-        except Exception:
+        if asyncio:
+            await asyncio.sleep(int(interval_s))
+        else:
             break

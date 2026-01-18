@@ -1,22 +1,55 @@
 # Firmware Version: v2.06.0
+try:
+    import uasyncio as asyncio
+except Exception:
+    asyncio = None
+
 from utils import debug_print
 
 async def frostwatchCheck():
-    await debug_print(f"Frostwatch Checks", "FROSTWATCH")
+    try:
+        await debug_print("frostwatchCheck", "FROSTWATCH")
+    except Exception:
+        pass
+    if asyncio:
+        await asyncio.sleep(0)
 
 async def heatwatchCheck():
-    await debug_print(f"Heatwatch Checks", "HEATWATCH")
+    try:
+        await debug_print("heatwatchCheck", "HEATWATCH")
+    except Exception:
+        pass
+    if asyncio:
+        await asyncio.sleep(0)
 
 async def beginFrostOperations():
-    await debug_print(f"Frostwatch Operations Start", "FROSTWATCH")
-    pass
+    try:
+        await debug_print("beginFrostOperations", "FROSTWATCH")
+    except Exception:
+        pass
+    if asyncio:
+        await asyncio.sleep(0)
 
 async def beginHeatOperations():
-    await debug_print(f"Heatwatch Operations Start", "HEATWATCH")
-    pass
+    try:
+        await debug_print("beginHeatOperations", "HEATWATCH")
+    except Exception:
+        pass
+    if asyncio:
+        await asyncio.sleep(0)
 
 async def endFrostOperations():
-    pass
+    try:
+        await debug_print("endFrostOperations", "FROSTWATCH")
+    except Exception:
+        pass
+    if asyncio:
+        await asyncio.sleep(0)
 
 async def endHeatOperations():
-    pass
+    try:
+        await debug_print("endHeatOperations", "HEATWATCH")
+    except Exception:
+        pass
+    if asyncio:
+        await asyncio.sleep(0)

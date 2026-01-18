@@ -7,6 +7,7 @@ import uasyncio as asyncio
 from utils import debug_print
 from tmon import frostwatchCheck, heatwatchCheck, beginFrostOperations, beginHeatOperations, endFrostOperations, endHeatOperations
 from BME280 import BME280
+import gc
 
 
 #Sampling Routine for sample all sensor types if they are enabled
@@ -21,6 +22,12 @@ async def sampleEnviroment():
         await frost_and_heat_watch()  # Call frost and heat watch after sampling
     finally:
         _s.sampling_active = False
+        # NEW: runGC after sampling cycle
+        try:
+            from utils import runGC
+            await runGC()
+        except Exception:
+            pass
 
 #Sample Temperatures from enabled sensors devices
 async def sampleTemp():
@@ -58,6 +65,13 @@ async def sampleBME280():
                 led_status_flash('SAMPLE_TEMP')
                 data = []
                 data = sensor.readData()
+
+                # NEW: GC after memory-intensive sensor read
+                try:
+                    gc.collect()
+                except Exception:
+                    pass
+
                 sdata.cur_temp_c = data[1]
                 sdata.cur_temp_f = (sdata.cur_temp_c * 9/5) + 32
                 sdata.cur_humid = data[2]
