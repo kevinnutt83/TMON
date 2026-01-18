@@ -29,11 +29,6 @@ FLIP_INTERVAL_S = int(getattr(settings, 'OLED_HEADER_FLIP_S', 4))
 RENDER_INTERVAL_S = 0.5
 MAX_TEXT_CHARS = 16
 
-try:
-    import gc
-except Exception:
-    gc = None
-
 # Simple SSD1309 driver (robust for 128x64)
 class SSD1309_I2C(framebuf.FrameBuffer):
     def __init__(self, width, height, i2c, addr=0x3C, external_vcc=False):
@@ -260,7 +255,6 @@ async def _render_loop(page=0):
         return
     if not getattr(settings, 'DEBUG', False):
         await fade_display(on=True)
-    _gc_ctr = 0  # NEW: throttle GC
     while True:
         try:
             nowt = time.time()
@@ -445,14 +439,6 @@ async def _render_loop(page=0):
                 pass
 
             oled.show()
-
-            # NEW: GC after render (throttled)
-            try:
-                _gc_ctr += 1
-                if gc and (_gc_ctr % 20) == 0:
-                    gc.collect()
-            except Exception:
-                pass
         except Exception as e:
             try:
                 print("[OLED] render error:", e)
