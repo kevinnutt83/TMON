@@ -57,6 +57,10 @@ ALLOWLIST = {
     'GPS_SOURCE': _to_str,
     'GPS_LAT': _to_float,
     'GPS_LNG': _to_float,
+    # Added allowlist entries for higher-level settings that must be applied
+    'NODE_TYPE': _to_str,
+    'UNIT_Name': _to_str,
+    'WORDPRESS_API_URL': _to_str,
 }
 
 # WiFi credentials are sensitive; only allow if explicitly permitted and on base or unprovisioned
@@ -87,6 +91,28 @@ def _apply_key(k, v):
         if k in ALLOWLIST:
             coerced = ALLOWLIST[k](v)
             setattr(settings, k, coerced)
+            # Special handling: NODE_TYPE changes should be persisted and may immediately alter behavior
+            if k == 'NODE_TYPE':
+                try:
+                    from utils import persist_node_type
+                    persist_node_type(coerced)
+                    # If role is remote, ensure WiFi disabled (best-effort)
+                    if str(coerced).lower() == 'remote':
+                        try:
+                            from wifi import disable_wifi
+                            disable_wifi()
+                            settings.ENABLE_WIFI = False
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+            # Special handling: WORDPRESS_API_URL should be persisted for device
+            if k == 'WORDPRESS_API_URL':
+                try:
+                    from utils import persist_wordpress_api_url
+                    persist_wordpress_api_url(coerced)
+                except Exception:
+                    pass
             return True
         # sensitive items
         if k in SENSITIVE and _can_apply_wifi_credentials():
@@ -113,6 +139,17 @@ def load_applied_settings_on_boot():
         data = read_json(path, None)
         if isinstance(data, dict):
             _filter_and_apply(data)
+            # If NODE_TYPE is remote, proactively disable WiFi on boot
+            try:
+                if getattr(settings, 'NODE_TYPE', '').lower() == 'remote':
+                    try:
+                        from wifi import disable_wifi
+                        disable_wifi()
+                        settings.ENABLE_WIFI = False
+                    except Exception:
+                        pass
+            except Exception:
+                pass
     except Exception:
         pass
 

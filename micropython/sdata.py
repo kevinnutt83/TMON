@@ -17,6 +17,12 @@ lora_SigStr = 0
 # Added SNR for better signal info
 lora_snr = 0
 
+# NEW: LoRa activity/connection flags used by OLED header refresh logic
+LORA_CONNECTED = False
+lora_last_rx_ts = 0
+lora_last_tx_ts = 0
+lora_last_init_ts = 0
+
 # Engine controller metrics
 engine1_speed_rpm = 0
 engine2_speed_rpm = 0
@@ -29,6 +35,8 @@ cur_temp_c = 0
 cur_temp_f = 0
 cur_bar_pres = 0
 cur_humid = 0
+# NEW: indicate sampling in progress so OLED can render sampling-only content
+sampling_active = False
 
 # Base Station Data Variables
 lowest_temp_f = 0

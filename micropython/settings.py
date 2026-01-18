@@ -2,18 +2,18 @@
 
 # Bootstrap critical variables before any reference
 try:
-	FIELD_DATA_APP_PASS
+    FIELD_DATA_APP_PASS
 except NameError:
-	FIELD_DATA_APP_PASS = ""  # default; overridden by persisted config later
+    FIELD_DATA_APP_PASS = ""  # default; overridden by persisted config later
 # Ensure claim-flow toggles exist before use
 try:
-	ENABLE_FIRST_CHECKIN_CLAIM
+    ENABLE_FIRST_CHECKIN_CLAIM
 except NameError:
-	ENABLE_FIRST_CHECKIN_CLAIM = False
+    ENABLE_FIRST_CHECKIN_CLAIM = False
 try:
-	CLAIM_CONFIRM_DELAY_S
+    CLAIM_CONFIRM_DELAY_S
 except NameError:
-	CLAIM_CONFIRM_DELAY_S = 0
+    CLAIM_CONFIRM_DELAY_S = 0
 
 # Move LOG_DIR and essential file paths near the top so other constants can reference them.
 LOG_DIR = '/logs'
@@ -26,6 +26,7 @@ PROVISIONED_FLAG_FILE = LOG_DIR + '/provisioned.flag'
 REMOTE_SETTINGS_STAGED_FILE = LOG_DIR + '/remote_settings.staged.json'
 REMOTE_SETTINGS_APPLIED_FILE = LOG_DIR + '/remote_settings.applied.json'
 REMOTE_SETTINGS_PREV_FILE = LOG_DIR + '/remote_settings.prev.json'
+UNIT_NAME_FILE = '/logs/unit_name.txt'   # Persisted human-friendly unit name (applied after provisioning)
 
 # Generic logs
 LOG_FILE = LOG_DIR + '/lora.log'
@@ -80,8 +81,8 @@ RELAY_PIN1 = 17
 RELAY_PIN2 = 18
 I2C_A_SCL_PIN = 33
 I2C_A_SDA_PIN = 34
-I2C_B_SCL_PIN = 11
-I2C_B_SDA_PIN = 12
+I2C_B_SCL_PIN = 38
+I2C_B_SDA_PIN = 39
 SPI_BUS = 1
 CLK_PIN = 35
 MOSI_PIN = 36
@@ -125,7 +126,7 @@ FIELD_DATA_BACKOFF_S = 10          # retry backoff on HTTP failures
 FIELD_DATA_GZIP = True             # allow gzip payload when supported
 
 # --- LoRa sync & recovery ---
-nextLoraSync = 300                      # Remote next absolute sync epoch (assigned by base)
+nextLoraSync = 100                      # Remote next absolute sync epoch (assigned by base)
 LORA_SYNC_WINDOW = 2                    # seconds of minimum spacing between remote sync slots
 LORA_SLOT_SPACING_S = LORA_SYNC_WINDOW  # alias for clarity
 LORA_CHECK_IN_MINUTES = 5               # Default check-in cadence in minutes used when no explicit nextLoraSync is set
@@ -134,25 +135,29 @@ LORA_HARD_REBOOT_ERR_CODES = [-2]  # error codes that trigger hard reboot (e.g.,
 LORA_ERR_PERSIST_REBOOTS = 2       # if persists this many times across reboots, stop rebooting and log
 ERROR_STATE_FILE = LOG_DIR + '/last_error.state'  # persist last error and reboot counters
 LORA_REMOTE_INFO_LOG = LOG_DIR + '/remote_info.log'  # base records remote identities here
-LORA_HMAC_ENABLED = False            # When True, firmware includes a signature with LoRa frames
-LORA_HMAC_SECRET = ''                # Per-device secret used to sign LoRa frames (provisioned)
+LORA_HMAC_ENABLED = True            # When True, firmware includes a signature with LoRa frames
+LORA_HMAC_SECRET = ''               # Per-device secret used to sign LoRa frames (provisioned)
 LORA_HMAC_COUNTER_FILE = LOG_DIR + '/lora_ctr.json'  # Persist local counter (remote)
 LORA_REMOTE_COUNTERS_FILE = LOG_DIR + '/remote_ctr.json'  # Base: last seen counters per remote
 LORA_HMAC_REJECT_UNSIGNED = True     # When enabled + HMAC active, reject frames lacking valid signature
 LORA_HMAC_REPLAY_PROTECT = True      # Enforce strictly increasing counter (ctr) to prevent replay
-LORA_ENCRYPT_ENABLED = False         # Optional payload encryption (ChaCha20 stream cipher)
+LORA_ENCRYPT_ENABLED = True         # Optional payload encryption (ChaCha20 stream cipher)
 LORA_ENCRYPT_SECRET = ''  
-FREQ = 868.0                               # Regional frequency (EU example); change per deployment
+FREQ = 915.0                               # Regional frequency (EU example); change per deployment
 BW = 125.0
 SF = 12
-CR = 5
+CR = 7                                    # stronger coding rate (4/7)
 SYNC_WORD = 0xF4
-POWER = 20
+POWER = 14                                # default transmit power reduced for regulatory safety
 CURRENT_LIMIT = 140.0
 PREAMBLE_LEN = 12
 CRC_ON = True
 TCXO_VOLTAGE = 1.8  # Confirmed for Waveshare SX1262
-USE_LDO = True# 32-byte key (hex or text) for encryption; provision per device
+USE_LDO = True
+CAD_SYMBOLS = 8  # Symbols for CAD detection before TX
+# NEW: CAD backoff when channel busy (seconds)
+LORA_CAD_BACKOFF_S = 2       # Base backoff when CAD indicates busy
+LORA_CAD_BACKOFF_MAX_S = 30  # Maximum randomized backoff applied
 
 # --- Last error telemetry (include in sdata payloads) ---
 LAST_ERROR_CODE = 0
@@ -188,7 +193,7 @@ OLED_HEADER_HEIGHT = 16                   # pixels reserved at top for header (v
 OLED_FOOTER_HEIGHT = 12                   # pixels reserved at bottom for footer (temp/unit)
 
 # NEW: control whether the compact network bars and labels are shown in header
-DISPLAY_NET_BARS = False                  # When True, show concise "W"/"L" bars in OLED header
+DISPLAY_NET_BARS = True                   # When True, show concise "W"/"L" bars in OLED header
 
 # NEW: seconds to flip between voltage and r_temp_f in header (smooth flip)
 OLED_HEADER_FLIP_S = 4
@@ -222,8 +227,8 @@ ENABLE_RELAY6 = False
 ENABLE_RELAY7 = False
 ENABLE_RELAY8 = False
 RELAY_RUNTIME_LIMITS = {               # Per relay runtime cap (minutes) override; fallback to RELAY_SAFETY_MAX_RUNTIME_MIN
-	1: 720,
-	2: 720
+    1: 720,
+    2: 720
 }
 
 #Sampling Toggles
@@ -279,7 +284,7 @@ OTA_APPLY_INTERVAL_S = 5                  # Check/apply pending update every few
 OTA_RESTORE_ON_FAIL = True                # Restore backups if any file verification/apply fails
 OTA_MAX_FILE_BYTES = 256*1024             # Safety cap per file download size
 OTA_FILES_ALLOWLIST = [                   # Limit which files can be updated via OTA
-	'main.py','lora.py','utils.py','sampling.py','settings.py','relay.py','oled.py','ota.py','wprest.py'
+    'main.py','lora.py','utils.py','sampling.py','settings.py','relay.py','oled.py','ota.py','wprest.py'
 ]
 OTA_MANIFEST_SIG_URL = OTA_MANIFEST_URL + '.sig'  # Optional detached HMAC signature (hex)
 OTA_MANIFEST_HMAC_SECRET = ''             # If set, verify manifest with HMAC(secret, manifest_bytes)
@@ -353,7 +358,7 @@ STAGED_SETTINGS_KEYS_ALLOW = [
     'FIELD_DATA_HMAC_ENABLED','FIELD_DATA_HMAC_SECRET',
     'DEBUG','DEBUG_PROVISION','DEBUG_LORA','DEBUG_WIFI','DEBUG_OTA',
     # Added keys to support device feature toggles and engine/pin control
-    'ENGINE_ENABLED','ENGINE_FORCE_DISABLED','ENABLE_sensorBME280',
+    'ENGINE_ENABLED','ENGINE_FORCE_DISABLED','ENABLE_SENSORBME280',
     'RELAY_PIN1','RELAY_PIN2','RELAY_RUNTIME_LIMITS',
     'ENABLE_OLED','UNIT_Name'  # ensure these are accepted when staged
 ]
@@ -510,3 +515,17 @@ def get_display_settings():
         'OLED_HEADER_FLIP_S': OLED_HEADER_FLIP_S,
     }
 
+# LoRa chunked transfer parameters (remote -> base)
+LORA_CHUNK_RAW_BYTES = 150        # raw bytes per chunk before base64 & JSON overhead (tune so final msg <= 250)
+LORA_CHUNK_MAX_RETRIES = 3       # attempts per chunk before deferring
+LORA_CHUNK_ACK_WAIT_MS = 1500    # ms to wait for per-chunk ACK before retry
+# LoRa payload safety: keep below SX126x limits and leave headroom for driver overhead.
+# Reasonable default chosen to avoid packet-too-long (-4) errors in the field.
+LORA_MAX_PAYLOAD = 255
+
+# NEW: control retries for single-frame sends before re-init (helps transient -1 cases)
+LORA_SINGLE_FRAME_RETRIES = 2
+
+# NEW: explicit lists for handling chunk send errors
+LORA_CHUNK_SHRINK_CODES = [-4]            # codes that indicate "packet too long" and should trigger chunk size shrink
+LORA_CHUNK_TRANSIENT_CODES = [86, 87, 89] # codes considered transient — retry the chunk rather than shrink

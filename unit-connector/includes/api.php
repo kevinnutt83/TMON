@@ -148,4 +148,242 @@ add_action('rest_api_init', function() {
 		},
 		'permission_callback' => function() { return current_user_can('manage_options'); }
 	));
+
+    // Accept a device chunk-store snapshot (posted by device firmware or base)
+    register_rest_route('tmon/v1', '/admin/chunk-store', [
+        'methods' => 'POST',
+        'permission_callback' => '__return_true', // we validate hub key inside
+        'callback' => function($request) {
+            $expected = get_option('tmon_uc_shared_key', '') ?: get_option('tmon_admin_uc_key', '');
+            $provided = '';
+            if (function_exists('getallheaders')) {
+                $h = getallheaders();
+                $provided = $h['X-TMON-HUB'] ?? $h['x-tmon-hub'] ?? '';
+            } else {
+                $provided = $_SERVER['HTTP_X_TMON_HUB'] ?? '';
+            }
+            if ($expected && !$provided) return new WP_REST_Response(['ok'=>false,'msg'=>'missing hub key'],403);
+            if ($expected && !hash_equals((string)$expected, (string)$provided)) return new WP_REST_Response(['ok'=>false,'msg'=>'invalid hub key'],403);
+
+            $params = $request->get_json_params();
+            $unit = sanitize_text_field($params['unit_id'] ?? ($params['unit'] ?? 'unknown'));
+            $snap = is_array($params) ? $params : [];
+            $store = get_option('tmon_uc_chunk_store', []);
+            if (!is_array($store)) $store = [];
+            $store[$unit] = ['ts' => current_time('mysql'), 'snapshot' => $snap];
+            update_option('tmon_uc_chunk_store', $store);
+            return rest_ensure_response(['ok'=>true]);
+        }
+    ]);
+
+    // Accept lora status snapshots
+    register_rest_route('tmon/v1', '/admin/lora-status', [
+        'methods' => 'POST',
+        'permission_callback' => '__return_true',
+        'callback' => function($request) {
+            $expected = get_option('tmon_uc_shared_key', '') ?: get_option('tmon_admin_uc_key', '');
+            $provided = '';
+            if (function_exists('getallheaders')) {
+                $h = getallheaders();
+                $provided = $h['X-TMON-HUB'] ?? $h['x-tmon-hub'] ?? '';
+            } else {
+                $provided = $_SERVER['HTTP_X_TMON_HUB'] ?? '';
+            }
+            if ($expected && !$provided) return new WP_REST_Response(['ok'=>false,'msg'=>'missing hub key'],403);
+            if ($expected && !hash_equals((string)$expected, (string)$provided)) return new WP_REST_Response(['ok'=>false,'msg'=>'invalid hub key'],403);
+
+            $params = $request->get_json_params();
+            $unit = sanitize_text_field($params['unit_id'] ?? ($params['unit'] ?? 'unknown'));
+            $snap = is_array($params) ? $params : [];
+            $store = get_option('tmon_uc_lora_status', []);
+            if (!is_array($store)) $store = [];
+            $store[$unit] = ['ts' => current_time('mysql'), 'status' => $snap];
+            update_option('tmon_uc_lora_status', $store);
+            return rest_ensure_response(['ok'=>true]);
+        }
+    ]);
+
+    // Accept admin->UC commands: enqueue into local tmon_device_commands table
+    register_rest_route('tmon/v1', '/device/command', [
+        'methods' => 'POST',
+        'permission_callback' => '__return_true',
+        'callback' => function($request) {
+            // auth: allow either Hub key or WP capability if authenticated
+            $expected = get_option('tmon_admin_uc_key', '') ?: get_option('tmon_uc_shared_key', '');
+            $provided = '';
+            if (function_exists('getallheaders')) {
+                $h = getallheaders();
+                $provided = $h['X-TMON-HUB'] ?? $h['x-tmon-hub'] ?? '';
+            } else {
+                $provided = $_SERVER['HTTP_X_TMON_HUB'] ?? '';
+            }
+            if ($expected && !$provided && !current_user_can('manage_options')) {
+                return new WP_REST_Response(['ok'=>false,'msg'=>'forbidden'],403);
+            }
+            if ($expected && $provided && !hash_equals((string)$expected, (string)$provided)) {
+                return new WP_REST_Response(['ok'=>false,'msg'=>'invalid hub key'],403);
+            }
+
+            $params = $request->get_json_params();
+            $unit = sanitize_text_field($params['unit_id'] ?? ($params['device_id'] ?? ''));
+            $cmd  = sanitize_text_field($params['command'] ?? '');
+            $data = isset($params['params']) ? $params['params'] : ($params['payload'] ?? []);
+
+            if (!$unit || !$cmd) return new WP_REST_Response(['ok'=>false,'msg'=>'unit_id and command required'],400);
+
+            global $wpdb;
+            $table = $wpdb->prefix . 'tmon_device_commands';
+            $wpdb->insert($table, [
+                'device_id' => $unit,
+                'command' => $cmd,
+                'params' => wp_json_encode($data),
+                'status' => 'queued',
+                'created_at' => current_time('mysql'),
+            ]);
+            return rest_ensure_response(['ok'=>true,'id'=>$wpdb->insert_id]);
+        }
+    ]);
+
+    // Store a chunk-store snapshot for historical analysis
+    register_rest_route('tmon/v1', '/admin/chunk-store-history', [
+        'methods' => 'POST',
+        'permission_callback' => '__return_true',
+        'callback' => function($request) {
+            $expected = get_option('tmon_uc_shared_key','') ?: get_option('tmon_admin_uc_key','');
+            $provided = $_SERVER['HTTP_X_TMON_HUB'] ?? ($_SERVER['HTTP_X_TMON_ADMIN'] ?? '');
+            if ($expected && !hash_equals((string)$expected, (string)$provided)) {
+                return new WP_REST_Response(['ok'=>false,'msg'=>'invalid hub key'],403);
+            }
+            $params = $request->get_json_params();
+            $unit = sanitize_text_field($params['unit_id'] ?? ($params['unit'] ?? 'unknown'));
+            $payload = wp_json_encode($params);
+            global $wpdb;
+            $tbl = $wpdb->prefix . 'tmon_uc_lora_snapshots';
+            $wpdb->insert($tbl, ['unit_id'=>$unit, 'ts'=>current_time('mysql'), 'payload'=>$payload]);
+            return rest_ensure_response(['ok'=>true,'id'=>$wpdb->insert_id]);
+        }
+    ]);
+
+    // Append shell log chunk from a device (POST)
+    register_rest_route('tmon/v1', '/device/shell-log', [
+        'methods' => 'POST',
+        'permission_callback' => '__return_true',
+        'callback' => function($request) {
+            $params = $request->get_json_params();
+            $unit = sanitize_text_field($params['unit_id'] ?? '');
+            $job = sanitize_text_field($params['job_id'] ?? '');
+            $seq = intval($params['seq'] ?? 0);
+            $chunk = isset($params['chunk']) ? wp_json_encode($params['chunk']) : '';
+            if (!$unit || !$job) return new WP_REST_Response(['ok'=>false,'msg'=>'unit_id and job_id required'],400);
+            global $wpdb;
+            $tbl = $wpdb->prefix . 'tmon_uc_shell_logs';
+            $wpdb->insert($tbl, ['unit_id'=>$unit, 'job_id'=>$job, 'seq'=>$seq, 'chunk'=>$chunk, 'created_at'=>current_time('mysql')]);
+            return rest_ensure_response(['ok'=>true,'id'=>$wpdb->insert_id]);
+        }
+    ]);
+
+    // Retrieve shell log (GET) by unit_id & job_id -> returns JSON array of chunks ordered by seq
+    register_rest_route('tmon/v1', '/admin/shell-log', [
+        'methods' => 'GET',
+        'permission_callback' => 'current_user_can', // restrict to logged-in admins in UC UI
+        'callback' => function($request) {
+            $unit = sanitize_text_field($request->get_param('unit_id') ?? '');
+            $job  = sanitize_text_field($request->get_param('job_id') ?? '');
+            if (!$unit || !$job) return new WP_REST_Response(['ok'=>false,'msg'=>'unit_id and job_id required'],400);
+            global $wpdb;
+            $tbl = $wpdb->prefix . 'tmon_uc_shell_logs';
+            $rows = $wpdb->get_results($wpdb->prepare("SELECT seq, chunk, created_at FROM {$tbl} WHERE unit_id=%s AND job_id=%s ORDER BY seq ASC", $unit, $job), ARRAY_A);
+            if (!$rows) return rest_ensure_response(['ok'=>true,'chunks'=>[]]);
+            $chunks = array_map(function($r){ return ['seq'=>intval($r['seq']),'chunk'=>json_decode($r['chunk'], true),'ts'=>$r['created_at']]; }, $rows);
+            return rest_ensure_response(['ok'=>true,'chunks'=>$chunks]);
+        }
+    ]);
+
+    // GET historical chunk-store summary for a unit (timeseries of missing counts)
+    register_rest_route('tmon/v1', '/admin/chunk-history', [
+        'methods' => 'GET',
+        'permission_callback' => function(){ return current_user_can('manage_options'); },
+        'callback' => function($request){
+            global $wpdb;
+            $unit = sanitize_text_field($request->get_param('unit_id') ?? '');
+            $limit = intval($request->get_param('limit') ?? 48);
+            if (!$unit) return new WP_REST_Response(['ok'=>false,'msg'=>'unit_id required'], 400);
+            tmon_uc_ensure_tables();
+            $tbl = $wpdb->prefix . 'tmon_uc_lora_snapshots';
+            $rows = $wpdb->get_results($wpdb->prepare("SELECT ts, payload FROM {$tbl} WHERE unit_id=%s ORDER BY ts DESC LIMIT %d", $unit, $limit), ARRAY_A);
+            $series = [];
+            if ($rows && is_array($rows)) {
+                foreach ($rows as $r) {
+                    $ts = $r['ts'];
+                    $payload = json_decode($r['payload'] ?? '{}', true);
+                    $missing_count = 0;
+                    if (is_array($payload)) {
+                        // payload may contain 'chunks' mapping mid->info or similar
+                        $chunks = isset($payload['chunks']) && is_array($payload['chunks']) ? $payload['chunks'] : (is_array($payload) ? $payload : []);
+                        if (is_array($chunks)) {
+                            foreach ($chunks as $mid => $info) {
+                                if (is_array($info) && isset($info['missing']) && is_array($info['missing'])) {
+                                    $missing_count += count($info['missing']);
+                                }
+                            }
+                        }
+                    }
+                    $series[] = ['ts' => $ts, 'missing' => intval($missing_count)];
+                }
+            }
+            return rest_ensure_response(['ok'=>true, 'unit'=>$unit, 'series'=>array_reverse($series)]);
+        }
+    ]);
+
+    // POST backfill from Admin -> UC (customers + locations)
+    register_rest_route('tmon/v1', '/admin/backfill', [
+        'methods' => 'POST',
+        'permission_callback' => '__return_true',
+        'callback' => function($request) {
+            // authenticate via hub key when configured
+            $expected = get_option('tmon_uc_shared_key', '') ?: get_option('tmon_admin_uc_key', '');
+            $provided = '';
+            if (function_exists('getallheaders')) {
+                $h = getallheaders();
+                $provided = $h['X-TMON-HUB'] ?? $h['x-tmon-hub'] ?? '';
+            } else {
+                $provided = $_SERVER['HTTP_X_TMON_HUB'] ?? '';
+            }
+            if ($expected && !$provided) return new WP_REST_Response(['ok'=>false,'msg'=>'missing hub key'],403);
+            if ($expected && !hash_equals((string)$expected, (string)$provided)) return new WP_REST_Response(['ok'=>false,'msg'=>'invalid hub key'],403);
+
+            $params = $request->get_json_params();
+            if (!is_array($params)) return new WP_REST_Response(['ok'=>false,'msg'=>'bad payload'],400);
+            tmon_uc_ensure_tables();
+            global $wpdb;
+            // upsert customers
+            if (!empty($params['customers']) && is_array($params['customers'])) {
+                foreach ($params['customers'] as $c) {
+                    $name = sanitize_text_field($c['name'] ?? '');
+                    $meta = wp_json_encode($c['meta'] ?? []);
+                    if (!$name) continue;
+                    $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM {$wpdb->prefix}tmon_customers WHERE name=%s", $name));
+                    if ($exists) $wpdb->update($wpdb->prefix . 'tmon_customers', ['meta'=>$meta,'updated_at'=>current_time('mysql')], ['id'=>$exists]);
+                    else $wpdb->insert($wpdb->prefix . 'tmon_customers', ['name'=>$name,'meta'=>$meta]);
+                }
+            }
+            // upsert locations
+            if (!empty($params['locations']) && is_array($params['locations'])) {
+                foreach ($params['locations'] as $loc) {
+                    $cust = sanitize_text_field($loc['customer'] ?? '');
+                    $cust_id = $wpdb->get_var($wpdb->prepare("SELECT id FROM {$wpdb->prefix}tmon_customers WHERE name=%s", $cust));
+                    if (!$cust_id) continue;
+                    $name = sanitize_text_field($loc['name'] ?? '');
+                    $lat = floatval($loc['lat'] ?? 0);
+                    $lng = floatval($loc['lng'] ?? 0);
+                    $addr = sanitize_text_field($loc['address'] ?? '');
+                    $uc_site = sanitize_text_field($loc['uc_site_url'] ?? '');
+                    $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM {$wpdb->prefix}tmon_customer_locations WHERE customer_id=%d AND name=%s", $cust_id, $name));
+                    if ($exists) $wpdb->update($wpdb->prefix . 'tmon_customer_locations', ['lat'=>$lat,'lng'=>$lng,'address'=>$addr,'uc_site_url'=>$uc_site,'updated_at'=>current_time('mysql')], ['id'=>$exists]);
+                    else $wpdb->insert($wpdb->prefix . 'tmon_customer_locations', ['customer_id'=>$cust_id,'name'=>$name,'lat'=>$lat,'lng'=>$lng,'address'=>$addr,'uc_site_url'=>$uc_site]);
+                }
+            }
+            return rest_ensure_response(['ok'=>true]);
+        }
+    ]);
 });

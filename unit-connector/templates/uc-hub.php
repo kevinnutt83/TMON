@@ -153,4 +153,22 @@ jQuery(function($){
         });
     });
 });
+
+document.addEventListener('DOMContentLoaded', function(){
+	(function ensureRoleSelects(){
+		var roles=['base','wifi','remote'];
+		document.querySelectorAll('select[name="role"]').forEach(function(sel){
+			var hasWifi=false, hasRemote=false;
+			for (var i=0;i<sel.options.length;i++){
+				if(sel.options[i].value==='wifi') hasWifi=true;
+				if(sel.options[i].value==='remote') hasRemote=true;
+			}
+			if (hasWifi && hasRemote) return;
+			var cur = sel.value || '';
+			sel.innerHTML = '';
+			var opt=document.createElement('option'); opt.value=''; opt.text='Select a type'; sel.appendChild(opt);
+			roles.forEach(function(r){ var o=document.createElement('option'); o.value=r; o.text=r; if (r===cur) o.selected=true; sel.appendChild(o); });
+		});
+	})();
+});
 </script>

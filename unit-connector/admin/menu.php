@@ -14,6 +14,15 @@ add_action('admin_menu', function() {
     add_submenu_page('tmon_devices', 'Settings', 'Settings', 'manage_options', 'tmon-settings', function(){
         include __DIR__ . '/../templates/settings.php';
     });
+    add_submenu_page('tmon_devices', 'LoRa Map', 'LoRa Map', 'manage_options', 'tmon-uc-lora-map', function(){
+        include __DIR__ . '/../templates/lora_map.php';
+    });
+    add_submenu_page('tmon_devices', 'Remote Shell', 'Remote Shell', 'manage_options', 'tmon-uc-remote-shell', function(){
+        include __DIR__ . '/../templates/remote_shell.php';
+    });
+    add_submenu_page('tmon_devices', 'Customers', 'Customers', 'manage_options', 'tmon-uc-customers', function(){
+        include __DIR__ . '/../templates/customers.php';
+    });
 });
 
 function tmon_admin_devices_page() {

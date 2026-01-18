@@ -545,6 +545,70 @@ add_action('rest_api_init', function() {
         },
         'permission_callback' => '__return_true'
     ]);
+
+    register_rest_route('tmon/v1', '/admin/uc-backfill', [
+        'methods' => 'POST',
+        'permission_callback' => '__return_true',
+        'callback' => function($request) {
+            // Validate hub key when present
+            $expected = get_option('tmon_admin_uc_key','');
+            $provided = $_SERVER['HTTP_X_TMON_HUB'] ?? '';
+            if ($expected && !$provided) return new WP_REST_Response(['ok'=>false,'msg'=>'missing hub key'],403);
+            if ($expected && !hash_equals((string)$expected, (string)$provided)) return new WP_REST_Response(['ok'=>false,'msg'=>'invalid hub key'],403);
+            $params = $request->get_json_params();
+            if (!is_array($params)) return new WP_REST_Response(['ok'=>false,'msg'=>'bad payload'],400);
+            tmon_admin_ensure_customer_tables();
+            global $wpdb;
+            // Accept customers array
+            if (!empty($params['customers']) && is_array($params['customers'])) {
+                foreach ($params['customers'] as $c) {
+                    $name = sanitize_text_field($c['name'] ?? '');
+                    $meta = wp_json_encode($c['meta'] ?? []);
+                    if (!$name) continue;
+                    // upsert by name
+                    $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM {$wpdb->prefix}tmon_customers WHERE name=%s", $name));
+                    if ($exists) {
+                        $wpdb->update($wpdb->prefix . 'tmon_customers', ['meta'=>$meta, 'updated_at'=>current_time('mysql')], ['id'=>$exists]);
+                    } else {
+                        $wpdb->insert($wpdb->prefix . 'tmon_customers', ['name'=>$name, 'meta'=>$meta]);
+                    }
+                }
+            }
+            // Accept locations
+            if (!empty($params['locations']) && is_array($params['locations'])) {
+                foreach ($params['locations'] as $loc) {
+                    $cust = sanitize_text_field($loc['customer'] ?? '');
+                    $cust_id = $wpdb->get_var($wpdb->prepare("SELECT id FROM {$wpdb->prefix}tmon_customers WHERE name=%s", $cust));
+                    if (!$cust_id) continue;
+                    $name = sanitize_text_field($loc['name'] ?? '');
+                    $lat = floatval($loc['lat'] ?? 0);
+                    $lng = floatval($loc['lng'] ?? 0);
+                    $addr = sanitize_text_field($loc['address'] ?? '');
+                    $uc_site = sanitize_text_field($loc['uc_site_url'] ?? '');
+                    // upsert by customer_id + name
+                    $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM {$wpdb->prefix}tmon_customer_locations WHERE customer_id=%d AND name=%s", $cust_id, $name));
+                    if ($exists) {
+                        $wpdb->update($wpdb->prefix . 'tmon_customer_locations', ['lat'=>$lat,'lng'=>$lng,'address'=>$addr,'uc_site_url'=>$uc_site,'updated_at'=>current_time('mysql')], ['id'=>$exists]);
+                    } else {
+                        $wpdb->insert($wpdb->prefix . 'tmon_customer_locations', ['customer_id'=>$cust_id,'name'=>$name,'lat'=>$lat,'lng'=>$lng,'address'=>$addr,'uc_site_url'=>$uc_site]);
+                    }
+                }
+            }
+            return rest_ensure_response(['ok'=>true]);
+        }
+    ]);
+
+    // Expose customer list to admins
+    register_rest_route('tmon/v1', '/admin/customers', [
+        'methods' => 'GET',
+        'permission_callback' => function(){ return current_user_can('manage_options'); },
+        'callback' => function($request){
+            global $wpdb;
+            tmon_admin_ensure_customer_tables();
+            $rows = $wpdb->get_results("SELECT id,name,meta,created_at,updated_at FROM {$wpdb->prefix}tmon_customers ORDER BY id DESC LIMIT 500", ARRAY_A);
+            return rest_ensure_response(['ok'=>true,'customers'=>$rows]);
+        }
+    ]);
 });
 
 // Authorization: decide if a device is allowed to post data (fee-for-service, provisioning, etc.)
@@ -711,3 +775,92 @@ if (!function_exists('tmon_admin_get_devices')) {
 function tmon_admin_example_event_logger($message, $context = []) {
 	do_action('tmon_admin_notify', $message, $context);
 }
+
+// Push locations/customers to a paired UC site (Admin -> UC)
+function tmon_admin_push_locations_to_uc($site_url) {
+    if (!current_user_can('manage_options') && !is_admin()) {
+        return new WP_Error('forbidden', 'Permission denied');
+    }
+    $site_url = esc_url_raw($site_url);
+    if (!$site_url) return new WP_Error('missing_site', 'Site URL required');
+
+    global $wpdb;
+    tmon_admin_ensure_customer_tables();
+    $locations = $wpdb->get_results($wpdb->prepare("SELECT l.*, c.name as customer_name FROM {$wpdb->prefix}tmon_customer_locations l JOIN {$wpdb->prefix}tmon_customers c ON c.id = l.customer_id WHERE l.uc_site_url = %s", $site_url), ARRAY_A);
+    if (!$locations) {
+        return ['ok'=>true, 'synced'=>0, 'msg'=>'no locations for site'];
+    }
+    $customers = [];
+    $locs = [];
+    foreach ($locations as $l) {
+        $customers[$l['customer_name']] = ['name' => $l['customer_name']];
+        $locs[] = [
+            'customer' => $l['customer_name'],
+            'name' => $l['name'],
+            'lat' => floatval($l['lat']),
+            'lng' => floatval($l['lng']),
+            'address' => $l['address'],
+            'uc_site_url' => $l['uc_site_url'],
+        ];
+    }
+    $cust_arr = array_values($customers);
+    $payload = ['customers' => $cust_arr, 'locations' => $locs];
+
+    $endpoint = rtrim($site_url, '/') . '/wp-json/tmon/v1/admin/backfill';
+    $hub_key = get_option('tmon_admin_uc_key', '');
+    $headers = ['Content-Type' => 'application/json'];
+    if ($hub_key) $headers['X-TMON-HUB'] = $hub_key;
+
+    $resp = wp_remote_post($endpoint, ['headers' => $headers, 'body'=> wp_json_encode($payload), 'timeout' => 10]);
+    if (is_wp_error($resp)) {
+        // Audit: record failure
+        $audit = get_option('tmon_admin_sync_audit', []);
+        if (!is_array($audit)) $audit = [];
+        $audit[] = ['ts' => time(), 'site' => $site_url, 'ok' => false, 'error' => $resp->get_error_message()];
+        update_option('tmon_admin_sync_audit', array_slice($audit, -200));
+        return $resp;
+    }
+    $code = wp_remote_retrieve_response_code($resp);
+    $body = wp_remote_retrieve_body($resp);
+    $ok = in_array(intval($code), [200,201], true);
+    // Audit: record result
+    $audit = get_option('tmon_admin_sync_audit', []);
+    if (!is_array($audit)) $audit = [];
+    $audit[] = ['ts' => time(), 'site' => $site_url, 'ok' => $ok, 'code' => intval($code), 'snip' => substr($body,0,200)];
+    update_option('tmon_admin_sync_audit', array_slice($audit, -200));
+    if ($ok) {
+        return ['ok'=>true, 'synced'=>count($locs)];
+    }
+    return new WP_Error('push_failed', 'UC responded: ' . intval($code) . ' ' . substr($body,0,200));
+}
+
+// AJAX (admin) handler to push locations from admin UI
+add_action('wp_ajax_tmon_admin_sync_locations', function(){
+    if (!current_user_can('manage_options')) wp_send_json_error(['msg'=>'forbidden'], 403);
+    check_admin_referer('tmon_admin_customers');
+    $site = esc_url_raw($_POST['site_url'] ?? '');
+    if (!$site) wp_send_json_error(['msg'=>'site required'], 400);
+    $res = tmon_admin_push_locations_to_uc($site);
+    if (is_wp_error($res)) wp_send_json_error(['msg'=>$res->get_error_message()], 500);
+    wp_send_json_success($res);
+});
+
+// Schedule hourly auto-sync if not already scheduled
+if (!wp_next_scheduled('tmon_admin_hourly_sync_locations')) {
+    wp_schedule_event(time(), 'hourly', 'tmon_admin_hourly_sync_locations');
+}
+add_action('tmon_admin_hourly_sync_locations', function(){
+    $pairings = get_option('tmon_admin_uc_sites', []);
+    if (!is_array($pairings) || empty($pairings)) return;
+    foreach ($pairings as $site => $_) {
+        try {
+            tmon_admin_push_locations_to_uc($site);
+        } catch (Exception $e) {
+            // record in admin notices option for troubleshooting
+            $audit = get_option('tmon_admin_sync_audit', []);
+            if (!is_array($audit)) $audit = [];
+            $audit[] = ['ts'=>time(),'site'=>$site,'error'=>substr($e->getMessage(),0,200)];
+            update_option('tmon_admin_sync_audit', array_slice($audit, -200));
+        }
+    }
+});

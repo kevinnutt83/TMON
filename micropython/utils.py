@@ -3,7 +3,7 @@ import ujson
 import uasyncio as asyncio
 import os
 import settings
-from config_persist import write_text, read_text, set_flag, is_flag_set, write_json, read_json
+from config_persist import write_text, read_json, set_flag, is_flag_set, write_json, read_text
 
 # Persistent backlog file for unsent field data
 FIELD_DATA_BACKLOG = settings.LOG_DIR + '/field_data_backlog.log'
@@ -764,6 +764,48 @@ async def flash_led(num_flashes, interval, lightColor, pattern):
 
 ERROR_LOG_FILE = getattr(settings, 'ERROR_LOG_FILE', '/logs/lora_errors.log')
 
+# NEW: ensure provisioning log path exists before provisioning_log() is referenced
+PROVISION_LOG_FILE = getattr(settings, 'LOG_DIR', '/logs') + '/provisioning.log'
+
+# NEW: ensure this exists before log_error()/write_lora_log() call it
+# (If you already have a fuller implementation later in this file, that later one can overwrite this.)
+_LOG_MAX_BYTES = int(getattr(settings, 'LOG_MAX_BYTES', 3 * 1024 * 1024))
+_LOG_TRIM_KEEP_RATIO = 0.5
+
+def _enforce_log_caps_before_write(path: str):
+    try:
+        if not path:
+            return
+        # never trim field-data pipeline logs here
+        p = str(path)
+        if 'field_data' in p.lower():
+            return
+        st = os.stat(p)
+        size = st[6] if isinstance(st, (tuple, list)) else getattr(st, 'st_size', 0)
+        if not size or size <= _LOG_MAX_BYTES:
+            return
+        keep = int(_LOG_MAX_BYTES * _LOG_TRIM_KEEP_RATIO)
+        if keep < 256:
+            keep = 256
+        with open(p, 'rb') as f:
+            try:
+                f.seek(max(0, size - keep))
+            except Exception:
+                f.seek(0)
+            tail = f.read()
+        try:
+            nl = tail.find(b'\n')
+            if nl != -1 and nl + 1 < len(tail):
+                tail = tail[nl + 1:]
+        except Exception:
+            pass
+        with open(p, 'wb') as f:
+            f.write(tail)
+    except Exception:
+        pass
+
+ERROR_LOG_FILE = getattr(settings, 'ERROR_LOG_FILE', '/logs/lora_errors.log')
+
 async def log_error(error_msg, context=None):
     """Log error to persistent storage and optionally print to console."""
     try:
@@ -775,6 +817,10 @@ async def log_error(error_msg, context=None):
             os.stat(settings.LOG_DIR)
         except OSError:
             os.mkdir(settings.LOG_DIR)
+
+        # NEW: cap non-field-data logs before write
+        _enforce_log_caps_before_write(ERROR_LOG_FILE)
+
         with open(ERROR_LOG_FILE, 'a') as f:
             f.write(ujson.dumps(entry) + '\n')
         if settings.DEBUG:
@@ -793,6 +839,10 @@ def write_lora_log(message, level='INFO'):
             os.stat(settings.LOG_DIR)
         except OSError:
             os.mkdir(settings.LOG_DIR)
+
+        # NEW: cap non-field-data logs before write
+        _enforce_log_caps_before_write(settings.LOG_FILE)
+
         with open(settings.LOG_FILE, 'a') as f:
             f.write(ujson.dumps(entry) + '\n')
     except Exception as e:
@@ -801,6 +851,66 @@ def write_lora_log(message, level='INFO'):
             print(f"[LOGBACKUP] {level}: {message} ({e})")
         except Exception:
             pass
+
+def provisioning_log(msg):
+    """Append provisioning-specific debug to the provisioning log + console."""
+    try:
+        ts = time.localtime()
+        timestamp = f"{ts[0]:04}-{ts[1]:02}-{ts[2]:02} {ts[3]:02}:{ts[4]:02}:{ts[5]:02}"
+        entry = f"[{timestamp}] {msg}"
+        print("[PROVISION] " + entry)
+        try:
+            checkLogDirectory()
+            _enforce_log_caps_before_write(PROVISION_LOG_FILE)
+            with open(PROVISION_LOG_FILE, 'a') as f:
+                f.write(entry + '\n')
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+# Persistent NODE_TYPE (role) file
+NODE_TYPE_FILE = getattr(settings, 'NODE_TYPE_FILE', settings.LOG_DIR + '/node_type.txt')
+
+def persist_node_type(role: str):
+    try:
+        if not role:
+            return
+        checkLogDirectory()
+        write_text(NODE_TYPE_FILE, str(role).strip())
+        try:
+            import settings as _s
+            _s.NODE_TYPE = str(role).strip()
+        except Exception:
+            pass
+        # If role is remote, proactively disable WiFi (best-effort)
+        try:
+            if str(role).strip().lower() == 'remote':
+                try:
+                    from wifi import disable_wifi
+                    disable_wifi()
+                except Exception:
+                    pass
+                try:
+                    import settings as _s2
+                    _s2.ENABLE_WIFI = False
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+def load_persisted_node_type():
+    try:
+        checkLogDirectory()
+        val = read_text(NODE_TYPE_FILE, None)
+        if not val:
+            return None
+        val = val.strip()
+        return val if val else None
+    except Exception:
+        return None
 
 async def safe_run(coro, context=None):
     """Run a coroutine and log any exceptions, never let them escape."""
@@ -819,13 +929,11 @@ class TMONAI:
     async def observe_error(self, error_msg, context=None):
         self.error_count += 1
         self.last_error = (error_msg, context)
-        # Example: escalate if too many errors
         if self.error_count > 5:
             await log_error('AI: Too many errors, attempting system recovery', context)
             await self.recover_system()
 
     async def recover_system(self):
-        # Example: restart network, re-init hardware, or soft reset
         try:
             import machine
             await log_error('AI: Performing soft reset', 'recovery')
@@ -834,21 +942,22 @@ class TMONAI:
             await log_error(f'AI: Recovery failed: {e}', 'recovery')
 
     async def suggest_action(self, context):
-        # Example: suggest user actions based on context
         if 'wifi' in str(context).lower():
             return 'Check WiFi credentials or signal.'
         if 'ota' in str(context).lower():
             return 'Retry OTA or check file integrity.'
         return 'Check device logs and power cycle if needed.'
 
-# Singleton instance
+# Singleton instance expected by main.py/lora.py
 TMON_AI = TMONAI()
 
 def get_machine_id():
     try:
-        # Import locally to avoid desktop lints; valid on MicroPython firmware
         import machine as _m
-        import ubinascii as _ub
+        try:
+            import ubinascii as _ub
+        except Exception:
+            import binascii as _ub
         uid = _m.unique_id() if hasattr(_m, 'unique_id') else None
         if uid is None:
             return ''
@@ -856,50 +965,11 @@ def get_machine_id():
     except Exception:
         return ''
 
-# Provisioning log file
-PROVISION_LOG_FILE = getattr(settings, 'LOG_DIR', '/logs') + '/provisioning.log'
-
-def provisioning_log(msg):
-    """Append provisioning-specific debug to the provisioning log + console."""
-    try:
-        ts = time.localtime()
-        timestamp = f"{ts[0]:04}-{ts[1]:02}-{ts[2]:02} {ts[3]:02}:{ts[4]:02}:{ts[5]:02}"
-        entry = f"[{timestamp}] {msg}"
-        print("[PROVISION] " + entry)
-        try:
-            checkLogDirectory()
-            with open(PROVISION_LOG_FILE, 'a') as f:
-                f.write(entry + '\n')
-        except Exception:
-            pass
-    except Exception:
-        pass
-
-# Persistent NODE_TYPE (role) file
-NODE_TYPE_FILE = getattr(settings, 'NODE_TYPE_FILE', settings.LOG_DIR + '/node_type.txt')
-
-def persist_node_type(role: str):
-    try:
-        if not role:
-            return
-        checkLogDirectory()
-        write_text(NODE_TYPE_FILE, str(role).strip())
-    except Exception:
-        pass
-
-def load_persisted_node_type():
-    try:
-        checkLogDirectory()
-        val = read_text(NODE_TYPE_FILE, None)
-        if not val:
-            return None
-        val = val.strip()
-        return val if val else None
-    except Exception:
-        return None
-
-# --- RESTORED: periodic provisioning poll (was removed) ---
-_provision_reboot_guard_written = False
+# Apply persisted unit name at import/boot so UI and telemetry show it early
+try:
+    load_persisted_unit_name()
+except Exception:
+    pass
 
 async def periodic_provision_check():
     """Poll Admin hub for staged provisioning metadata until provisioned.
@@ -926,6 +996,11 @@ async def periodic_provision_check():
                 uid_set = bool(str(getattr(settings, 'UNIT_ID', '')).strip())
                 if hub and flag_file and flag_exists and wp_url_set and uid_set:
                     await debug_print('prov: provisioned', 'PROVISION')
+                    # mark the in-memory flag so other modules know provisioning applied
+                    try:
+                        settings.UNIT_PROVISIONED = True
+                    except Exception:
+                        pass
                     return
             except Exception:
                 pass
@@ -1025,6 +1100,11 @@ async def periodic_provision_check():
                                     f.write('ok')
                             except Exception:
                                 pass
+                            # Mark in-memory provisioned so remotes stop HTTP calls
+                            try:
+                                settings.UNIT_PROVISIONED = True
+                            except Exception:
+                                pass
                             # One-time soft reset after initial full metadata persistence
                             if not _provision_reboot_guard_written:
                                 reboot_needed = True
@@ -1061,6 +1141,16 @@ async def periodic_provision_check():
                 pass
         # Always yield and delay to avoid a tight loop in error conditions
         await _a.sleep(interval)
+
+# NEW: public wrapper so other modules can enforce the same 3MB cap policy
+def enforce_log_caps(path: str):
+	"""Enforce non-field-data log cap before writing.
+	Skips any path containing 'field_data' (per requirements).
+	"""
+	try:
+		_enforce_log_caps_before_write(path)
+	except Exception:
+		pass
 
 # Lightweight background scheduler to avoid ImportError in main.py
 def start_background_tasks():
@@ -1100,3 +1190,304 @@ __all__ = [
     'persist_node_type',
     'load_persisted_node_type'
 ]
+
+def persist_unit_name(unit_name: str):
+    """Persist a human-friendly unit name so it survives reboots."""
+    try:
+        if not unit_name:
+            return
+        checkLogDirectory()
+        path = getattr(settings, 'UNIT_NAME_FILE', settings.LOG_DIR + '/unit_name.txt')
+        # detect prior persisted name (to show a first-time banner)
+        try:
+            prev = read_text(path, None)
+        except Exception:
+            prev = None
+        write_text(path, str(unit_name).strip())
+        try:
+            import settings as _s
+            _s.UNIT_Name = str(unit_name).strip()
+        except Exception:
+            pass
+        # If this is the first persistence (no previous name), show an OLED banner (best-effort)
+        try:
+            if not prev or not str(prev).strip():
+                try:
+                    import uasyncio as _a
+                    from oled import display_message
+                    try:
+                        _a.create_task(display_message("Unit: " + str(unit_name).strip(), 2))
+                    except Exception:
+                        # If loop/create_task not available, try simple call (may error on non-async context)
+                        try:
+                            _a.run(display_message("Unit: " + str(unit_name).strip(), 2))
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+def load_persisted_unit_name():
+    """Load persisted UNIT_Name and apply to settings if present."""
+    try:
+        checkLogDirectory()
+        path = getattr(settings, 'UNIT_NAME_FILE', settings.LOG_DIR + '/unit_name.txt')
+        try:
+            val = read_text(path, None)
+        except Exception:
+            val = None
+        if val:
+            val = val.strip()
+            if val:
+                try:
+                    settings.UNIT_Name = val
+                except Exception:
+                    pass
+                return val
+        return None
+    except Exception:
+        return None
+
+# Apply persisted unit name at import/boot so UI and telemetry show it early
+try:
+    load_persisted_unit_name()
+except Exception:
+    pass
+
+async def periodic_provision_check():
+    """Poll Admin hub for staged provisioning metadata until provisioned.
+    Persists UNIT_ID, WORDPRESS_API_URL, role, plan, unit_name, firmware and soft-resets once after URL persistence.
+    """
+    global _provision_reboot_guard_written
+    import uasyncio as _a
+    interval = int(getattr(settings, 'PROVISION_CHECK_INTERVAL_S', 25))
+    timeout_s = int(getattr(settings, 'PROVISION_CHECK_TIMEOUT_S', 8))
+    hub = getattr(settings, 'TMON_ADMIN_API_URL', '')
+    flag_file = getattr(settings, 'PROVISIONED_FLAG_FILE', settings.LOG_DIR + '/provisioned.flag')
+    guard_file = getattr(settings, 'PROVISION_REBOOT_GUARD_FILE', settings.LOG_DIR + '/provision_reboot.flag')
+    while True:
+        try:
+            # Robust flag check, but only consider "fully provisioned" if URL and UNIT_ID are set
+            try:
+                flag_exists = False
+                try:
+                    os.stat(flag_file)
+                    flag_exists = True
+                except OSError:
+                    flag_exists = False
+                wp_url_set = bool(str(getattr(settings, 'WORDPRESS_API_URL', '')).strip())
+                uid_set = bool(str(getattr(settings, 'UNIT_ID', '')).strip())
+                if hub and flag_file and flag_exists and wp_url_set and uid_set:
+                    await debug_print('prov: provisioned', 'PROVISION')
+                    # mark the in-memory flag so other modules know provisioning applied
+                    try:
+                        settings.UNIT_PROVISIONED = True
+                    except Exception:
+                        pass
+                    return
+            except Exception:
+                pass
+
+            if not hub:
+                await debug_print('prov: no hub', 'PROVISION')
+            else:
+                # Prefer urequests; fall back to any already-imported requests module
+                try:
+                    import urequests as _r
+                except Exception:
+                    try:
+                        import sys
+                        _r = sys.modules.get('urequests') or sys.modules.get('requests')
+                        if _r is None:
+                            # Last resort: import ota and reuse its requests handle if set
+                            try:
+                                import ota as _ota
+                                _r = getattr(_ota, 'requests', None)
+                            except Exception:
+                                _r = None
+                    except Exception:
+                        _r = None
+                resp = None  # guard for close
+                if _r:
+                    # Force a short socket timeout so the event loop is not blocked indefinitely
+                    try:
+                        import usocket as _sock
+                        _sock.setdefaulttimeout(timeout_s)
+                    except Exception:
+                        pass
+                    mid = get_machine_id()
+                    uid = getattr(settings, 'UNIT_ID', None)
+                    body = {'machine_id': mid}
+                    if uid:
+                        body['unit_id'] = uid
+                    # Yield before performing blocking HTTP to keep the loop responsive
+                    await _a.sleep(0)
+                    try:
+                        resp = _r.post(hub.rstrip('/') + '/wp-json/tmon-admin/v1/device/check-in', json=body, timeout=10)
+                    except TypeError:
+                        resp = _r.post(hub.rstrip('/') + '/wp-json/tmon-admin/v1/device/check-in', json=body)
+                    status = getattr(resp, 'status_code', 0)
+                    if status == 200:
+                        try:
+                            resp_json = resp.json()
+                        except Exception:
+                            resp_json = {}
+                        staged = bool(resp_json.get('staged_exists'))
+                        provisioned = bool(resp_json.get('provisioned'))
+                        await debug_print(f'prov: check staged={staged} prov={provisioned}', 'PROVISION')
+                        # Persist UNIT_ID if provided and non-empty
+                        new_uid = resp_json.get('unit_id')
+                        if new_uid and str(new_uid).strip():
+                            if str(new_uid).strip() != str(getattr(settings, 'UNIT_ID', '')):
+                                settings.UNIT_ID = str(new_uid).strip()
+                                try:
+                                    persist_unit_id(settings.UNIT_ID)
+                                except Exception:
+                                    pass
+                        # Persist metadata -> WORDPRESS_API_URL etc.
+                        site_val = (resp_json.get('site_url') or resp_json.get('wordpress_api_url') or '').strip()
+                        if site_val:
+                            persist_wordpress_api_url(site_val)
+                        unit_name = (resp_json.get('unit_name') or '').strip()
+                        role_val = (resp_json.get('role') or '').strip()
+                        plan_val = (resp_json.get('plan') or '').strip()
+                        fw_ver = (resp_json.get('firmware') or '').strip()
+                        if unit_name:
+                            try:
+                                settings.UNIT_Name = unit_name
+                            except Exception:
+                                pass
+                        if role_val:
+                            try:
+                                settings.NODE_TYPE = role_val
+                            except Exception:
+                                pass
+                            try:
+                                persist_node_type(role_val)
+                            except Exception:
+                                pass
+                        if plan_val:
+                            try:
+                                settings.PLAN = plan_val
+                            except Exception:
+                                pass
+                        if fw_ver:
+                            try:
+                                settings.FIRMWARE_VERSION = fw_ver
+                            except Exception:
+                                pass
+                        # Mark provisioned flag file (do not exit loop yet; allow URL/UID checks next tick)
+                        if (provisioned or staged) and site_val:
+                            try:
+                                with open(flag_file, 'w') as f:
+                                    f.write('ok')
+                            except Exception:
+                                pass
+                            # Mark in-memory provisioned so remotes stop HTTP calls
+                            try:
+                                settings.UNIT_PROVISIONED = True
+                            except Exception:
+                                pass
+                            # One-time soft reset after initial full metadata persistence
+                            if not _provision_reboot_guard_written:
+                                reboot_needed = True
+                                try:
+                                    os.stat(guard_file)
+                                    reboot_needed = False
+                                except OSError:
+                                    reboot_needed = True
+                                if reboot_needed:
+                                    try:
+                                        with open(guard_file, 'w') as gf:
+                                            gf.write('1')
+                                    except Exception:
+                                        pass
+                                    await debug_print('prov: applied -> soft reset', 'PROVISION')
+                                    _provision_reboot_guard_written = True
+                                    try:
+                                        import machine
+                                        machine.soft_reset()
+                                    except Exception:
+                                        pass
+                    else:
+                        await debug_print('prov: no requests', 'PROVISION')
+                    # Safely close response
+                    try:
+                        if resp:
+                            resp.close()
+                    except Exception:
+                        pass
+        except Exception as e:
+            try:
+                await debug_print(f'prov: error {e}', 'ERROR')
+            except Exception:
+                pass
+        # Always yield and delay to avoid a tight loop in error conditions
+        await _a.sleep(interval)
+
+def compute_bars(rssi, cuts=None):
+    """Return 0..3 bars for RSSI. 'cuts' is tuple/list of descending thresholds (e.g., [-60,-80,-90])."""
+    try:
+        if rssi is None:
+            return 0
+        if cuts is None:
+            # fallback defaults (better expressed as settings but safe here)
+            cuts = getattr(settings, 'WIFI_RSSI_CUTS', (-60, -80, -90))
+        # ensure list/tuple
+        if not isinstance(cuts, (list, tuple)):
+            cuts = tuple(cuts)
+        try:
+            r = int(rssi)
+        except Exception:
+            return 0
+        if r > cuts[0]:
+            return 3
+        if r > cuts[1]:
+            return 2
+        if r > cuts[2]:
+            return 1
+    except Exception:
+        pass
+    return 0
+
+def is_http_allowed_for_node():
+    """Return True if this device should perform HTTP REST calls (base/wifi behavior).
+       Remote nodes that are provisioned should not do HTTP after registration.
+    """
+    try:
+        if getattr(settings, 'NODE_TYPE', '').lower() == 'remote':
+            # check for provisioned state / flag
+            if getattr(settings, 'UNIT_PROVISIONED', False):
+                return False
+            # Also check flag file if present (defensive)
+            try:
+                flag = getattr(settings, 'PROVISIONED_FLAG_FILE', settings.LOG_DIR + '/provisioned.flag')
+                import os
+                try:
+                    os.stat(flag)
+                    return False
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        return True
+    except Exception:
+        return True
+
+# Basic self-test for bar computation (run only in DEBUG to avoid overhead)
+try:
+    if getattr(settings, 'DEBUG', False):
+        _test_samples = [(-50, 3), (-70, 2), (-85, 1), (-100, 0), (None, 0)]
+        for r, expect in _test_samples:
+            got = compute_bars(r, getattr(settings, 'WIFI_RSSI_CUTS', (-60, -80, -90)))
+            if got != expect:
+                try:
+                    # best-effort print to console for devs
+                    print(f"[DEBUG] compute_bars test failed r={r} expect={expect} got={got}")
+                except Exception:
+                    pass
+except Exception:
+    pass

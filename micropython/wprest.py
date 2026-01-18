@@ -16,7 +16,7 @@ try:
 except Exception:
     import json
 
-from utils import debug_print, get_machine_id, persist_unit_id, append_to_backlog, read_backlog, clear_backlog
+from utils import debug_print, get_machine_id, persist_unit_id, persist_unit_name, append_to_backlog, read_backlog, clear_backlog
 import settings
 import os
 
@@ -97,6 +97,15 @@ async def register_with_wp():
     Tries multiple known admin endpoints to work around differing hub API routes.
     """
     try:
+        # REMOTE nodes: once provisioned, must not perform HTTP calls
+        try:
+            from utils import is_http_allowed_for_node
+            if not is_http_allowed_for_node():
+                await debug_print('wprest: http disabled for remote node (provisioned)', 'WARN')
+                return False
+        except Exception:
+            pass
+
         base = getattr(settings, 'TMON_ADMIN_API_URL', '') or getattr(settings, 'WORDPRESS_API_URL', '')
         if not base:
             await debug_print('wprest: no Admin hub URL configured', 'WARN')
@@ -111,7 +120,6 @@ async def register_with_wp():
         # Candidate register endpoints (order tuned for common server implementations)
         candidates = []
         try:
-            # Prefer check-in path first (many hubs implement check-in but not legacy /register)
             candidates.append('/wp-json/tmon-admin/v1/device/check-in')
             candidates.append(getattr(settings, 'ADMIN_REGISTER_PATH', '/wp-json/tmon-admin/v1/device/register'))
             candidates.append(getattr(settings, 'ADMIN_V2_CHECKIN_PATH', '/wp-json/tmon-admin/v2/device/checkin'))
@@ -132,6 +140,22 @@ async def register_with_wp():
                     body_snip = (getattr(resp, 'text', '') or '')[:400]
                 except Exception:
                     body_snip = ''
+                # Parse and persist name if present
+                try:
+                    if status in (200, 201):
+                        try:
+                            j = resp.json()
+                        except Exception:
+                            j = {}
+                        unit_name = (j.get('unit_name') or '').strip()
+                        if unit_name:
+                            try:
+                                from utils import persist_unit_name
+                                persist_unit_name(unit_name)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
                 try:
                     if resp:
                         resp.close()
@@ -169,6 +193,14 @@ async def send_data_to_wp():
     """Send recent field data batches to WordPress field-data endpoint (best-effort).
        This implementation uses same semantics as utils.send_field_data_log but is a lightweight wrapper.
     """
+    try:
+        from utils import is_http_allowed_for_node
+        if not is_http_allowed_for_node():
+            await debug_print('wprest: skip send_data (remote node http disabled)', 'WARN')
+            return False
+    except Exception:
+        pass
+
     try:
         if not getattr(settings, 'WORDPRESS_API_URL', ''):
             await debug_print('wprest: no WP url', 'WARN')
@@ -212,6 +244,14 @@ async def send_settings_to_wp():
        Tries multiple endpoint paths and auth modes (auto/basic/hub/read/none).
        On repeated failure, append payload to backlog for later retry.
     """
+    try:
+        from utils import is_http_allowed_for_node
+        if not is_http_allowed_for_node():
+            await debug_print('wprest: skip send_settings (remote node http disabled)', 'WARN')
+            return False
+    except Exception:
+        pass
+
     try:
         wp = getattr(settings, 'WORDPRESS_API_URL', '') or ''
         if not wp:
@@ -377,6 +417,14 @@ async def fetch_staged_settings():
 async def fetch_settings_from_wp():
     """GET applied device settings from WP (best-effort). Returns dict or None."""
     try:
+        from utils import is_http_allowed_for_node
+        if not is_http_allowed_for_node():
+            await debug_print('wprest: skip fetch_settings (remote node http disabled)', 'WARN')
+            return None
+    except Exception:
+        pass
+
+    try:
         if not getattr(settings, 'WORDPRESS_API_URL', ''):
             return None
         unit = getattr(settings, 'UNIT_ID', '') or ''
@@ -413,6 +461,14 @@ async def poll_device_commands():
     """Poll for queued commands from Unit Connector. Return list of commands or [].
        On simple success, call handle_device_command for each command if available.
     """
+    try:
+        from utils import is_http_allowed_for_node
+        if not is_http_allowed_for_node():
+            await debug_print('wprest: skip poll_device_commands (remote node http disabled)', 'WARN')
+            return []
+    except Exception:
+        pass
+
     try:
         if not getattr(settings, 'WORDPRESS_API_URL', ''):
             return []
@@ -701,6 +757,14 @@ __all__ = [
 
 async def heartbeat_ping():
     """Best-effort heartbeat POST to the server's heartbeat endpoint."""
+    try:
+        from utils import is_http_allowed_for_node
+        if not is_http_allowed_for_node():
+            await debug_print('wprest: skip heartbeat (remote node http disabled)', 'WARN')
+            return False
+    except Exception:
+        pass
+
     try:
         wp = getattr(settings, 'WORDPRESS_API_URL', '') or ''
         if not wp:

@@ -697,3 +697,130 @@ function tmon_admin_arr_get($arr, $key, $default=''){ return isset($arr[$key]) ?
 // Example:
 // $id = tmon_admin_arr_get($row, 'id', 0);
 // $staged = tmon_admin_arr_get($row, 'settings_staged', '{}');
+
+/**
+ * Return provisioning role options used by the UI.
+ * Filterable so other code can modify available roles.
+ *
+ * @return array
+ */
+function tmon_admin_get_role_options() {
+	$defaults = array( 'base', 'wifi', 'remote', 'gateway' );
+	$opts = apply_filters( 'tmon_admin_provision_role_options', $defaults );
+	// ensure uniqueness & stable order
+	$seen = array();
+	$out = array();
+	foreach ( (array) $opts as $v ) {
+		$vv = strtolower(trim((string)$v));
+		if ( $vv === '' ) continue;
+		if ( isset($seen[$vv]) ) continue;
+		$seen[$vv] = true;
+		$out[] = $vv;
+	}
+	return $out;
+}
+
+/**
+ * AJAX endpoint: return device info for a unit_id (machine_id, unit_name).
+ * POST params: unit_id, _wpnonce
+ * Capability: manage_options OR valid nonce 'tmon_admin_provision'
+ */
+add_action( 'wp_ajax_tmon_get_device_info', function() {
+	$nonce = $_REQUEST['_wpnonce'] ?? '';
+	if ( ! wp_verify_nonce( $nonce, 'tmon_admin_provision' ) && ! current_user_can( 'manage_options' ) ) {
+		wp_send_json_error( array( 'message' => 'Forbidden/invalid nonce' ), 403 );
+	}
+
+	$unit = sanitize_text_field( wp_unslash( $_REQUEST['unit_id'] ?? '' ) );
+	if ( empty( $unit ) ) {
+		wp_send_json_error( array( 'message' => 'Missing unit_id' ), 400 );
+	}
+
+	// Try high-level helper if available
+	$info = array( 'unit_id' => $unit, 'machine_id' => '', 'unit_name' => '' );
+	$found = false;
+	try {
+		if ( function_exists( 'tmon_admin_get_all_devices' ) ) {
+			$all = tmon_admin_get_all_devices();
+			if ( is_array( $all ) ) {
+				foreach ( $all as $r ) {
+					if ( ! empty( $r['unit_id'] ) && strval( $r['unit_id'] ) === strval( $unit ) ) {
+						$info['machine_id'] = $r['machine_id'] ?? $r['machine'] ?? $r['machine_id_hex'] ?? '';
+						$info['unit_name']  = $r['unit_name'] ?? $r['UNIT_Name'] ?? '';
+						$found = true;
+						break;
+					}
+				}
+			}
+		}
+	} catch ( Exception $e ) {
+		// ignore, fallback to DB
+	}
+
+	// DB fallback when helper not present
+	if ( ! $found && function_exists( 'get_option' ) ) {
+		global $wpdb;
+		$table = $wpdb->prefix . 'tmon_devices';
+		try {
+			if ( $wpdb && $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) ) {
+				$row = $wpdb->get_row( $wpdb->prepare( "SELECT machine_id, unit_name FROM {$table} WHERE unit_id=%s LIMIT 1", $unit ), ARRAY_A );
+				if ( is_array( $row ) && ! empty( $row ) ) {
+					$info['machine_id'] = $row['machine_id'] ?? '';
+					$info['unit_name']  = $row['unit_name'] ?? '';
+					$found = true;
+				}
+			}
+		} catch ( Exception $e ) {
+			// ignore DB errors
+		}
+	}
+
+	if ( $found ) {
+		wp_send_json_success( $info );
+	} else {
+		wp_send_json_error( array( 'message' => 'Not found' ), 404 );
+	}
+} );
+
+// Provisioning helpers: node role options & rendering helper
+
+if (!function_exists('tmon_admin_get_node_role_options')) {
+    /**
+     * Return canonical node role options for provisioning UI.
+     * Keep this stable and useable by templates and other code.
+     */
+    function tmon_admin_get_node_role_options() {
+        // Allow site override via option (array), otherwise use canonical three roles
+        $opts = get_option('tmon_admin_node_roles', null);
+        if (is_array($opts) && !empty($opts)) {
+            return $opts;
+        }
+        return array('base', 'wifi', 'remote');
+    }
+}
+
+if (!function_exists('tmon_admin_render_node_role_select')) {
+    /**
+     * Render a <select> for node role.
+     * Params:
+     *  - $name string: form field name (default 'role')
+     *  - $selected string: currently selected value
+     *  - $attrs array: additional attributes for <select>
+     */
+    function tmon_admin_render_node_role_select($name = 'role', $selected = '', $attrs = array()) {
+        $opts = tmon_admin_get_node_role_options();
+        $attr_str = '';
+        if (is_array($attrs)) {
+            foreach ($attrs as $k => $v) {
+                $attr_str .= ' ' . esc_attr($k) . '="' . esc_attr($v) . '"';
+            }
+        }
+        echo '<select name="'.esc_attr($name).'" id="'.esc_attr($name).'"'.$attr_str.'>';
+        echo '<option value="">Select a type</option>';
+        foreach ($opts as $o) {
+            $sel = ($o === $selected) ? ' selected' : '';
+            echo '<option value="'.esc_attr($o).'"'.$sel.'>'.esc_html($o).'</option>';
+        }
+        echo '</select>';
+    }
+}

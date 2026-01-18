@@ -217,3 +217,114 @@ add_action('admin_init', function(){
 		'canBill' => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN canBill TINYINT(1) NOT NULL DEFAULT 0",
 	]);
 });
+
+// Ensure DB tables for UC extended features exist (idempotent)
+function tmon_uc_ensure_tables() {
+	global $wpdb;
+	$coll = $wpdb->get_charset_collate();
+
+	// LoRa snapshots for historical/trend views
+	$tbl_snap = $wpdb->prefix . 'tmon_uc_lora_snapshots';
+	$wpdb->query("
+	CREATE TABLE IF NOT EXISTS {$tbl_snap} (
+		id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+		unit_id VARCHAR(64) NOT NULL,
+		ts DATETIME NOT NULL,
+		payload LONGTEXT,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		KEY (unit_id),
+		KEY (ts)
+	) {$coll};
+	");
+
+	// Remote shell logs (appendable chunks)
+	$tbl_shell = $wpdb->prefix . 'tmon_uc_shell_logs';
+	$wpdb->query("
+	CREATE TABLE IF NOT EXISTS {$tbl_shell} (
+		id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+		unit_id VARCHAR(64) NOT NULL,
+		job_id VARCHAR(128) DEFAULT '',
+		seq INT DEFAULT 0,
+		chunk LONGTEXT,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		KEY (unit_id),
+		KEY (job_id),
+		KEY (seq)
+	) {$coll};
+	");
+
+	// Customer & location model (for backfilled data from Admin)
+	$tbl_customer = $wpdb->prefix . 'tmon_customers';
+	$wpdb->query("
+	CREATE TABLE IF NOT EXISTS {$tbl_customer} (
+		id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+		name VARCHAR(255) NOT NULL,
+		meta LONGTEXT,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP NULL DEFAULT NULL
+	) {$coll};
+	");
+
+	$tbl_location = $wpdb->prefix . 'tmon_customer_locations';
+	$wpdb->query("
+	CREATE TABLE IF NOT EXISTS {$tbl_location} (
+		id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+		customer_id BIGINT UNSIGNED NOT NULL,
+		name VARCHAR(255),
+		lat DOUBLE,
+		lng DOUBLE,
+		address TEXT,
+		uc_site_url VARCHAR(255) DEFAULT '',
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP NULL DEFAULT NULL,
+		KEY (customer_id),
+		KEY (uc_site_url)
+	) {$coll};
+	");
+
+	// Zones & device groups for UC local grouping
+	$tbl_zone = $wpdb->prefix . 'tmon_uc_zones';
+	$wpdb->query("
+	CREATE TABLE IF NOT EXISTS {$tbl_zone} (
+		id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+		uc_site_url VARCHAR(255) DEFAULT '',
+		location_id BIGINT UNSIGNED DEFAULT 0,
+		name VARCHAR(255) DEFAULT '',
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		KEY (uc_site_url),
+		KEY (location_id)
+	) {$coll};
+	");
+
+	$tbl_group = $wpdb->prefix . 'tmon_uc_device_groups';
+	$wpdb->query("
+	CREATE TABLE IF NOT EXISTS {$tbl_group} (
+		id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+		uc_site_url VARCHAR(255) DEFAULT '',
+		zone_id BIGINT UNSIGNED DEFAULT 0,
+		name VARCHAR(255) DEFAULT '',
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		KEY (uc_site_url),
+		KEY (zone_id)
+	) {$coll};
+	");
+
+	$tbl_assign = $wpdb->prefix . 'tmon_uc_group_assignments';
+	$wpdb->query("
+	CREATE TABLE IF NOT EXISTS {$tbl_assign} (
+		id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+		group_id BIGINT UNSIGNED NOT NULL,
+		unit_id VARCHAR(64) NOT NULL,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		KEY (group_id),
+		KEY (unit_id)
+	) {$coll};
+	");
+}
+
+// Provide legacy alias used by some admin pages
+if (!function_exists('uc_devices_ensure_table')) {
+	function uc_devices_ensure_table() {
+		tmon_uc_ensure_tables();
+	}
+}

@@ -31,8 +31,46 @@ async def boot():
                 pass
     except Exception:
         pass
-    # Only connect to WiFi if NODE_TYPE is not 'remote' and ENABLE_WIFI is True
-    if getattr(settings, 'NODE_TYPE', None) != 'remote' and getattr(settings, 'ENABLE_WIFI', False):
-        await connectToWifiNetwork()   
+    # Only connect to WiFi when enabled. For remotes, allow connect if not yet provisioned and policy allows it.
+    try:
+        node_type = getattr(settings, 'NODE_TYPE', None)
+        enabled = getattr(settings, 'ENABLE_WIFI', False)
+        allow_remote_wifi_if_unprovisioned = bool(getattr(settings, 'WIFI_ALWAYS_ON_WHEN_UNPROVISIONED', True))
+        should_connect = False
+        if enabled:
+            if node_type != 'remote':
+                should_connect = True
+            else:
+                # remote: only if not provisioned and policy allows
+                if not getattr(settings, 'UNIT_PROVISIONED', False) and allow_remote_wifi_if_unprovisioned:
+                    should_connect = True
+        if should_connect:
+            await connectToWifiNetwork()
+
+            # NEW: Best-effort, early provisioning fetch when internet is available
+            try:
+                from wifi import check_internet_connection
+                inet_ok = False
+                try:
+                    inet_ok = await check_internet_connection()
+                except Exception:
+                    inet_ok = False
+                if inet_ok:
+                    try:
+                        import provision
+                        mid = getattr(settings, 'MACHINE_ID', None)
+                        prov = provision.fetch_provisioning(unit_id=getattr(settings, 'UNIT_ID', None), machine_id=mid, base_url=getattr(settings, 'TMON_ADMIN_API_URL', None))
+                        if isinstance(prov, dict) and prov:
+                            try:
+                                provision.apply_settings(prov)
+                            except Exception:
+                                pass
+                    except Exception:
+                        # keep boot resilient on any errors
+                        pass
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 asyncio.run(boot())

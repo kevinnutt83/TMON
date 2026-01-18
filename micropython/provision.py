@@ -162,6 +162,14 @@ def apply_settings(settings_doc):
     # Persist mapped fields to settings module
     try:
         import settings as _s
+        # Persist UNIT_ID if present (best-effort)
+        if settings_doc.get('unit_id'):
+            try:
+                from utils import persist_unit_id
+                _s.UNIT_ID = str(settings_doc.get('unit_id'))
+                persist_unit_id(_s.UNIT_ID)
+            except Exception:
+                pass
         if settings_doc.get('plan'): _s.PLAN = settings_doc.get('plan')
         if settings_doc.get('site_url') or settings_doc.get('wordpress_api_url'):
             _s.WORDPRESS_API_URL = settings_doc.get('site_url') or settings_doc.get('wordpress_api_url')
@@ -169,6 +177,27 @@ def apply_settings(settings_doc):
                 path = getattr(_s, 'WORDPRESS_API_URL_FILE', _s.LOG_DIR + '/wordpress_api_url.txt')
                 with open(path, 'w') as f:
                     f.write(_s.WORDPRESS_API_URL)
+            except Exception:
+                pass
+        # Persist unit name via utils to maintain consistent behavior
+        if unit_name:
+            try:
+                from utils import persist_unit_name
+                persist_unit_name(unit_name)
+                _s.UNIT_Name = unit_name
+            except Exception:
+                pass
+        # If role -> persist node type and if remote, optionally disable WiFi
+        if node_type:
+            try:
+                _s.NODE_TYPE = node_type
+                from utils import persist_node_type
+                persist_node_type(node_type)
+                if str(node_type).lower() == 'remote' and settings_doc.get('WIFI_DISABLE_AFTER_PROVISION', False):
+                    try:
+                        _s.ENABLE_WIFI = False
+                    except Exception:
+                        pass
             except Exception:
                 pass
     except Exception:

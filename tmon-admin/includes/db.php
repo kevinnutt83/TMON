@@ -173,6 +173,38 @@ function tmon_admin_ensure_history_table() {
 	) {$collate}");
 }
 
+function tmon_admin_ensure_customer_tables() {
+	global $wpdb;
+	$coll = $wpdb->get_charset_collate();
+
+	$tbl_customer = $wpdb->prefix . 'tmon_customers';
+	$wpdb->query("
+	CREATE TABLE IF NOT EXISTS {$tbl_customer} (
+		id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+		name VARCHAR(255) NOT NULL,
+		meta LONGTEXT,
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP NULL DEFAULT NULL
+	) {$coll};
+	");
+
+	$tbl_loc = $wpdb->prefix . 'tmon_customer_locations';
+	$wpdb->query("
+	CREATE TABLE IF NOT EXISTS {$tbl_loc} (
+		id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+		customer_id BIGINT UNSIGNED NOT NULL,
+		name VARCHAR(255),
+		lat DOUBLE,
+		lng DOUBLE,
+		address TEXT,
+		uc_site_url VARCHAR(255) DEFAULT '',
+		created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP NULL DEFAULT NULL,
+		KEY(customer_id)
+	) {$coll};
+	");
+}
+
 // Silent ensures during admin_init
 add_action('admin_init', function(){
 	// Run ensures silently each admin load

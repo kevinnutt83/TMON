@@ -103,6 +103,25 @@
 			const btn = form.querySelector('input[type="submit"], button[type="submit"], .button-primary');
 			if (btn) { btn.disabled=true; setTimeout(()=>{btn.disabled=false},4000); }
 		}, {passive:true}));
+
+		// Defensive: ensure any provisioning Role select has canonical options
+		(function ensureRoleSelects(){
+			var roles = ['base','wifi','remote'];
+			document.querySelectorAll('select[name="role"]').forEach(function(sel){
+				// quick check: if wifi & remote present already, skip
+				var hasWifi = false, hasRemote = false;
+				for (var i=0;i<sel.options.length;i++){
+					if (sel.options[i].value === 'wifi') hasWifi = true;
+					if (sel.options[i].value === 'remote') hasRemote = true;
+				}
+				if (hasWifi && hasRemote) return;
+				var cur = sel.value || '';
+				// rebuild safely preserving selection when possible
+				sel.innerHTML = '';
+				var opt = document.createElement('option'); opt.value=''; opt.text='Select a type'; sel.appendChild(opt);
+				roles.forEach(function(r){ var o=document.createElement('option'); o.value=r; o.text=r; if (r===cur) o.selected=true; sel.appendChild(o); });
+			});
+		})();
 	});
 
 	// Fetch manifest modified to use either REST or admin-ajax depending on availability
@@ -219,5 +238,14 @@
 			fetchManifest(repo);
 		});
 
+		// Defensive shim: if DataTables is not available, provide a no-op to avoid hard JS errors
+		try {
+			if (window.jQuery && typeof jQuery.fn !== 'undefined' && typeof jQuery.fn.DataTable === 'undefined') {
+				console.warn('DataTables not loaded; provisioning page will use a basic fallback.');
+				jQuery.fn.DataTable = function () { return this; }; // minimal no-op to avoid errors
+			}
+		} catch (e) {
+			try { console.warn('DataTable shim failed', e); } catch (err) {}
+		}
 	})();
 })();

@@ -362,3 +362,35 @@ function uc_get_staged_settings($unit_id = '', $machine_id = '') {
 	if (!is_array($json)) $json = [];
 	return ['staged'=>true,'staged_at'=>$row['staged_at'],'settings'=>$json];
 }
+
+// Provisioning helpers for Unit Connector: ensure canonical role options and render helper are available.
+
+if (!function_exists('uc_get_node_role_options')) {
+	function uc_get_node_role_options() {
+		$opts = get_option('tmon_admin_node_roles', null);
+		if (is_array($opts) && !empty($opts)) {
+			return $opts;
+		}
+		// canonical device roles (match firmware/ADMIN_MODAL_DEFAULT_ROLE_OPTIONS)
+		return array('base', 'wifi', 'remote');
+	}
+}
+
+if (!function_exists('uc_render_node_role_select')) {
+	function uc_render_node_role_select($name = 'role', $selected = '', $attrs = array()) {
+		$opts = uc_get_node_role_options();
+		$attr_str = '';
+		if (is_array($attrs)) {
+			foreach ($attrs as $k => $v) {
+				$attr_str .= ' ' . esc_attr($k) . '="' . esc_attr($v) . '"';
+			}
+		}
+		echo '<select name="'.esc_attr($name).'" id="'.esc_attr($name).'"'.$attr_str.'>';
+		echo '<option value="">Select a type</option>';
+		foreach ($opts as $o) {
+			$sel = ($o === $selected) ? ' selected' : '';
+			echo '<option value="'.esc_attr($o).'"'.$sel.'>'.esc_html($o).'</option>';
+		}
+		echo '</select>';
+	}
+}

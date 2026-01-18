@@ -12,10 +12,15 @@ from BME280 import BME280
 #Sampling Routine for sample all sensor types if they are enabled
 async def sampleEnviroment():
     from utils import led_status_flash
-    led_status_flash('SAMPLE_TEMP')
-    await sampleTemp()
-    led_status_flash('SAMPLE_BAR')
-    await frost_and_heat_watch()  # Call frost and heat watch after sampling
+    import sdata as _s
+    _s.sampling_active = True
+    try:
+        led_status_flash('SAMPLE_TEMP')
+        await sampleTemp()
+        led_status_flash('SAMPLE_BAR')
+        await frost_and_heat_watch()  # Call frost and heat watch after sampling
+    finally:
+        _s.sampling_active = False
 
 #Sample Temperatures from enabled sensors devices
 async def sampleTemp():
@@ -28,68 +33,76 @@ async def sampleTemp():
 async def sampleBME280():
     if settings.ENABLE_sensorBME280:
         from utils import led_status_flash
+        import sdata as _s
+        _s.sampling_active = True
         try:
-            from oled import display_message
-            await display_message("Sampling", 1)
-        except Exception:
-            pass
-        import lora as lora_module
-        # Deinit LoRa and free pins before using BME280
-        async with lora_module.pin_lock:
-            if lora_module.lora is not None:
-                lora_module.lora.spi.deinit()
-                lora_module.lora = None
-        await free_pins()
-        from BME280 import BME280
-        sensor = BME280()
-        sensor.get_calib_param()
-        try:
-            led_status_flash('SAMPLE_TEMP')
-            data = []
-            data = sensor.readData()
-            sdata.cur_temp_c = data[1]
-            sdata.cur_temp_f = (sdata.cur_temp_c * 9/5) + 32
-            sdata.cur_humid = data[2]
-            sdata.cur_bar_pres = data[0]
-
-            # NEW: evaluate local sample against historical min/max for frost/heat logic
             try:
-                await findLowestTemp(sdata.cur_temp_f, source='local')
-                await findHighestTemp(sdata.cur_temp_f, source='local')
-                await findLowestBar(sdata.cur_bar_pres, source='local')
-                await findHighestBar(sdata.cur_bar_pres, source='local')
-                await findLowestHumid(sdata.cur_humid, source='local')
-                await findHighestHumid(sdata.cur_humid, source='local')
+                from oled import display_message
+                await display_message("Sampling", 1)
             except Exception:
                 pass
+            import lora as lora_module
+            # Deinit LoRa and free pins before using BME280
+            async with lora_module.pin_lock:
+                if lora_module.lora is not None:
+                    try:
+                        lora_module.lora.spi.deinit()
+                    except Exception:
+                        pass
+                    lora_module.lora = None
+            await free_pins()
+            from BME280 import BME280
+            sensor = BME280()
+            sensor.get_calib_param()
+            try:
+                led_status_flash('SAMPLE_TEMP')
+                data = []
+                data = sensor.readData()
+                sdata.cur_temp_c = data[1]
+                sdata.cur_temp_f = (sdata.cur_temp_c * 9/5) + 32
+                sdata.cur_humid = data[2]
+                sdata.cur_bar_pres = data[0]
 
-            if settings.DEBUG and settings.DEBUG_TEMP:
-                await debug_print(
-                    "sample:BME p:%7.2f t:%-6.2f h:%6.2f" % (data[0], data[1], data[2]),
-                    "DEBUG TEMP"
-                )
+                # NEW: evaluate local sample against historical min/max for frost/heat logic
                 try:
-                    from oled import display_message
-                    await display_message("Sample OK", 1.5)
+                    await findLowestTemp(sdata.cur_temp_f, source='local')
+                    await findHighestTemp(sdata.cur_temp_f, source='local')
+                    await findLowestBar(sdata.cur_bar_pres, source='local')
+                    await findHighestBar(sdata.cur_bar_pres, source='local')
+                    await findLowestHumid(sdata.cur_humid, source='local')
+                    await findHighestHumid(sdata.cur_humid, source='local')
                 except Exception:
                     pass
-        except Exception as e:
-            if settings.DEBUG and settings.DEBUG_TEMP:
-                await debug_print(f"sample:BME err: {e}", "SAMPLE ERROR TEMP")
-        finally:
-            # Some MicroPython ports do not implement I2C.deinit(); guard accordingly
-            try:
-                if getattr(sensor, "i2c", None):
-                    i2c_obj = sensor.i2c
-                    if hasattr(i2c_obj, "deinit"):
-                        i2c_obj.deinit()
+
+                if settings.DEBUG and settings.DEBUG_TEMP:
+                    await debug_print(
+                        "sample:BME p:%7.2f t:%-6.2f h:%6.2f" % (data[0], data[1], data[2]),
+                        "DEBUG TEMP"
+                    )
+                    try:
+                        from oled import display_message
+                        await display_message("Sample OK", 1.5)
+                    except Exception:
+                        pass
             except Exception as e:
                 if settings.DEBUG and settings.DEBUG_TEMP:
-                    await debug_print(f"BME: deinit skipped: {e}", "DEBUG TEMP")
+                    await debug_print(f"sample:BME err: {e}", "SAMPLE ERROR TEMP")
             finally:
-                # Help GC release the bus reference
-                sensor.i2c = None
-        # Optionally, re-initialize LoRa here if needed for next operation
+                # Some MicroPython ports do not implement I2C.deinit(); guard accordingly
+                try:
+                    if getattr(sensor, "i2c", None):
+                        i2c_obj = sensor.i2c
+                        if hasattr(i2c_obj, "deinit"):
+                            i2c_obj.deinit()
+                except Exception as e:
+                    if settings.DEBUG and settings.DEBUG_TEMP:
+                        await debug_print(f"BME: deinit skipped: {e}", "DEBUG TEMP")
+                finally:
+                    # Help GC release the bus reference
+                    sensor.i2c = None
+            # Optionally, re-initialize LoRa here if needed for next operation
+        finally:
+            _s.sampling_active = False
 
 async def findLowestTemp(compareTemp, source='local'):
     try:

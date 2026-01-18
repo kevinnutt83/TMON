@@ -139,10 +139,9 @@ async def lora_comm_task():
     global sdata
     from utils import led_status_flash
     while True:
-        # Block LoRa loop until provisioned to avoid premature radio churn
-        if not is_provisioned():
-            await asyncio.sleep(1)
-            continue
+        # NOTE: remote/base must be able to use LoRa before being 'provisioned' (remotes rely on LoRa to contact base).
+        # Previously we blocked this loop until is_provisioned() to avoid premature churn; that prevented remotes from ever sending.
+        # Removed the provisioning gate so LoRa starts immediately. Keep rest of safety behavior (DEVICE_SUSPENDED, re-init backoff).
         loop_start_time = time.ticks_ms()
         led_status_flash('INFO')
         result = None
@@ -289,11 +288,29 @@ async def first_boot_provision():
                     f.write('ok')
             except Exception:
                 pass
+            # Mark device as provisioned in-memory so other tasks (esp. remotes) stop HTTP usage
+            try:
+                settings.UNIT_PROVISIONED = True
+            except Exception:
+                pass
             # Restore: do not overwrite UNIT_ID with blank values
             try:
                 resp_json = resp.json()
             except Exception:
                 resp_json = {}
+            # Persist unit name when returned during check-in
+            try:
+                unit_name = (resp_json.get('unit_name') or '').strip()
+                if unit_name:
+                    try:
+                        from utils import persist_unit_name
+                        persist_unit_name(unit_name)
+                        settings.UNIT_Name = unit_name
+                        await debug_print('first_boot_provision: UNIT_Name persisted', 'PROVISION')
+                    except Exception:
+                        pass
+            except Exception:
+                pass
             # Restore: do not overwrite UNIT_ID with blank values
             try:
                 new_uid = resp_json.get('unit_id')
@@ -329,6 +346,29 @@ async def first_boot_provision():
                         settings.NODE_TYPE = role_val
                     except Exception:
                         pass
+                    try:
+                        persist_node_type(role_val)
+                    except Exception:
+                        pass
+                    # if role is remote, proactively disable wifi and persist
+                    try:
+                        if str(role_val).lower() == 'remote':
+                            try:
+                                from utils import persist_node_type
+                                persist_node_type(role_val)
+                            except Exception:
+                                pass
+                            try:
+                                from utils import persist_unit_name
+                                # ensure unit name persisted earlier
+                            except Exception:
+                                pass
+                            try:
+                                disable_wifi()
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
                 if unit_name:
                     try:
                         settings.UNIT_Name = unit_name
@@ -349,6 +389,11 @@ async def first_boot_provision():
                     try:
                         with open(flag, 'w') as f:
                             f.write('ok')
+                    except Exception:
+                        pass
+                    # Mark device as provisioned in-memory
+                    try:
+                        settings.UNIT_PROVISIONED = True
                     except Exception:
                         pass
                     # NEW: confirm applied provisioning to Admin (best-effort)
@@ -596,7 +641,7 @@ async def startup():
 
 # If blocking tasks are added later, start them in a separate thread here
 import uasyncio as asyncio
-from utils import start_background_tasks, update_sys_voltage
+from utils import start_background_tasks, update_sys_voltage, runGC  # CHANGED: use runGC alias
 from oled import display_message
 
 async def main():
@@ -616,13 +661,28 @@ async def main():
         pass
 
     # Idle loop to update system metrics and keep loop alive
+    _last_gc_ms = time.ticks_ms()
+    _gc_interval_ms = 300 * 1000  # 300 seconds
+
     while True:
         try:
             try:
                 update_sys_voltage()
             except Exception:
                 pass
+
+            # ...existing code...
             await asyncio.sleep(10)
+
+            # CHANGED: runGC every 300s at end of loop
+            try:
+                now_ms = time.ticks_ms()
+                if time.ticks_diff(now_ms, _last_gc_ms) >= _gc_interval_ms:
+                    await runGC()
+                    _last_gc_ms = now_ms
+            except Exception:
+                pass
+
         except Exception:
             await asyncio.sleep(5)
 

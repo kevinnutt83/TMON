@@ -36,3 +36,21 @@ Replace repo with TMON-main (non-interactive example):
   ./scripts/fix-permissions.sh
   # Then run replace (non-interactive, auto-commit):
   ./scripts/replace-with-tmon-main.sh --yes --commit ./TMON-main .
+
+## Git sync troubleshooting (divergent branches)
+
+If `git pull` errors with “Need to specify how to reconcile divergent branches”, run:
+
+    cd /workspaces/TMON
+    git status
+    git pull --rebase --tags origin main
+    git config pull.rebase true
+
+If conflicts happen:
+
+    git add -A
+    git rebase --continue
+
+If you rebased commits that were already pushed:
+
+    git push --force-with-lease

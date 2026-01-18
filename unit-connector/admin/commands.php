@@ -43,14 +43,24 @@ if (!function_exists('tmon_uc_commands_page')) {
 		echo '<tr><th scope="row"><label>Unit ID</label></th><td><input type="text" name="unit_id" class="regular-text" required></td></tr>';
 			echo '<tr><th scope="row"><label>Command</label></th><td>';
 			echo '<select name="command" id="tmon-command">';
-			echo '<option value="toggle_relay" selected>toggle_relay</option>';
+			echo '<option value="toggle_relay">toggle_relay</option>';
 			echo '<option value="settings_update">settings_update</option>';
 			echo '<option value="set_oled_message">set_oled_message</option>';
 			echo '<option value="set_oled_banner">set_oled_banner</option>';
 			echo '<option value="clear_oled">clear_oled</option>';
+			// NEW commands
+			echo '<option value="reboot">reboot</option>';
+			echo '<option value="download_logs">download_logs</option>';
+			echo '<option value="force_firmware">force_firmware</option>';
+			echo '<option value="set_setting">set_setting</option>';
+			echo '<option value="trigger_sampling">trigger_sampling</option>';
+			echo '<option value="shutdown">shutdown</option>';
+			echo '<option value="set_node_type">set_node_type</option>';
+			echo '<option value="set_unit_name">set_unit_name</option>';
+			echo '<option value="remote_shell">remote_shell</option>';
 			echo '</select>';
 			echo '</td></tr>';
-			echo '<tr><th scope="row"><label>Params (JSON)</label></th><td><textarea name="params" rows="5" class="large-text" id="tmon-params">{"relay_num":"1","state":"on","runtime":"5"}</textarea><p class="description">For settings_update, provide a JSON object of settings keys to update, e.g. {"FIELD_DATA_SEND_INTERVAL":60}</p></td></tr>';
+			echo '<tr><th scope="row"><label>Params (JSON)</label></th><td><textarea name="params" rows="5" class="large-text" id="tmon-params">{"relay_num":"1","state":"on","runtime":"5"}</textarea><p class="description">Examples: <em>reboot</em> => {} | <em>download_logs</em> => {"dest":"s3://..."} | <em>force_firmware</em> => {"url":"https://.../main.py"} | <em>set_setting</em> => {"key":"FIELD_DATA_SEND_INTERVAL","value":30} | <em>remote_shell</em> => {"cmd":"tail /logs/field_data.log 50"}</p></td></tr>';
 		echo '</table>';
 		submit_button('Send Command', 'primary', 'tmon_uc_send_command');
 		echo '</form>';
