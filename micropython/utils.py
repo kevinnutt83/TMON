@@ -1152,6 +1152,282 @@ def enforce_log_caps(path: str):
 	except Exception:
 		pass
 
+# Lightweight background scheduler to avoid ImportError in main.py
+def start_background_tasks():
+    try:
+        import uasyncio as _a
+        # Avoid duplicate scheduling: use a simple guard flag in settings
+        if not hasattr(settings, '_BG_TASKS_STARTED'):
+            settings._BG_TASKS_STARTED = True
+            try:
+                _a.create_task(periodic_provision_check())
+            except Exception:
+                pass
+            try:
+                # Guard field-data send scheduler: only start when URL exists and role supports it
+                wp_url = str(getattr(settings, 'WORDPRESS_API_URL', '')).strip()
+                role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
+                if wp_url and role in ('base', 'wifi'):
+                    _a.create_task(periodic_field_data_send())
+            except Exception:
+                pass
+    except Exception:
+        # Silently ignore to keep boot path resilient
+        pass
+
+# Ensure periodic_provision_check is exported for main.py import
+__all__ = [
+    'debug_print',
+    'free_pins',
+    'persist_unit_id',
+    'load_persisted_unit_id',
+    'persist_wordpress_api_url',
+    'load_persisted_wordpress_api_url',
+    'periodic_field_data_send',
+    'periodic_provision_check',
+    'get_machine_id',
+    'start_background_tasks',
+    'persist_node_type',
+    'load_persisted_node_type'
+]
+
+def persist_unit_name(unit_name: str):
+    """Persist a human-friendly unit name so it survives reboots."""
+    try:
+        if not unit_name:
+            return
+        checkLogDirectory()
+        path = getattr(settings, 'UNIT_NAME_FILE', settings.LOG_DIR + '/unit_name.txt')
+        # detect prior persisted name (to show a first-time banner)
+        try:
+            prev = read_text(path, None)
+        except Exception:
+            prev = None
+        write_text(path, str(unit_name).strip())
+        try:
+            import settings as _s
+            _s.UNIT_Name = str(unit_name).strip()
+        except Exception:
+            pass
+        # If this is the first persistence (no previous name), show an OLED banner (best-effort)
+        try:
+            if not prev or not str(prev).strip():
+                try:
+                    import uasyncio as _a
+                    from oled import display_message
+                    try:
+                        _a.create_task(display_message("Unit: " + str(unit_name).strip(), 2))
+                    except Exception:
+                        # If loop/create_task not available, try simple call (may error on non-async context)
+                        try:
+                            _a.run(display_message("Unit: " + str(unit_name).strip(), 2))
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+def load_persisted_unit_name():
+    """Load persisted UNIT_Name and apply to settings if present."""
+    try:
+        checkLogDirectory()
+        path = getattr(settings, 'UNIT_NAME_FILE', settings.LOG_DIR + '/unit_name.txt')
+        try:
+            val = read_text(path, None)
+        except Exception:
+            val = None
+        if val:
+            val = val.strip()
+            if val:
+                try:
+                    settings.UNIT_Name = val
+                except Exception:
+                    pass
+                return val
+        return None
+    except Exception:
+        return None
+
+# Apply persisted unit name at import/boot so UI and telemetry show it early
+try:
+    load_persisted_unit_name()
+except Exception:
+    pass
+
+async def periodic_provision_check():
+    """Poll Admin hub for staged provisioning metadata until provisioned.
+    Persists UNIT_ID, WORDPRESS_API_URL, role, plan, unit_name, firmware and soft-resets once after URL persistence.
+    """
+    global _provision_reboot_guard_written
+    import uasyncio as _a
+    interval = int(getattr(settings, 'PROVISION_CHECK_INTERVAL_S', 25))
+    timeout_s = int(getattr(settings, 'PROVISION_CHECK_TIMEOUT_S', 8))
+    hub = getattr(settings, 'TMON_ADMIN_API_URL', '')
+    flag_file = getattr(settings, 'PROVISIONED_FLAG_FILE', settings.LOG_DIR + '/provisioned.flag')
+    guard_file = getattr(settings, 'PROVISION_REBOOT_GUARD_FILE', settings.LOG_DIR + '/provision_reboot.flag')
+    while True:
+        try:
+            # Robust flag check, but only consider "fully provisioned" if URL and UNIT_ID are set
+            try:
+                flag_exists = False
+                try:
+                    os.stat(flag_file)
+                    flag_exists = True
+                except OSError:
+                    flag_exists = False
+                wp_url_set = bool(str(getattr(settings, 'WORDPRESS_API_URL', '')).strip())
+                uid_set = bool(str(getattr(settings, 'UNIT_ID', '')).strip())
+                if hub and flag_file and flag_exists and wp_url_set and uid_set:
+                    await debug_print('prov: provisioned', 'PROVISION')
+                    # mark the in-memory flag so other modules know provisioning applied
+                    try:
+                        settings.UNIT_PROVISIONED = True
+                    except Exception:
+                        pass
+                    return
+            except Exception:
+                pass
+
+            if not hub:
+                await debug_print('prov: no hub', 'PROVISION')
+            else:
+                # Prefer urequests; fall back to any already-imported requests module
+                try:
+                    import urequests as _r
+                except Exception:
+                    try:
+                        import sys
+                        _r = sys.modules.get('urequests') or sys.modules.get('requests')
+                        if _r is None:
+                            # Last resort: import ota and reuse its requests handle if set
+                            try:
+                                import ota as _ota
+                                _r = getattr(_ota, 'requests', None)
+                            except Exception:
+                                _r = None
+                    except Exception:
+                        _r = None
+                resp = None  # guard for close
+                if _r:
+                    # Force a short socket timeout so the event loop is not blocked indefinitely
+                    try:
+                        import usocket as _sock
+                        _sock.setdefaulttimeout(timeout_s)
+                    except Exception:
+                        pass
+                    mid = get_machine_id()
+                    uid = getattr(settings, 'UNIT_ID', None)
+                    body = {'machine_id': mid}
+                    if uid:
+                        body['unit_id'] = uid
+                    # Yield before performing blocking HTTP to keep the loop responsive
+                    await _a.sleep(0)
+                    try:
+                        resp = _r.post(hub.rstrip('/') + '/wp-json/tmon-admin/v1/device/check-in', json=body, timeout=10)
+                    except TypeError:
+                        resp = _r.post(hub.rstrip('/') + '/wp-json/tmon-admin/v1/device/check-in', json=body)
+                    status = getattr(resp, 'status_code', 0)
+                    if status == 200:
+                        try:
+                            resp_json = resp.json()
+                        except Exception:
+                            resp_json = {}
+                        staged = bool(resp_json.get('staged_exists'))
+                        provisioned = bool(resp_json.get('provisioned'))
+                        await debug_print(f'prov: check staged={staged} prov={provisioned}', 'PROVISION')
+                        # Persist UNIT_ID if provided and non-empty
+                        new_uid = resp_json.get('unit_id')
+                        if new_uid and str(new_uid).strip():
+                            if str(new_uid).strip() != str(getattr(settings, 'UNIT_ID', '')):
+                                settings.UNIT_ID = str(new_uid).strip()
+                                try:
+                                    persist_unit_id(settings.UNIT_ID)
+                                except Exception:
+                                    pass
+                        # Persist metadata -> WORDPRESS_API_URL etc.
+                        site_val = (resp_json.get('site_url') or resp_json.get('wordpress_api_url') or '').strip()
+                        if site_val:
+                            persist_wordpress_api_url(site_val)
+                        unit_name = (resp_json.get('unit_name') or '').strip()
+                        role_val = (resp_json.get('role') or '').strip()
+                        plan_val = (resp_json.get('plan') or '').strip()
+                        fw_ver = (resp_json.get('firmware') or '').strip()
+                        if unit_name:
+                            try:
+                                settings.UNIT_Name = unit_name
+                            except Exception:
+                                pass
+                        if role_val:
+                            try:
+                                settings.NODE_TYPE = role_val
+                            except Exception:
+                                pass
+                            try:
+                                persist_node_type(role_val)
+                            except Exception:
+                                pass
+                        if plan_val:
+                            try:
+                                settings.PLAN = plan_val
+                            except Exception:
+                                pass
+                        if fw_ver:
+                            try:
+                                settings.FIRMWARE_VERSION = fw_ver
+                            except Exception:
+                                pass
+                        # Mark provisioned flag file (do not exit loop yet; allow URL/UID checks next tick)
+                        if (provisioned or staged) and site_val:
+                            try:
+                                with open(flag_file, 'w') as f:
+                                    f.write('ok')
+                            except Exception:
+                                pass
+                            # Mark in-memory provisioned so remotes stop HTTP calls
+                            try:
+                                settings.UNIT_PROVISIONED = True
+                            except Exception:
+                                pass
+                            # One-time soft reset after initial full metadata persistence
+                            if not _provision_reboot_guard_written:
+                                reboot_needed = True
+                                try:
+                                    os.stat(guard_file)
+                                    reboot_needed = False
+                                except OSError:
+                                    reboot_needed = True
+                                if reboot_needed:
+                                    try:
+                                        with open(guard_file, 'w') as gf:
+                                            gf.write('1')
+                                    except Exception:
+                                        pass
+                                    await debug_print('prov: applied -> soft reset', 'PROVISION')
+                                    _provision_reboot_guard_written = True
+                                    try:
+                                        import machine
+                                        machine.soft_reset()
+                                    except Exception:
+                                        pass
+                    else:
+                        await debug_print('prov: no requests', 'PROVISION')
+                    # Safely close response
+                    try:
+                        if resp:
+                            resp.close()
+                    except Exception:
+                        pass
+        except Exception as e:
+            try:
+                await debug_print(f'prov: error {e}', 'ERROR')
+            except Exception:
+                pass
+        # Always yield and delay to avoid a tight loop in error conditions
+        await _a.sleep(interval)
+
 def compute_bars(rssi, cuts=None):
     """Return 0..3 bars for RSSI. 'cuts' is tuple/list of descending thresholds (e.g., [-60,-80,-90])."""
     try:
