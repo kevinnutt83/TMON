@@ -5,6 +5,7 @@
 # --- Single-threaded asyncio event loop ---
 import uasyncio as asyncio
 import settings
+import gc  # FIX: boot_check_in() uses gc before later import; keep this near the top
 from debug import info as dbg_info, warn as dbg_warn, error as dbg_error
 import sdata
 import utime as time

@@ -154,3 +154,19 @@ GC_INTERVAL_S = 60
 
 # Internet test
 INTERNET_TEST_URL = 'https://example.com'
+
+# --- BME280 (required by /lib/BME280.py) ---
+# Some BME280 drivers in this repo expect these exact names on settings.*
+i2cAddr_BME280 = 0x76  # common BME280 address (alternate is 0x77)
+i2cFreq_BME280 = 100000
+
+# If your board uses different pins/bus, override these in your device config.
+# Keep these present so imports don't fail even when ENABLE_sensorBME280=False.
+try:
+    I2C_B_SCL_PIN
+except Exception:
+    I2C_B_SCL_PIN = 9
+try:
+    I2C_B_SDA_PIN
+except Exception:
+    I2C_B_SDA_PIN = 8

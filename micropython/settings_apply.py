@@ -5,7 +5,7 @@ try:
 except Exception:
     import json  # type: ignore
 
-import os
+import uos as os
 try:
     import utime as time
 except Exception:
@@ -22,7 +22,6 @@ except Exception:
     gc = None
 
 import settings
-
 from config_persist import read_json, write_json
 from utils import debug_print, persist_suspension_state, persist_unit_name, persist_node_type, persist_wordpress_api_url
 
@@ -115,7 +114,7 @@ def _apply_key(k, v):
         val = ALLOWLIST[k](v)
         setattr(settings, k, val)
 
-        # Side effects / persistence for higher-level settings
+        # persistence side-effects for key settings
         try:
             if k == 'DEVICE_SUSPENDED':
                 persist_suspension_state(bool(val))
@@ -154,18 +153,15 @@ def load_applied_settings_on_boot():
         _gc_collect()
 
 def _post_command_confirm(payload):
-    """Best-effort: POST a command-complete / ack to the configured WP URL."""
+    """Best-effort ack to WP (optional)."""
     try:
-        try:
-            import urequests as requests
-        except Exception:
-            requests = None
-        if not requests:
-            return False
+        import urequests as requests
+    except Exception:
+        requests = None
+    try:
         wp = str(getattr(settings, 'WORDPRESS_API_URL', '') or '').rstrip('/')
-        if not wp:
+        if not (requests and wp):
             return False
-        # Prefer new endpoint; fallback to legacy ack
         try:
             from wprest import _auth_headers
             hdrs = _auth_headers() if callable(_auth_headers) else {}
@@ -177,13 +173,6 @@ def _post_command_confirm(payload):
                 r = requests.post(wp + '/wp-json/tmon/v1/device/command-complete', headers=hdrs, json=payload, timeout=8)
             except TypeError:
                 r = requests.post(wp + '/wp-json/tmon/v1/device/command-complete', headers=hdrs, json=payload)
-            sc = getattr(r, 'status_code', 0)
-            if sc == 404:
-                try:
-                    r.close()
-                except Exception:
-                    pass
-                r = requests.post(wp + '/wp-json/tmon/v1/device/ack', headers=hdrs, json=payload)
             return True
         finally:
             try:
@@ -196,46 +185,20 @@ def _post_command_confirm(payload):
         return False
 
 def _append_staged_audit(unit_id, action, details):
-    """Append an audit line to LOG_DIR/staged_settings_audit.log for traceability."""
     try:
         p = getattr(settings, 'LOG_DIR', '/logs').rstrip('/') + '/staged_settings_audit.log'
         with open(p, 'a') as f:
-            f.write(json.dumps({
-                'ts': int(time.time()),
-                'unit_id': unit_id,
-                'action': action,
-                'details': details
-            }) + '\n')
+            f.write(json.dumps({'ts': int(time.time()), 'unit_id': unit_id, 'action': action, 'details': details}) + '\n')
     except Exception:
         pass
     finally:
         _gc_collect()
 
 async def apply_staged_settings_once():
-    """Apply staged settings file if present; persist applied snapshot; clear staged file."""
     unit_id = str(getattr(settings, 'UNIT_ID', '') or '')
     staged_path = getattr(settings, 'REMOTE_SETTINGS_STAGED_FILE', '/logs/remote_settings.staged.json')
     applied_path = getattr(settings, 'REMOTE_SETTINGS_APPLIED_FILE', '/logs/remote_settings.applied.json')
-
     try:
-        # If a per-unit staged file exists (base behavior), move it into canonical path first
-        try:
-            per_unit = getattr(settings, 'LOG_DIR', '/logs').rstrip('/') + f'/device_settings-{unit_id}.json'
-            try:
-                os.stat(per_unit)
-                try:
-                    with open(per_unit, 'r') as f:
-                        doc = json.loads(f.read() or '{}')
-                    write_json(staged_path, doc)
-                    try:
-                        os.remove(per_unit)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-        except Exception:
-            pass
-
         try:
             os.stat(staged_path)
         except Exception:
@@ -253,14 +216,15 @@ async def apply_staged_settings_once():
         if applied:
             write_json(applied_path, applied)
             _append_staged_audit(unit_id, 'applied', {'keys': list(applied.keys())})
-            await debug_print(f"settings_apply: applied {list(applied.keys())}", "INFO")
-            # Best-effort confirmation to server
+            try:
+                await debug_print(f"settings_apply: applied {list(applied.keys())}", "INFO")
+            except Exception:
+                pass
             try:
                 _post_command_confirm({'unit_id': unit_id, 'type': 'settings_applied', 'applied': list(applied.keys())})
             except Exception:
                 pass
 
-        # Clear staged file after attempt
         try:
             os.remove(staged_path)
         except Exception:

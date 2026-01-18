@@ -1850,10 +1850,8 @@ async def connectLora():
                                                         break
                                                 except Exception:
                                                     pass
-                            await asyncio.sleep(0.01)
-                        return True
-                    else:
-                        await debug_print(f"lora: last-resort single-frame failed ({st_last})", "ERROR")
+                            else:
+                                await debug_print(f"lora: last-resort single-frame failed ({st_last})", "ERROR")
                 await debug_print("lora: cannot shrink chunk size further", "ERROR")
                 break
             raw_chunk_size = new_raw
@@ -1948,8 +1946,6 @@ async def connectLora():
                         write_lora_log(f"Remote stored next sync epoch: {getattr(settings, 'nextLoraSync', '')}", 'INFO')
                         led_status_flash('SUCCESS')
                         break
-                except Exception:
-                    pass
         await asyncio.sleep(0.01)
 
     # After sending all chunks, done for this cycle
@@ -2048,3 +2044,113 @@ except Exception as e:
     lora = None
     return False
     return True
+
+# FIX: helpers referenced later in connectLora() must exist
+try:
+    import gc as _gc
+except Exception:
+    _gc = None
+
+def _gc_collect():
+    try:
+        if _gc:
+            _gc.collect()
+    except Exception:
+        pass
+
+def _update_lora_rx_metrics():
+    """Best-effort RX metrics update into sdata (RSSI/SNR/ts/LORA_CONNECTED)."""
+    try:
+        if not sdata:
+            return
+        # Prefer getPacketStatus() if driver provides it; fallback to getRSSI/getSNR
+        try:
+            if lora and hasattr(lora, 'getPacketStatus'):
+                ps = lora.getPacketStatus()
+                if isinstance(ps, (tuple, list)) and len(ps) >= 2:
+                    sdata.lora_SigStr = ps[0]
+                    sdata.lora_snr = ps[1]
+        except Exception:
+            pass
+        try:
+            if lora and hasattr(lora, 'getRSSI'):
+                sdata.lora_SigStr = lora.getRSSI()
+        except Exception:
+            pass
+        try:
+            if lora and hasattr(lora, 'getSNR'):
+                sdata.lora_snr = lora.getSNR()
+        except Exception:
+            pass
+        try:
+            sdata.lora_last_rx_ts = int(time.time())
+        except Exception:
+            pass
+        try:
+            sdata.LORA_CONNECTED = True
+        except Exception:
+            pass
+    finally:
+        _gc_collect()
+
+def _update_lora_tx_metrics():
+    """Best-effort TX metrics update into sdata (ts/LORA_CONNECTED)."""
+    try:
+        if not sdata:
+            return
+        try:
+            sdata.lora_last_tx_ts = int(time.time())
+        except Exception:
+            pass
+        try:
+            sdata.LORA_CONNECTED = True
+        except Exception:
+            pass
+    finally:
+        _gc_collect()
+
+def _lora_connected_stale_reset():
+    """Reset sdata.LORA_CONNECTED if no RX/TX activity for > OLED_LORA_STALE_S seconds."""
+    try:
+        if not sdata:
+            return
+        stale_s = int(getattr(settings, 'OLED_LORA_STALE_S', 120))
+        now = int(time.time())
+        last_rx = int(getattr(sdata, 'lora_last_rx_ts', 0) or 0)
+        last_tx = int(getattr(sdata, 'lora_last_tx_ts', 0) or 0)
+        last = last_rx if last_rx > last_tx else last_tx
+        if last and (now - last) > stale_s:
+            sdata.LORA_CONNECTED = False
+    except Exception:
+        pass
+
+def _field_log_tail_bytes(max_bytes=4096):
+    """Read a bounded tail from FIELD_DATA_LOG to avoid OOM; returns (text, full_sent_bool)."""
+    try:
+        path = getattr(settings, 'FIELD_DATA_LOG', settings.LOG_DIR + '/field_data.log')
+        try:
+            st = os.stat(path)
+            size = st[6]
+        except Exception:
+            return None, False
+        if size <= 0:
+            return None, True
+        full = size <= int(max_bytes)
+        keep = size if full else int(max_bytes)
+        buf = bytearray()
+        with open(path, 'rb') as f:
+            while True:
+                chunk = f.read(512)
+                if not chunk:
+                    break
+                buf += chunk
+                if len(buf) > keep:
+                    buf = buf[-keep:]
+        try:
+            return bytes(buf).decode('utf-8', 'ignore'), full
+        except Exception:
+            return str(buf), full
+    except Exception:
+        return None, False
+    finally:
+        _gc_collect()
