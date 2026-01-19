@@ -457,6 +457,7 @@ async def periodic_field_data_send():
     while True:
         await send_field_data_log()
         await asyncio.sleep(settings.FIELD_DATA_SEND_INTERVAL)
+        
 # Record all sdata and settings variables to field_data.log with timestamp
 def get_unix_time():
     try:
@@ -523,11 +524,12 @@ def record_field_data():
     _copy(entry, sdata, 'gps_last_fix_ts')
     # Minimal identity
     entry['unit_id'] = getattr(settings, 'UNIT_ID', '')
+    entry['unit_name'] = getattr(settings, 'UNIT_Name', '')
     entry['firmware_version'] = getattr(settings, 'FIRMWARE_VERSION', '')
     entry['NODE_TYPE'] = getattr(settings, 'NODE_TYPE', '')
     # Only persist on base and wifi nodes (remote-lora-only devices should not flood server logs)
-    if getattr(settings, 'NODE_TYPE', 'base') == 'remote':
-        return
+    # if getattr(settings, 'NODE_TYPE', 'base') == 'remote':
+        # return
     checkLogDirectory()
     try:
         with open(settings.FIELD_DATA_LOG, 'a') as f:
@@ -536,6 +538,7 @@ def record_field_data():
         gc.collect()
     except Exception as e:
         print(f"Error recording field data: {e}")
+
 import utime as time
 import settings
 import machine
@@ -656,7 +659,7 @@ def led_status_flash(status):
     import uasyncio as asyncio
     from utils import flash_led
     color_map = {
-        'INFO': 'green',
+        'INFO': 'lime',
         'SUCCESS': 'green',
         'OK': 'green',
         'WARN': 'orange',
@@ -664,12 +667,12 @@ def led_status_flash(status):
         'ERROR': 'red',
         'WIFI': 'blue',
         # LoRa specific
-        'LORA_RX': 'purple',
-        'LORA_TX': 'teal',
+        'LORA_RX': 'white',
+        'LORA_TX': 'grey',
         # Sampling specific
         'SAMPLE_TEMP': 'magenta',
         'SAMPLE_HUMID': 'cyan',
-        'SAMPLE_BAR': 'blue',
+        'SAMPLE_BAR': 'pink',
     }
     color = color_map.get(status, 'white')
     # Schedule LED flash asynchronously
@@ -1167,7 +1170,7 @@ def start_background_tasks():
                 # Guard field-data send scheduler: only start when URL exists and role supports it
                 wp_url = str(getattr(settings, 'WORDPRESS_API_URL', '')).strip()
                 role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
-                if wp_url and role in ('base', 'wifi'):
+                if wp_url and role in ('base', 'wifi', 'remote'):
                     _a.create_task(periodic_field_data_send())
             except Exception:
                 pass
