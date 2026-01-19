@@ -57,6 +57,8 @@ async def boot():
                     inet_ok = False
                 if inet_ok:
                     try:
+                        from main import first_boot_provision
+                        await first_boot_provision()
                         import provision
                         mid = getattr(settings, 'MACHINE_ID', None)
                         prov = provision.fetch_provisioning(unit_id=getattr(settings, 'UNIT_ID', None), machine_id=mid, base_url=getattr(settings, 'TMON_ADMIN_API_URL', None))
