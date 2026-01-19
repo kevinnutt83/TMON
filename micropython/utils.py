@@ -1167,7 +1167,7 @@ def start_background_tasks():
                 # Guard field-data send scheduler: only start when URL exists and role supports it
                 wp_url = str(getattr(settings, 'WORDPRESS_API_URL', '')).strip()
                 role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
-                if wp_url and role in ('base', 'wifi'):
+                if wp_url and role in ('base', 'wifi', 'remote'):
                     _a.create_task(periodic_field_data_send())
             except Exception:
                 pass
