@@ -1,19 +1,38 @@
 # Firmware Version: v2.06.0
 
-# Bootstrap critical variables before any reference
+# FIX: remove invalid placeholder try/except blocks and ensure critical defaults exist
+# (Your current file had `try:` blocks with no body, which is a SyntaxError.)
+
+# Ensure LOG_DIR is defined early (used by many path constants)
 try:
-    FIELD_DATA_APP_PASS
-except NameError:
-    FIELD_DATA_APP_PASS = ""  # default; overridden by persisted config later
-# Ensure claim-flow toggles exist before use
+    LOG_DIR
+except Exception:
+    LOG_DIR = '/logs'
+
+# Ensure basic identity defaults exist
 try:
-    ENABLE_FIRST_CHECKIN_CLAIM
-except NameError:
-    ENABLE_FIRST_CHECKIN_CLAIM = False
+    UNIT_ID
+except Exception:
+    UNIT_ID = "None"
 try:
-    CLAIM_CONFIRM_DELAY_S
-except NameError:
-    CLAIM_CONFIRM_DELAY_S = 0
+    UNIT_Name
+except Exception:
+    UNIT_Name = "No Device Name"
+try:
+    NODE_TYPE
+except Exception:
+    NODE_TYPE = "base"
+
+# --- BME280 (required by /lib/BME280.py) ---
+# That driver expects these exact attribute names on the settings module.
+try:
+    i2cAddr_BME280
+except Exception:
+    i2cAddr_BME280 = 0x76  # common; alternate is 0x77
+try:
+    i2cFreq_BME280
+except Exception:
+    i2cFreq_BME280 = 100000
 
 # Move LOG_DIR and essential file paths near the top so other constants can reference them.
 LOG_DIR = '/logs'
