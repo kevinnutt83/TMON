@@ -463,6 +463,48 @@ async def ota_boot_check():
     except Exception:
         pass
 
+#Call for syncing with TMON Admin and Unit Connector Plugins
+async def doServerSync():
+    try:
+        from wprest import register_with_wp, send_settings_to_wp, send_data_to_wp, poll_ota_jobs, fetch_staged_settings, poll_device_commands
+    except Exception:
+        register_with_wp = send_settings_to_wp = send_data_to_wp = poll_ota_jobs = fetch_staged_settings = poll_device_commands = None
+    if not is_provisioned():
+        await asyncio.sleep(2)
+        return
+    wp = getattr(settings, 'WORDPRESS_API_URL', '')
+    # Only run check-ins and related operations on nodes that have WP configured
+    if wp and not getattr(settings, 'DEVICE_SUSPENDED', False):
+        if register_with_wp:
+            await register_with_wp()
+        if send_settings_to_wp:
+            await send_settings_to_wp()
+        if send_data_to_wp:
+            await send_data_to_wp()
+        if poll_ota_jobs:
+            await poll_ota_jobs()
+        # NEW: fetch staged settings and pending commands (useful for wifi & base nodes)
+        if fetch_staged_settings:
+            res = await fetch_staged_settings()
+            # If commands returned, attempt to process them immediately (use same handlers as poll)
+            if res and isinstance(res, dict) and res.get('commands'):
+                cmds = res.get('commands')
+                for c in cmds:
+                    try:
+                        # simple handler reuse: insert as immediate commands via poll_device_commands logic if available
+                        if poll_device_commands:
+                            # poll handler will retrieve via its own endpoint; skip heavy immediate execution here
+                            pass
+                    except Exception:
+                        pass
+        # Also ensure regular command poll runs for wifi/base nodes here (avoid extra loop for remotes)
+        node_role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
+        if node_role in ('base', 'wifi') and poll_device_commands:
+            try:
+                await poll_device_commands()
+            except Exception as e:
+                await debug_print(f"Command poll error (checkin): {e}", "ERROR")
+
 async def periodic_uc_checkin_task():
     """Periodic Unit Connector check-in for provisioned devices."""
     try:
@@ -472,44 +514,11 @@ async def periodic_uc_checkin_task():
     interval = int(getattr(settings, 'UC_CHECKIN_INTERVAL_S', 300))
     while True:
         try:
-            if not is_provisioned():
-                await asyncio.sleep(2)
-                continue
-            wp = getattr(settings, 'WORDPRESS_API_URL', '')
-            # Only run check-ins and related operations on nodes that have WP configured
-            if wp and not getattr(settings, 'DEVICE_SUSPENDED', False):
-                if register_with_wp:
-                    await register_with_wp()
-                if send_settings_to_wp:
-                    await send_settings_to_wp()
-                if send_data_to_wp:
-                    await send_data_to_wp()
-                if poll_ota_jobs:
-                    await poll_ota_jobs()
-                # NEW: fetch staged settings and pending commands (useful for wifi & base nodes)
-                if fetch_staged_settings:
-                    res = await fetch_staged_settings()
-                    # If commands returned, attempt to process them immediately (use same handlers as poll)
-                    if res and isinstance(res, dict) and res.get('commands'):
-                        cmds = res.get('commands')
-                        for c in cmds:
-                            try:
-                                # simple handler reuse: insert as immediate commands via poll_device_commands logic if available
-                                if poll_device_commands:
-                                    # poll handler will retrieve via its own endpoint; skip heavy immediate execution here
-                                    pass
-                            except Exception:
-                                pass
-                # Also ensure regular command poll runs for wifi/base nodes here (avoid extra loop for remotes)
-                node_role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
-                if node_role in ('base', 'wifi') and poll_device_commands:
-                    try:
-                        await poll_device_commands()
-                    except Exception as e:
-                        await debug_print(f"Command poll error (checkin): {e}", "ERROR")
+            await doServerSync()
         except Exception as e:
             await debug_print(f"uc: checkin err {e}", "ERROR")
         await asyncio.sleep(interval)
+
 
 async def startup():
     tm = TaskManager()
