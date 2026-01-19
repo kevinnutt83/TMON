@@ -99,6 +99,7 @@ import settings
 REMOTE_NODE_INFO_FILE = settings.LOG_DIR + '/remote_node_info.json'
 REMOTE_SYNC_SCHEDULE_FILE = settings.LOG_DIR + '/remote_sync_schedule.json'
 GPS_STATE_FILE = settings.LOG_DIR + '/gps.json'
+FIELD_DATA_LOG = settings.LOG_DIR + '/field_data.log'
 
 # Load REMOTE_NODE_INFO from file at startup
 def load_remote_node_info():
@@ -606,8 +607,6 @@ async def init_lora():
             settings.CS_PIN, settings.IRQ_PIN, settings.RST_PIN, settings.BUSY_PIN
         )
         print('[DEBUG] init_lora: SX1262 object created')
-        # Ensure any leftover SPI is clean
-        _deinit_spi_if_any(lora)
         # Guarded begin: retry and attempt to attach a machine.SPI instance if the driver
         # throws an AttributeError referencing a missing 'write' (common when SPI wasn't bound).
         async def _attempt_begin(lo, attempts=3):
@@ -858,6 +857,36 @@ _MAX_INIT_FAILS = 3
 _last_tx_exception_ms = 0
 _TX_EXCEPTION_COOLDOWN_MS = 2500  # avoid tight re-init loops on persistent TX failures
 
+# Function to store data in field_data.log (new logic for remote nodes)
+def store_data_to_log():
+    try:
+        data = sampleEnviroment()
+        data['settings'] = {k: getattr(settings, k) for k in dir(settings) if not k.startswith('__') and not callable(getattr(settings, k))}
+        data['timestamp'] = time.time()
+        checkLogDirectory()
+        with open(FIELD_DATA_LOG, 'a') as f:
+            f.write(ujson.dumps(data) + '\n')
+    except Exception as e:
+        asyncio.get_event_loop().create_task(debug_print(f'Failed to store data to log: {e}', 'ERROR'))
+
+# Function to read field_data.log for sending
+def read_field_data_log():
+    try:
+        if os.stat(FIELD_DATA_LOG)[6] == 0:
+            return ''
+        with open(FIELD_DATA_LOG, 'r') as f:
+            return f.read()
+    except Exception:
+        return ''
+
+# Function to clear field_data.log after successful send
+def clear_field_data_log():
+    try:
+        with open(FIELD_DATA_LOG, 'w') as f:
+            f.write('')
+    except Exception:
+        pass
+
 async def connectLora():
     """Non-blocking LoRa routine called frequently from lora_comm_task.
     - Initializes radio once (with retry cap)
@@ -880,7 +909,7 @@ async def connectLora():
     err2 = None
     tb = ''
     tx_start = 0
-    # Extra locals that may otherwise be referenced before assignment in complex flows
+    # Extra locals that may be referenced before assignment in complex flows
     parts = []
     total = 0
     part_failure = False
@@ -958,6 +987,12 @@ async def connectLora():
                 except Exception as rexc:
                     await debug_print(f"lora: _readData exception: {rexc}", "ERROR")
                     msg_bytes = None; err = -1
+                # Update signal strength
+                try:
+                    sdata.lora_rssi = lora.getRSSI()
+                    sdata.lora_snr = lora.getSNR()
+                except Exception:
+                    pass
                 if err == 0 and msg_bytes:
                     try:
                         # Normalize to text for JSON parsing (bytes -> str)
@@ -971,15 +1006,17 @@ async def connectLora():
                             # not json; store raw
                             payload = {'raw': txt}
                         # Handle chunked messages
-                        if isinstance(payload, dict) and payload.get('chunked'):
+                        if isinstance(payload, dict) and 'chunk' in payload:
                             try:
-                                uid = str(payload.get('unit_id') or 'unknown')
-                                seq = int(payload.get('seq', 1))
+                                uid = str(payload.get('sender') or 'unknown')
+                                seq = int(payload.get('idx', 1))
                                 total = int(payload.get('total', 1))
-                                b64 = payload.get('b64', '') or ''
+                                b64 = payload.get('chunk', '') or ''
                                 if not b64:
                                     raise ValueError('empty_chunk')
-                                raw_chunk = _ub.a2b_base64(b64)
+                                encrypted = _ub.a2b_base64(b64)
+                                nonce = derive_nonce(uid, seq)
+                                raw_chunk = chacha20_encrypt(encrypted, settings.LORA_ENCRYPT_SECRET.encode('utf-8') if hasattr(settings, 'LORA_ENCRYPT_SECRET') else b'\x00'*32, nonce)
                                 entry = _lora_incoming_chunks.get(uid, {'total': total, 'parts': {}, 'ts': int(time.time())})
                                 entry['total'] = total
                                 entry['parts'][seq] = raw_chunk
@@ -989,14 +1026,14 @@ async def connectLora():
                                 # If complete, reassemble and process as a single payload
                                 if len(entry['parts']) == entry['total']:
                                     try:
-                                        assembled = b''.join(entry['parts'][i] for i in range(1, entry['total'] + 1))
-                                        try:
-                                            assembled_obj = ujson.loads(assembled.decode('utf-8', 'ignore'))
-                                        except Exception:
-                                            assembled_obj = {'raw': assembled.decode('utf-8', 'ignore')}
-                                        # Replace payload with assembled and continue processing using existing branch
-                                        payload = assembled_obj
-                                        await debug_print(f"lora: assembled for {uid}", 'LORA')
+                                        assembled = b''.join(entry['parts'].get(i, b'') for i in range(1, entry['total'] + 1))
+                                        full_data = assembled.decode('utf-8', 'ignore')
+                                        # Store in base log
+                                        checkLogDirectory()
+                                        fd_path = getattr(settings, 'FIELD_DATA_LOG', FIELD_DATA_LOG)
+                                        with open(fd_path, 'a') as f:
+                                            f.write(full_data)
+                                        await debug_print(f"lora: assembled and stored for {uid}", 'LORA')
                                     finally:
                                         try:
                                             del _lora_incoming_chunks[uid]
@@ -1004,11 +1041,10 @@ async def connectLora():
                                             pass
                                 else:
                                     # waiting for more parts; skip persistence until complete
-                                    # Was `continue` here (invalid outside loop) — return to caller instead.
                                     return True
                             except Exception as e:
                                 await debug_print(f"lora: chunk handling error: {e}", "ERROR")
-                                # Was `continue` here (invalid outside loop) — exit handler cleanly.
+                                # exit handler cleanly.
                                 return True
 
                         # existing processing logic: persist record etc.
@@ -1046,7 +1082,7 @@ async def connectLora():
                                     ack = {'ack': 'ok'}
                                     # schedule next_in seconds (base chooses cadence)
                                     next_in = getattr(settings, 'LORA_CHECK_IN_MINUTES', 5) * 60
-                                    ack['next_in'] = next_in
+                                    ack['next'] = int(time.time() + next_in)
                                     if getattr(settings, 'GPS_BROADCAST_TO_REMOTES', False):
                                         try:
                                             ack['gps_lat'] = getattr(settings, 'GPS_LAT', None)
@@ -1061,7 +1097,7 @@ async def connectLora():
                                             # Wait for not busy before mode change
                                             busy_start = time.ticks_ms()
                                             while lora.gpio.value() and time.ticks_diff(time.ticks_ms(), busy_start) < 2000:
-                                                await asyncio.sleep(0.01)
+                                                await asyncio.sleep(0.005)
                                             lora.setOperatingMode(lora.MODE_TX)
                                             lora.send(ujson.dumps(ack).encode('utf-8'))
                                             # Wait briefly for TX_DONE then restore RX mode
@@ -1070,11 +1106,11 @@ async def connectLora():
                                                 ev = lora._events()
                                                 if getattr(lora, 'TX_DONE', 0) and (ev & lora.TX_DONE):
                                                     break
-                                                await asyncio.sleep(0.01)
+                                                await asyncio.sleep(0.005)
                                             # Wait for not busy after TX_DONE
                                             busy_start = time.ticks_ms()
                                             while lora.gpio.value() and time.ticks_diff(time.ticks_ms(), busy_start) < 2000:
-                                                await asyncio.sleep(0.01)
+                                                await asyncio.sleep(0.005)
                                             lora.setOperatingMode(lora.MODE_RX)
                                         except Exception:
                                             # try a more direct sequence if the driver has explicit tx API
@@ -1098,6 +1134,14 @@ async def connectLora():
 
     # --- Remote TX flow (unchanged but hardened) ---
     if role == 'remote':
+        # Sample to log periodically
+        _last_sample_ms = globals().get('_last_sample_ms', 0)
+        sample_interval_ms = getattr(settings, 'SAMPLE_INTERVAL', 300) * 1000
+        if time.ticks_diff(now, _last_sample_ms) >= sample_interval_ms:
+            store_data_to_log()
+            _last_sample_ms = now
+            globals()['_last_sample_ms'] = _last_sample_ms
+
         # Determine if it's time to TX. Before first contact, fall back to short probing interval.
         probe_interval_ms = 30 * 1000
         next_sync = getattr(settings, 'nextLoraSync', 300)
@@ -1119,720 +1163,169 @@ async def connectLora():
 
         if due:
             try:
-                # Build compact payload
-                payload = {
-                    'unit_id': getattr(settings, 'UNIT_ID', ''),
-                    'name': getattr(settings, 'UNIT_Name', ''),
-                    'ts': now,
-                    't_f': getattr(sdata, 'cur_temp_f', 0),
-                    't_c': getattr(sdata, 'cur_temp_c', 0),
-                    'hum': getattr(sdata, 'cur_humid', 0),
-                    'bar': getattr(sdata, 'cur_bar_pres', 0),
-                    'v': getattr(sdata, 'sys_voltage', 0),
-                    'fm': getattr(sdata, 'free_mem', 0),
-                    'net': getattr(settings, 'LORA_NETWORK_NAME', 'tmon'),
-                    'key': getattr(settings, 'LORA_NETWORK_PASSWORD', ''),
-                }
-                try:
-                    if getattr(settings, 'LORA_HMAC_ENABLED', False):
-                        import uhashlib, ubinascii, ujson
-                        ctr_file = getattr(settings, 'LORA_HMAC_COUNTER_FILE', '/logs/lora_ctr.json')
-                        ctr = 0
+                # Read accumulated data from log
+                data = read_field_data_log()
+                if not data:
+                    await debug_print("lora: no data in log to send", "LORA")
+                    _last_send_ms = time.ticks_ms()
+                    return True
+
+                # Encryption key
+                key = (getattr(settings, 'LORA_ENCRYPT_SECRET', '') or '').encode('utf-8')
+                if len(key) < 32:
+                    key = (key + b'\x00' * 32)[:32]
+
+                # Tunables
+                min_raw = int(getattr(settings, 'LORA_CHUNK_MIN_RAW_BYTES', 12))
+                max_parts_allowed = int(getattr(settings, 'LORA_CHUNK_MAX_PARTS', 8))
+                raw_chunk_size = 200  # Increased for speed, max ~240 after JSON overhead
+                # Always chunk for consistency
+                parts = [data[i:i+raw_chunk_size] for i in range(0, len(data), raw_chunk_size)]
+                total = len(parts)
+                if total > max_parts_allowed:
+                    await debug_print(f"lora: aborting send, required parts {total} exceeds limit {max_parts_allowed}", "ERROR")
+                    return False
+
+                # Adaptive send with retries and jitter
+                max_retries = int(getattr(settings, 'LORA_CHUNK_MAX_RETRIES', 5))  # Increased for reliability
+                sent_ok = False
+
+                for idx, chunk in enumerate(parts, start=1):
+                    attempt = 0
+                    chunk_sent = False
+                    while attempt < max_retries and not chunk_sent:
                         try:
-                            with open(ctr_file, 'r') as cf:
-                                ctr_obj = ujson.loads(cf.read())
-                                ctr = int(ctr_obj.get('ctr', 0))
-                        except Exception:
-                            ctr = 0
-                        ctr += 1
-                        try:
-                            with open(ctr_file, 'w') as cfw:
-                                cfw.write(ujson.dumps({'ctr': ctr}))
-                        except Exception:
-                            pass
-                        payload['ctr'] = ctr
-                        secret = getattr(settings, 'LORA_HMAC_SECRET', '')
-                        if secret:
-                            mac_src = b"|".join([
-                                secret.encode(),
-                                str(payload['unit_id']).encode(),
-                                str(payload['ts']).encode(),
-                                str(payload['ctr']).encode()
-                            ])
-                            h = uhashlib.sha256(mac_src)
-                            payload['sig'] = ubinascii.hexlify(h.digest())[:32].decode()
-                except Exception:
-                    pass
+                            # Ensure radio is present — re-init on demand
+                            if lora is None:
+                                await debug_print("lora: radio missing before chunk send, attempting re-init", "LORA")
+                                async with pin_lock:
+                                    ok = await init_lora()
+                                if not ok or lora is None:
+                                    await debug_print("lora: re-init failed, aborting chunk send", "ERROR")
+                                    part_failure = True
+                                    break
 
-                if getattr(settings, 'LORA_ENCRYPT_ENABLED', False) and chacha20_encrypt and derive_nonce:
-                    try:
-                        secret = getattr(settings, 'LORA_ENCRYPT_SECRET', '')
-                        key = secret.encode()
-                        if len(key) < 32:
-                            key = (key + b'\x00'*32)[:32]
-                        nonce = derive_nonce(int(time.time()), int(payload.get('ctr', 0)))
-                        pt = ujson.dumps(payload).encode('utf-8')
-                        ct = chacha20_encrypt(key, nonce, 1, pt)
-                        env = {'enc': 1, 'nonce': ''.join('{:02x}'.format(b) for b in nonce), 'ct': ''.join('{:02x}'.format(b) for b in ct), 'net': payload.get('net'), 'key': payload.get('key')}
-                        data = ujson.dumps(env).encode('utf-8')
-                    except Exception:
-                        data = ujson.dumps(payload).encode('utf-8')
-                else:
-                    data = ujson.dumps(payload).encode('utf-8')
-
-                # NEW: only chunk if data actually exceeds safe payload size
-                max_payload = int(getattr(settings, 'LORA_MAX_PAYLOAD', 240) or 240)
-
-                # Quick single-frame send when payload fits — avoids tiny chunk floods for modest payloads
-                if len(data) <= max_payload:
-                    # Ensure radio present
-                    if lora is None:
-                        await debug_print("lora: reinit before single-frame send", "LORA")
-                        async with pin_lock:
-                            ok = await init_lora()
-                        if not ok:
-                            await debug_print("lora: single-frame send aborted, radio unavailable", "ERROR")
-                            return False
-
-                    # NEW: ensure TX mode and wait for not-busy; perform bounded retry loop on transient codes
-                    single_retries = int(getattr(settings, 'LORA_SINGLE_FRAME_RETRIES', 2))
-                    sent = False
-                    for sr in range(1, single_retries + 1):
-                        try:
-                            # wait for not-busy (short)
+                            # Ensure radio not busy and set TX mode
                             try:
                                 busy_start = time.ticks_ms()
+                                # wait up to 800ms for not-busy
                                 while True:
                                     gpio = getattr(lora, 'gpio', None)
                                     busy = gpio.value() if gpio and hasattr(gpio, 'value') else False
                                     if not busy:
                                         break
-                                    if time.ticks_diff(time.ticks_ms(), busy_start) > 400:
+                                    if time.ticks_diff(time.ticks_ms(), busy_start) > 800:
                                         break
-                                    await asyncio.sleep(0.01)
+                                    await asyncio.sleep(0.005)
                             except Exception:
                                 pass
                             try:
                                 lora.setOperatingMode(lora.MODE_TX)
-                                await asyncio.sleep(0.02)
                             except Exception:
                                 pass
 
-                            # diagnostic snapshot before send
+                            # Encrypt chunk
+                            chunk_bytes = chunk.encode('utf-8')
+                            nonce = derive_nonce(settings.UNIT_ID, idx)
+                            encrypted = chacha20_encrypt(chunk_bytes, key, nonce)
+                            b64 = _ub.b2a_base64(encrypted).decode('utf-8').strip()
+                            chunk_msg = {'sender': settings.UNIT_ID, 'chunk': b64, 'idx': idx, 'total': total}
+                            msg_data = ujson.dumps(chunk_msg).encode('utf-8')
+                            resp = None
                             try:
-                                ev_pre = lora._events()
-                            except Exception:
-                                ev_pre = None
-                            try:
-                                gpio_pre = getattr(lora, 'gpio', None).value() if getattr(lora, 'gpio', None) and hasattr(lora.gpio, 'value') else None
-                            except Exception:
-                                gpio_pre = None
-                            await debug_print(f"lora: single-frame pre-send events={ev_pre} gpio={gpio_pre}", "LORA")
-
-                            # send
-                            try:
-                                resp = lora.send(data)
-                            except Exception as send_exc:
-                                await debug_print(f"lora: single-frame send() raised: {send_exc}", 'ERROR')
+                                resp = lora.send(msg_data)
+                            except Exception as exc_send:
+                                await debug_print(f"lora: chunk send exception: {exc_send}", "ERROR")
                                 resp = -999
 
-                            # normalize status
+                            # Normalize status
                             st_code = None
-                            try:
-                                if isinstance(resp, (tuple, list)):
-                                    if len(resp) >= 2 and isinstance(resp[1], int):
-                                        st_code = resp[1]
-                                    elif len(resp) >= 1 and isinstance(resp[0], int):
-                                        st_code = resp[0]
-                                    else:
-                                        try:
-                                            st_code = int(resp[0])
-                                        except Exception:
-                                            st_code = -999
-                                elif isinstance(resp, int):
-                                    st_code = resp
+                            if isinstance(resp, (tuple, list)) and len(resp) > 0:
+                                if len(resp) >= 2 and isinstance(resp[1], int):
+                                    st_code = resp[1]
+                                elif isinstance(resp[0], int):
+                                    st_code = resp[0]
                                 else:
                                     try:
-                                        st_code = int(resp)
+                                        st_code = int(resp[0])
                                     except Exception:
                                         st_code = -999
-                            except Exception:
-                                st_code = -999
+                            elif isinstance(resp, int):
+                                st_code = resp
+                            else:
+                                try:
+                                    st_code = int(resp)
+                                except Exception:
+                                    st_code = -999
 
-                            # diagnostic after send
-                            try:
-                                ev_post = lora._events()
-                            except Exception:
-                                ev_post = None
-                            await debug_print(f"lora: single-frame resp={resp} code={st_code} events_post={ev_post}", "LORA")
+                            # Log the raw response for diagnostics when non-zero
+                            if st_code != 0:
+                                await debug_print(f"lora: raw send resp={resp} normalized_code={st_code} (part {idx}/{total})", "LORA")
 
                             if st_code == 0:
-                                sent = True
-                                break
-
-                            # On transient negative or known transient codes, retry locally first
-                            transient_codes = set(getattr(settings, 'LORA_CHUNK_TRANSIENT_CODES', [86, 87, 89]) or [86,87,89])
-                            if (st_code in transient_codes) or (st_code == -1) or (st_code == -999):
-                                await debug_print(f"lora: single-frame transient err {st_code} (attempt {sr}/{single_retries})", "WARN")
-                                await asyncio.sleep(0.06 + random.random() * 0.06)
-                                # loop to retry
-                                continue
-
-                            # otherwise treat as severe and break to re-init handling below
-                            await debug_print(f"lora: single-frame error {st_code} (fatal)", "ERROR")
-                            break
-                        except Exception:
-                            await asyncio.sleep(0.05)
-                            continue
-
-                    if sent:
-                        # wait for TX_DONE and optional ACK same as chunk flow
-                        try:
-                            tx_start = time.ticks_ms()
-                            while time.ticks_diff(time.ticks_ms(), tx_start) < 10000:
-                                try:
-                                    ev = lora._events()
-                                except Exception:
-                                    ev = 0
-                                if TX_DONE_FLAG is not None and (ev & TX_DONE_FLAG):
-                                    break
-                                await asyncio.sleep(0.01)
-                            try:
-                                lora.setOperatingMode(lora.MODE_RX)
-                            except Exception:
-                                pass
-                        except Exception:
-                            pass
-                        _last_send_ms = time.ticks_ms()
-                        _last_activity_ms = _last_send_ms
-                        # Wait for ACK
-                        ack_wait_ms = int(getattr(settings, 'LORA_CHUNK_ACK_WAIT_MS', 1500))
-                        start_wait = time.ticks_ms()
-                        while time.ticks_diff(time.ticks_ms(), start_wait) < ack_wait_ms:
-                            try:
-                                ev2 = lora._events()
-                            except Exception:
-                                ev2 = 0
-                            if RX_DONE_FLAG is not None and (ev2 & RX_DONE_FLAG):
-                                try:
-                                    msg2, err2 = lora._readData(0)
-                                except Exception:
-                                    msg2 = None; err2 = -1
-                                if err2 == 0 and msg2:
-                                    try:
-                                        obj2 = None
-                                        txt2 = msg2.decode('utf-8', 'ignore') if isinstance(msg2, (bytes, bytearray)) else str(msg2)
-                                        try:
-                                            obj2 = ujson.loads(txt2)
-                                        except Exception:
-                                            obj2 = None
-                                        if isinstance(obj2, dict) and obj2.get('ack') == 'ok':
-                                            # Capture signal info for display
-                                            try:
-                                                if hasattr(lora, 'getRSSI'):
-                                                    sdata.lora_SigStr = lora.getRSSI()
-                                                if hasattr(lora, 'getSNR'):
-                                                    sdata.lora_snr = lora.getSNR()
-                                                    sdata.last_message = ujson.dumps(obj2)[:32]
-                                            except Exception:
-                                                pass
-                                            # Adopt next sync if provided
-                                            try:
-                                                if 'next_in' in obj2:
-                                                    rel = int(obj2['next_in'])
-                                                    if rel < 1:
-                                                        rel = 1
-                                                    if rel > 24 * 3600:
-                                                        rel = 24 * 3600
-                                                    settings.nextLoraSync = int(time.time() + rel)
-                                                elif 'next' in obj2:
-                                                    settings.nextLoraSync = int(obj2['next'])
-                                            except Exception:
-                                                pass
-                                            # Adopt GPS from base if provided and allowed
-                                            try:
-                                                if getattr(settings, 'GPS_ACCEPT_FROM_BASE', True):
-                                                    blat = obj2.get('gps_lat')
-                                                    blng = obj2.get('gps_lng')
-                                                    if (blat is not None) and (blng is not None):
-                                                        balt = obj2.get('gps_alt_m')
-                                                        bacc = obj2.get('gps_accuracy_m')
-                                                        bts = obj2.get('gps_last_fix_ts')
-                                                        save_gps_state(blat, blng, balt, bacc, bts)
-                                                        await debug_print('lora: GPS adopted', 'LORA')
-                                            except Exception:
-                                                pass
-                                            await debug_print(f"lora: next {getattr(settings, 'nextLoraSync', '')}", 'LORA')
-                                            write_lora_log(f"Remote stored next sync epoch: {getattr(settings, 'nextLoraSync', '')}", 'INFO')
-                                            led_status_flash('SUCCESS')
-                                            break
-                                    except Exception:
-                                        pass
-                            await asyncio.sleep(0.01)
-                        return True
-
-                    # If we reached here, single-frame failed after retries: treat as re-init trigger
-                    await debug_print("lora: single-frame send failed after retries, re-initing radio", "ERROR")
-                    try:
-                        if hasattr(lora, 'spi') and lora.spi:
-                            lora.spi.deinit()
-                        _last_tx_exception_ms = time.ticks_ms()
-                    except Exception:
-                        pass
-                    lora = None
-                    return False
-
-                # Tunables
-                min_raw = int(getattr(settings, 'LORA_CHUNK_MIN_RAW_BYTES', 12))
-                max_parts_allowed = int(getattr(settings, 'LORA_CHUNK_MAX_PARTS', 8))
-                # Build a minimal template to estimate JSON overhead accurately
-                try:
-                    tmpl = {'unit_id': getattr(settings, 'UNIT_ID', ''), 'chunked': 1, 'seq': 999, 'total': 999, 'b64': ''}
-                    overhead = len(ujson.dumps(tmpl).encode('utf-8')) + 20  # safety margin
-                    avail_b64 = max_payload - overhead
-                    raw_chunk_size = max(min_raw, int((avail_b64 * 3) // 4)) if avail_b64 > 0 else min_raw
-                except Exception:
-                    # Fallback conservative size
-                    raw_chunk_size = max(min_raw, int(getattr(settings, 'LORA_CHUNK_RAW_BYTES', 50)))
-
-                # Helper to compact payload to minimal telemetry shapes
-                def _compact_payload_to_minimal(p):
-                    try:
-                        return ujson.dumps({
-                            'unit_id': p.get('unit_id'),
-                            'ts': p.get('ts'),
-                            't_f': p.get('t_f'),
-                            'hum': p.get('hum'),
-                            'bar': p.get('bar'),
-                            'v': p.get('v')
-                        }).encode('utf-8')
-                    except Exception:
-                        return ujson.dumps({'unit_id': p.get('unit_id'), 'ts': p.get('ts')}).encode('utf-8')
-
-                # Adaptive send with shrink attempts and per-chunk retries
-                max_shrinks = 4
-                shrink_attempt = 0
-                sent_ok = False
-                max_shrink_retries = int(getattr(settings, 'LORA_CHUNK_MAX_RETRIES', 3))
-                jitter_base = 0.02
-
-                # If payload already larger than a reasonable size, attempt compaction up-front
-                while shrink_attempt < max_shrinks and not sent_ok:
-                    parts = [data[i:i+raw_chunk_size] for i in range(0, len(data), raw_chunk_size)]
-                    total = len(parts)
-
-                    # If message would create too many parts, try compressing payload to a minimal form
-                    if total > max_parts_allowed:
-                        await debug_print(f"lora: large split {total} parts > max {max_parts_allowed}, attempting compact payload", "LORA")
-                        # try minimal telemetry
-                        compacted = _compact_payload_to_minimal(payload)
-                        if len(compacted) < len(data):
-                            data = compacted
-                            parts = [data[i:i+raw_chunk_size] for i in range(0, len(data), raw_chunk_size)]
-                            total = len(parts)
-                        # still too many parts? try ultra-compact (unit_id + ts)
-                        if total > max_parts_allowed:
-                            tiny = ujson.dumps({'unit_id': getattr(settings, 'UNIT_ID', ''), 'ts': payload.get('ts')}).encode('utf-8')
-                            data = tiny
-                            parts = [data[i:i+raw_chunk_size] for i in range(0, len(data), raw_chunk_size)]
-                            total = len(parts)
-                        # if still too many parts, abort
-                        if total > max_parts_allowed:
-                            await debug_print(f"lora: aborting chunk send, required parts {total} exceeds limit {max_parts_allowed}", "ERROR")
-                            write_lora_log(f"Remote chunk send aborted: {total} parts exceeds max {max_parts_allowed}", 'ERROR')
-                            return False
-
-                        # NEW: After compaction, if the payload now fits a single frame, try that first
-                        if len(data) <= max_payload:
-                            await debug_print("lora: compaction produced single-frame payload; attempting single-frame send", "LORA")
-                            # Ensure radio present
-                            if lora is None:
-                                await debug_print("lora: reinit before single-frame send (post-compact)", "LORA")
-                                async with pin_lock:
-                                    ok_init = await init_lora()
-                                if not ok_init:
-                                    await debug_print("lora: re-init failed for single-frame send (post-compact)", "ERROR")
-                                    return False
-                            try:
-                                resp = lora.send(data)
-                            except Exception as send_exc:
-                                await debug_print(f"lora: single-frame send() (post-compact) raised: {send_exc}", 'ERROR')
-                                resp = -999
-                            # normalize
-                            st_code = None
-                            try:
-                                if isinstance(resp, (tuple, list)):
-                                    if len(resp) >= 2 and isinstance(resp[1], int):
-                                        st_code = resp[1]
-                                    elif len(resp) >= 1 and isinstance(resp[0], int):
-                                        st_code = resp[0]
-                                    else:
-                                        try:
-                                            st_code = int(resp[0])
-                                        except Exception:
-                                            st_code = -999
-                            except Exception:
-                                st_code = -999
-                            if st_code == 0:
-                                _last_send_ms = time.ticks_ms()
-                                _last_activity_ms = _last_send_ms
-                                await debug_print("lora: single-frame send (post-compact) succeeded", "LORA")
-                                # Wait for TX_DONE and ACK
+                                # Wait for TX_DONE after successful send
                                 try:
                                     tx_start = time.ticks_ms()
-                                    while time.ticks_diff(time.ticks_ms(), tx_start) < 10000:
+                                    while time.ticks_diff(time.ticks_ms(), tx_start) < 5000:  # Reduced timeout
                                         try:
                                             ev = lora._events()
                                         except Exception:
                                             ev = 0
                                         if TX_DONE_FLAG is not None and (ev & TX_DONE_FLAG):
+                                            await debug_print(f"lora: TX_DONE for chunk {idx}", 'LORA')
                                             break
-                                        await asyncio.sleep(0.01)
-                                    try:
-                                        lora.setOperatingMode(lora.MODE_RX)
-                                    except Exception:
-                                        pass
+                                        await asyncio.sleep(0.005)
                                 except Exception:
                                     pass
-                                # Wait for ACK
-                                ack_wait_ms = int(getattr(settings, 'LORA_CHUNK_ACK_WAIT_MS', 1500))
-                                start_wait = time.ticks_ms()
-                                while time.ticks_diff(time.ticks_ms(), start_wait) < ack_wait_ms:
-                                    try:
-                                        ev2 = lora._events()
-                                    except Exception:
-                                        ev2 = 0
-                                    if RX_DONE_FLAG is not None and (ev2 & RX_DONE_FLAG):
-                                        try:
-                                            msg2, err2 = lora._readData(0)
-                                        except Exception:
-                                            msg2 = None; err2 = -1
-                                        if err2 == 0 and msg2:
-                                            try:
-                                                obj2 = None
-                                                txt2 = msg2.decode('utf-8', 'ignore') if isinstance(msg2, (bytes, bytearray)) else str(msg2)
-                                                try:
-                                                    obj2 = ujson.loads(txt2)
-                                                except Exception:
-                                                    obj2 = None
-                                                if isinstance(obj2, dict) and obj2.get('ack') == 'ok':
-                                                    # Capture signal info
-                                                    try:
-                                                        if hasattr(lora, 'getRSSI'):
-                                                            sdata.lora_SigStr = lora.getRSSI()
-                                                        if hasattr(lora, 'getSNR'):
-                                                            sdata.lora_snr = lora.getSNR()
-                                                            sdata.last_message = ujson.dumps(obj2)[:32]
-                                                    except Exception:
-                                                        pass
-                                                    # Adopt next sync
-                                                    try:
-                                                        if 'next_in' in obj2:
-                                                            rel = int(obj2['next_in'])
-                                                            if rel < 1:
-                                                                rel = 1
-                                                            if rel > 24 * 3600:
-                                                                rel = 24 * 3600
-                                                            settings.nextLoraSync = int(time.time() + rel)
-                                                        elif 'next' in obj2:
-                                                            settings.nextLoraSync = int(obj2['next'])
-                                                    except Exception:
-                                                        pass
-                                                    # Adopt GPS
-                                                    try:
-                                                        if getattr(settings, 'GPS_ACCEPT_FROM_BASE', True):
-                                                            blat = obj2.get('gps_lat')
-                                                            blng = obj2.get('gps_lng')
-                                                            if (blat is not None) and (blng is not None):
-                                                                balt = obj2.get('gps_alt_m')
-                                                                bacc = obj2.get('gps_accuracy_m')
-                                                                bts = obj2.get('gps_last_fix_ts')
-                                                                save_gps_state(blat, blng, balt, bacc, bts)
-                                                                await debug_print('lora: GPS adopted', 'LORA')
-                                                    except Exception:
-                                                        pass
-                                                    await debug_print(f"lora: next {getattr(settings, 'nextLoraSync', '')}", 'LORA')
-                                                    write_lora_log(f"Remote stored next sync epoch: {getattr(settings, 'nextLoraSync', '')}", 'INFO')
-                                                    led_status_flash('SUCCESS')
-                                                    break
-                                            except Exception:
-                                                pass
-                                    await asyncio.sleep(0.01)
-                                return True
-                            else:
-                                await debug_print(f"lora: single-frame (post-compact) failed: {st_code}", "WARN")
-                                # If it's a negative hardware-like code, attempt guarded re-init and fall through to chunk flow
-                                if st_code < 0:
-                                    await debug_print("lora: negative code on single-frame post-compact; reinit attempt", "LORA")
-                                    async with pin_lock:
-                                        ok_init = await init_lora()
-                                    if not ok_init:
-                                        await debug_print("lora: post-compact re-init failed, aborting", "ERROR")
-                                        return False
-                                    # re-check radio and continue into chunk attempts after short backoff
-                                    await asyncio.sleep(0.08)
+                                chunk_sent = True
+                                # small spacing between chunks with jitter
+                                await asyncio.sleep(0.01 + random.random() * 0.02)
+                                break
 
-                    for idx, chunk in enumerate(parts, start=1):
-                        attempt = 0
-                        chunk_sent = False
-                        while attempt < max_shrink_retries and not chunk_sent:
-                            try:
-                                # Ensure radio is present — re-init on demand
-                                if lora is None:
-                                    await debug_print("lora: SPI/radio missing before chunk send, attempting re-init", "LORA")
-                                    async with pin_lock:
-                                        ok = await init_lora()
-                                    if not ok or lora is None:
-                                        await debug_print("lora: re-init failed, aborting chunk send", "ERROR")
-                                        part_failure = True
-                                        break
-
-                                # Ensure radio not busy and set TX mode
-                                try:
-                                    busy_start = time.ticks_ms()
-                                    # wait up to 800ms for not-busy
-                                    while True:
-                                        gpio = getattr(lora, 'gpio', None)
-                                        busy = gpio.value() if gpio and hasattr(gpio, 'value') else False
-                                        if not busy:
-                                            break
-                                        if time.ticks_diff(time.ticks_ms(), busy_start) > 800:
-                                            break
-                                        await asyncio.sleep(0.01)
-                                except Exception:
-                                    pass
-                                try:
-                                    lora.setOperatingMode(lora.MODE_TX)
-                                except Exception:
-                                    pass
-
-                                b64 = _ub.b2a_base64(chunk).decode().strip()
-                                chunk_msg = {'unit_id': getattr(settings, 'UNIT_ID', ''), 'chunked': 1, 'seq': idx, 'total': total, 'b64': b64}
-                                resp = None
-                                try:
-                                    resp = lora.send(ujson.dumps(chunk_msg).encode('utf-8'))
-                                except Exception as exc_send:
-                                    await debug_print(f"lora: chunk send exception: {exc_send}", "ERROR")
-                                    resp = -999
-
-                                # Normalize status
-                                st_code = None
-                                if isinstance(resp, (tuple, list)) and len(resp) > 0:
-                                    if len(resp) >= 2 and isinstance(resp[1], int):
-                                        st_code = resp[1]
-                                    elif isinstance(resp[0], int):
-                                        st_code = resp[0]
-                                    else:
-                                        try:
-                                            st_code = int(resp[0])
-                                        except Exception:
-                                            st_code = -999
-                                elif isinstance(resp, int):
-                                    st_code = resp
+                            # NEW: negative/stub codes likely indicate radio/hardware issue — attempt guarded re-init once
+                            if st_code is not None and st_code < 0:
+                                await debug_print(f"lora: negative chunk send code {st_code} — attempting guarded re-init", "LORA")
+                                async with pin_lock:
+                                    ok = await init_lora()
+                                if ok and lora is not None:
+                                    await debug_print("lora: re-init succeeded, retrying chunk send", "LORA")
+                                    attempt += 1
+                                    await asyncio.sleep(attempt * 0.05 + random.random() * 0.1)
+                                    continue
                                 else:
-                                    try:
-                                        st_code = int(resp)
-                                    except Exception:
-                                        st_code = -999
-
-                                # Log the raw response for diagnostics when non-zero
-                                if st_code != 0:
-                                    await debug_print(f"lora: raw send resp={resp} normalized_code={st_code} (part {idx}/{total})", "LORA")
-
-                                if st_code == 0:
-                                    # Wait for TX_DONE after successful send
-                                    try:
-                                        tx_start = time.ticks_ms()
-                                        while time.ticks_diff(time.ticks_ms(), tx_start) < 10000:
-                                            try:
-                                                ev = lora._events()
-                                            except Exception:
-                                                ev = 0
-                                            if TX_DONE_FLAG is not None and (ev & TX_DONE_FLAG):
-                                                await debug_print(f"lora: TX_DONE for chunk {idx}", 'LORA')
-                                                break
-                                            await asyncio.sleep(0.01)
-                                    except Exception:
-                                        pass
-                                    chunk_sent = True
-                                    # small spacing between chunks
-                                    await asyncio.sleep(jitter_base + random.random() * jitter_base)
-                                    break
-
-                                # NEW: negative/stub codes likely indicate radio/hardware issue — attempt guarded re-init once
-                                if st_code is not None and st_code < 0:
-                                    await debug_print(f"lora: negative chunk send code {st_code} — attempting guarded re-init", "LORA")
-                                    async with pin_lock:
-                                        ok = await init_lora()
-                                    if ok and lora is not None:
-                                        await debug_print("lora: re-init succeeded, retrying chunk send", "LORA")
-                                        # do not advance shrink/shrink_attempt here; retry chunk attempts
-                                        attempt += 1
-                                        await asyncio.sleep(0.06)
-                                        continue
-                                    else:
-                                        await debug_print("lora: re-init after negative code failed, aborting", "ERROR")
-                                        part_failure = True
-                                        break
-
-                                # Decide action: shrink only on explicit shrink codes; otherwise treat some codes as transient retry
-                                shrink_codes = set(getattr(settings, 'LORA_CHUNK_SHRINK_CODES', [-4]) or [-4])
-                                transient_codes = set(getattr(settings, 'LORA_CHUNK_TRANSIENT_CODES', [86, 87, 89]) or [86,87,89])
-                                if st_code in shrink_codes:
-                                    await debug_print(f"lora: chunk send indicates shrink-needed (code {st_code})", "ERROR")
+                                    await debug_print("lora: re-init after negative code failed, aborting", "ERROR")
                                     part_failure = True
                                     break
-                                if st_code in transient_codes or st_code in (-999,):
-                                    attempt += 1
-                                    await asyncio.sleep(0.05 + random.random() * 0.05)
-                                    continue
 
-                                # Unknown non-zero codes: treat as transient but log prominently and retry once
-                                await debug_print(f"lora: unexpected chunk TX err {st_code} (retry attempt {attempt+1})", "WARN")
+                            # Decide action: shrink only on explicit shrink codes; otherwise treat some codes as transient retry
+                            shrink_codes = set(getattr(settings, 'LORA_CHUNK_SHRINK_CODES', [-4]) or [-4])
+                            transient_codes = set(getattr(settings, 'LORA_CHUNK_TRANSIENT_CODES', [86, 87, 89]) or [86,87,89])
+                            if st_code in shrink_codes:
+                                await debug_print(f"lora: chunk send indicates shrink-needed (code {st_code})", "ERROR")
+                                part_failure = True
+                                break
+                            if st_code in transient_codes or st_code in (-999,):
                                 attempt += 1
-                                await asyncio.sleep(0.05 + random.random() * 0.05)
+                                await asyncio.sleep(attempt * 0.05 + random.random() * 0.1)
                                 continue
 
-                            except Exception as e:
-                                await debug_print(f"lora: unexpected chunk send error: {e}", "ERROR")
-                                attempt += 1
-                                await asyncio.sleep(0.05)
-                        if not chunk_sent:
-                            part_failure = True
-                            break
-                    # If part_failure -> shrink raw_chunk and retry (bounded)
-                    if part_failure:
-                        shrink_attempt += 1
-                        new_raw = max(min_raw, raw_chunk_size // 2)
-                        if new_raw == raw_chunk_size:
-                            # cannot shrink more — try single-frame as last resort if fits
-                            if len(data) <= max_payload:
-                                await debug_print("lora: cannot shrink but data fits single-frame; attempting single-frame send (last-resort)", "LORA")
-                                # try single-frame send with guarded re-init
-                                if lora is None:
-                                    async with pin_lock:
-                                        ok = await init_lora()
-                                    if not ok:
-                                        await debug_print("lora: re-init failed for last-resort single-frame send", "ERROR")
-                                        break
-                                try:
-                                    resp = lora.send(data)
-                                except Exception as se:
-                                    await debug_print(f"lora: last-resort single-frame send error: {se}", "ERROR")
-                                    resp = -999
-                                # Normalize and evaluate
-                                try:
-                                    if isinstance(resp, (tuple, list)) and len(resp) >= 2 and isinstance(resp[1], int):
-                                        st_last = resp[1]
-                                    elif isinstance(resp, int):
-                                        st_last = resp
-                                    else:
-                                        try:
-                                            st_last = int(resp[0]) if isinstance(resp, (tuple, list)) else int(resp)
-                                        except Exception:
-                                            st_last = -999
-                                except Exception:
-                                    st_last = -999
-                                if st_last == 0:
-                                    await debug_print("lora: last-resort single-frame succeeded", "LORA")
-                                    _last_send_ms = time.ticks_ms()
-                                    _last_activity_ms = _last_send_ms
-                                    # Wait for TX_DONE and ACK
-                                    try:
-                                        tx_start = time.ticks_ms()
-                                        while time.ticks_diff(time.ticks_ms(), tx_start) < 10000:
-                                            try:
-                                                ev = lora._events()
-                                            except Exception:
-                                                ev = 0
-                                            if TX_DONE_FLAG is not None and (ev & TX_DONE_FLAG):
-                                                break
-                                            await asyncio.sleep(0.01)
-                                        try:
-                                            lora.setOperatingMode(lora.MODE_RX)
-                                        except Exception:
-                                            pass
-                                    except Exception:
-                                        pass
-                                    # Wait for ACK
-                                    ack_wait_ms = int(getattr(settings, 'LORA_CHUNK_ACK_WAIT_MS', 1500))
-                                    start_wait = time.ticks_ms()
-                                    while time.ticks_diff(time.ticks_ms(), start_wait) < ack_wait_ms:
-                                        try:
-                                            ev2 = lora._events()
-                                        except Exception:
-                                            ev2 = 0
-                                        if RX_DONE_FLAG is not None and (ev2 & RX_DONE_FLAG):
-                                            try:
-                                                msg2, err2 = lora._readData(0)
-                                            except Exception:
-                                                msg2 = None; err2 = -1
-                                            if err2 == 0 and msg2:
-                                                try:
-                                                    obj2 = None
-                                                    txt2 = msg2.decode('utf-8', 'ignore') if isinstance(msg2, (bytes, bytearray)) else str(msg2)
-                                                    try:
-                                                        obj2 = ujson.loads(txt2)
-                                                    except Exception:
-                                                        obj2 = None
-                                                    if isinstance(obj2, dict) and obj2.get('ack') == 'ok':
-                                                        # Capture signal info
-                                                        try:
-                                                            if hasattr(lora, 'getRSSI'):
-                                                                sdata.lora_SigStr = lora.getRSSI()
-                                                            if hasattr(lora, 'getSNR'):
-                                                                sdata.lora_snr = lora.getSNR()
-                                                                sdata.last_message = ujson.dumps(obj2)[:32]
-                                                        except Exception:
-                                                            pass
-                                                        # Adopt next sync
-                                                        try:
-                                                            if 'next_in' in obj2:
-                                                                rel = int(obj2['next_in'])
-                                                                if rel < 1:
-                                                                    rel = 1
-                                                                if rel > 24 * 3600:
-                                                                    rel = 24 * 3600
-                                                                settings.nextLoraSync = int(time.time() + rel)
-                                                            elif 'next' in obj2:
-                                                                settings.nextLoraSync = int(obj2['next'])
-                                                        except Exception:
-                                                            pass
-                                                        # Adopt GPS
-                                                        try:
-                                                            if getattr(settings, 'GPS_ACCEPT_FROM_BASE', True):
-                                                                blat = obj2.get('gps_lat')
-                                                                blng = obj2.get('gps_lng')
-                                                                if (blat is not None) and (blng is not None):
-                                                                    balt = obj2.get('gps_alt_m')
-                                                                    bacc = obj2.get('gps_accuracy_m')
-                                                                    bts = obj2.get('gps_last_fix_ts')
-                                                                    save_gps_state(blat, blng, balt, bacc, bts)
-                                                                    await debug_print('lora: GPS adopted', 'LORA')
-                                                        except Exception:
-                                                            pass
-                                                        await debug_print(f"lora: next {getattr(settings, 'nextLoraSync', '')}", 'LORA')
-                                                        write_lora_log(f"Remote stored next sync epoch: {getattr(settings, 'nextLoraSync', '')}", 'INFO')
-                                                        led_status_flash('SUCCESS')
-                                                        break
-                                                except Exception:
-                                                    pass
-                                        await asyncio.sleep(0.01)
-                                    break
-                                await debug_print(f"lora: last-resort single-frame failed ({st_last})", "ERROR")
-                            await debug_print("lora: cannot shrink chunk size further", "ERROR")
-                            break
-                        raw_chunk_size = new_raw
-                        await debug_print(f"lora: shrinking raw_chunk to {raw_chunk_size} (attempt {shrink_attempt}/{max_shrinks})", "LORA")
-                        # short backoff before retrying with smaller chunks
-                        await asyncio.sleep(0.12 + random.random() * 0.08)
-                        continue
-                    # Success path
-                    sent_ok = True
+                            # Unknown non-zero codes: treat as transient but log prominently and retry once
+                            await debug_print(f"lora: unexpected chunk TX err {st_code} (retry attempt {attempt+1})", "WARN")
+                            attempt += 1
+                            await asyncio.sleep(attempt * 0.05 + random.random() * 0.1)
+                            continue
 
-                if not sent_ok:
-                    await debug_print("lora: chunk send failed after shrink attempts", "ERROR")
-                    write_lora_log("Remote chunk send failed after shrink attempts", 'ERROR')
+                        except Exception as e:
+                            await debug_print(f"lora: unexpected chunk send error: {e}", "ERROR")
+                            attempt += 1
+                            await asyncio.sleep(attempt * 0.05 + random.random() * 0.1)
+                    if not chunk_sent:
+                        part_failure = True
+                        break
+                # If part_failure, abort
+                if part_failure:
+                    await debug_print("lora: chunk send failed after retries", "ERROR")
+                    write_lora_log("Remote chunk send failed after retries", 'ERROR')
                     try:
                         _last_tx_exception_ms = time.ticks_ms()
                     except Exception:
@@ -1866,6 +1359,12 @@ async def connectLora():
                             msg2, err2 = lora._readData(0)
                         except Exception:
                             msg2 = None; err2 = -1
+                        # Update signal strength
+                        try:
+                            sdata.lora_rssi = lora.getRSSI()
+                            sdata.lora_snr = lora.getSNR()
+                        except Exception:
+                            pass
                         if err2 == 0 and msg2:
                             try:
                                 obj2 = None
@@ -1875,25 +1374,9 @@ async def connectLora():
                                 except Exception:
                                     obj2 = None
                                 if isinstance(obj2, dict) and obj2.get('ack') == 'ok':
-                                    # Capture signal info for display
-                                    try:
-                                        if hasattr(lora, 'getRSSI'):
-                                            sdata.lora_SigStr = lora.getRSSI()
-                                        if hasattr(lora, 'getSNR'):
-                                            sdata.lora_snr = lora.getSNR()
-                                            sdata.last_message = ujson.dumps(obj2)[:32]
-                                    except Exception:
-                                        pass
                                     # Adopt next sync if provided
                                     try:
-                                        if 'next_in' in obj2:
-                                            rel = int(obj2['next_in'])
-                                            if rel < 1:
-                                                rel = 1
-                                            if rel > 24 * 3600:
-                                                rel = 24 * 3600
-                                            settings.nextLoraSync = int(time.time() + rel)
-                                        elif 'next' in obj2:
+                                        if 'next' in obj2:
                                             settings.nextLoraSync = int(obj2['next'])
                                     except Exception:
                                         pass
@@ -1913,10 +1396,11 @@ async def connectLora():
                                     await debug_print(f"lora: next {getattr(settings, 'nextLoraSync', '')}", 'LORA')
                                     write_lora_log(f"Remote stored next sync epoch: {getattr(settings, 'nextLoraSync', '')}", 'INFO')
                                     led_status_flash('SUCCESS')
+                                    clear_field_data_log()
                                     break
                             except Exception:
                                 pass
-                    await asyncio.sleep(0.01)
+                    await asyncio.sleep(0.005)
 
                 # After sending all chunks, done for this cycle
                 _last_send_ms = time.ticks_ms()

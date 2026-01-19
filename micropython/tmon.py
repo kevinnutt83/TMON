@@ -2,21 +2,37 @@
 from utils import debug_print
 
 async def frostwatchCheck():
-    await debug_print(f"Frostwatch Checks", "FROSTWATCH")
+    try:
+        await debug_print("frostwatchCheck: new low observed", "FROSTWATCH")
+    except Exception:
+        pass
 
 async def heatwatchCheck():
-    await debug_print(f"Heatwatch Checks", "HEATWATCH")
+    try:
+        await debug_print("heatwatchCheck: new high observed", "HEATWATCH")
+    except Exception:
+        pass
 
 async def beginFrostOperations():
-    await debug_print(f"Frostwatch Operations Start", "FROSTWATCH")
-    pass
-
-async def beginHeatOperations():
-    await debug_print(f"Heatwatch Operations Start", "HEATWATCH")
-    pass
+    try:
+        await debug_print("beginFrostOperations: executing frost response", "FROSTWATCH")
+    except Exception:
+        pass
 
 async def endFrostOperations():
-    pass
+    try:
+        await debug_print("endFrostOperations: ending frost response", "FROSTWATCH")
+    except Exception:
+        pass
+
+async def beginHeatOperations():
+    try:
+        await debug_print("beginHeatOperations: executing heat response", "HEATWATCH")
+    except Exception:
+        pass
 
 async def endHeatOperations():
-    pass
+    try:
+        await debug_print("endHeatOperations: ending heat response", "HEATWATCH")
+    except Exception:
+        pass
