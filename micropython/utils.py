@@ -660,8 +660,8 @@ def led_status_flash(status):
     from utils import flash_led
     color_map = {
         'INFO': 'lime',
-        'SUCCESS': 'green',
-        'OK': 'green',
+        'SUCCESS': 'lavender',
+        'OK': 'olive',
         'WARN': 'orange',
         'WARNING': 'orange',
         'ERROR': 'red',
