@@ -524,6 +524,7 @@ def record_field_data():
     _copy(entry, sdata, 'gps_last_fix_ts')
     # Minimal identity
     entry['unit_id'] = getattr(settings, 'UNIT_ID', '')
+    entry['unit_name'] = getattr(settings, 'UNIT_Name', '')
     entry['firmware_version'] = getattr(settings, 'FIRMWARE_VERSION', '')
     entry['NODE_TYPE'] = getattr(settings, 'NODE_TYPE', '')
     # Only persist on base and wifi nodes (remote-lora-only devices should not flood server logs)
