@@ -364,4 +364,3 @@ async def settings_apply_loop(interval_s: int = 60):
             await _a.sleep(int(interval_s))
         except Exception:
             break
-

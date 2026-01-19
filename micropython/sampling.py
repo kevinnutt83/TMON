@@ -75,7 +75,10 @@ async def sampleBME280():
                     pass
 
                 if settings.DEBUG and settings.DEBUG_TEMP:
-                    await debug_print("sample:BME p:%7.2f t:%-6.2f h:%6.2f" % (data[0], data[1], data[2]), "DEBUG TEMP")
+                    await debug_print(
+                        "sample:BME p:%7.2f t:%-6.2f h:%6.2f" % (data[0], data[1], data[2]),
+                        "DEBUG TEMP"
+                    )
                     try:
                         from oled import display_message
                         await display_message("Sample OK", 1.5)
