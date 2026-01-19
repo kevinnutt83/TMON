@@ -514,7 +514,9 @@ async def periodic_uc_checkin_task():
     interval = int(getattr(settings, 'UC_CHECKIN_INTERVAL_S', 300))
     while True:
         try:
+            await display_message("Server Sync", 1.5)
             await doServerSync()
+            await display_message("Sync OK", 1.5)
         except Exception as e:
             await debug_print(f"uc: checkin err {e}", "ERROR")
         await asyncio.sleep(interval)
