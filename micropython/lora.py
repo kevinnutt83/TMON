@@ -803,8 +803,10 @@ async def init_lora():
             try:
                 if getattr(settings, 'NODE_TYPE', 'base') == 'base' and lora is not None:
                     lora.setOperatingMode(lora.MODE_RX)
+                    led_status_flash('LORA_RX')
                 elif getattr(settings, 'NODE_TYPE', 'base') == 'remote' and lora is not None:
                     lora.setOperatingMode(lora.MODE_STDBY)
+                    led_status_flash('LORA_TX')
             except Exception:
                 pass
             print('[DEBUG] init_lora: completed successfully')

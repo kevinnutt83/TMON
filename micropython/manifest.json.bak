@@ -80,7 +80,7 @@
     "lora.py": "sha256:551eecc0b7535ce2284230219a9499a220fc9f03154f55fec7123a13956a93da",
     "lora_ping.py": "sha256:52e849e21f098109ed9495f1560757fb3728a6e9fb16e9d0a988f28f2108569a",
     "main.py": "sha256:587cfbbf0b70a23de32956e2b86f82b138c877e823a7a2bd7f105c5e9811ca65",
-    "manifest.json.bak": "sha256:91101cf53496881675e19e9969719a87c9f7c107d4e8b47af35c6dc288c2703a",
+    "manifest.json.bak": "sha256:2dd9a389388863156289e5728b2a4ded473569f905182cc1d5be82520604dfbf",
     "oled.py": "sha256:919720d61a567544e02ff84fc65cf611219d9dfa1179084d825e02542d8e381e",
     "ota.py": "sha256:156ee04e0e444bbd8a22a0a7182f7a7bbb93142df62b04dbf06a5bd1f2d9d14c",
     "provision.py": "sha256:5d6ddd185309e0475e1b175cef638df4ed7b66d60b7c16a46fd68316e7936bf1",
@@ -95,11 +95,11 @@
     "tests/test_chunk_dump_rotation.py": "sha256:84eb685de4a73e725ed008e513c4609472071eea3bcc3fee5f9a664d4c5d24e3",
     "tests/test_log_trim.py": "sha256:5933ec391a1cefcaeb401a461c1957744d4452987abb1d46f6c7ec74d3c0fc03",
     "tmon.py": "sha256:e9b2ad058b6522bf1caf8f8eb84ee87499da9ca9beb5f7f765e064cc76ee53b0",
-    "utils.py": "sha256:4ebd806d136436d592b62e4247185e60e840fa0cf6ea31e6aec421f8390a555c",
-    "version.txt": "sha256:6a424d29a2ad5af56e05e9ac72ab15cf296cc145b1faa77a43b75234087febb8",
+    "utils.py": "sha256:9ea8f480a184de19f49483ccad7a3da6ff9a7c9d25d4dad4bbde988d7b0e66ba",
+    "version.txt": "sha256:b8c2e99c3b2c3fa72627287965bb0ab10cdce5a6adf1422d07334262f9317daa",
     "wifi.py": "sha256:75cead272475cb6be033925331a9a7caf3cf44954f4f4ca8ff0da2b1beedf772",
     "wprest.py": "sha256:4b85ca55056e7e850a3c2275377228db0bc600d7b853e788d2fc6aa522103bbe"
   },
   "name": "tmon-micropython",
-  "version": "v2.06.2"
+  "version": "v2.06.3"
 }
