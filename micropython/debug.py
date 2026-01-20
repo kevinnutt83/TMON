@@ -14,13 +14,40 @@ CATEGORY_FLAGS = {
     'HUMID': 'DEBUG_HUMID',
     'BAR': 'DEBUG_BAR',
     'LORA': 'DEBUG_LORA',
-    'WIFI': 'DEBUG_WIFI',
+    'WIFI': 'DEBUG_WIFI_CONNECT',   # CHANGED (was DEBUG_WIFI)
     'OTA': 'DEBUG_OTA',
     'PROVISION': 'DEBUG_PROVISION',
     'SAMPLING': 'DEBUG_SAMPLING',
     'DISPLAY': 'DEBUG_DISPLAY',
-    'REMOTE': 'DEBUG_REMOTE',
+
+    # NEW: role-specific toggles present in settings.py
+    'BASE_NODE': 'DEBUG_BASE_NODE',
+    'REMOTE_NODE': 'DEBUG_REMOTE_NODE',
+    'WIFI_NODE': 'DEBUG_WIFI_NODE',
+
+    # NEW: RS485 category present in settings.py
+    'RS485': 'DEBUG_RS485',
 }
+
+# NEW: legacy flag aliases for compatibility (best-effort)
+_LEGACY_FLAG_ALIASES = {
+    'DEBUG_WIFI_CONNECT': ('DEBUG_WIFI_CONNECTION', 'DEBUG_WIFI'),
+    'DEBUG_REMOTE_NODE': ('DEBUG_REMOTE',),
+}
+
+def _flag_enabled(flag_name: str) -> bool:
+    try:
+        if getattr(settings, flag_name, False):
+            return True
+    except Exception:
+        pass
+    for legacy in _LEGACY_FLAG_ALIASES.get(flag_name, ()):
+        try:
+            if getattr(settings, legacy, False):
+                return True
+        except Exception:
+            pass
+    return False
 
 async def log(message, level='INFO', category=None):
     """Unified async debug logger.
@@ -31,7 +58,7 @@ async def log(message, level='INFO', category=None):
     if category:
         flag_name = CATEGORY_FLAGS.get(category.upper())
         if flag_name:
-            enabled = enabled or getattr(settings, flag_name, False)
+            enabled = enabled or _flag_enabled(flag_name)  # CHANGED: use shim
     if not enabled:
         return
     try:

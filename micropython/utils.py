@@ -624,44 +624,120 @@ async def runGC():
         print("Garbage collection completed after MemoryError")
     await asyncio.sleep(0)  # Yield control
 
+# --- Debug gating helpers (NEW) ---
+_DEBUG_STATUS_TO_FLAG = {
+    # sensors
+    'TEMP': 'DEBUG_TEMP',
+    'HUMID': 'DEBUG_HUMID',
+    'BAR': 'DEBUG_BAR',
+
+    # subsystems
+    'LORA': 'DEBUG_LORA',
+    'WIFI': 'DEBUG_WIFI_CONNECT',
+    'OTA': 'DEBUG_OTA',
+    'PROVISION': 'DEBUG_PROVISION',
+    'SAMPLING': 'DEBUG_SAMPLING',
+    'DISPLAY': 'DEBUG_DISPLAY',
+    'RS485': 'DEBUG_RS485',
+
+    # node roles
+    'BASE_NODE': 'DEBUG_BASE_NODE',
+    'REMOTE_NODE': 'DEBUG_REMOTE_NODE',
+    'WIFI_NODE': 'DEBUG_WIFI_NODE',
+}
+
+# Best-effort legacy aliases so old configs still enable logs.
+_LEGACY_FLAG_ALIASES = {
+    'DEBUG_WIFI_CONNECT': ('DEBUG_WIFI_CONNECTION', 'DEBUG_WIFI'),
+    'DEBUG_REMOTE_NODE': ('DEBUG_REMOTE',),
+}
+
+_ALWAYS_PRINT_TOKENS = {'ERROR', 'WARN', 'WARNING', 'FATAL'}
+
+def _tokenize_status(s: str):
+    try:
+        s = (s or '').upper()
+        out, cur = [], ''
+        for ch in s:
+            if ('A' <= ch <= 'Z') or ('0' <= ch <= '9') or ch == '_':
+                cur += ch
+            else:
+                if cur:
+                    out.append(cur)
+                    cur = ''
+        if cur:
+            out.append(cur)
+        return out
+    except Exception:
+        return []
+
+def _flag_enabled(flag_name: str) -> bool:
+    try:
+        if getattr(settings, flag_name, False):
+            return True
+    except Exception:
+        pass
+    for legacy in _LEGACY_FLAG_ALIASES.get(flag_name, ()):
+        try:
+            if getattr(settings, legacy, False):
+                return True
+        except Exception:
+            pass
+    return False
+
+def _debug_allowed_for_status(status) -> bool:
+    # If status indicates severity, always print (not treated as "debug-only").
+    tokens = _tokenize_status(str(status))
+    for t in tokens:
+        if t in _ALWAYS_PRINT_TOKENS:
+            return True
+
+    # If status maps to one or more known debug categories, require that category flag.
+    matched_any_category = False
+    for t in tokens:
+        flag = _DEBUG_STATUS_TO_FLAG.get(t)
+        if not flag:
+            continue
+        matched_any_category = True
+        if _flag_enabled(flag):
+            return True
+
+    if matched_any_category:
+        # Known category was referenced but disabled -> do not print.
+        return False
+
+    # Unknown status: treat as generic debug, controlled by settings.DEBUG only.
+    return bool(getattr(settings, 'DEBUG', False))
+
 # Asynchronous debug print
 async def debug_print(message, status):
-    # Feature-based debug control
-    debug_flags = {
-        'TEMP': settings.DEBUG_TEMP,
-        'BAR': settings.DEBUG_BAR,
-        'HUMID': settings.DEBUG_HUMID,
-        'LORA': settings.DEBUG_LORA,
-    }
-    # Always print if global DEBUG is True
-    should_print = settings.DEBUG
-    # Print if feature-specific debug is enabled
-    for key, enabled in debug_flags.items():
-        if key in status and enabled:
-            should_print = True
-    if should_print:
-        # Sanitize for print/display to avoid UnicodeError
-        try:
-            safe_msg = message
-            if isinstance(safe_msg, bytes):
-                safe_msg = safe_msg.decode('utf-8', 'ignore')
-            safe_msg = ''.join(ch if 32 <= ord(ch) <= 126 else ' ' for ch in safe_msg)
-        except Exception:
-            safe_msg = '<unprintable>'
-        # Build ISO timestamp using Unix epoch helper to avoid 2000-epoch skew
-        try:
-            unixt = get_unix_time()
-            ts = time.localtime(unixt) if hasattr(time, 'localtime') else None
-            if ts:
-                timestamp = f"{ts[0]:04}-{ts[1]:02}-{ts[2]:02} {ts[3]:02}:{ts[4]:02}:{ts[5]:02}"
-            else:
-                timestamp = str(unixt)
-        except Exception:
-            timestamp = '0'
-        print(f"[{timestamp}] [{status}] {safe_msg}")
-        #try:
-            # Gate OLED messages by ENABLE_OLED
-           # if bool(getattr(settings, 'ENABLE_OLED', True)):
+    # CHANGED: only print if the corresponding flag is enabled (or severity token)
+    if not _debug_allowed_for_status(status):
+        await asyncio.sleep(0)
+        return
+
+    # Sanitize for print/display to avoid UnicodeError
+    try:
+        safe_msg = message
+        if isinstance(safe_msg, bytes):
+            safe_msg = safe_msg.decode('utf-8', 'ignore')
+        safe_msg = ''.join(ch if 32 <= ord(ch) <= 126 else ' ' for ch in safe_msg)
+    except Exception:
+        safe_msg = '<unprintable>'
+    # Build ISO timestamp using Unix epoch helper to avoid 2000-epoch skew
+    try:
+        unixt = get_unix_time()
+        ts = time.localtime(unixt) if hasattr(time, 'localtime') else None
+        if ts:
+            timestamp = f"{ts[0]:04}-{ts[1]:02}-{ts[2]:02} {ts[3]:02}:{ts[4]:02}:{ts[5]:02}"
+        else:
+            timestamp = str(unixt)
+    except Exception:
+        timestamp = '0'
+    print(f"[{timestamp}] [{status}] {safe_msg}")
+    #try:
+        # Gate OLED messages by ENABLE_OLED
+       # if bool(getattr(settings, 'ENABLE_OLED', True)):
                 # await display_message(safe_msg, 1.5)
        # except Exception:
            # pass
