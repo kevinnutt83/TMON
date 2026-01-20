@@ -74,15 +74,39 @@ ENABLE_OLED = True
 GPS_ENABLED = True                      # Global GPS enable
 ENGINE_ENABLED = False 
 
+# Waveshare Environmental / Sensor settings
+ENABLE_sensorBME280 = True              # BME280 Sensor Enable
+i2cAddr_BME280 = 0x76
+ENABLE_sensorDHT11 = False              # BME280 Sensor Enable
+i2cAddr_DHT11 = 0x76
+ENABLE_sensorLTR390 = False 
+light_i2c_address = 0x53
+ENABLE_MPU925x = False
+motion_i2c_address = 0x68
+ENABLE_sensorSGP40 = False
+voc_i2c_address = 0x59
+ENABLE_sensorTSL2591 = False
+lux_i2c_address = 0x29
+
 # Pin definitions
-SYS_VOLTAGE_PIN = 3                        # ADC pin used for voltage divider (adjust as needed)
+SYS_VOLTAGE_PIN = 3                # ADC pin used for voltage divider (adjust as needed)
+# LED Light control pin
 LED_PIN = 21
+# Relay control pins
 RELAY_PIN1 = 17
 RELAY_PIN2 = 18
+RELAY_PIN3 = None
+RELAY_PIN4 = None
+RELAY_PIN5 = None
+RELAY_PIN6 = None
+RELAY_PIN7 = None
+RELAY_PIN8 = None
+# I2C pins
 I2C_A_SCL_PIN = 33
 I2C_A_SDA_PIN = 34
 I2C_B_SCL_PIN = 38
 I2C_B_SDA_PIN = 39
+# LoRa Radio pins
 SPI_BUS = 1
 CLK_PIN = 35
 MOSI_PIN = 36
@@ -91,19 +115,59 @@ CS_PIN = 14
 IRQ_PIN = 4
 RST_PIN = 40
 BUSY_PIN = 13
+# RS485 / Engine controller pins
+CH1_TX_PIN = 4
+CH1_RX_PIN = 5
+CH2_TX_PIN = 6
+CH2_RX_PIN = 7
 
 #Debug toggles
-DEBUG = True
-DEBUG_TEMP = True
-DEBUG_BAR = True
-DEBUG_HUMID = True
-DEBUG_LORA = True
-DEBUG_WIFI = True
-DEBUG_OTA = True
-DEBUG_PROVISION = True
-DEBUG_SAMPLING = True
-DEBUG_DISPLAY = True
-DEBUG_REMOTE = True
+DEBUG = False
+DEBUG_SAMPLING = False
+DEBUG_BME280 = False
+DEBUG_DHT11 = False
+DEBUG_TEMP = False
+DEBUG_BAR = False
+DEBUG_HUMID = False
+DEBUG_LORA = False
+DEBUG_WIFI_CONNECT = False
+DEBUG_OTA = False
+DEBUG_PROVISION = False
+DEBUG_DISPLAY = False
+DEBUG_BASE_NODE = False
+DEBUG_REMOTE_NODE = False
+DEBUG_WIFI_NODE = False
+DEBUG_RS485 = False
+
+# RS485 / Engine controller
+ENGINE_FORCE_DISABLED = True          # Temporary kill switch to disable engine control
+ENABLE_RS485 = False                  # Enable RS485 engine controller
+ENABLE_ENGINE_CONTROLLER = False      # Enable engine polling/controls
+ENGINE_POLL_INTERVAL_S = 30           # Seconds between polls
+ENGINE_DEV_ADDR = 1                   # Base Modbus address
+ENGINE_DEV_COUNT = 1                  # Number of engines chained
+ENGINE_SAMPLE_RATE = 30               # Heartbeat/sample cadence seconds
+ENGINE_KEEPALIVE = 5                  # Extra keep-alive loops between polls
+ENGINE_PUMP1_COIL = 0                 # Coil address for Pump1
+ENGINE_PUMP2_COIL = 1                 # Coil address for Pump2
+COMM_BAUD = 9600
+COMM_PARITY = None
+COMM_STOP_BITS = 1
+
+
+# Relay Settings
+ENABLE_RELAY1 = True
+ENABLE_RELAY2 = True
+ENABLE_RELAY3 = False
+ENABLE_RELAY4 = False
+ENABLE_RELAY5 = False
+ENABLE_RELAY6 = False
+ENABLE_RELAY7 = False
+ENABLE_RELAY8 = False
+RELAY_RUNTIME_LIMITS = {               # Per relay runtime cap (minutes) override; fallback to RELAY_SAFETY_MAX_RUNTIME_MIN
+    1: 720,
+    2: 720
+}
 
 # wifi settings
 WIFI_SSID = "house of nonsense"          # Provisioned or manually set SSID
@@ -143,6 +207,7 @@ LORA_HMAC_REJECT_UNSIGNED = True     # When enabled + HMAC active, reject frames
 LORA_HMAC_REPLAY_PROTECT = True      # Enforce strictly increasing counter (ctr) to prevent replay
 LORA_ENCRYPT_ENABLED = True         # Optional payload encryption (ChaCha20 stream cipher)
 LORA_ENCRYPT_SECRET = ''  
+#LoRa Radio Settings
 FREQ = 915.0                               # Regional frequency (EU example); change per deployment
 BW = 125.0
 SF = 12
@@ -198,39 +263,6 @@ DISPLAY_NET_BARS = True                   # When True, show concise "W"/"L" bars
 # NEW: seconds to flip between voltage and r_temp_f in header (smooth flip)
 OLED_HEADER_FLIP_S = 4
 
-# RS485 / Engine controller
-ENGINE_FORCE_DISABLED = True          # Temporary kill switch to disable engine control
-USE_RS485 = False                     # Enable RS485 engine controller
-ENGINE_ENABLED = False                # Enable engine polling/controls
-ENGINE_POLL_INTERVAL_S = 30           # Seconds between polls
-ENGINE_DEV_ADDR = 1                   # Base Modbus address
-ENGINE_DEV_COUNT = 1                  # Number of engines chained
-ENGINE_SAMPLE_RATE = 30               # Heartbeat/sample cadence seconds
-ENGINE_KEEPALIVE = 5                  # Extra keep-alive loops between polls
-ENGINE_PUMP1_COIL = 0                 # Coil address for Pump1
-ENGINE_PUMP2_COIL = 1                 # Coil address for Pump2
-COMM_BAUD = 9600
-COMM_PARITY = None
-COMM_STOP_BITS = 1
-CH1_TX_PIN = 4
-CH1_RX_PIN = 5
-CH2_TX_PIN = 6
-CH2_RX_PIN = 7
-
-# Relay Settings
-ENABLE_RELAY1 = True
-ENABLE_RELAY2 = True
-ENABLE_RELAY3 = False
-ENABLE_RELAY4 = False
-ENABLE_RELAY5 = False
-ENABLE_RELAY6 = False
-ENABLE_RELAY7 = False
-ENABLE_RELAY8 = False
-RELAY_RUNTIME_LIMITS = {               # Per relay runtime cap (minutes) override; fallback to RELAY_SAFETY_MAX_RUNTIME_MIN
-    1: 720,
-    2: 720
-}
-
 #Sampling Toggles
 SAMPLE_TEMP = True
 COMPARE_TEMP = True                     # Compare against thresholds for frost/heat watch triggers
@@ -254,14 +286,6 @@ HEATWATCH_ACTIVE_TEMP = 90
 HEATWATCH_ALERT_TEMP = 100
 HEATWATCH_ACTION_TEMP = 110
 HEATWATCH_STANDDOWN_TEMP = 105
-
-# Waveshare Environmental / Sensor settings
-ENABLE_sensorBME280 = True              # Primary environmental sensor module
-i2cAddr_BME280 = 0x76
-light_i2c_address = 0x53
-motion_i2c_address = 0x68
-voc_i2c_address = 0x59
-lux_i2c_address = 0x29
 
 # System voltage measurement settings
 SYS_VOLTAGE_MAX = 5.0                      # Maximum measurable voltage (adjust for your divider)

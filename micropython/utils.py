@@ -659,7 +659,7 @@ def led_status_flash(status):
     import uasyncio as asyncio
     from utils import flash_led
     color_map = {
-        'INFO': 'lime',
+        'INFO': 'light_green',
         'SUCCESS': 'green',
         'OK': 'green',
         'WARN': 'orange',
@@ -673,6 +673,9 @@ def led_status_flash(status):
         'SAMPLE_TEMP': 'magenta',
         'SAMPLE_HUMID': 'cyan',
         'SAMPLE_BAR': 'pink',
+        # Action Specific
+        'RELAY_ON': 'orchid',
+        'RELAY_OFF': 'plum',
     }
     color = color_map.get(status, 'white')
     # Schedule LED flash asynchronously
@@ -683,23 +686,43 @@ color_to_duty = {
     'white': (255, 255, 255),
     'red': (255, 0, 0),
     'blue': (0, 0, 255),
-    'green': (0, 255, 0),
+    'green': (0, 128, 0),  # Corrected to standard green
     'yellow': (255, 255, 0),
     'cyan': (0, 255, 255),
     'magenta': (255, 0, 255),
-    'orange': (255, 128, 0),
-    'purple': (128, 0, 255),
-    'pink': (255, 128, 128),
-    'lime': (128, 255, 0),
+    'orange': (255, 165, 0),  # Corrected to standard orange
+    'purple': (128, 0, 128),  # Corrected to standard purple
+    'pink': (255, 192, 203),  # Corrected to standard pink
+    'lime': (0, 255, 0),  # Corrected to standard lime
     'teal': (0, 128, 128),
-    'lavender': (128, 0, 128),
-    'brown': (128, 64, 0),
-    'beige': (255, 192, 128),
+    'lavender': (230, 230, 250),  # Corrected to standard lavender
+    'brown': (165, 42, 42),  # Corrected to standard brown
+    'beige': (245, 245, 220),  # Corrected to standard beige
     'maroon': (128, 0, 0),
     'olive': (128, 128, 0),
     'navy': (0, 0, 128),
     'grey': (128, 128, 128),
-    'black': (0, 0, 0)
+    'black': (0, 0, 0),
+    'light_blue': (173, 216, 230),  # LightBlue
+    'dark_blue': (0, 0, 139),  # DarkBlue
+    'light_green': (144, 238, 144),  # LightGreen
+    'dark_green': (0, 100, 0),  # DarkGreen
+    'light_red': (240, 128, 128),  # LightCoral (as a pinkish red variant)
+    'dark_red': (139, 0, 0),  # DarkRed
+    'indigo': (75, 0, 130),  # Indigo
+    'violet': (238, 130, 238),  # Violet
+    'turquoise': (64, 224, 208),  # Turquoise
+    'gold': (255, 215, 0),  # Gold
+    'silver': (192, 192, 192),  # Silver
+    'chartreuse': (127, 255, 0),  # Chartreuse (close to your original lime)
+    'crimson': (220, 20, 60),  # Crimson
+    'salmon': (250, 128, 114),  # Salmon
+    'khaki': (240, 230, 140),  # Khaki
+    'sienna': (160, 82, 45),  # Sienna
+    'orchid': (218, 112, 214),  # Orchid
+    'plum': (221, 160, 221),  # Plum
+    'sky_blue': (135, 206, 235),  # SkyBlue
+    'sea_green': (46, 139, 87)  # SeaGreen
 }
 
 # Commented out examples of using flash_led:

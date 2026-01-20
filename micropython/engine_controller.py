@@ -79,7 +79,7 @@ def _write_single_coil(uart, dev_addr, coil_addr, turn_on):
 async def poll_engine(dev_idx):
     if getattr(settings, 'ENGINE_FORCE_DISABLED', False):
         return {}
-    if not settings.USE_RS485 or not settings.ENGINE_ENABLED:
+    if not settings.ENABLE_RS485 or not settings.ENABLE_ENGINE_CONTROLLER:
         return {}
     dev_addr = settings.ENGINE_DEV_ADDR + dev_idx
     uart_a = uart1
@@ -105,7 +105,7 @@ async def poll_engine(dev_idx):
 async def start_pump(channel, pump_number):
     if getattr(settings, 'ENGINE_FORCE_DISABLED', False):
         return
-    if not settings.USE_RS485 or not settings.ENGINE_ENABLED:
+    if not settings.ENABLE_RS485 or not settings.ENABLE_ENGINE_CONTROLLER:
         return
     coil = settings.ENGINE_PUMP1_COIL if pump_number == 1 else settings.ENGINE_PUMP2_COIL
     uart = uart1 if channel == 1 else uart2
@@ -115,7 +115,7 @@ async def start_pump(channel, pump_number):
 async def stop_pump(channel, pump_number):
     if getattr(settings, 'ENGINE_FORCE_DISABLED', False):
         return
-    if not settings.USE_RS485 or not settings.ENGINE_ENABLED:
+    if not settings.ENABLE_RS485 or not settings.ENABLE_ENGINE_CONTROLLER:
         return
     coil = settings.ENGINE_PUMP1_COIL if pump_number == 1 else settings.ENGINE_PUMP2_COIL
     uart = uart1 if channel == 1 else uart2
@@ -125,7 +125,7 @@ async def stop_pump(channel, pump_number):
 async def reset_rs485():
     if getattr(settings, 'ENGINE_FORCE_DISABLED', False):
         return
-    if not settings.USE_RS485:
+    if not settings.ENABLE_RS485:
         return
     global uart1, uart2
     try:
@@ -140,7 +140,7 @@ async def engine_loop():
     if getattr(settings, 'ENGINE_FORCE_DISABLED', False):
         await asyncio.sleep(5)
         return
-    if not settings.USE_RS485 or not settings.ENGINE_ENABLED:
+    if not settings.ENABLE_RS485 or not settings.ENABLE_ENGINE_CONTROLLER:
         await asyncio.sleep(5)
         return
     while True:

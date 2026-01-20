@@ -627,7 +627,7 @@ async def startup():
             engine_loop
             and not bool(getattr(settings, 'ENGINE_FORCE_DISABLED', False))
             and bool(getattr(settings, 'USE_RS485', False))
-            and bool(getattr(settings, 'ENGINE_ENABLED', False))
+            and bool(getattr(settings, 'ENABLE_ENGINE_CONTROLLER', False))
         ):
             import uasyncio as _ae
             _ae.create_task(engine_loop())
