@@ -603,7 +603,7 @@ async def free_pins_lora():
     machine.Pin(settings.BUSY_PIN, machine.Pin.IN)
     await asyncio.sleep(0)  # Yield control
 
-async def free_pins_i2c
+async def free_pins_i2c():
     machine.Pin(settings.I2C_A_SCL_PIN, machine.Pin.IN)
     machine.Pin(settings.I2C_A_SDA_PIN, machine.Pin.IN)
     await asyncio.sleep(0)  # Yield control
