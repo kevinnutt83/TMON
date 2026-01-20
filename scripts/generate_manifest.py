@@ -2,6 +2,16 @@
 """
 Generate micropython/manifest.json by hashing files in micropython/.
 
+IMPORTANT:
+  Run this from a *shell* (no leading ">>>"). If you see a SyntaxError like:
+    File "<stdin>", line 1
+      /bin/python3 /path/to/script.py
+  you typed a shell command into the Python REPL.
+
+Examples (shell):
+  python3 /workspaces/TMON/scripts/generate_manifest.py
+  /workspaces/TMON/scripts/generate_manifest.py --check-only
+
 Usage:
   python scripts/generate_manifest.py [--commit] [--sig-secret ENV_VAR_NAME]
 
