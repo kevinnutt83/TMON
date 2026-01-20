@@ -2,7 +2,7 @@
 
 import sdata
 import settings
-from utils import free_pins
+from utils import free_pins_i2c
 import uasyncio as asyncio
 from utils import debug_print
 from tmon import frostwatchCheck, heatwatchCheck, beginFrostOperations, beginHeatOperations, endFrostOperations, endHeatOperations
@@ -26,9 +26,9 @@ async def sampleEnviroment():
 async def sampleTemp():
     if settings.SAMPLE_TEMP:
         if settings.ENABLE_sensorBME280:
-            await free_pins()  # Ensure pins are free before BME280
+            await free_pins_i2c()  # Ensure pins are free before BME280
             await sampleBME280()
-            await free_pins()  # Free pins after BME280 for next device
+            await free_pins_i2c()  # Free pins after BME280 for next device
 
 async def sampleBME280():
     if settings.ENABLE_sensorBME280:
@@ -38,7 +38,7 @@ async def sampleBME280():
         try:
             try:
                 from oled import display_message
-                await display_message("Sampling", 1)
+                await display_message("Sampling BME280", 1)
             except Exception:
                 pass
             import lora as lora_module
@@ -50,12 +50,12 @@ async def sampleBME280():
                     except Exception:
                         pass
                     lora_module.lora = None
-            await free_pins()
+            await free_pins_i2c()
             from BME280 import BME280
             sensor = BME280()
             sensor.get_calib_param()
             try:
-                led_status_flash('SAMPLE_TEMP')
+                led_status_flash('SAMPLE_BME280')
                 data = []
                 data = sensor.readData()
                 sdata.cur_temp_c = data[1]
@@ -81,12 +81,12 @@ async def sampleBME280():
                     )
                     try:
                         from oled import display_message
-                        await display_message("Sample OK", 1.5)
+                        await display_message("BME280 Sample OK", 1.5)
                     except Exception:
                         pass
             except Exception as e:
                 if settings.DEBUG and settings.DEBUG_TEMP:
-                    await debug_print(f"sample:BME err: {e}", "SAMPLE ERROR TEMP")
+                    await debug_print(f"sample:BME280 err: {e}", "SAMPLE ERROR TEMP")
             finally:
                 # Some MicroPython ports do not implement I2C.deinit(); guard accordingly
                 try:

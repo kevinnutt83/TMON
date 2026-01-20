@@ -591,10 +591,23 @@ async def free_pins():
     machine.Pin(settings.IRQ_PIN, machine.Pin.IN)
     machine.Pin(settings.RST_PIN, machine.Pin.IN)
     machine.Pin(settings.BUSY_PIN, machine.Pin.IN)
+    await asyncio.sleep(0)  # Yield control
+
+async def free_pins_lora():
+    machine.Pin(settings.CLK_PIN, machine.Pin.IN)
+    machine.Pin(settings.MOSI_PIN, machine.Pin.IN)
+    machine.Pin(settings.MISO_PIN, machine.Pin.IN)
+    machine.Pin(settings.CS_PIN, machine.Pin.IN)
+    machine.Pin(settings.IRQ_PIN, machine.Pin.IN)
+    machine.Pin(settings.RST_PIN, machine.Pin.IN)
+    machine.Pin(settings.BUSY_PIN, machine.Pin.IN)
+    await asyncio.sleep(0)  # Yield control
+
+async def free_pins_i2c
     machine.Pin(settings.I2C_A_SCL_PIN, machine.Pin.IN)
     machine.Pin(settings.I2C_A_SDA_PIN, machine.Pin.IN)
     await asyncio.sleep(0)  # Yield control
-
+    
 # Asynchronous garbage collection
 async def runGC():
     gc.enable()
@@ -670,7 +683,7 @@ def led_status_flash(status):
         'LORA_RX': 'white',
         'LORA_TX': 'grey',
         # Sampling specific
-        'SAMPLE_TEMP': 'magenta',
+        'SAMPLE_BME280': 'magenta',
         'SAMPLE_HUMID': 'cyan',
         'SAMPLE_BAR': 'pink',
         # Action Specific
@@ -1205,6 +1218,8 @@ def start_background_tasks():
 __all__ = [
     'debug_print',
     'free_pins',
+    'free_pins_lora',
+    'free_pins_i2c',
     'persist_unit_id',
     'load_persisted_unit_id',
     'persist_wordpress_api_url',

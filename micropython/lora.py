@@ -41,7 +41,7 @@ except ImportError:
         import requests
     except ImportError:
         requests = None
-from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run, led_status_flash, write_lora_log, persist_unit_id
+from utils import free_pins_lora, checkLogDirectory, debug_print, TMON_AI, safe_run, led_status_flash, write_lora_log, persist_unit_id
 from relay import toggle_relay
 try:
     from encryption import chacha20_encrypt, derive_nonce
@@ -275,7 +275,7 @@ except ImportError:
         import requests
     except ImportError:
         requests = None
-from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run
+from utils import free_pins_lora, checkLogDirectory, debug_print, TMON_AI, safe_run
 from relay import toggle_relay
 
 # Restore: define WORDPRESS_API_URL safely for this module
@@ -773,7 +773,7 @@ async def init_lora():
             if rc != 0:
                 await debug_print(f"lora: setBlockingCallback fail {rc}", "ERROR")
                 await log_error(f"LoRa setBlockingCallback failed: {rc}")
-                await free_pins()
+                await free_pins_lora()
                 lora = None
                 return False
             # Double-check radio packet type is LoRa
@@ -782,13 +782,13 @@ async def init_lora():
                 if pkt_type != 1:  # assuming 1 is LORA mode, since import removed
                     await debug_print("lora: init verify pkt_type mismatch", "ERROR")
                     await log_error(f"LoRa init verify failed: packet type={pkt_type}")
-                    await free_pins()
+                    await free_pins_lora()
                     lora = None
                     return False
             except Exception as ve:
                 await debug_print(f"LoRa init verify exception: {ve}", "ERROR")
                 await log_error(f"LoRa init verify exception: {ve}")
-                await free_pins()
+                await free_pins_lora()
                 lora = None
                 return False
         if status == 0:
@@ -845,7 +845,7 @@ async def init_lora():
             _deinit_spi_if_any(lora)
         except Exception:
             pass
-        await free_pins()
+        await free_pins_lora()
         lora = None
         return False
 
@@ -1944,7 +1944,7 @@ async def connectLora():
                     except Exception:
                         pass
                     try:
-                        await free_pins()
+                        await free_pins_lora()
                     except Exception:
                         pass
                     lora = None
@@ -1999,7 +1999,7 @@ async def connectLora():
                 except Exception:
                     pass
                 try:
-                    await free_pins()
+                    await free_pins_lora()
                 except Exception:
                     pass
                 lora = None

@@ -9,7 +9,7 @@ from debug import info as dbg_info, warn as dbg_warn, error as dbg_error
 import sdata
 import utime as time
 from sampling import sampleEnviroment
-from utils import free_pins, checkLogDirectory, debug_print, periodic_field_data_send, load_persisted_unit_id, persist_unit_id, get_machine_id, periodic_provision_check
+from utils import free_pins_lora, checkLogDirectory, debug_print, periodic_field_data_send, load_persisted_unit_id, persist_unit_id, get_machine_id, periodic_provision_check
 from lora import connectLora, log_error, TMON_AI
 from ota import check_for_update, apply_pending_update
 from oled import update_display, display_message
@@ -171,7 +171,7 @@ async def lora_comm_task():
                 error_msg += " | .blocking attribute does not exist on SX1262."
             await debug_print(error_msg, "ERROR")
             await log_error(error_msg)
-            await free_pins()
+            await free_pins_lora()
             for _ in range(10):
                 await asyncio.sleep(1)
         loop_runtime = (time.ticks_ms() - loop_start_time) // 1000
