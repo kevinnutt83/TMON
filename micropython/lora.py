@@ -4,7 +4,7 @@ def print_remote_nodes():
     import settings
     remote_info = getattr(settings, 'REMOTE_NODE_INFO', {})
     for node_id, node_data in remote_info.items():
-        print(f"[REMOTE NODE] {node_id}: {node_data}")
+        await debug_print(f"[REMOTE NODE] {node_id}: {node_data}", "REMOTE_NODE")
 
 # --- All imports at the top ---
 import ujson
@@ -428,7 +428,7 @@ async def log_error(error_msg):
             with open(settings.ERROR_LOG_FILE, 'a') as f:
                 f.write(log_line)
     except Exception as e:
-        print(f"[FATAL] Failed to log error: {e}")
+        await debug_print(f"[FATAL] Failed to log error: {e}", "ERROR")
     await asyncio.sleep(0)
 
 command_handlers = {
@@ -582,7 +582,7 @@ def _attach_spi_shim():
 
 async def init_lora():
     global lora
-    print('[DEBUG] init_lora start')
+    await debug_print('[DEBUG] init_lora start', 'LORA')
     try:
         # Defensive hardware prep: ensure CS high (inactive), RST pulsed, BUSY/IRQ as inputs
         try:
@@ -600,12 +600,12 @@ async def init_lora():
         except Exception:
             pass
 
-        print('[DEBUG] init_lora: BEFORE SX1262 instantiation (pins prepped)')
+        await debug_print('[DEBUG] init_lora: BEFORE SX1262 instantiation (pins prepped)', 'LORA')
         lora = SX1262(
             settings.SPI_BUS, settings.CLK_PIN, settings.MOSI_PIN, settings.MISO_PIN,
             settings.CS_PIN, settings.IRQ_PIN, settings.RST_PIN, settings.BUSY_PIN
         )
-        print('[DEBUG] init_lora: SX1262 object created')
+        await debug_print('[DEBUG] init_lora: SX1262 object created', 'LORA')
         # Ensure any leftover SPI is clean
         _deinit_spi_if_any(lora)
         # Guarded begin: retry and attempt to attach a machine.SPI instance if the driver
@@ -705,7 +705,7 @@ async def init_lora():
             return -999
 
         status = await _attempt_begin(lora, attempts=2)
-        print(f'[DEBUG] init_lora: lora.begin() returned {status}')
+        debug_print(f'[DEBUG] init_lora: lora.begin() returned {status}', 'LORA')
         # If chip not found, attempt diagnostics, re-instantiation with shim, reset and a single retry.
         if status == -2:
             await debug_print('lora: chip not found, performing diagnostics & retry', 'LORA')
@@ -809,7 +809,7 @@ async def init_lora():
                     led_status_flash('LORA_TX')
             except Exception:
                 pass
-            print('[DEBUG] init_lora: completed successfully')
+            await debug_print('[DEBUG] init_lora: completed successfully', 'LORA')
             return True
         if status != 0:
             error_msg = f"LoRa initialization failed with status: {status}"
@@ -832,7 +832,6 @@ async def init_lora():
             return False
     except Exception as e:
         error_msg = f"Exception in init_lora: {e}"
-        print(error_msg)
         await debug_print(error_msg, "ERROR")
         try:
             from oled import display_message
