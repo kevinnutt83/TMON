@@ -5,6 +5,20 @@ import os
 import settings
 from config_persist import write_text, read_json, set_flag, is_flag_set, write_json, read_text
 
+# --- ujson compatibility shim (MicroPython often lacks load()/dump()) ---
+try:
+    if not hasattr(ujson, "load"):
+        def _ujson_load(fp):
+            return ujson.loads(fp.read() or "")
+        ujson.load = _ujson_load  # type: ignore[attr-defined]
+    if not hasattr(ujson, "dump"):
+        def _ujson_dump(obj, fp):
+            fp.write(ujson.dumps(obj))
+        ujson.dump = _ujson_dump  # type: ignore[attr-defined]
+except Exception:
+    # best-effort; never break boot if filesystem/ports behave differently
+    pass
+
 # Persistent backlog file for unsent field data
 FIELD_DATA_BACKLOG = settings.LOG_DIR + '/field_data_backlog.log'
 UNIT_ID_FILE = settings.UNIT_ID_FILE if hasattr(settings, 'UNIT_ID_FILE') else (settings.LOG_DIR + '/unit_id.txt')

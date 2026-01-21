@@ -104,21 +104,21 @@ GPS_STATE_FILE = settings.LOG_DIR + '/gps.json'
 def load_remote_node_info():
     try:
         with open(REMOTE_NODE_INFO_FILE, 'r') as f:
-            settings.REMOTE_NODE_INFO = ujson.load(f)
+            settings.REMOTE_NODE_INFO = ujson.loads(f.read() or "{}")
     except Exception:
         settings.REMOTE_NODE_INFO = {}
 
     # Load remote sync schedule (base only)
     try:
         with open(REMOTE_SYNC_SCHEDULE_FILE, 'r') as f:
-            settings.REMOTE_SYNC_SCHEDULE = ujson.load(f)
+            settings.REMOTE_SYNC_SCHEDULE = ujson.loads(f.read() or "{}")
     except Exception:
         settings.REMOTE_SYNC_SCHEDULE = {}
 
     # Load last known GPS state
     try:
         with open(GPS_STATE_FILE, 'r') as f:
-            gps = ujson.load(f)
+            gps = ujson.loads(f.read() or "{}")
             try:
                 import sdata as _s
                 _s.gps_lat = gps.get('gps_lat')
@@ -148,14 +148,14 @@ load_remote_node_info()
 def save_remote_node_info():
     try:
         with open(REMOTE_NODE_INFO_FILE, 'w') as f:
-            ujson.dump(settings.REMOTE_NODE_INFO, f)
+            f.write(ujson.dumps(getattr(settings, 'REMOTE_NODE_INFO', {}) or {}))
     except Exception:
         pass
 
 def save_remote_sync_schedule():
     try:
         with open(REMOTE_SYNC_SCHEDULE_FILE, 'w') as f:
-            ujson.dump(settings.REMOTE_SYNC_SCHEDULE, f)
+            f.write(ujson.dumps(getattr(settings, 'REMOTE_SYNC_SCHEDULE', {}) or {}))
     except Exception:
         pass
 
@@ -182,13 +182,13 @@ def save_gps_state(lat=None, lng=None, alt=None, acc=None, ts=None):
         except Exception:
             pass
         with open(GPS_STATE_FILE, 'w') as f:
-            ujson.dump({
+            f.write(ujson.dumps({
                 'gps_lat': lat,
                 'gps_lng': lng,
                 'gps_alt_m': alt,
                 'gps_accuracy_m': acc,
                 'gps_last_fix_ts': ts
-            }, f)
+            }))
     except Exception:
         pass
 
@@ -1020,9 +1020,26 @@ async def connectLora():
                         # Persist to field data log so base later uploads remote telemetry via WPREST
                         try:
                             checkLogDirectory()
-                            fd_path = getattr(settings, 'FIELD_DATA_LOG', settings.LOG_DIR + '/field_data.log')
+                            fd_path = getattr(settings, 'FIELD_DATA_LOG', None)
+                            if not fd_path:
+                                fd_path = (getattr(settings, 'LOG_DIR', '/logs').rstrip('/') + '/field_data.log')
+
+                            safe_record = _sanitize_for_ujson(record)
+                            try:
+                                line = ujson.dumps(safe_record)
+                            except Exception:
+                                # Last-resort: persist something rather than erroring out
+                                try:
+                                    line = ujson.dumps({
+                                        'received_at': int(time.time()),
+                                        'source': 'remote',
+                                        'from_radio': True,
+                                        'raw': (txt[:512] if isinstance(txt, str) else str(txt)[:512]),
+                                    })
+                                except Exception:
+                                    line = '{"source":"remote","from_radio":true}'
                             with open(fd_path, 'a') as f:
-                                f.write(ujson.dumps(record) + '\n')
+                                f.write(line + '\n')
                         except Exception as e:
                             await debug_print(f"lora: failed to persist remote line: {e}", "ERROR")
                         # update in-memory remote info and write file
@@ -1060,20 +1077,20 @@ async def connectLora():
                                         try:
                                             # Wait for not busy before mode change
                                             busy_start = time.ticks_ms()
-                                            while lora.gpio.value() and time.ticks_diff(time.ticks_ms(), busy_start) < 2000:
+                                            while lora.gpio.value() and time.ticks_diff(time.ticks.ms(), busy_start) < 2000:
                                                 await asyncio.sleep(0.01)
                                             lora.setOperatingMode(lora.MODE_TX)
                                             lora.send(ujson.dumps(ack).encode('utf-8'))
                                             # Wait briefly for TX_DONE then restore RX mode
                                             ack_start = time.ticks_ms()
-                                            while time.ticks_diff(time.ticks_ms(), ack_start) < 2000:
+                                            while time.ticks_diff(time.ticks.ms(), ack_start) < 2000:
                                                 ev = lora._events()
                                                 if getattr(lora, 'TX_DONE', 0) and (ev & lora.TX_DONE):
                                                     break
                                                 await asyncio.sleep(0.01)
                                             # Wait for not busy after TX_DONE
                                             busy_start = time.ticks_ms()
-                                            while lora.gpio.value() and time.ticks_diff(time.ticks_ms(), busy_start) < 2000:
+                                            while lora.gpio.value() and time.ticks_diff(time.ticks.ms(), busy_start) < 2000:
                                                 await asyncio.sleep(0.01)
                                             lora.setOperatingMode(lora.MODE_RX)
                                         except Exception:
@@ -1289,7 +1306,7 @@ async def connectLora():
                         # wait for TX_DONE and optional ACK same as chunk flow
                         try:
                             tx_start = time.ticks_ms()
-                            while time.ticks_diff(time.ticks_ms(), tx_start) < 10000:
+                            while time.ticks_diff(time.ticks.ms(), tx_start) < 10000:
                                 try:
                                     ev = lora._events()
                                 except Exception:
@@ -1308,7 +1325,7 @@ async def connectLora():
                         # Wait for ACK
                         ack_wait_ms = int(getattr(settings, 'LORA_CHUNK_ACK_WAIT_MS', 1500))
                         start_wait = time.ticks_ms()
-                        while time.ticks_diff(time.ticks_ms(), start_wait) < ack_wait_ms:
+                        while time.ticks_diff(time.ticks.ms(), start_wait) < ack_wait_ms:
                             try:
                                 ev2 = lora._events()
                             except Exception:
@@ -1471,6 +1488,13 @@ async def connectLora():
                                             st_code = int(resp[0])
                                         except Exception:
                                             st_code = -999
+                                elif isinstance(resp, int):
+                                    st_code = resp
+                                else:
+                                    try:
+                                        st_code = int(resp)
+                                    except Exception:
+                                        st_code = -999
                             except Exception:
                                 st_code = -999
                             if st_code == 0:
@@ -1480,7 +1504,7 @@ async def connectLora():
                                 # Wait for TX_DONE and ACK
                                 try:
                                     tx_start = time.ticks_ms()
-                                    while time.ticks_diff(time.ticks_ms(), tx_start) < 10000:
+                                    while time.ticks_diff(time.ticks.ms(), tx_start) < 10000:
                                         try:
                                             ev = lora._events()
                                         except Exception:
@@ -1497,7 +1521,7 @@ async def connectLora():
                                 # Wait for ACK
                                 ack_wait_ms = int(getattr(settings, 'LORA_CHUNK_ACK_WAIT_MS', 1500))
                                 start_wait = time.ticks_ms()
-                                while time.ticks_diff(time.ticks_ms(), start_wait) < ack_wait_ms:
+                                while time.ticks_diff(time.ticks.ms(), start_wait) < ack_wait_ms:
                                     try:
                                         ev2 = lora._events()
                                     except Exception:
@@ -1557,8 +1581,6 @@ async def connectLora():
                                                     break
                                             except Exception:
                                                 pass
-                                    await asyncio.sleep(0.01)
-                                return True
                             else:
                                 await debug_print(f"lora: single-frame (post-compact) failed: {st_code}", "WARN")
                                 # If it's a negative hardware-like code, attempt guarded re-init and fall through to chunk flow
@@ -1643,7 +1665,7 @@ async def connectLora():
                                     # Wait for TX_DONE after successful send
                                     try:
                                         tx_start = time.ticks_ms()
-                                        while time.ticks_diff(time.ticks_ms(), tx_start) < 10000:
+                                        while time.ticks_diff(time.ticks.ms(), tx_start) < 10000:
                                             try:
                                                 ev = lora._events()
                                             except Exception:
@@ -1740,7 +1762,7 @@ async def connectLora():
                                     # Wait for TX_DONE and ACK
                                     try:
                                         tx_start = time.ticks_ms()
-                                        while time.ticks_diff(time.ticks_ms(), tx_start) < 10000:
+                                        while time.ticks_diff(time.ticks.ms(), tx_start) < 10000:
                                             try:
                                                 ev = lora._events()
                                             except Exception:
@@ -1757,7 +1779,7 @@ async def connectLora():
                                     # Wait for ACK
                                     ack_wait_ms = int(getattr(settings, 'LORA_CHUNK_ACK_WAIT_MS', 1500))
                                     start_wait = time.ticks_ms()
-                                    while time.ticks_diff(time.ticks_ms(), start_wait) < ack_wait_ms:
+                                    while time.ticks_diff(time.ticks.ms(), start_wait) < ack_wait_ms:
                                         try:
                                             ev2 = lora._events()
                                         except Exception:
@@ -1783,6 +1805,7 @@ async def connectLora():
                                                             if hasattr(lora, 'getSNR'):
                                                                 sdata.lora_snr = lora.getSNR()
                                                                 sdata.last_message = ujson.dumps(obj2)[:32]
+
                                                         except Exception:
                                                             pass
                                                         # Adopt next sync
@@ -1817,8 +1840,7 @@ async def connectLora():
                                                         break
                                                 except Exception:
                                                     pass
-                                        await asyncio.sleep(0.01)
-                                    break
+                            else:
                                 await debug_print(f"lora: last-resort single-frame failed ({st_last})", "ERROR")
                             await debug_print("lora: cannot shrink chunk size further", "ERROR")
                             break
@@ -1856,7 +1878,7 @@ async def connectLora():
 
                 ack_wait_ms = int(getattr(settings, 'LORA_CHUNK_ACK_WAIT_MS', 1500))
                 start_wait = time.ticks_ms()
-                while time.ticks_diff(time.ticks_ms(), start_wait) < ack_wait_ms:
+                while time.ticks_diff(time.ticks.ms(), start_wait) < ack_wait_ms:
                     try:
                         ev2 = lora._events()
                     except Exception:
@@ -2005,3 +2027,49 @@ async def connectLora():
                 lora = None
                 return False
     return True
+
+# Add near other helpers (module scope), before connectLora()
+def _sanitize_for_ujson(obj, depth=0):
+    """Make obj safe for MicroPython ujson.dumps()."""
+    try:
+        if depth > 6:
+            return None
+        if obj is None or isinstance(obj, (bool, int, str)):
+            return obj
+        if isinstance(obj, float):
+            # Prefer math.isfinite if available; otherwise handle NaN/Inf defensively
+            try:
+                import math
+                if hasattr(math, 'isfinite') and not math.isfinite(obj):
+                    return None
+            except Exception:
+                pass
+            try:
+                # NaN is the only float where x != x
+                if obj != obj:
+                    return None
+                # Handle +/-inf on ports where isfinite isn't present
+                inf = float('inf')
+                if obj == inf or obj == -inf:
+                    return None
+            except Exception:
+                return None
+            return obj
+        if isinstance(obj, (bytes, bytearray)):
+            try:
+                return obj.decode('utf-8', 'ignore')
+            except Exception:
+                return str(obj)
+        if isinstance(obj, dict):
+            out = {}
+            for k, v in obj.items():
+                try:
+                    out[str(k)] = _sanitize_for_ujson(v, depth + 1)
+                except Exception:
+                    pass
+            return out
+        if isinstance(obj, (list, tuple)):
+            return [_sanitize_for_ujson(x, depth + 1) for x in obj]
+        return str(obj)
+    except Exception:
+        return None
