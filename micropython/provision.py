@@ -49,6 +49,13 @@ def _attempt_endpoint(base_url, endpoint, params=None, json_body=None, timeout=R
                 return None, str(e)
     except Exception as e:
         return None, str(e)
+    finally:
+        # NEW: GC after endpoint attempt
+        try:
+            import gc
+            gc.collect()
+        except Exception:
+            pass
 
 def fetch_provisioning(unit_id=None, machine_id=None, base_url=None, force=False):
     """
@@ -200,6 +207,13 @@ def apply_settings(settings_doc):
                         pass
             except Exception:
                 pass
+    except Exception:
+        pass
+
+    # NEW: GC after applying/persisting provisioning settings
+    try:
+        import gc
+        gc.collect()
     except Exception:
         pass
 

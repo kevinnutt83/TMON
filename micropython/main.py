@@ -211,6 +211,12 @@ async def sample_task():
     # Shortened debug print; consider making it conditional on settings.DEBUG
     record_field_data()
     await debug_print(f"sample: lr={sdata.loop_runtime}s sr={sdata.script_runtime}s mem={sdata.free_mem}", "INFO")
+    # NEW: GC after sampling + record persistence
+    try:
+        from utils import maybe_gc
+        maybe_gc("sample_task", min_interval_ms=5000, mem_free_below=35 * 1024)
+    except Exception:
+        pass
     led_status_flash('INFO')  # Always flash LED for info
 
 async def periodic_field_data_task():
@@ -227,6 +233,12 @@ async def periodic_field_data_task():
                 await send_field_data_log()
         except Exception as e:
             await debug_print(f"sfd: task err {e}", "ERROR")
+        # NEW: GC after HTTP/upload attempts
+        try:
+            from utils import maybe_gc
+            maybe_gc("field_data_send", min_interval_ms=12000, mem_free_below=40 * 1024)
+        except Exception:
+            pass
         await asyncio.sleep(settings.FIELD_DATA_SEND_INTERVAL)
 
 async def periodic_command_poll_task():
@@ -243,6 +255,12 @@ async def periodic_command_poll_task():
                 await poll_device_commands()
             except Exception as e:
                 await debug_print(f"Command poll error: {e}", "ERROR")
+            # NEW: GC after command poll (JSON + handlers)
+            try:
+                from utils import maybe_gc
+                maybe_gc("cmd_poll", min_interval_ms=12000, mem_free_below=40 * 1024)
+            except Exception:
+                pass
         await asyncio.sleep(10)
 
 
@@ -509,6 +527,12 @@ async def periodic_uc_checkin_task():
                         await debug_print(f"Command poll error (checkin): {e}", "ERROR")
         except Exception as e:
             await debug_print(f"uc: checkin err {e}", "ERROR")
+        # NEW: GC after UC check-in loop (multiple HTTP calls + JSON)
+        try:
+            from utils import maybe_gc
+            maybe_gc("uc_checkin", min_interval_ms=15000, mem_free_below=45 * 1024)
+        except Exception:
+            pass
         await asyncio.sleep(interval)
 
 async def startup():
@@ -671,7 +695,6 @@ async def main():
             except Exception:
                 pass
 
-            # ...existing code...
             await asyncio.sleep(10)
 
             # CHANGED: runGC every 300s at end of loop

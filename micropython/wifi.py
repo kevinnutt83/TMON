@@ -9,6 +9,13 @@ import sdata
 
 gc.enable()
 
+# --- GC: best-effort cleanup after module import / heavy init ---
+try:
+    import gc
+    gc.collect()
+except Exception:
+    pass
+
 # Inserted: lazy settings accessor must exist before use
 _settings_mod = None
 def get_settings():

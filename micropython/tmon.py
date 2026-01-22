@@ -1,6 +1,13 @@
 # Firmware Version: v2.06.0
 from utils import debug_print
 
+# --- GC: best-effort cleanup after module import / heavy init ---
+try:
+    import gc
+    gc.collect()
+except Exception:
+    pass
+
 async def frostwatchCheck():
     await debug_print(f"Frostwatch Checks", "FROSTWATCH")
 

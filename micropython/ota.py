@@ -50,6 +50,8 @@ async def _sleep(seconds):
 import settings
 from config_persist import write_text
 from utils import debug_print
+# NEW: GC helper
+from utils import maybe_gc
 import ujson as json
 import os
 import binascii as _binascii
@@ -121,6 +123,11 @@ async def check_for_update():
             await debug_print(f'ota: ver fetch {status}', 'ERROR')
         try:
             resp.close()
+        except Exception:
+            pass
+        # NEW: GC after HTTP response handling
+        try:
+            maybe_gc("ota_check_for_update", min_interval_ms=8000, mem_free_below=45 * 1024)
         except Exception:
             pass
     except Exception as e:
@@ -231,6 +238,11 @@ async def apply_pending_update():
                     try:
                         manifest = json.loads(body)
                         manifest_fetched = True
+                        # NEW: GC after manifest parse/persist
+                        try:
+                            maybe_gc("ota_manifest_loaded", min_interval_ms=3000, mem_free_below=55 * 1024)
+                        except Exception:
+                            pass
                         # persist manifest for analysis
                         try:
                             mpath = getattr(settings, 'LOG_DIR','/logs').rstrip('/') + '/ota_manifest.json'
@@ -437,6 +449,11 @@ async def apply_pending_update():
 
                     comp_hash = _ub.hexlify(h.digest()).decode().lower()
                     await debug_print(f'OTA: downloaded {name} size={total} computed_sha256={comp_hash}', 'OTA')
+                    # NEW: GC after hashing large buffers/file ops
+                    try:
+                        maybe_gc(f"ota_file_hashed:{name}", min_interval_ms=2000, mem_free_below=60 * 1024)
+                    except Exception:
+                        pass
 
                     # If manifest provided expected hash, compare
                     if expected_hex:
@@ -517,6 +534,11 @@ async def apply_pending_update():
         except Exception:
             pass
         await debug_print('OTA: apply completed', 'OTA')
+        # NEW: GC after OTA apply completes (before returning to loops)
+        try:
+            maybe_gc("ota_apply_done", min_interval_ms=1000, mem_free_below=60 * 1024)
+        except Exception:
+            pass
         return True
     except Exception as e:
         await debug_print(f'ota: apply exc: {e}', 'ERROR')

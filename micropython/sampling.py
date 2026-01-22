@@ -100,7 +100,12 @@ async def sampleBME280():
                 finally:
                     # Help GC release the bus reference
                     sensor.i2c = None
-            # Optionally, re-initialize LoRa here if needed for next operation
+            # NEW: GC after BME280 sampling and bus cleanup
+            try:
+                from utils import maybe_gc
+                maybe_gc("sample_bme280", min_interval_ms=3000, mem_free_below=50 * 1024)
+            except Exception:
+                pass
         finally:
             _s.sampling_active = False
 

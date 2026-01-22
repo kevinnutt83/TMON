@@ -42,6 +42,8 @@ except ImportError:
     except ImportError:
         requests = None
 from utils import free_pins_lora, checkLogDirectory, debug_print, TMON_AI, safe_run, led_status_flash, write_lora_log, persist_unit_id
+# NEW: GC helper (throttled)
+from utils import maybe_gc
 from relay import toggle_relay
 try:
     from encryption import chacha20_encrypt, derive_nonce
@@ -989,11 +991,15 @@ async def connectLora():
                                 if len(entry['parts']) == entry['total']:
                                     try:
                                         assembled = b''.join(entry['parts'][i] for i in range(1, entry['total'] + 1))
+                                        # NEW: GC after large join (reassembly)
+                                        try:
+                                            maybe_gc("lora_chunk_reassemble", min_interval_ms=3000, mem_free_below=45 * 1024)
+                                        except Exception:
+                                            pass
                                         try:
                                             assembled_obj = ujson.loads(assembled.decode('utf-8', 'ignore'))
                                         except Exception:
                                             assembled_obj = {'raw': assembled.decode('utf-8', 'ignore')}
-                                        # Replace payload with assembled and continue processing using existing branch
                                         payload = assembled_obj
                                         await debug_print(f"lora: assembled for {uid}", 'LORA')
                                     finally:
@@ -1002,12 +1008,9 @@ async def connectLora():
                                         except Exception:
                                             pass
                                 else:
-                                    # waiting for more parts; skip persistence until complete
-                                    # Was `continue` here (invalid outside loop) — return to caller instead.
                                     return True
                             except Exception as e:
                                 await debug_print(f"lora: chunk handling error: {e}", "ERROR")
-                                # Was `continue` here (invalid outside loop) — exit handler cleanly.
                                 return True
 
                         # existing processing logic: persist record etc.
@@ -1041,6 +1044,13 @@ async def connectLora():
                                 f.write(line + '\n')
                         except Exception as e:
                             await debug_print(f"lora: failed to persist remote line: {e}", "ERROR")
+
+                        # NEW: GC after write/JSON serialization (base RX hot path)
+                        try:
+                            maybe_gc("lora_base_rx_persist", min_interval_ms=6000, mem_free_below=45 * 1024)
+                        except Exception:
+                            pass
+
                         # update in-memory remote info and write file
                         try:
                             uid = record.get('unit_id') or record.get('unit') or record.get('name')
@@ -1617,7 +1627,7 @@ async def connectLora():
                                         busy = gpio.value() if gpio and hasattr(gpio, 'value') else False
                                         if not busy:
                                             break
-                                        if time.ticks_diff(time.ticks_ms(), busy_start) > 800:
+                                        if time.ticks_diff(time.ticks.ms(), busy_start) > 800:
                                             break
                                         await asyncio.sleep(0.01)
                                 except Exception:

@@ -12,6 +12,8 @@ except Exception:
 import settings
 from config_persist import read_json, write_json
 from utils import debug_print, persist_suspension_state
+# NEW: GC helper
+from utils import maybe_gc
 
 # Conservative allowlist: key -> coercion function
 def _to_bool(v):
@@ -150,66 +152,11 @@ def load_applied_settings_on_boot():
                         pass
             except Exception:
                 pass
-    except Exception:
-        pass
-
-def _post_command_confirm(payload):
-    """Best-effort: POST a command-complete / ack to the configured WP URL."""
-    try:
-        # import in-function to avoid circular deps on device
+        # NEW: GC after boot-time apply snapshot
         try:
-            import urequests as requests
-        except Exception:
-            import requests
-        wp_url = getattr(settings, 'WORDPRESS_API_URL', '') or ''
-        if not wp_url:
-            return False
-        headers = {'Content-Type': 'application/json'}
-        # Try primary endpoint
-        try:
-            resp = requests.post(wp_url.rstrip('/') + '/wp-json/tmon/v1/device/command-complete', headers=headers, json=payload, timeout=8)
-            ok = getattr(resp, 'status_code', 0) in (200, 201)
-            try:
-                if resp: resp.close()
-            except Exception:
-                pass
-            if ok:
-                return True
+            maybe_gc("settings_apply_boot", min_interval_ms=2000, mem_free_below=55 * 1024)
         except Exception:
             pass
-        # Fallback to legacy ack endpoint
-        try:
-            legacy = {'command_id': payload.get('job_id') or payload.get('command_id'), 'ok': payload.get('ok', False), 'result': payload.get('result','')}
-            resp2 = requests.post(wp_url.rstrip('/') + '/wp-json/tmon/v1/device/ack', headers=headers, json=legacy, timeout=8)
-            ok2 = getattr(resp2, 'status_code', 0) in (200, 201)
-            try:
-                if resp2: resp2.close()
-            except Exception:
-                pass
-            return ok2
-        except Exception:
-            return False
-    except Exception:
-        return False
-
-def _append_staged_audit(unit_id, action, details):
-    """Append an audit line to LOG_DIR/staged_settings_audit.log for traceability."""
-    try:
-        import utime as _t
-        ts = int(_t.time()) if hasattr(_t, 'time') else 0
-    except Exception:
-        ts = 0
-    try:
-        path = getattr(settings, 'LOG_DIR', '/logs').rstrip('/') + '/staged_settings_audit.log'
-        line = {'ts': ts, 'unit_id': str(unit_id), 'action': action, 'details': details}
-        try:
-            import ujson as _j
-            s = _j.dumps(line)
-        except Exception:
-            import json as _j
-            s = _j.dumps(line)
-        with open(path, 'a') as af:
-            af.write(s + '\n')
     except Exception:
         pass
 
@@ -283,6 +230,12 @@ async def apply_staged_settings_once():
         # Remove staged file to prevent re-apply
         try:
             os.remove(staged_path)
+        except Exception:
+            pass
+
+        # NEW: GC after apply + snapshot + delete staged
+        try:
+            maybe_gc("settings_apply_once", min_interval_ms=3000, mem_free_below=55 * 1024)
         except Exception:
             pass
 

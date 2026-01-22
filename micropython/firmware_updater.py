@@ -190,6 +190,13 @@ def download_and_apply_firmware(url, version_hint=None, target_path=None, chunk_
     # Compute SHA256 of downloaded file
     computed = compute_file_sha256(target_path)
 
+    # NEW: GC after file hash computation
+    try:
+        import gc
+        gc.collect()
+    except Exception:
+        pass
+
     # If expected_sha not known and manifest_url provided, try fetching manifest now
     if not expected_sha and manifest_url:
         try:
@@ -230,7 +237,13 @@ def download_and_apply_firmware(url, version_hint=None, target_path=None, chunk_
                 'error': 'hash_mismatch'
             }
 
-    # success
+    # NEW: GC on success path as well (post-IO)
+    try:
+        import gc
+        gc.collect()
+    except Exception:
+        pass
+
     return {'ok': True, 'path': target_path, 'size': total_written, 'sha256': computed, 'expected_sha': (expected_sha or None), 'manifest_checked': bool(manifest_checked)}
 
 # Export helper

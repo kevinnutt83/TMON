@@ -1281,28 +1281,70 @@ def enforce_log_caps(path: str):
 	except Exception:
 		pass
 
-# Lightweight background scheduler to avoid ImportError in main.py
-def start_background_tasks():
+# --- GC helpers (non-functional / non-logic change) ---
+try:
+    import gc as _gc
+except Exception:
+    _gc = None
+
+try:
+    import utime as _time
+except Exception:
     try:
-        import uasyncio as _a
-        # Avoid duplicate scheduling: use a simple guard flag in settings
-        if not hasattr(settings, '_BG_TASKS_STARTED'):
-            settings._BG_TASKS_STARTED = True
-            try:
-                _a.create_task(periodic_provision_check())
-            except Exception:
-                pass
-            try:
-                # Guard field-data send scheduler: only start when URL exists and role supports it
-                wp_url = str(getattr(settings, 'WORDPRESS_API_URL', '')).strip()
-                role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
-                if wp_url and role in ('base', 'wifi', 'remote'):
-                    _a.create_task(periodic_field_data_send())
-            except Exception:
-                pass
+        import time as _time
     except Exception:
-        # Silently ignore to keep boot path resilient
-        pass
+        _time = None
+
+_last_gc_ms = 0
+
+def gc_collect(reason: str = None):
+    """Force a GC collection (best-effort). Returns free mem if available, else None."""
+    try:
+        if not _gc:
+            return None
+        _gc.collect()
+        try:
+            return _gc.mem_free()
+        except Exception:
+            return None
+    except Exception:
+        return None
+
+def maybe_gc(reason: str = None, min_interval_ms: int = 8000, mem_free_below: int = None):
+    """Collect only if enough time passed and/or free mem is below a threshold."""
+    global _last_gc_ms
+    try:
+        if not _gc:
+            return None
+
+        do = False
+
+        # mem-based trigger
+        if mem_free_below is not None:
+            try:
+                if _gc.mem_free() < int(mem_free_below):
+                    do = True
+            except Exception:
+                pass
+
+        # time-based trigger
+        if not do and _time and hasattr(_time, "ticks_ms") and hasattr(_time, "ticks_diff"):
+            try:
+                now = _time.ticks_ms()
+                if _time.ticks_diff(now, _last_gc_ms) >= int(min_interval_ms):
+                    do = True
+                    _last_gc_ms = now
+            except Exception:
+                do = True
+        elif not do:
+            # fallback: if ticks_ms not available, allow occasional collects
+            do = True
+
+        if do:
+            return gc_collect(reason)
+    except Exception:
+        return None
+    return None
 
 # Ensure periodic_provision_check is exported for main.py import
 __all__ = [

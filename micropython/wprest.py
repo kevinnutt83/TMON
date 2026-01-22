@@ -784,3 +784,10 @@ async def heartbeat_ping():
         return code in (200, 201)
     except Exception:
         return False
+
+# --- GC: best-effort cleanup after module import / heavy init ---
+try:
+    import gc
+    gc.collect()
+except Exception:
+    pass

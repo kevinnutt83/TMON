@@ -500,6 +500,13 @@ async def display_message(message, display_time_s=0):
         else:
             if display_time_s and display_time_s > 0:
                 await asyncio.sleep(display_time_s)
+            # NEW: GC after message paging (helps after long strings / repeated UI updates)
+            try:
+                from utils import maybe_gc
+                maybe_gc("oled_display_message", min_interval_ms=5000, mem_free_below=45 * 1024)
+            except Exception:
+                pass
+
     # When done, leave override in place for a short period for smooth handoff; renderer clears when expired
     if not getattr(settings, 'DEBUG', False):
         await screen_off()
