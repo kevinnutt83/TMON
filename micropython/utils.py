@@ -1135,6 +1135,10 @@ async def periodic_provision_check():
                                 settings.UNIT_Name = unit_name
                             except Exception:
                                 pass
+                            try:
+                                persist_unit_name(unit_name)  # ensure UNIT_Name.txt is written (remotes too)
+                            except Exception:
+                                pass
                         if role_val:
                             try:
                                 settings.NODE_TYPE = role_val
