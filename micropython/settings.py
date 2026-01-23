@@ -121,7 +121,7 @@ CH1_RX_PIN = 5
 CH2_TX_PIN = 6
 CH2_RX_PIN = 7
 
-#Debug toggles
+#Debug toggles flags
 DEBUG = False
 DEBUG_SAMPLING = False
 DEBUG_BME280 = False
@@ -137,7 +137,15 @@ DEBUG_DISPLAY = False
 DEBUG_BASE_NODE = False
 DEBUG_REMOTE_NODE = False
 DEBUG_WIFI_NODE = False
+DEBUG_WPREST = False
+DEBUG_FIELD_DATA = False
 DEBUG_RS485 = False
+
+# Backwards-compatible aliases for older/alternate flag names used by debug_print/callsites
+DEBUG_WIFI = DEBUG_WIFI_CONNECT
+DEBUG_OLED = DEBUG_DISPLAY
+DEBUG_WP_REST = DEBUG_WPREST
+DEBUG_PROV = DEBUG_PROVISION
 
 # RS485 / Engine controller
 ENGINE_FORCE_DISABLED = True          # Temporary kill switch to disable engine control

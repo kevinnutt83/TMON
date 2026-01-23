@@ -243,10 +243,34 @@ def get_unix_time():
 
 async def debug_print(message, status):
     debug_flags = {
+        # sensors/telemetry
         'TEMP': getattr(settings, 'DEBUG_TEMP', False),
         'BAR': getattr(settings, 'DEBUG_BAR', False),
         'HUMID': getattr(settings, 'DEBUG_HUMID', False),
+        'BME280': getattr(settings, 'DEBUG_BME280', False),
+        'DHT11': getattr(settings, 'DEBUG_DHT11', False),
+        'SAMPLING': getattr(settings, 'DEBUG_SAMPLING', False),
+        'SAMPLE_': getattr(settings, 'DEBUG_SAMPLING', False),  # matches SAMPLE_TEMP/HUMID/BAR...
+
+        # connectivity / radio
         'LORA': getattr(settings, 'DEBUG_LORA', False),
+        'LORA_RX': getattr(settings, 'DEBUG_LORA', False),
+        'LORA_TX': getattr(settings, 'DEBUG_LORA', False),
+        'WIFI': getattr(settings, 'DEBUG_WIFI_CONNECT', False),
+        'WIFI_CONNECT': getattr(settings, 'DEBUG_WIFI_CONNECT', False),
+
+        # system subsystems
+        'OTA': getattr(settings, 'DEBUG_OTA', False),
+        'PROVISION': getattr(settings, 'DEBUG_PROVISION', False),
+        'DISPLAY': getattr(settings, 'DEBUG_DISPLAY', False),
+        'WPREST': getattr(settings, 'DEBUG_WPREST', False),
+        'FIELD_DATA': getattr(settings, 'DEBUG_FIELD_DATA', False),
+        'RS485': getattr(settings, 'DEBUG_RS485', False),
+
+        # node roles
+        'BASE_NODE': getattr(settings, 'DEBUG_BASE_NODE', False),
+        'REMOTE_NODE': getattr(settings, 'DEBUG_REMOTE_NODE', False),
+        'WIFI_NODE': getattr(settings, 'DEBUG_WIFI_NODE', False),
     }
     should_print = bool(getattr(settings, 'DEBUG', False))
     for key, enabled in debug_flags.items():
