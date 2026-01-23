@@ -723,6 +723,19 @@ class TMONAI:
 TMON_AI = TMONAI()
 
 # --- field data record + sender (restored) ---
+def append_field_data_entry(entry: dict):
+    """Append a JSON entry to FIELD_DATA_LOG using the standard path."""
+    try:
+        checkLogDirectory()
+        with open(settings.FIELD_DATA_LOG, 'a') as f:
+            f.write(ujson.dumps(entry) + '\n')
+        gc.collect()
+    except Exception as e:
+        try:
+            print(f"Error appending field data entry: {e}")
+        except Exception:
+            pass
+
 def record_field_data():
     """Append a minimal telemetry record for the device."""
     import sdata
@@ -786,11 +799,8 @@ def record_field_data():
     if getattr(settings, 'NODE_TYPE', 'base') == 'remote':
         return
 
-    checkLogDirectory()
     try:
-        with open(settings.FIELD_DATA_LOG, 'a') as f:
-            f.write(ujson.dumps(entry) + '\n')
-        gc.collect()
+        append_field_data_entry(entry)
     except Exception as e:
         print(f"Error recording field data: {e}")
 
@@ -1289,5 +1299,6 @@ __all__ = [
     'TMON_AI',
     'compute_bars',
     'is_http_allowed_for_node',
+    'append_field_data_entry',
 ]
 

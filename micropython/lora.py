@@ -1,6 +1,6 @@
 # Firmware Version: v2.06.0
 # Utility to print remote node info
-def print_remote_nodes():
+async def print_remote_nodes():
     import settings
     remote_info = getattr(settings, 'REMOTE_NODE_INFO', {})
     for node_id, node_data in remote_info.items():
@@ -23,7 +23,10 @@ except ImportError:
 try:
     from sx1262 import SX1262
 except ImportError:
-    SX1262 = None
+    try:
+        from lib.sx1262 import SX1262  # driver located in /lib
+    except ImportError:
+        SX1262 = None
 try:
     import sdata
     import settings
@@ -41,7 +44,7 @@ except ImportError:
         import requests
     except ImportError:
         requests = None
-from utils import free_pins_lora, checkLogDirectory, debug_print, TMON_AI, safe_run, led_status_flash, write_lora_log, persist_unit_id
+from utils import free_pins_lora, checkLogDirectory, debug_print, TMON_AI, safe_run, led_status_flash, write_lora_log, persist_unit_id, append_field_data_entry
 # NEW: GC helper (throttled)
 from utils import maybe_gc
 from relay import toggle_relay
@@ -250,7 +253,10 @@ async def check_suspend_remove():
 try:
     from sx1262 import SX1262
 except ImportError:
-    SX1262 = None
+    try:
+        from lib.sx1262 import SX1262
+    except ImportError:
+        SX1262 = None
 try:
     import uasyncio as asyncio
 except ImportError:
@@ -800,7 +806,7 @@ async def init_lora():
                 await display_message("LoRa Ready", 2)
             except Exception:
                 pass
-            print_remote_nodes()
+            await print_remote_nodes()
             # Ensure base starts in RX mode to listen for remotes
             try:
                 if getattr(settings, 'NODE_TYPE', 'base') == 'base' and lora is not None:
@@ -1019,6 +1025,11 @@ async def connectLora():
                             record.update(payload)
                         else:
                             record['data'] = payload
+                        try:
+                            safe_record = _sanitize_for_ujson(record)
+                            append_field_data_entry(safe_record)
+                        except Exception as e:
+                            await debug_print(f"lora: failed to persist remote line: {e}", "ERROR")
                         # Persist to field data log so base later uploads remote telemetry via WPREST
                         try:
                             checkLogDirectory()
@@ -1233,7 +1244,7 @@ async def connectLora():
                                     busy = gpio.value() if gpio and hasattr(gpio, 'value') else False
                                     if not busy:
                                         break
-                                    if time.ticks_diff(time.ticks_ms(), busy_start) > 400:
+                                    if time.ticks_diff(time.ticks.ms(), busy_start) > 400:
                                         break
                                     await asyncio.sleep(0.01)
                             except Exception:
