@@ -6,6 +6,13 @@ def print_remote_nodes():
     for node_id, node_data in remote_info.items():
         print(f"[REMOTE NODE] {node_id}: {node_data}")
 
+# Async helper to log remote nodes without blocking LoRa init
+async def print_remote_nodes_async():
+    try:
+        print_remote_nodes()
+    except Exception:
+        pass
+
 # --- All imports at the top ---
 import ujson
 import os
@@ -23,7 +30,10 @@ except ImportError:
 try:
     from sx1262 import SX1262
 except ImportError:
-    SX1262 = None
+    try:
+        from lib.sx1262 import SX1262  # fallback to lib path
+    except ImportError:
+        SX1262 = None
 try:
     import sdata
     import settings
@@ -41,7 +51,7 @@ except ImportError:
         import requests
     except ImportError:
         requests = None
-from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run, led_status_flash, write_lora_log, persist_unit_id
+from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run, led_status_flash, write_lora_log, persist_unit_id, append_field_data_entry
 from relay import toggle_relay
 try:
     from encryption import chacha20_encrypt, derive_nonce
@@ -248,7 +258,10 @@ async def check_suspend_remove():
 try:
     from sx1262 import SX1262
 except ImportError:
-    SX1262 = None
+    try:
+        from lib.sx1262 import SX1262  # fallback to lib path
+    except ImportError:
+        SX1262 = None
 try:
     import uasyncio as asyncio
 except ImportError:
@@ -798,7 +811,7 @@ async def init_lora():
                 await display_message("LoRa Ready", 2)
             except Exception:
                 pass
-            print_remote_nodes()
+            await print_remote_nodes_async()
             # Ensure base starts in RX mode to listen for remotes
             try:
                 if getattr(settings, 'NODE_TYPE', 'base') == 'base' and lora is not None:
@@ -1019,10 +1032,8 @@ async def connectLora():
                             record['data'] = payload
                         # Persist to field data log so base later uploads remote telemetry via WPREST
                         try:
-                            checkLogDirectory()
-                            fd_path = getattr(settings, 'FIELD_DATA_LOG', settings.LOG_DIR + '/field_data.log')
-                            with open(fd_path, 'a') as f:
-                                f.write(ujson.dumps(record) + '\n')
+                            safe_record = record
+                            append_field_data_entry(safe_record)
                         except Exception as e:
                             await debug_print(f"lora: failed to persist remote line: {e}", "ERROR")
                         # update in-memory remote info and write file
@@ -1451,7 +1462,7 @@ async def connectLora():
                                 async with pin_lock:
                                     ok_init = await init_lora()
                                 if not ok_init:
-                                    await debug_print("lora: re-init failed for single-frame send (post-compact)", "ERROR")
+                                    await debug_print("lora: post-compact re-init failed, aborting", "ERROR")
                                     return False
                             try:
                                 resp = lora.send(data)
@@ -1557,8 +1568,6 @@ async def connectLora():
                                                     break
                                             except Exception:
                                                 pass
-                                    await asyncio.sleep(0.01)
-                                return True
                             else:
                                 await debug_print(f"lora: single-frame (post-compact) failed: {st_code}", "WARN")
                                 # If it's a negative hardware-like code, attempt guarded re-init and fall through to chunk flow
@@ -1817,32 +1826,17 @@ async def connectLora():
                                                         break
                                                 except Exception:
                                                     pass
-                                        await asyncio.sleep(0.01)
-                                    break
-                                await debug_print(f"lora: last-resort single-frame failed ({st_last})", "ERROR")
-                            await debug_print("lora: cannot shrink chunk size further", "ERROR")
-                            break
-                        raw_chunk_size = new_raw
-                        await debug_print(f"lora: shrinking raw_chunk to {raw_chunk_size} (attempt {shrink_attempt}/{max_shrinks})", "LORA")
-                        # short backoff before retrying with smaller chunks
-                        await asyncio.sleep(0.12 + random.random() * 0.08)
-                        continue
-                    # Success path
-                    sent_ok = True
-
-                if not sent_ok:
-                    await debug_print("lora: chunk send failed after shrink attempts", "ERROR")
-                    write_lora_log("Remote chunk send failed after shrink attempts", 'ERROR')
+                                            await debug_print(f"lora: next {getattr(settings, 'nextLoraSync', '')}", 'LORA')
+                                            write_lora_log(f"Remote stored next sync epoch: {getattr(settings, 'nextLoraSync', '')}", 'INFO')
+                                            led_status_flash('SUCCESS')
+                        except Exception:
+                            pass
+                    # If we reached here, chunked send failed after retries: treat as re-init trigger
+                    await debug_print("lora: chunk send failed after retries, re-initing radio", "ERROR")
                     try:
+                        if hasattr(lora, 'spi') and lora.spi:
+                            lora.spi.deinit()
                         _last_tx_exception_ms = time.ticks_ms()
-                    except Exception:
-                        pass
-                    try:
-                        if lora and hasattr(lora, 'spi') and lora.spi:
-                            try:
-                                lora.spi.deinit()
-                            except Exception:
-                                pass
                     except Exception:
                         pass
                     lora = None
