@@ -301,6 +301,7 @@ async def debug_print(message, status):
         print(f"[{timestamp}] [{status}] {safe_msg}")
     await asyncio.sleep(0)
 
+    
 # --- LED support (restored) ---
 color_to_duty = {
     'white': (255, 255, 255),
@@ -322,7 +323,41 @@ color_to_duty = {
     'olive': (128, 128, 0),
     'navy': (0, 0, 128),
     'grey': (128, 128, 128),
-    'black': (0, 0, 0)
+    'black': (0, 0, 0),
+    'light_blue': (173, 216, 230),  # Light blue (sky-like)
+    'dark_blue': (0, 0, 139),      # Dark blue (close to navy but deeper)
+    'light_green': (144, 238, 144),  # Light green
+    'dark_green': (0, 100, 0),     # Dark green (forest)
+    'light_yellow': (255, 255, 224),  # Light yellow (lemon chiffon)
+    'dark_red': (139, 0, 0),       # Dark red (crimson-like)
+    'indigo': (75, 0, 130),        # Indigo
+    'violet': (238, 130, 238),     # Violet
+    'turquoise': (64, 224, 208),   # Turquoise
+    'gold': (255, 215, 0),         # Gold
+    'silver': (192, 192, 192),     # Silver (light gray)
+    'coral': (255, 127, 80),       # Coral
+    'salmon': (250, 128, 114),     # Salmon
+    'khaki': (240, 230, 140),      # Khaki
+    'sienna': (160, 82, 45),       # Sienna (earthy brown)
+    'chocolate': (210, 105, 30),   # Chocolate brown
+    'tan': (210, 180, 140),        # Tan
+    'plum': (221, 160, 221),       # Plum (light purple)
+    'orchid': (218, 112, 214),     # Orchid
+    'azure': (240, 255, 255),      # Azure (light cyan)
+    'mint': (189, 252, 201),       # Mint green
+    'chartreuse': (127, 255, 0),   # Chartreuse (alternative to your lime)
+    'fuchsia': (255, 0, 255),      # Fuchsia (same as magenta, but added for completeness)
+    'crimson': (220, 20, 60),      # Crimson
+    'aqua': (0, 255, 255),         # Aqua (same as cyan)
+    'sky_blue': (135, 206, 235),   # Sky blue
+    'forest_green': (34, 139, 34), # Forest green
+    'dark_orange': (255, 140, 0),  # Dark orange
+    'hot_pink': (255, 105, 180),   # Hot pink
+    'dark_purple': (148, 0, 211),  # Dark violet/purple
+    'light_grey': (211, 211, 211), # Light gray
+    'dark_grey': (169, 169, 169),  # Dark gray
+    'ivory': (255, 255, 240),      # Ivory (off-white)
+    'snow': (255, 250, 250)        # Snow (another off-white)
 }
 
 led_lock = asyncio.Lock()
@@ -377,24 +412,47 @@ async def flash_led(num_flashes, interval, lightColor, pattern):
 def led_status_flash(status):
     import uasyncio as _a
     color_map = {
-        'INFO': 'green',
+        'INFO': 'light_green',
         'SUCCESS': 'green',
-        'OK': 'green',
-        'WARN': 'orange',
+        'OK': 'lime',
+        'WARN': 'light_yellow',
         'WARNING': 'orange',
         'ERROR': 'red',
         'WIFI': 'blue',
-        'LORA_RX': 'purple',
+        'REMOTE_NODE': 'purple',
+        'BASE_NODE': 'lavender',
+        'WIFI_NODE': 'indigo',
+        'LORA_RX': 'violet',
         'LORA_TX': 'teal',
         'SAMPLE_TEMP': 'magenta',
         'SAMPLE_HUMID': 'cyan',
-        'SAMPLE_BAR': 'blue',
+        'SAMPLE_BAR': 'sky_blue',
+        'RELAY_1_ON': 'turquoise',
+        'RELAY_2_ON': 'gold',
+        'RELAY_3_ON': 'coral',
+        'RELAY_4_ON': 'salmon',
+        'RELAY_5_ON': 'khaki',
+        'RELAY_6_ON': 'sienna',
+        'RELAY_7_ON': 'chocolate',
+        'RELAY_8_ON': 'tan',
+        'RELAY_1_OFF': 'plum',
+        'RELAY_2_OFF': 'orchid',
+        'RELAY_3_OFF': 'azure',
+        'RELAY_4_OFF': 'mint',
+        'RELAY_5_OFF': 'chartreuse',
+        'RELAY_6_OFF': 'crimson',
+        'RELAY_7_OFF': 'dark_orange',
+        'RELAY_8_OFF': 'hot_pink',
+        'RS485_TX': 'dark_purple',
+        'RS485_RX': 'light_blue',
+        'WPREST': 'dark_blue'
     }
     color = color_map.get(status, 'white')
     try:
         _a.create_task(flash_led(1, 0.2, color, 'short'))
     except Exception:
         pass
+    
 
 # --- error + lora logs (restored) ---
 async def log_error(error_msg, context=None):
@@ -1228,3 +1286,4 @@ __all__ = [
     'compute_bars',
     'is_http_allowed_for_node',
 ]
+
