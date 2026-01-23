@@ -271,6 +271,11 @@ async def debug_print(message, status):
         'BASE_NODE': getattr(settings, 'DEBUG_BASE_NODE', False),
         'REMOTE_NODE': getattr(settings, 'DEBUG_REMOTE_NODE', False),
         'WIFI_NODE': getattr(settings, 'DEBUG_WIFI_NODE', False),
+        
+        # Info, Error, and Warning
+        'INFO': getattr(settings, 'DEBUG', False),
+        'WARN': getattr(settings, 'DEBUG', False),
+        'ERROR': getattr(settings, 'DEBUG', False),
     }
     should_print = bool(getattr(settings, 'DEBUG', False))
     for key, enabled in debug_flags.items():
