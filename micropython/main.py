@@ -9,7 +9,7 @@ from debug import info as dbg_info, warn as dbg_warn, error as dbg_error
 import sdata
 import utime as time
 from sampling import sampleEnviroment
-from utils import free_pins_lora, checkLogDirectory, debug_print, periodic_field_data_send, load_persisted_unit_id, persist_unit_id, get_machine_id, periodic_provision_check
+from utils import free_pins_lora, checkLogDirectory, debug_print, load_persisted_unit_name, periodic_field_data_send, load_persisted_unit_id, persist_unit_id, get_machine_id, periodic_provision_check
 from lora import connectLora, log_error, TMON_AI
 from ota import check_for_update, apply_pending_update
 from oled import update_display, display_message
@@ -57,6 +57,15 @@ try:
     if stored_uid and str(stored_uid) != str(settings.UNIT_ID):
         settings.UNIT_ID = str(stored_uid)
     print(f"[BOOT] Loaded persisted UNIT_ID: {settings.UNIT_ID}")
+except Exception:
+    pass
+
+# Load persisted UNIT_Name mapping if available
+try:
+    stored_uname = load_persisted_unit_name()
+    if stored_uname and str(stored_uname) != str(settings.UNIT_Name):
+        settings.UNIT_Name = str(stored_uname)
+    print(f"[BOOT] Loaded persisted UNIT_Name: {settings.UNIT_Name}")
 except Exception:
     pass
 
