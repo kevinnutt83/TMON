@@ -508,7 +508,7 @@ async def display_message(message, display_time_s=0):
                 pass
 
     # When done, leave override in place for a short period for smooth handoff; renderer clears when expired
-    if not getattr(settings, 'DEBUG', False):
+    if not getattr(settings, 'ENABLE_OLED', False):
         await screen_off()
 
 async def display_time(display_time_s=0):
