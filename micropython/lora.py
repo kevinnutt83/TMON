@@ -60,6 +60,10 @@ except Exception:
     chacha20_encrypt = None
     derive_nonce = None
 
+# Add decrypt since ChaCha20 is symmetric
+def chacha20_decrypt(key, nonce, aad, ciphertext):
+    return chacha20_encrypt(key, nonce, aad, ciphertext)
+
 # Guarded import of optional wprest helpers to avoid ImportError on devices that don't expose all names.
 try:
     import wprest as _wp
@@ -897,6 +901,23 @@ _MAX_INIT_FAILS = 3
 _last_tx_exception_ms = 0
 _TX_EXCEPTION_COOLDOWN_MS = 2500  # avoid tight re-init loops on persistent TX failures
 
+# Remote counters for HMAC replay protection (base only)
+def _load_remote_counters():
+    path = getattr(settings, 'LORA_REMOTE_COUNTERS_FILE', settings.LOG_DIR + '/remote_ctr.json')
+    try:
+        with open(path, 'r') as f:
+            return ujson.load(f)
+    except Exception:
+        return {}
+
+def _save_remote_counters(ctrs):
+    path = getattr(settings, 'LORA_REMOTE_COUNTERS_FILE', settings.LOG_DIR + '/remote_ctr.json')
+    try:
+        with open(path, 'w') as f:
+            ujson.dump(ctrs, f)
+    except Exception:
+        pass
+
 async def connectLora():
     """Non-blocking LoRa routine called frequently from lora_comm_task.
     - Initializes radio once (with retry cap)
@@ -998,6 +1019,12 @@ async def connectLora():
                     await debug_print(f"lora: _readData exception: {rexc}", "ERROR")
                     msg_bytes = None; err = -1
                 if err == 0 and msg_bytes:
+                    # Capture RSSI/SNR on successful RX (update sdata for OLED)
+                    try:
+                        sdata.lora_SigStr = lora.getRSSI()
+                        sdata.lora_snr = lora.getSNR()
+                    except Exception:
+                        pass
                     try:
                         # Normalize to text for JSON parsing (bytes -> str)
                         if isinstance(msg_bytes, (bytes, bytearray)):
