@@ -967,8 +967,8 @@ async def connectLora():
     max_shrinks = 4
     max_shrink_retries = 3
     jitter_base = 0.02
-    max_payload = int(getattr(settings, 'LORA_MAX_PAYLOAD', 240) or 240)
-    raw_chunk_size = 120
+    max_payload = int(getattr(settings, 'LORA_MAX_PAYLOAD', 220) or 220)  # Reduced to 220 for safety
+    raw_chunk_size = 80  # Reduced to avoid CRC errors
     transient_codes = [86, 87, 89]
     shrink_codes = [-4]
     # TX/RX flags: evaluate early and reuse (safe even if SX1262 missing)
@@ -1015,7 +1015,9 @@ async def connectLora():
             if RX_DONE_FLAG is not None and (ev & RX_DONE_FLAG):
                 try:
                     msg_bytes, err = lora._readData(0)
-                    await debug_print(f"lora: RX len={len(msg_bytes)} err={err}", "LORA")
+                    await debug_print(f"lora: RX len={len(msg_bytes if msg_bytes else b'')} err={err}", "LORA")
+                    if err != 0:
+                        await debug_print(f"lora: RX err={err} discarded", "LORA")
                 except Exception as rexc:
                     await debug_print(f"lora: _readData exception: {rexc}", "ERROR")
                     msg_bytes = None; err = -1
@@ -1210,12 +1212,14 @@ async def connectLora():
                                             while lora.gpio.value() and time.ticks_diff(time.ticks_ms(), busy_start) < 2000:
                                                 await asyncio.sleep(0.01)
                                             lora.setOperatingMode(lora.MODE_RX)
+                                            sdata.lora_last_tx_ts = time.time()
                                         except Exception:
                                             # try a more direct sequence if the driver has explicit tx API
                                             try:
                                                 lora.setOperatingMode(lora.MODE_TX)
                                                 lora.send(ujson.dumps(ack).encode('utf-8'))
                                                 lora.setOperatingMode(lora.MODE_RX)
+                                                sdata.lora_last_tx_ts = time.time()
                                             except Exception:
                                                 pass
                                     except Exception:
@@ -1317,8 +1321,10 @@ async def connectLora():
                 else:
                     data = ujson.dumps(payload).encode('utf-8')
 
+                await debug_print(f"lora: TX data len={len(data)}", "LORA")
+
                 # NEW: only chunk if data actually exceeds safe payload size
-                max_payload = int(getattr(settings, 'LORA_MAX_PAYLOAD', 240) or 240)
+                max_payload = int(getattr(settings, 'LORA_MAX_PAYLOAD', 220) or 220)  # Reduced for safety
 
                 # Quick single-frame send when payload fits — avoids tiny chunk floods for modest payloads
                 if len(data) <= max_payload:
@@ -1532,7 +1538,7 @@ async def connectLora():
                     raw_chunk_size = max(min_raw, int((avail_b64 * 3) // 4)) if avail_b64 > 0 else min_raw
                 except Exception:
                     # Fallback conservative size
-                    raw_chunk_size = max(min_raw, int(getattr(settings, 'LORA_CHUNK_RAW_BYTES', 50)))
+                    raw_chunk_size = max(min_raw, int(getattr(settings, 'LORA_CHUNK_RAW_BYTES', 80)))
 
                 # Helper to compact payload to minimal telemetry shapes
                 def _compact_payload_to_minimal(p):
