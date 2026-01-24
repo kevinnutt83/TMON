@@ -968,7 +968,7 @@ async def connectLora():
     max_shrink_retries = 3
     jitter_base = 0.02
     max_payload = int(getattr(settings, 'LORA_MAX_PAYLOAD', 240) or 240)
-    raw_chunk_size = 50
+    raw_chunk_size = 120
     transient_codes = [86, 87, 89]
     shrink_codes = [-4]
     # TX/RX flags: evaluate early and reuse (safe even if SX1262 missing)
@@ -1015,6 +1015,7 @@ async def connectLora():
             if RX_DONE_FLAG is not None and (ev & RX_DONE_FLAG):
                 try:
                     msg_bytes, err = lora._readData(0)
+                    await debug_print(f"lora: RX len={len(msg_bytes)} err={err}", "LORA")
                 except Exception as rexc:
                     await debug_print(f"lora: _readData exception: {rexc}", "ERROR")
                     msg_bytes = None; err = -1
@@ -1032,6 +1033,7 @@ async def connectLora():
                             txt = msg_bytes.decode('utf-8', 'ignore')
                         else:
                             txt = str(msg_bytes)
+                        await debug_print(f"lora: RX txt={txt}", "LORA")
                         try:
                             payload = ujson.loads(txt)
                         except Exception:
@@ -1298,7 +1300,8 @@ async def connectLora():
                 except Exception:
                     pass
 
-                if getattr(settings, 'LORA_ENCRYPT_ENABLED', False) and chacha20_encrypt and derive_nonce:
+                # Disable encryption to avoid chunking for debugging
+                if False and getattr(settings, 'LORA_ENCRYPT_ENABLED', False) and chacha20_encrypt and derive_nonce:
                     try:
                         secret = getattr(settings, 'LORA_ENCRYPT_SECRET', '')
                         key = secret.encode()
@@ -1708,6 +1711,7 @@ async def connectLora():
                                     await asyncio.sleep(0.08)
 
                     for idx, chunk in enumerate(parts, start=1):
+                        await debug_print(f"lora: sending chunk {idx}/{total}", "LORA")
                         attempt = 0
                         chunk_sent = False
                         while attempt < max_shrink_retries and not chunk_sent:
@@ -1915,6 +1919,7 @@ async def connectLora():
                                                         try:
                                                             if hasattr(lora, 'getRSSI'):
                                                                 sdata.lora_SigStr = lora.getRSSI()
+                                                                sdata.lora_last_rx_ts = time.time()
                                                             if hasattr(lora, 'getSNR'):
                                                                 sdata.lora_snr = lora.getSNR()
                                                                 sdata.last_message = ujson.dumps(obj2)[:32]
