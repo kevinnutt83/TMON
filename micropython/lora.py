@@ -1023,6 +1023,7 @@ async def connectLora():
                     try:
                         sdata.lora_SigStr = lora.getRSSI()
                         sdata.lora_snr = lora.getSNR()
+                        sdata.lora_last_rx_ts = time.time()
                     except Exception:
                         pass
                     try:
@@ -1079,21 +1080,86 @@ async def connectLora():
                                 gc.collect()
                                 return True
 
+                        # Decrypt if encrypted
+                        if 'enc' in payload and payload['enc'] == 1:
+                            try:
+                                secret = getattr(settings, 'LORA_ENCRYPT_SECRET', '')
+                                key = secret.encode()
+                                if len(key) < 32:
+                                    key = (key + b'\x00'*32)[:32]
+                                nonce_str = payload.get('nonce', '')
+                                nonce = bytes(int(nonce_str[i:i+2], 16) for i in range(0, len(nonce_str), 2))
+                                ct_str = payload.get('ct', '')
+                                ct = bytes(int(ct_str[i:i+2], 16) for i in range(0, len(ct_str), 2))
+                                pt = chacha20_decrypt(key, nonce, 1, ct)
+                                inner = ujson.loads(pt.decode('utf-8', 'ignore'))
+                                payload = inner
+                            except Exception as de:
+                                await debug_print(f"lora: decrypt failed: {de}", "ERROR")
+                                return True  # discard
+
+                        # Verify HMAC if enabled
+                        if settings.LORA_HMAC_ENABLED:
+                            if 'sig' not in payload:
+                                if settings.LORA_HMAC_REJECT_UNSIGNED:
+                                    await debug_print("lora: unsigned payload rejected", "WARN")
+                                    return True
+                            else:
+                                try:
+                                    secret = getattr(settings, 'LORA_HMAC_SECRET', '').encode()
+                                    ctr = payload.get('ctr', 0)
+                                    mac_src = b"|".join([
+                                        secret,
+                                        str(payload.get('unit_id', '')).encode(),
+                                        str(payload.get('ts', '')).encode(),
+                                        str(ctr).encode()
+                                    ])
+                                    import uhashlib
+                                    h = uhashlib.sha256(mac_src)
+                                    import ubinascii
+                                    expected = ubinascii.hexlify(h.digest())[:32].decode()
+                                    if expected != payload['sig']:
+                                        await debug_print("lora: invalid signature", "ERROR")
+                                        return True
+                                    # Replay protect
+                                    if settings.LORA_HMAC_REPLAY_PROTECT:
+                                        ctrs = _load_remote_counters()
+                                        uid = str(payload.get('unit_id', ''))
+                                        last = ctrs.get(uid, 0)
+                                        if ctr <= last:
+                                            await debug_print("lora: replay detected", "ERROR")
+                                            return True
+                                        ctrs[uid] = ctr
+                                        _save_remote_counters(ctrs)
+                                    # Clean up
+                                    del payload['sig']
+                                    del payload['ctr']
+                                except Exception as ve:
+                                    await debug_print(f"lora: hmac verify failed: {ve}", "ERROR")
+                                    return True
+
                         # existing processing logic: persist record etc.
-                        record = {'received_at': int(time.time()), 'source': 'remote', 'from_radio': True}
-                        if isinstance(payload, dict):
-                            record.update(payload)
-                        else:
-                            record['data'] = payload
+                        record = {
+                            'timestamp': int(time.time()),
+                            'remote_timestamp': payload.get('ts'),
+                            'cur_temp_f': payload.get('t_f'),
+                            'cur_temp_c': payload.get('t_c'),
+                            'cur_humid': payload.get('hum'),
+                            'cur_bar_pres': payload.get('bar'),
+                            'sys_voltage': payload.get('v'),
+                            'free_mem': payload.get('fm'),
+                            'remote_unit_id': payload.get('unit_id'),
+                            'node_type': 'remote',
+                            'source': 'remote'
+                        }
                         # Persist to field data log so base later uploads remote telemetry via WPREST
                         try:
-                            safe_record = record
-                            append_field_data_entry(safe_record)
+                            append_field_data_entry(record)
                         except Exception as e:
                             await debug_print(f"lora: failed to persist remote line: {e}", "ERROR")
                         # update in-memory remote info and write file
                         try:
-                            uid = record.get('unit_id') or record.get('unit') or record.get('name')
+                            uid = record['remote_unit_id']
                             if uid:
                                 settings.REMOTE_NODE_INFO = getattr(settings, 'REMOTE_NODE_INFO', {})
                                 settings.REMOTE_NODE_INFO[str(uid)] = {'last_seen': int(time.time()), 'last_payload': record}
