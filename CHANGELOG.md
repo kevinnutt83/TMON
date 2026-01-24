@@ -2,7 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
-## v2.04.0 — Unreleased
+## v2.06.1 — 2025-01-XX
+- Documentation: Comprehensive README overhaul for micropython/ and root README.md.
+  - Accurate device role descriptions (base, wifi, remote).
+  - Full configuration reference for settings.py (identity, WiFi, LoRa, sensors, relays, OLED, OTA, logging).
+  - Runtime task table with intervals and descriptions.
+  - LED status color reference.
+  - API endpoint documentation for TMON Admin and Unit Connector.
+  - Troubleshooting section with common issues and debug toggles.
+  - Security notes for authentication, encryption, and OTA integrity.
+- Firmware: Manifest updated to v2.06.1 with current file hashes.
+- Firmware: GC calls added at strategic points (OTA, sampling, field data, provisioning) to reduce memory pressure.
+- Firmware: LoRa single-frame send path with bounded retries before falling back to chunked transmission.
+- Firmware: OLED header shows LoRa connection based on recent activity timestamps (lora_last_rx_ts, lora_last_tx_ts).
+- Firmware: Body override mechanism in OLED for display_message to avoid render conflicts.
+
+## v2.06.0 — 2025-01-XX
+- Firmware version bump to v2.06.0.
+- LoRa: Improved SPI shim attachment for broader hardware compatibility.
+- LoRa: Enhanced diagnostics on chip-not-found (-2) including device errors, status, and SPI presence checks.
+- LoRa: Guarded begin() with multiple signature fallbacks (TypeError handling).
+- OTA: Placeholder hash detection in manifest files; manifests with all-zero hashes are rejected.
+- OTA: Detached signature and HMAC-SHA256 manifest verification.
+- OTA: HTML response detection during file downloads to avoid hash mismatches from error pages.
+- Sampling: GC after BME280 sampling and bus cleanup.
+- Settings apply: Conservative allowlist with type coercion; sensitive WiFi credentials gated by role/provisioning state.
+
+## v2.04.0 — 2025-01-XX
 - Bump firmware version to v2.04.0 and align manifest to 0.2.4.
 - Updated User-Agent headers and admin API defaults to v2.04.0.
 - Misc metadata consistency updates across micropython/ modules.
