@@ -1,7 +1,7 @@
 {
   "description": "TMON MicroPython firmware manifest",
   "files": {
-    "README.md": "sha256:b164db139524ff79bb66dd2f34b63ab87a70d032899c6eecee66b7a81a7a37fb",
+    "README.md": "sha256:9d4a00d2ef4d5f1cc21a58120414fae0bc98947dca7b4447a0552e32928cd953",
     "__init__.py": "sha256:b8252953178001f2462f23c7546dbd9fc9085ad952e43848d057481a51d98ef5",
     "boot.py": "sha256:be1493b6b31979e1201ffef4ba1020992ba26c29118406468c03c94ed5921295",
     "config_persist.py": "sha256:167df203e6c12bfc64561f09438b8f19b7a4d46e1df57a7f7008aa5fbdc2d36a",
@@ -75,7 +75,7 @@
     "lib/urequests.py": "sha256:2bee6a73926682d278a23c52d1c598290c82391372e40615b6075cda5583efcd",
     "lora.py": "sha256:6fac2097c2f2d105461d216eacc68015bc0c6f55631eec650e0041d63a7160a1",
     "main.py": "sha256:1d82a6658644ab57539deef4098d1c09389f52eb0acda7a1fe89dc294be47676",
-    "manifest.json.bak": "sha256:dc6214da2db6646364c057baa3d24141bcdc38934956b5ed57d74d705b606aeb",
+    "manifest.json.bak": "sha256:d49f1c24ddeb430755d14c7926669dd2199c2b4f7eca7be1644dbffeff331c3c",
     "oled.py": "sha256:0bafa726a99b0912836268aeb19a253fd8af4455f22d2a23d6170a8460953520",
     "ota.py": "sha256:0aecb1ead1224e4187878f6c5a7cb02f375bab81fc63b520603f2f7989657b7c",
     "provision.py": "sha256:8c65d17437c06c79f4938b3214b896458cb5ab15cbe920ca568cdcc0609377cc",
