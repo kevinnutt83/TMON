@@ -1159,6 +1159,7 @@ async def connectLora():
                         # Persist to field data log so base later uploads remote telemetry via WPREST
                         try:
                             append_field_data_entry(record)
+                            await debug_print("persisted remote data to field log", 'LORA')
                         except Exception as e:
                             await debug_print(f"lora: failed to persist remote line: {e}", "ERROR")
                         # update in-memory remote info and write file
@@ -1167,6 +1168,11 @@ async def connectLora():
                             if uid:
                                 settings.REMOTE_NODE_INFO = getattr(settings, 'REMOTE_NODE_INFO', {})
                                 settings.REMOTE_NODE_INFO[str(uid)] = {'last_seen': int(time.time()), 'last_payload': record}
+                                try:
+                                    settings.REMOTE_NODE_INFO[str(uid)]['last_rssi'] = lora.getRSSI()
+                                    settings.REMOTE_NODE_INFO[str(uid)]['last_snr'] = lora.getSNR()
+                                except Exception:
+                                    pass
                                 save_remote_node_info()
                                 # If remote sent staged settings, persist to per-unit staged file for later apply/inspection
                                 if isinstance(payload, dict) and payload.get('settings'):
@@ -1181,7 +1187,8 @@ async def connectLora():
                                 try:
                                     ack = {'ack': 'ok'}
                                     # schedule next_in seconds (base chooses cadence)
-                                    next_in = getattr(settings, 'LORA_CHECK_IN_MINUTES', 5) * 60
+                                    next_in = getattr(settings, 'LORA_CHECK_IN_MINUTES', 5) * 60 + random.randint(-30, 30)
+                                    if next_in < 60: next_in = 60
                                     ack['next_in'] = next_in
                                     if getattr(settings, 'GPS_BROADCAST_TO_REMOTES', False):
                                         try:
@@ -1191,6 +1198,11 @@ async def connectLora():
                                             ack['gps_accuracy_m'] = getattr(settings, 'GPS_ACCURACY_M', None)
                                         except Exception:
                                             pass
+                                    try:
+                                        settings.REMOTE_SYNC_SCHEDULE[str(uid)] = {'next_expected': int(time.time() + next_in)}
+                                        save_remote_sync_schedule()
+                                    except Exception:
+                                        pass
                                     try:
                                         # send ack (best-effort). Radio may need reconfig, so guard heavily.
                                         try:
@@ -1451,6 +1463,7 @@ async def connectLora():
                         # Wait for ACK
                         ack_wait_ms = int(getattr(settings, 'LORA_CHUNK_ACK_WAIT_MS', 1500))
                         start_wait = time.ticks_ms()
+                        ack_received = False
                         while time.ticks_diff(time.ticks_ms(), start_wait) < ack_wait_ms:
                             try:
                                 ev2 = lora._events()
@@ -1470,6 +1483,7 @@ async def connectLora():
                                         except Exception:
                                             obj2 = None
                                         if isinstance(obj2, dict) and obj2.get('ack') == 'ok':
+                                            ack_received = True
                                             # Capture signal info for display
                                             try:
                                                 if hasattr(lora, 'getRSSI'):
@@ -1512,6 +1526,11 @@ async def connectLora():
                                     except Exception:
                                         pass
                             await asyncio.sleep(0.01)
+                        if not ack_received:
+                            fallback = 300 + random.randint(-30, 30)
+                            if fallback < 60: fallback = 60
+                            settings.nextLoraSync = int(time.time() + fallback)
+                            write_lora_log(f"Remote no ACK, fallback next sync in {fallback} sec", 'INFO')
                         gc.collect()
                         return True
 
@@ -1620,9 +1639,9 @@ async def connectLora():
                             except Exception:
                                 st_code = -999
                             if st_code == 0:
+                                await debug_print("lora: single-frame send (post-compact) succeeded", "LORA")
                                 _last_send_ms = time.ticks_ms()
                                 _last_activity_ms = _last_send_ms
-                                await debug_print("lora: single-frame send (post-compact) succeeded", "LORA")
                                 # Wait for TX_DONE and ACK
                                 try:
                                     tx_start = time.ticks_ms()
@@ -1643,6 +1662,7 @@ async def connectLora():
                                 # Wait for ACK
                                 ack_wait_ms = int(getattr(settings, 'LORA_CHUNK_ACK_WAIT_MS', 1500))
                                 start_wait = time.ticks_ms()
+                                ack_received = False
                                 while time.ticks_diff(time.ticks_ms(), start_wait) < ack_wait_ms:
                                     try:
                                         ev2 = lora._events()
@@ -1662,10 +1682,12 @@ async def connectLora():
                                                 except Exception:
                                                     obj2 = None
                                                 if isinstance(obj2, dict) and obj2.get('ack') == 'ok':
+                                                    ack_received = True
                                                     # Capture signal info
                                                     try:
                                                         if hasattr(lora, 'getRSSI'):
                                                             sdata.lora_SigStr = lora.getRSSI()
+                                                            sdata.lora_last_rx_ts = time.time()
                                                         if hasattr(lora, 'getSNR'):
                                                             sdata.lora_snr = lora.getSNR()
                                                             sdata.last_message = ujson.dumps(obj2)[:32]
@@ -1703,6 +1725,14 @@ async def connectLora():
                                                     break
                                             except Exception:
                                                 pass
+                                    await asyncio.sleep(0.01)
+                                if not ack_received:
+                                    fallback = 300 + random.randint(-30, 30)
+                                    if fallback < 60: fallback = 60
+                                    settings.nextLoraSync = int(time.time() + fallback)
+                                    write_lora_log(f"Remote no ACK, fallback next sync in {fallback} sec", 'INFO')
+                                gc.collect()
+                                return True
                             else:
                                 await debug_print(f"lora: single-frame (post-compact) failed: {st_code}", "WARN")
                                 # If it's a negative hardware-like code, attempt guarded re-init and fall through to chunk flow
@@ -1902,6 +1932,7 @@ async def connectLora():
                                     # Wait for ACK
                                     ack_wait_ms = int(getattr(settings, 'LORA_CHUNK_ACK_WAIT_MS', 1500))
                                     start_wait = time.ticks_ms()
+                                    ack_received = False
                                     while time.ticks_diff(time.ticks_ms(), start_wait) < ack_wait_ms:
                                         try:
                                             ev2 = lora._events()
@@ -1921,6 +1952,7 @@ async def connectLora():
                                                     except Exception:
                                                         obj2 = None
                                                     if isinstance(obj2, dict) and obj2.get('ack') == 'ok':
+                                                        ack_received = True
                                                         # Capture signal info
                                                         try:
                                                             if hasattr(lora, 'getRSSI'):
@@ -1964,6 +1996,13 @@ async def connectLora():
                                                 except Exception:
                                                     pass
                                         await asyncio.sleep(0.01)
+                                    if not ack_received:
+                                        fallback = 300 + random.randint(-30, 30)
+                                        if fallback < 60: fallback = 60
+                                        settings.nextLoraSync = int(time.time() + fallback)
+                                        write_lora_log(f"Remote no ACK, fallback next sync in {fallback} sec", 'INFO')
+                                    gc.collect()
+                                    return True
                     # If we reached here, chunked send failed after retries: treat as re-init trigger
                     await debug_print("lora: chunk send failed after retries, re-initing radio", "ERROR")
                     try:
@@ -1984,6 +2023,7 @@ async def connectLora():
 
                 ack_wait_ms = int(getattr(settings, 'LORA_CHUNK_ACK_WAIT_MS', 1500))
                 start_wait = time.ticks_ms()
+                ack_received = False
                 while time.ticks_diff(time.ticks_ms(), start_wait) < ack_wait_ms:
                     try:
                         ev2 = lora._events()
@@ -2003,6 +2043,7 @@ async def connectLora():
                                 except Exception:
                                     obj2 = None
                                 if isinstance(obj2, dict) and obj2.get('ack') == 'ok':
+                                    ack_received = True
                                     # Capture signal info for display
                                     try:
                                         if hasattr(lora, 'getRSSI'):
@@ -2045,6 +2086,11 @@ async def connectLora():
                             except Exception:
                                 pass
                     await asyncio.sleep(0.01)
+                if not ack_received:
+                    fallback = 300 + random.randint(-30, 30)
+                    if fallback < 60: fallback = 60
+                    settings.nextLoraSync = int(time.time() + fallback)
+                    write_lora_log(f"Remote no ACK, fallback next sync in {fallback} sec", 'INFO')
 
                 # After sending all chunks, done for this cycle
                 _last_send_ms = time.ticks_ms()
