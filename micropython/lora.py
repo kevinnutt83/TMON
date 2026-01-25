@@ -918,6 +918,34 @@ def _save_remote_counters(ctrs):
     except Exception:
         pass
 
+# Copy from firmware_updater for remote OTA verify
+def _get_hashlib():
+    try:
+        import uhashlib as _uh
+        import ubinascii as _ub
+        return _uh, _ub
+    except Exception:
+        import hashlib as _uh
+        import binascii as _ub
+        return _uh, _ub
+
+def compute_sha256_from_bytes(data):
+    _uh, _ub = _get_hashlib()
+    h = _uh.sha256()
+    try:
+        h.update(data)
+    except Exception:
+        pass
+    try:
+        digest = h.digest()
+        hexsum = _ub.hexlify(digest).decode().lower()
+    except Exception:
+        try:
+            hexsum = h.hexdigest().lower()
+        except Exception:
+            hexsum = ''
+    return hexsum
+
 async def connectLora():
     """Non-blocking LoRa routine called frequently from lora_comm_task.
     - Initializes radio once (with retry cap)
@@ -1183,6 +1211,24 @@ async def connectLora():
                                         write_lora_log(f"Base: persisted staged settings for {uid}", 'INFO')
                                     except Exception:
                                         pass
+                                # Check for OTA jobs for this remote
+                                try:
+                                    jobs = await poll_ota_jobs()
+                                    ota_sent = False
+                                    for job in jobs:
+                                        if job.get('target') == uid and job.get('type') == 'firmware_update':
+                                            from firmware_updater import download_and_apply_firmware
+                                            dl = download_and_apply_firmware(job.get('url'), job.get('version'), expected_sha=job.get('sha'), manifest_url=job.get('manifest_url'))
+                                            if dl['ok']:
+                                                ota_sent = True
+                                                ack['ota_pending'] = True
+                                                ack['ota_filename'] = os.path.basename(dl['path'])
+                                                ack['ota_sha'] = dl['sha256']
+                                                # Send file after ACK
+                                                await send_ota_file_to_remote(uid, dl['path'], dl['sha256'])
+                                                break
+                                except Exception:
+                                    pass
                                 # Best-effort: ACK back to remote with next sync and optional GPS
                                 try:
                                     ack = {'ack': 'ok'}
@@ -1522,6 +1568,37 @@ async def connectLora():
                                             await debug_print(f"lora: next {getattr(settings, 'nextLoraSync', '')}", 'LORA')
                                             write_lora_log(f"Remote stored next sync epoch: {getattr(settings, 'nextLoraSync', '')}", 'INFO')
                                             led_status_flash('SUCCESS')
+                                            # Check for ota_pending
+                                            if obj2.get('ota_pending'):
+                                                ota_filename = obj2.get('ota_filename')
+                                                ota_sha = obj2.get('ota_sha')
+                                                ota_chunks = {}
+                                                ota_ts = time.time()
+                                                while time.time() - ota_ts < 3600:
+                                                    ev2 = lora._events()
+                                                    if RX_DONE_FLAG and (ev2 & RX_DONE_FLAG):
+                                                        msg2, err2 = lora._readData(0)
+                                                        if err2 == 0 and msg2:
+                                                            txt2 = msg2.decode('utf-8', 'ignore')
+                                                            chunk_payload = ujson.loads(txt2)
+                                                            if chunk_payload.get('ota_file'):
+                                                                seq = chunk_payload.get('seq')
+                                                                total = chunk_payload.get('total')
+                                                                b64 = chunk_payload.get('b64')
+                                                                raw_chunk = _ub.a2b_base64(b64)
+                                                                ota_chunks[seq] = raw_chunk
+                                                                if len(ota_chunks) == total:
+                                                                    assembled = b''.join(ota_chunks[i] for i in range(1, total+1))
+                                                                    computed_sha = compute_sha256_from_bytes(assembled)
+                                                                    if computed_sha == ota_sha:
+                                                                        path = '/ota/backup/' + ota_filename
+                                                                        with open(path, 'wb') as f:
+                                                                            f.write(assembled)
+                                                                        # Set pending flag
+                                                                        with open(settings.OTA_PENDING_FILE, 'w') as f:
+                                                                            f.write('pending')
+                                                                        machine.reset()
+                                                                        break
                                             break
                                     except Exception:
                                         pass
@@ -1722,6 +1799,37 @@ async def connectLora():
                                                     await debug_print(f"lora: next {getattr(settings, 'nextLoraSync', '')}", 'LORA')
                                                     write_lora_log(f"Remote stored next sync epoch: {getattr(settings, 'nextLoraSync', '')}", 'INFO')
                                                     led_status_flash('SUCCESS')
+                                                    # Check for ota_pending
+                                                    if obj2.get('ota_pending'):
+                                                        ota_filename = obj2.get('ota_filename')
+                                                        ota_sha = obj2.get('ota_sha')
+                                                        ota_chunks = {}
+                                                        ota_ts = time.time()
+                                                        while time.time() - ota_ts < 3600:
+                                                            ev2 = lora._events()
+                                                            if RX_DONE_FLAG and (ev2 & RX_DONE_FLAG):
+                                                                msg2, err2 = lora._readData(0)
+                                                                if err2 == 0 and msg2:
+                                                                    txt2 = msg2.decode('utf-8', 'ignore')
+                                                                    chunk_payload = ujson.loads(txt2)
+                                                                    if chunk_payload.get('ota_file'):
+                                                                        seq = chunk_payload.get('seq')
+                                                                        total = chunk_payload.get('total')
+                                                                        b64 = chunk_payload.get('b64')
+                                                                        raw_chunk = _ub.a2b_base64(b64)
+                                                                        ota_chunks[seq] = raw_chunk
+                                                                        if len(ota_chunks) == total:
+                                                                            assembled = b''.join(ota_chunks[i] for i in range(1, total+1))
+                                                                            computed_sha = compute_sha256_from_bytes(assembled)
+                                                                            if computed_sha == ota_sha:
+                                                                                path = '/ota/backup/' + ota_filename
+                                                                                with open(path, 'wb') as f:
+                                                                                    f.write(assembled)
+                                                                                # Set pending flag
+                                                                                with open(settings.OTA_PENDING_FILE, 'w') as f:
+                                                                                    f.write('pending')
+                                                                                machine.reset()
+                                                                                break
                                                     break
                                             except Exception:
                                                 pass
@@ -1992,6 +2100,37 @@ async def connectLora():
                                                         await debug_print(f"lora: next {getattr(settings, 'nextLoraSync', '')}", 'LORA')
                                                         write_lora_log(f"Remote stored next sync epoch: {getattr(settings, 'nextLoraSync', '')}", 'INFO')
                                                         led_status_flash('SUCCESS')
+                                                        # Check for ota_pending
+                                                        if obj2.get('ota_pending'):
+                                                            ota_filename = obj2.get('ota_filename')
+                                                            ota_sha = obj2.get('ota_sha')
+                                                            ota_chunks = {}
+                                                            ota_ts = time.time()
+                                                            while time.time() - ota_ts < 3600:
+                                                                ev2 = lora._events()
+                                                                if RX_DONE_FLAG and (ev2 & RX_DONE_FLAG):
+                                                                    msg2, err2 = lora._readData(0)
+                                                                    if err2 == 0 and msg2:
+                                                                        txt2 = msg2.decode('utf-8', 'ignore')
+                                                                        chunk_payload = ujson.loads(txt2)
+                                                                        if chunk_payload.get('ota_file'):
+                                                                            seq = chunk_payload.get('seq')
+                                                                            total = chunk_payload.get('total')
+                                                                            b64 = chunk_payload.get('b64')
+                                                                            raw_chunk = _ub.a2b_base64(b64)
+                                                                            ota_chunks[seq] = raw_chunk
+                                                                            if len(ota_chunks) == total:
+                                                                                assembled = b''.join(ota_chunks[i] for i in range(1, total+1))
+                                                                                computed_sha = compute_sha256_from_bytes(assembled)
+                                                                                if computed_sha == ota_sha:
+                                                                                    path = '/ota/backup/' + ota_filename
+                                                                                    with open(path, 'wb') as f:
+                                                                                        f.write(assembled)
+                                                                                # Set pending flag
+                                                                                with open(settings.OTA_PENDING_FILE, 'w') as f:
+                                                                                    f.write('pending')
+                                                                                machine.reset()
+                                                                                break
                                                         break
                                                 except Exception:
                                                     pass
@@ -2082,6 +2221,37 @@ async def connectLora():
                                     await debug_print(f"lora: next {getattr(settings, 'nextLoraSync', '')}", 'LORA')
                                     write_lora_log(f"Remote stored next sync epoch: {getattr(settings, 'nextLoraSync', '')}", 'INFO')
                                     led_status_flash('SUCCESS')
+                                    # Check for ota_pending
+                                    if obj2.get('ota_pending'):
+                                        ota_filename = obj2.get('ota_filename')
+                                        ota_sha = obj2.get('ota_sha')
+                                        ota_chunks = {}
+                                        ota_ts = time.time()
+                                        while time.time() - ota_ts < 3600:
+                                            ev2 = lora._events()
+                                            if RX_DONE_FLAG and (ev2 & RX_DONE_FLAG):
+                                                msg2, err2 = lora._readData(0)
+                                                if err2 == 0 and msg2:
+                                                    txt2 = msg2.decode('utf-8', 'ignore')
+                                                    chunk_payload = ujson.loads(txt2)
+                                                    if chunk_payload.get('ota_file'):
+                                                        seq = chunk_payload.get('seq')
+                                                        total = chunk_payload.get('total')
+                                                        b64 = chunk_payload.get('b64')
+                                                        raw_chunk = _ub.a2b_base64(b64)
+                                                        ota_chunks[seq] = raw_chunk
+                                                        if len(ota_chunks) == total:
+                                                            assembled = b''.join(ota_chunks[i] for i in range(1, total+1))
+                                                            computed_sha = compute_sha256_from_bytes(assembled)
+                                                            if computed_sha == ota_sha:
+                                                                path = '/ota/backup/' + ota_filename
+                                                                with open(path, 'wb') as f:
+                                                                    f.write(assembled)
+                                                                # Set pending flag
+                                                                with open(settings.OTA_PENDING_FILE, 'w') as f:
+                                                                    f.write('pending')
+                                                                machine.reset()
+                                                                break
                                     break
                             except Exception:
                                 pass
@@ -2183,3 +2353,38 @@ async def connectLora():
                 return False
     gc.collect()
     return True
+
+# OTA file sending from base to remote
+async def send_ota_file_to_remote(remote_uid, file_path, sha256):
+    try:
+        with open(file_path, 'rb') as f:
+            data = f.read()
+        max_payload = int(getattr(settings, 'LORA_MAX_PAYLOAD', 220))
+        raw_chunk_size = 80
+        parts = [data[i:i+raw_chunk_size] for i in range(0, len(data), raw_chunk_size)]
+        total = len(parts)
+        for idx, chunk in enumerate(parts, start=1):
+            b64 = _ub.b2a_base64(chunk).decode().strip()
+            chunk_msg = {
+                'ota_file': 1,
+                'filename': os.path.basename(file_path),
+                'sha': sha256,
+                'seq': idx,
+                'total': total,
+                'b64': b64,
+                'unit_id': remote_uid
+            }
+            # Send chunk via LoRa
+            lora.send(ujson.dumps(chunk_msg).encode('utf-8'))
+            # Wait for TX_DONE
+            tx_start = time.ticks_ms()
+            while time.ticks_diff(time.ticks_ms(), tx_start) < 10000:
+                ev = lora._events()
+                if TX_DONE_FLAG and (ev & TX_DONE_FLAG):
+                    break
+                await asyncio.sleep(0.01)
+            await asyncio.sleep(0.1)  # small delay between chunks
+        return True
+    except Exception as e:
+        await debug_print(f"Failed to send OTA file: {e}", "ERROR")
+        return False
