@@ -1,4 +1,4 @@
-# Firmware Version: v2.06.0
+# Firmware Version: v2.06.3
 
 # Bootstrap critical variables before any reference
 try:
@@ -33,7 +33,14 @@ LOG_FILE = LOG_DIR + '/lora.log'
 ERROR_LOG_FILE = LOG_DIR + '/lora_errors.log'
 FIELD_DATA_LOG = LOG_DIR + '/field_data.log'
 DATA_HISTORY_LOG = LOG_DIR + '/data_history.log'
-FIELD_DATA_DELIVERED_LOG = LOG_DIR + '/field_data.delivered.log'
+
+# --- Field Data Logging and controls ---
+FIELD_DATA_DELIVERED_LOG = LOG_DIR + '/field_data.delivered.log'  # archive of delivered entries
+FIELD_DATA_MAX_BYTES = 256 * 1024  # rotate/trim when exceeding this size
+FIELD_DATA_MAX_BATCH = 50          # max records per POST batch
+FIELD_DATA_SEND_INTERVAL = 30      # seconds, adjustable remotely
+FIELD_DATA_BACKOFF_S = 10          # retry backoff on HTTP failures
+FIELD_DATA_GZIP = True             # allow gzip payload when supported
 
 # Then other vars
 UNIT_ID = "None"              # 6-digit assigned by Admin after first check-in (persisted locally)
@@ -41,7 +48,7 @@ UNIT_Name = "No Device Name"    # Human-friendly name (provisioned)
 NODE_TYPE = 'base'             # 'base','wifi', or 'remote'; base can host LoRa network & WiFi; remote uses LoRa primarily
 #NODE_TYPE = 'remote'          # Uncomment for remote role during flashing
 
-FIRMWARE_VERSION = "v2.06.2"   # Firmware version string
+FIRMWARE_VERSION = "v2.06.3"   # Firmware version string
 
  # WordPress Unit Connector API integration
 WORDPRESS_API_URL = ""   # Customer Unit Connector site for provisioned devices
@@ -138,7 +145,7 @@ DEBUG_BASE_NODE = True
 DEBUG_REMOTE_NODE = True
 DEBUG_WIFI_NODE = False
 DEBUG_WPREST = False
-DEBUG_FIELD_DATA = False
+DEBUG_FIELD_DATA = True
 DEBUG_RS485 = False
 
 # Backwards-compatible aliases for older/alternate flag names used by debug_print/callsites
@@ -183,19 +190,6 @@ WIFI_PASS = "bluebread219"               # Provisioned or manually set password
 WIFI_CONN_RETRIES = 5                     # Immediate retries before longer backoff
 WIFI_BACKOFF_S = 15                       # Base backoff between retry bursts
 WIFI_SIGNAL_SAMPLE_INTERVAL_S = 30        # Interval to refresh RSSI for OLED
-
-# --- Logging & Rotation Controls ---
-LOG_DIR = '/logs'
-LOG_FILE = LOG_DIR + '/lora.log'
-ERROR_LOG_FILE = LOG_DIR + '/lora_errors.log'
-FIELD_DATA_LOG = LOG_DIR + '/field_data.log'
-DATA_HISTORY_LOG = LOG_DIR + '/data_history.log'
-FIELD_DATA_DELIVERED_LOG = LOG_DIR + '/field_data.delivered.log'  # archive of delivered entries
-FIELD_DATA_MAX_BYTES = 256 * 1024  # rotate/trim when exceeding this size
-FIELD_DATA_MAX_BATCH = 50          # max records per POST batch
-FIELD_DATA_SEND_INTERVAL = 30      # seconds, adjustable remotely
-FIELD_DATA_BACKOFF_S = 10          # retry backoff on HTTP failures
-FIELD_DATA_GZIP = True             # allow gzip payload when supported
 
 # --- LoRa sync & recovery ---
 nextLoraSync = 100                      # Remote next absolute sync epoch (assigned by base)
