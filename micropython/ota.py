@@ -534,12 +534,13 @@ async def apply_pending_update():
         except Exception:
             pass
         await debug_print('OTA: apply completed', 'OTA')
-        # NEW: GC after OTA apply completes (before returning to loops)
+        # Reboot device after OTA files are downloaded and applied
         try:
             import machine as _m
             _m.soft_reset()
         except Exception:
             pass
+        # NEW: GC after OTA apply completes (before returning to loops)
         try:
             maybe_gc("ota_apply_done", min_interval_ms=1000, mem_free_below=60 * 1024)
         except Exception:
