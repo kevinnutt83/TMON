@@ -75,7 +75,7 @@
     "lib/urequests.py": "sha256:2bee6a73926682d278a23c52d1c598290c82391372e40615b6075cda5583efcd",
     "lora.py": "sha256:1389b909e7df5c23dc33358ccfedf63d8aba32cc8bd4e0f507faa9522ba422d5",
     "main.py": "sha256:1d82a6658644ab57539deef4098d1c09389f52eb0acda7a1fe89dc294be47676",
-    "manifest.json.bak": "sha256:232bd906cf7538e2033e77a3609fe53b244ee1658a311e9dfa14ecf174057a01",
+    "manifest.json.bak": "sha256:5d60605fc15637eaac4fd5664617f39f321728e19859226c4aa33365815f7960",
     "oled.py": "sha256:0bafa726a99b0912836268aeb19a253fd8af4455f22d2a23d6170a8460953520",
     "ota.py": "sha256:0aecb1ead1224e4187878f6c5a7cb02f375bab81fc63b520603f2f7989657b7c",
     "provision.py": "sha256:8c65d17437c06c79f4938b3214b896458cb5ab15cbe920ca568cdcc0609377cc",
@@ -90,7 +90,7 @@
     "tests/test_chunk_dump_rotation.py": "sha256:84eb685de4a73e725ed008e513c4609472071eea3bcc3fee5f9a664d4c5d24e3",
     "tests/test_log_trim.py": "sha256:5933ec391a1cefcaeb401a461c1957744d4452987abb1d46f6c7ec74d3c0fc03",
     "tmon.py": "sha256:007dd905eedad43c72b9cedea38abdcebc73a99f4994dea26a7bc32d8fd56ff9",
-    "utils.py": "sha256:bef0f6b9c636553dd39f4d43139db95b464a9ad5a6fc8bdcd4bad1864fd62220",
+    "utils.py": "sha256:ff98e645ef0e618f311bed38d4eb3f34ac67c076839cbc1751bf4daee8e0b8dd",
     "version.txt": "sha256:b8c2e99c3b2c3fa72627287965bb0ab10cdce5a6adf1422d07334262f9317daa",
     "wifi.py": "sha256:aff6fa757ef19cc6d73bb7c33a21b7ad9742d0fb7a15546c92889c36fb411372",
     "wprest.py": "sha256:8d3e50e1a9370a4f53505c687acd5241cd25b4cc65328f12a14d84f182c141f9"
