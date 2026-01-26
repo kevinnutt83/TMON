@@ -1050,6 +1050,207 @@ async def send_field_data_log():
         await debug_print(f'sfd: exception {type(e).__name__}: {e}', 'ERROR')
         await log_error(f'sfd: failed send: {type(e).__name__}: {e}', 'field_data')
 
+# LoRa-based field data + state sender for remote nodes
+async def send_field_data_via_lora():
+    """Send field_data.log to base node over LoRa from a remote node.
+
+    Uses a similar batching/retry strategy as send_field_data_log, but sends
+    via LoRa instead of HTTP. As each batch is confirmed by the base, the
+    corresponding lines are removed from FIELD_DATA_LOG to avoid duplicates.
+    After field data, best-effort send settings.py and sdata.py snapshots.
+    """
+    # Only remotes participate in LoRa forwarding
+    try:
+        if str(getattr(settings, 'NODE_TYPE', 'base')).lower() != 'remote':
+            return
+    except Exception:
+        return
+
+    # Avoid overlap with any other field-data sender using same lock
+    try:
+        if _send_field_data_lock.locked():
+            await debug_print('sfd_lora: another send in progress, skipping', 'DEBUG')
+            return
+    except Exception:
+        pass
+
+    checkLogDirectory()
+
+    # Ensure field_data.log exists
+    try:
+        try:
+            os.stat(settings.FIELD_DATA_LOG)
+        except OSError:
+            with open(settings.FIELD_DATA_LOG, 'w') as f:
+                f.write('')
+            return
+    except Exception as e:
+        await debug_print(f'sfd_lora: failed to ensure FIELD_DATA_LOG: {e}', 'ERROR')
+        return
+
+    # LoRa helpers must be implemented in lora.py (remote ↔ base transport)
+    try:
+        from lora import send_remote_field_data_batch, send_remote_state_files
+    except Exception as e:
+        await debug_print(f'sfd_lora: lora helpers missing: {e}', 'ERROR')
+        return
+
+    async with _send_field_data_lock:
+        try:
+            # Read entire log as bytes to keep per-line indices
+            try:
+                with open(settings.FIELD_DATA_LOG, 'rb') as f:
+                    raw_lines = f.readlines()
+            except Exception as e:
+                await debug_print(f'sfd_lora: read log err: {e}', 'ERROR')
+                return
+
+            batches = []
+            batch = []
+            batch_indices = []
+            try:
+                batch_size = int(getattr(settings, 'FIELD_DATA_MAX_BATCH', 10))
+            except Exception:
+                batch_size = 10
+
+            for idx, raw in enumerate(raw_lines):
+                if not raw:
+                    continue
+                try:
+                    line = raw.decode('utf-8', 'ignore')
+                except Exception:
+                    try:
+                        line = raw.decode()
+                    except Exception:
+                        line = ''
+                if not line.strip():
+                    continue
+                try:
+                    obj = ujson.loads(line)
+                except Exception as pe:
+                    await debug_print(f'sfd_lora: JSON parse err on line {idx}: {pe}', 'ERROR')
+                    continue
+                batch.append(obj)
+                batch_indices.append(idx)
+                if len(batch) >= batch_size:
+                    batches.append((batch, batch_indices))
+                    batch, batch_indices = [], []
+            if batch:
+                batches.append((batch, batch_indices))
+
+            if not batches:
+                await debug_print('sfd_lora: no records to send', 'DEBUG')
+                return
+
+            acked_indices = set()
+            try:
+                max_attempts = int(getattr(settings, 'FIELD_DATA_MAX_ATTEMPTS', 5))
+            except Exception:
+                max_attempts = 5
+            try:
+                base_delay = int(getattr(settings, 'FIELD_DATA_RETRY_BASE_S', 5))
+            except Exception:
+                base_delay = 5
+
+            for bi, (data_batch, idx_list) in enumerate(batches):
+                payload = {
+                    'unit_id': getattr(settings, 'UNIT_ID', ''),
+                    'data': data_batch,
+                }
+                try:
+                    payload['machine_id'] = get_machine_id()
+                except Exception:
+                    pass
+                try:
+                    payload['firmware_version'] = getattr(settings, 'FIRMWARE_VERSION', '')
+                except Exception:
+                    pass
+                try:
+                    payload['node_type'] = getattr(settings, 'NODE_TYPE', '')
+                except Exception:
+                    pass
+
+                delivered = False
+                delay = base_delay
+                await debug_print(f'sfd_lora: batch {bi+1}/{len(batches)} size={len(data_batch)}', 'DEBUG')
+
+                for attempt in range(1, max_attempts + 1):
+                    try:
+                        gc.collect()
+                    except Exception:
+                        pass
+                    try:
+                        # Support both async and sync implementations of the helper
+                        try:
+                            delivered = await send_remote_field_data_batch(payload)
+                        except TypeError:
+                            delivered = bool(send_remote_field_data_batch(payload))
+                    except Exception as e:
+                        delivered = False
+                        await debug_print(f'sfd_lora: send err att{attempt}: {e}', 'ERROR')
+
+                    if delivered:
+                        acked_indices.update(idx_list)
+                        await debug_print(f'sfd_lora: batch {bi+1} delivered', 'DEBUG')
+                        break
+
+                    await debug_print(f'sfd_lora: batch {bi+1} att{attempt} failed, retry', 'WARN')
+                    try:
+                        await asyncio.sleep(delay)
+                    except Exception:
+                        pass
+                    delay = delay * 2
+                    if delay > 60:
+                        delay = 60
+
+                if not delivered:
+                    await debug_print(f'sfd_lora: batch {bi+1} failed after retries', 'ERROR')
+
+            # Rewrite field_data.log excluding acked lines
+            if acked_indices:
+                try:
+                    with open(settings.FIELD_DATA_LOG, 'wb') as f:
+                        for idx, raw in enumerate(raw_lines):
+                            if idx not in acked_indices:
+                                try:
+                                    f.write(raw)
+                                except Exception:
+                                    pass
+                    await debug_print(f'sfd_lora: trimmed {len(acked_indices)} delivered lines', 'DEBUG')
+                except Exception as e:
+                    await debug_print(f'sfd_lora: trim err: {e}', 'ERROR')
+
+            # After field data, best-effort send settings.py and sdata.py snapshots
+            try:
+                files = {}
+                for name in ('settings.py', 'sdata.py'):
+                    for path in (name, '/' + name):
+                        try:
+                            with open(path, 'rb') as fh:
+                                files[name] = fh.read()
+                                break
+                        except Exception:
+                            continue
+                if files:
+                    ok = False
+                    try:
+                        try:
+                            ok = await send_remote_state_files(files)
+                        except TypeError:
+                            ok = bool(send_remote_state_files(files))
+                    except Exception as e:
+                        await debug_print(f'sfd_lora: state files exc {e}', 'ERROR')
+                        ok = False
+                    await debug_print(
+                        'sfd_lora: state files sent' if ok else 'sfd_lora: state files send failed',
+                        'INFO' if ok else 'WARN'
+                    )
+            except Exception:
+                # State-file sending is best-effort; ignore errors
+                pass
+        except Exception as e:
+            await debug_print(f'sfd_lora: outer exc {e}', 'ERROR')
+
 async def periodic_field_data_send():
     while True:
         await send_field_data_log()
@@ -1277,6 +1478,76 @@ def start_background_tasks():
     except Exception:
         pass
 
+# NEW: base-node helpers to stage remote data for Unit Connector forwarding
+def stage_remote_field_data(remote_unit_id, records):
+    """Base helper: stage remote field data into local FIELD_DATA_LOG.
+
+    Each entry is appended via append_field_data_entry(). If 'unit_id' is
+    missing, remote_unit_id is injected so the Unit Connector can distinguish
+    remote vs base-origin records.
+    """
+    try:
+        if not records:
+            return
+        for entry in records:
+            try:
+                if not isinstance(entry, dict):
+                    continue
+                if 'unit_id' not in entry and remote_unit_id:
+                    entry['unit_id'] = remote_unit_id
+                append_field_data_entry(entry)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+def stage_remote_files(remote_unit_id, files):
+    """Base helper: persist remote settings/state files under LOG_DIR/remotes/<unit_id>/.
+
+    'files' is expected to be {filename: bytes_or_str}. These staged copies can
+    later be uploaded using the same Unit Connector APIs (e.g. send_file_to_wp).
+    """
+    try:
+        if not files or not remote_unit_id:
+            return
+
+        root = getattr(settings, 'LOG_DIR', '/logs').rstrip('/') + '/remotes/' + str(remote_unit_id)
+
+        try:
+            import uos as _os
+        except Exception:
+            _os = os
+
+        # Ensure /logs/remotes and /logs/remotes/<unit_id> exist
+        try:
+            base_dir = getattr(settings, 'LOG_DIR', '/logs').rstrip('/') + '/remotes'
+            try:
+                _os.stat(base_dir)
+            except Exception:
+                _os.mkdir(base_dir)
+            try:
+                _os.stat(root)
+            except Exception:
+                try:
+                    _os.mkdir(root)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        for name, content in files.items():
+            try:
+                path = root + '/' + str(name)
+                with open(path, 'wb') as f:
+                    if isinstance(content, bytes):
+                        f.write(content)
+                    else:
+                        f.write(str(content).encode('utf-8'))
+            except Exception:
+                pass
+    except Exception:
+        pass
+
 __all__ = [
     'debug_print',
     'free_pins',
@@ -1295,6 +1566,7 @@ __all__ = [
     'persist_unit_name',
     'load_persisted_unit_name',
     'send_field_data_log',
+    'send_field_data_via_lora',   # NEW
     'record_field_data',
     'update_sys_voltage',
     'runGC',
@@ -1304,5 +1576,7 @@ __all__ = [
     'compute_bars',
     'is_http_allowed_for_node',
     'append_field_data_entry',
+    'stage_remote_field_data',    # NEW
+    'stage_remote_files',         # NEW
 ]
 

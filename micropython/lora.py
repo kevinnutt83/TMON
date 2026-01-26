@@ -44,7 +44,7 @@ except ImportError:
 try:
     import utime as time
 except ImportError:
-    import time
+    time = None
 try:
     import urequests as requests
 except ImportError:
@@ -296,6 +296,7 @@ except ImportError:
     except ImportError:
         requests = None
 from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run
+
 from relay import toggle_relay
 
 # Restore: define WORDPRESS_API_URL safely for this module
@@ -307,6 +308,7 @@ except Exception:
 if not WORDPRESS_API_URL:
     try:
         from config_persist import read_text
+        path = getattr(settings, 'WORDPRESS_API_URL_FILE', settings.LOG_DIR + '/wordpress_api_url.txt')
         path = getattr(settings, 'WORDPRESS_API_URL_FILE', settings.LOG_DIR + '/wordpress_api_url.txt')
         val = (read_text(path, '') or '').strip()
         if val:
@@ -903,7 +905,7 @@ _TX_EXCEPTION_COOLDOWN_MS = 2500  # avoid tight re-init loops on persistent TX f
 
 # Remote counters for HMAC replay protection (base only)
 def _load_remote_counters():
-    path = getattr(settings, 'LORA_REMOTE_COUNTERS_FILE', settings.LOG_DIR + '/remote_ctr.json')
+    path = getattr(settings, 'LORA_REMOTE_REMOTE_COUNTERS_FILE', settings.LOG_DIR + '/remote_ctr.json')
     try:
         with open(path, 'r') as f:
             return ujson.load(f)
@@ -1171,25 +1173,30 @@ async def connectLora():
                                     return True
 
                         # existing processing logic: persist record etc.
-                        record = {
-                            'timestamp': int(time.time()),
-                            'remote_timestamp': payload.get('ts'),
-                            'cur_temp_f': payload.get('t_f'),
-                            'cur_temp_c': payload.get('t_c'),
-                            'cur_humid': payload.get('hum'),
-                            'cur_bar_pres': payload.get('bar'),
-                            'sys_voltage': payload.get('v'),
-                            'free_mem': payload.get('fm'),
-                            'remote_unit_id': payload.get('unit_id'),
-                            'node_type': 'remote',
-                            'source': 'remote'
-                        }
-                        # Persist to field data log so base later uploads remote telemetry via WPREST
-                        try:
-                            append_field_data_entry(record)
-                            await debug_print("persisted remote data to field log", 'LORA')
-                        except Exception as e:
-                            await debug_print(f"lora: failed to persist remote line: {e}", "ERROR")
+                        if 'data' in payload and isinstance(payload['data'], list):
+                            stage_remote_field_data(payload.get('unit_id', ''), payload['data'])
+                        elif 'files' in payload and isinstance(payload['files'], dict):
+                            stage_remote_files(payload.get('unit_id', ''), payload['files'])
+                        else:
+                            # Single record fallback
+                            record = {'timestamp': int(time.time()),
+                                      'remote_timestamp': payload.get('ts'),
+                                      'cur_temp_f': payload.get('t_f'),
+                                      'cur_temp_c': payload.get('t_c'),
+                                      'cur_humid': payload.get('hum'),
+                                      'cur_bar_pres': payload.get('bar'),
+                                      'sys_voltage': payload.get('v'),
+                                      'free_mem': payload.get('fm'),
+                                      'remote_unit_id': payload.get('unit_id'),
+                                      'node_type': 'remote',
+                                      'source': 'remote'
+                                      }
+                            # Persist to field data log so base later uploads remote telemetry via WPREST
+                            try:
+                                append_field_data_entry(record)
+                                await debug_print("persisted remote data to field log", 'LORA')
+                            except Exception as e:
+                                await debug_print(f"lora: failed to persist remote line: {e}", "ERROR")
                         # update in-memory remote info and write file
                         try:
                             uid = record['remote_unit_id']
@@ -1530,7 +1537,7 @@ async def connectLora():
                                             obj2 = None
                                         if isinstance(obj2, dict) and obj2.get('ack') == 'ok':
                                             ack_received = True
-                                            # Capture signal info for display
+                                            # Capture signal info
                                             try:
                                                 if hasattr(lora, 'getRSSI'):
                                                     sdata.lora_SigStr = lora.getRSSI()
@@ -1539,7 +1546,7 @@ async def connectLora():
                                                     sdata.last_message = ujson.dumps(obj2)[:32]
                                             except Exception:
                                                 pass
-                                            # Adopt next sync if provided
+                                            # Adopt next sync
                                             try:
                                                 if 'next_in' in obj2:
                                                     rel = int(obj2['next_in'])
@@ -1552,7 +1559,7 @@ async def connectLora():
                                                     settings.nextLoraSync = int(obj2['next'])
                                             except Exception:
                                                 pass
-                                            # Adopt GPS from base if provided and allowed
+                                            # Adopt GPS
                                             try:
                                                 if getattr(settings, 'GPS_ACCEPT_FROM_BASE', True):
                                                     blat = obj2.get('gps_lat')
@@ -1833,14 +1840,14 @@ async def connectLora():
                                                     break
                                             except Exception:
                                                 pass
-                                    await asyncio.sleep(0.01)
-                                if not ack_received:
-                                    fallback = 300 + random.randint(-30, 30)
-                                    if fallback < 60: fallback = 60
-                                    settings.nextLoraSync = int(time.time() + fallback)
-                                    write_lora_log(f"Remote no ACK, fallback next sync in {fallback} sec", 'INFO')
-                                gc.collect()
-                                return True
+                                        await asyncio.sleep(0.01)
+                                    if not ack_received:
+                                        fallback = 300 + random.randint(-30, 30)
+                                        if fallback < 60: fallback = 60
+                                        settings.nextLoraSync = int(time.time() + fallback)
+                                        write_lora_log(f"Remote no ACK, fallback next sync in {fallback} sec", 'INFO')
+                                    gc.collect()
+                                    return True
                             else:
                                 await debug_print(f"lora: single-frame (post-compact) failed: {st_code}", "WARN")
                                 # If it's a negative hardware-like code, attempt guarded re-init and fall through to chunk flow
@@ -2126,11 +2133,11 @@ async def connectLora():
                                                                                     path = '/ota/backup/' + ota_filename
                                                                                     with open(path, 'wb') as f:
                                                                                         f.write(assembled)
-                                                                                # Set pending flag
-                                                                                with open(settings.OTA_PENDING_FILE, 'w') as f:
-                                                                                    f.write('pending')
-                                                                                machine.reset()
-                                                                                break
+                                                                                    # Set pending flag
+                                                                                    with open(settings.OTA_PENDING_FILE, 'w') as f:
+                                                                                        f.write('pending')
+                                                                                    machine.reset()
+                                                                                    break
                                                         break
                                                 except Exception:
                                                     pass
@@ -2142,17 +2149,17 @@ async def connectLora():
                                         write_lora_log(f"Remote no ACK, fallback next sync in {fallback} sec", 'INFO')
                                     gc.collect()
                                     return True
-                    # If we reached here, chunked send failed after retries: treat as re-init trigger
-                    await debug_print("lora: chunk send failed after retries, re-initing radio", "ERROR")
-                    try:
-                        if hasattr(lora, 'spi') and lora.spi:
-                            lora.spi.deinit()
-                        _last_tx_exception_ms = time.ticks_ms()
-                    except Exception:
-                        pass
-                    lora = None
-                    gc.collect()
-                    return False
+                            # If we reached here, chunked send failed after retries: treat as re-init trigger
+                            await debug_print("lora: chunk send failed after retries, re-initing radio", "ERROR")
+                            try:
+                                if hasattr(lora, 'spi') and lora.spi:
+                                    lora.spi.deinit()
+                                _last_tx_exception_ms = time.ticks_ms()
+                            except Exception:
+                                pass
+                            lora = None
+                            gc.collect()
+                            return False
 
                 # After sending all chunks, switch to RX and wait for ACK
                 try:
@@ -2387,4 +2394,109 @@ async def send_ota_file_to_remote(remote_uid, file_path, sha256):
         return True
     except Exception as e:
         await debug_print(f"Failed to send OTA file: {e}", "ERROR")
+        return False
+
+# NEW: remote send helpers for field data batch and state files
+async def send_remote_field_data_batch(payload):
+    """Send field data batch to base over LoRa, with chunking if needed."""
+    try:
+        data = ujson.dumps(payload).encode('utf-8')
+        return await send_lora_payload(data, confirm=True)
+    except Exception as e:
+        await debug_print(f"send_remote_field_data_batch error: {e}", "ERROR")
+        return False
+
+async def send_remote_state_files(files):
+    """Send state files to base over LoRa, with chunking if needed."""
+    try:
+        # Convert bytes to str if needed (py files are text)
+        files_str = {}
+        for name, content in files.items():
+            if isinstance(content, bytes):
+                files_str[name] = content.decode('utf-8', 'ignore')
+            else:
+                files_str[name] = str(content)
+        payload = {'files': files_str}
+        data = ujson.dumps(payload).encode('utf-8')
+        return await send_lora_payload(data, confirm=True)
+    except Exception as e:
+        await debug_print(f"send_remote_state_files error: {e}", "ERROR")
+        return False
+
+async def send_lora_payload(data_bytes, confirm=True, max_wait_ms=1500):
+    """Send data_bytes over LoRa, chunk if large, wait for confirm ACK if requested."""
+    try:
+        if lora is None:
+            return False
+        max_payload = int(getattr(settings, 'LORA_MAX_PAYLOAD', 220))
+        raw_chunk_size = 80
+        if len(data_bytes) <= max_payload:
+            # Single frame
+            lora.setOperatingMode(lora.MODE_TX)
+            resp = lora.send(data_bytes)
+            st_code = 0 if resp == 0 else -1  # Simplified
+            if st_code != 0:
+                return False
+            # Wait TX_DONE
+            tx_start = time.ticks_ms()
+            while time.ticks_diff(time.ticks_ms(), tx_start) < 10000:
+                ev = lora._events()
+                if TX_DONE_FLAG and (ev & TX_DONE_FLAG):
+                    break
+                await asyncio.sleep(0.01)
+            if confirm:
+                lora.setOperatingMode(lora.MODE_RX)
+                start_wait = time.ticks_ms()
+                while time.ticks_diff(time.ticks_ms(), start_wait) < max_wait_ms:
+                    ev = lora._events()
+                    if RX_DONE_FLAG and (ev & RX_DONE_FLAG):
+                        msg, err = lora._readData(0)
+                        if err == 0 and msg:
+                            try:
+                                obj = ujson.loads(msg.decode('utf-8', 'ignore'))
+                                if obj.get('ack') == 'ok':
+                                    return True
+                            except Exception:
+                                pass
+                    await asyncio.sleep(0.01)
+            return True
+        else:
+            # Chunked
+            parts = [data_bytes[i:i+raw_chunk_size] for i in range(0, len(data_bytes), raw_chunk_size)]
+            total = len(parts)
+            for seq, chunk in enumerate(parts, 1):
+                b64 = _ub.b2a_base64(chunk).decode().strip()
+                chunk_p = {'chunked': 1, 'seq': seq, 'total': total, 'b64': b64}
+                chunk_data = ujson.dumps(chunk_p).encode('utf-8')
+                lora.setOperatingMode(lora.MODE_TX)
+                resp = lora.send(chunk_data)
+                st_code = 0 if resp == 0 else -1
+                if st_code != 0:
+                    return False
+                # Wait TX_DONE
+                tx_start = time.ticks_ms()
+                while time.ticks_diff(time.ticks_ms(), tx_start) < 10000:
+                    ev = lora._events()
+                    if TX_DONE_FLAG and (ev & TX_DONE_FLAG):
+                        break
+                    await asyncio.sleep(0.01)
+                await asyncio.sleep(0.1)  # Delay between chunks
+            if confirm:
+                lora.setOperatingMode(lora.MODE_RX)
+                start_wait = time.ticks_ms()
+                while time.ticks_diff(time.ticks_ms(), start_wait) < max_wait_ms:
+                    ev = lora._events()
+                    if RX_DONE_FLAG and (ev & RX_DONE_FLAG):
+                        msg, err = lora._readData(0)
+                        if err == 0 and msg:
+                            try:
+                                obj = ujson.loads(msg.decode('utf-8', 'ignore'))
+                                if obj.get('ack') == 'ok':
+                                    return True
+                            except Exception:
+                                pass
+                    await asyncio.sleep(0.01)
+            return True
+    except Exception as e:
+        await debug_print(f"send_lora_payload error: {e}", "ERROR")
         return False
