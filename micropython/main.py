@@ -148,9 +148,6 @@ async def lora_comm_task():
     global sdata
     from utils import led_status_flash
     while True:
-        # NOTE: remote/base must be able to use LoRa before being 'provisioned' (remotes rely on LoRa to contact base).
-        # Previously we blocked this loop until is_provisioned() to avoid premature churn; that prevented remotes from ever sending.
-        # Removed the provisioning gate so LoRa starts immediately. Keep rest of safety behavior (DEVICE_SUSPENDED, re-init backoff).
         loop_start_time = time.ticks_ms()
         led_status_flash('INFO')
         result = None
@@ -192,13 +189,12 @@ import gc
 import machine
 
 async def sample_task():
-    # Skip entirely until provisioned (prevents flash churn and uploads)
     if not is_provisioned():
         await asyncio.sleep(1)
         return
     loop_start_time = time.ticks_ms()
     from utils import led_status_flash
-    led_status_flash('INFO')  # Always flash LED for info
+    led_status_flash('INFO')
     # Skip sampling if suspended
     if getattr(settings, 'DEVICE_SUSPENDED', False):
         await debug_print("suspended: skip sample", "WARN")

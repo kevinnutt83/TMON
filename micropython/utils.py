@@ -412,6 +412,7 @@ async def flash_led(num_flashes, interval, lightColor, pattern):
 def led_status_flash(status):
     import uasyncio as _a
     color_map = {
+        'BOOT': 'mint',
         'INFO': 'light_green',
         'SUCCESS': 'green',
         'OK': 'lime',
@@ -446,6 +447,7 @@ def led_status_flash(status):
         'RS485_TX': 'dark_purple',
         'RS485_RX': 'light_blue',
         'WPREST': 'dark_blue'
+        'FIELD_LOG': 'forest_green'
     }
     color = color_map.get(status, 'white')
     try:
@@ -800,6 +802,8 @@ def record_field_data():
         return
 
     try:
+        from utils import led_status_flash
+        led_status_flash('FIELD_LOG')
         append_field_data_entry(entry)
     except Exception as e:
         print(f"Error recording field data: {e}")
