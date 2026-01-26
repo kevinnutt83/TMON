@@ -446,8 +446,8 @@ def led_status_flash(status):
         'RELAY_8_OFF': 'hot_pink',
         'RS485_TX': 'dark_purple',
         'RS485_RX': 'light_blue',
-        'WPREST': 'dark_blue'
-        'FIELD_LOG': 'forest_green'
+        'WPREST': 'dark_blue',
+        'FIELD_LOG': 'forest_green',
     }
     color = color_map.get(status, 'white')
     try:
