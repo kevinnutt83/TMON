@@ -796,7 +796,7 @@ def record_field_data():
     entry['firmware_version'] = getattr(settings, 'FIRMWARE_VERSION', '')
     entry['NODE_TYPE'] = getattr(settings, 'NODE_TYPE', '')
 
-    if getattr(settings, 'NODE_TYPE', 'base') == 'remote':
+    if getattr(settings, 'NODE_TYPE', 'base') not in ('base', 'remote', 'wifi'):
         return
 
     try:
