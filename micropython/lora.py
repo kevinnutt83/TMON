@@ -155,6 +155,7 @@ def load_remote_node_info():
                 pass
     except Exception:
         pass
+    gc.collect()
 
 # Ensure remote node info is loaded at startup (after settings import)
 load_remote_node_info()
@@ -166,6 +167,7 @@ def save_remote_node_info():
             ujson.dump(settings.REMOTE_NODE_INFO, f)
     except Exception:
         pass
+    gc.collect()
 
 def save_remote_sync_schedule():
     try:
@@ -173,6 +175,7 @@ def save_remote_sync_schedule():
             ujson.dump(settings.REMOTE_SYNC_SCHEDULE, f)
     except Exception:
         pass
+    gc.collect()
 
 def save_gps_state(lat=None, lng=None, alt=None, acc=None, ts=None):
     try:
@@ -206,6 +209,7 @@ def save_gps_state(lat=None, lng=None, alt=None, acc=None, ts=None):
             }, f)
     except Exception:
         pass
+    gc.collect()
 
 # Periodic sync with WordPress (settings, data, OTA jobs)
 async def periodic_wp_sync():
@@ -254,6 +258,7 @@ async def check_suspend_remove():
                     await asyncio.sleep(60)
     except Exception:
         pass
+    gc.collect()
 
 # Start periodic sync in main event loop (add to your main.py or boot.py)
 # asyncio.create_task(periodic_wp_sync())
@@ -346,6 +351,7 @@ def refresh_wp_url():
             WORDPRESS_API_URL = url
     except Exception:
         pass
+    gc.collect()
 
 async def send_settings_to_wp():
     if not WORDPRESS_API_URL:
@@ -621,6 +627,7 @@ def _attach_spi_shim():
         return _SPIShim(spi)
     except Exception:
         return None
+    gc.collect()
 
 async def init_lora():
     global lora
@@ -919,6 +926,7 @@ def _save_remote_counters(ctrs):
             ujson.dump(ctrs, f)
     except Exception:
         pass
+    gc.collect()
 
 # Copy from firmware_updater for remote OTA verify
 def _get_hashlib():
@@ -947,6 +955,7 @@ def compute_sha256_from_bytes(data):
         except Exception:
             hexsum = ''
     return hexsum
+    gc.collect()
 
 async def connectLora():
     """Non-blocking LoRa routine called frequently from lora_comm_task.
@@ -1172,11 +1181,12 @@ async def connectLora():
                                     await debug_print(f"lora: hmac verify failed: {ve}", "ERROR")
                                     return True
 
+                        uid = payload.get('unit_id', '')
                         # existing processing logic: persist record etc.
                         if 'data' in payload and isinstance(payload['data'], list):
-                            stage_remote_field_data(payload.get('unit_id', ''), payload['data'])
+                            stage_remote_field_data(uid, payload['data'])
                         elif 'files' in payload and isinstance(payload['files'], dict):
-                            stage_remote_files(payload.get('unit_id', ''), payload['files'])
+                            stage_remote_files(uid, payload['files'])
                         else:
                             # Single record fallback
                             record = {'timestamp': int(time.time()),
@@ -1187,7 +1197,7 @@ async def connectLora():
                                       'cur_bar_pres': payload.get('bar'),
                                       'sys_voltage': payload.get('v'),
                                       'free_mem': payload.get('fm'),
-                                      'remote_unit_id': payload.get('unit_id'),
+                                      'remote_unit_id': uid,
                                       'node_type': 'remote',
                                       'source': 'remote'
                                       }
@@ -1197,12 +1207,13 @@ async def connectLora():
                                 await debug_print("persisted remote data to field log", 'LORA')
                             except Exception as e:
                                 await debug_print(f"lora: failed to persist remote line: {e}", "ERROR")
+                            write_lora_log(f"Base received remote payload: {str(record)[:160]}", 'INFO')
                         # update in-memory remote info and write file
                         try:
-                            uid = record['remote_unit_id']
                             if uid:
                                 settings.REMOTE_NODE_INFO = getattr(settings, 'REMOTE_NODE_INFO', {})
-                                settings.REMOTE_NODE_INFO[str(uid)] = {'last_seen': int(time.time()), 'last_payload': record}
+                                last_payload = record if 'record' in locals() else payload
+                                settings.REMOTE_NODE_INFO[str(uid)] = {'last_seen': int(time.time()), 'last_payload': last_payload}
                                 try:
                                     settings.REMOTE_NODE_INFO[str(uid)]['last_rssi'] = lora.getRSSI()
                                     settings.REMOTE_NODE_INFO[str(uid)]['last_snr'] = lora.getSNR()
@@ -1218,82 +1229,81 @@ async def connectLora():
                                         write_lora_log(f"Base: persisted staged settings for {uid}", 'INFO')
                                     except Exception:
                                         pass
-                                # Check for OTA jobs for this remote
-                                try:
-                                    jobs = await poll_ota_jobs()
-                                    ota_sent = False
-                                    for job in jobs:
-                                        if job.get('target') == uid and job.get('type') == 'firmware_update':
-                                            from firmware_updater import download_and_apply_firmware
-                                            dl = download_and_apply_firmware(job.get('url'), job.get('version'), expected_sha=job.get('sha'), manifest_url=job.get('manifest_url'))
-                                            if dl['ok']:
-                                                ota_sent = True
-                                                ack['ota_pending'] = True
-                                                ack['ota_filename'] = os.path.basename(dl['path'])
-                                                ack['ota_sha'] = dl['sha256']
-                                                # Send file after ACK
-                                                await send_ota_file_to_remote(uid, dl['path'], dl['sha256'])
-                                                break
-                                except Exception:
-                                    pass
-                                # Best-effort: ACK back to remote with next sync and optional GPS
-                                try:
-                                    ack = {'ack': 'ok'}
-                                    # schedule next_in seconds (base chooses cadence)
-                                    next_in = getattr(settings, 'LORA_CHECK_IN_MINUTES', 5) * 60 + random.randint(-30, 30)
-                                    if next_in < 60: next_in = 60
-                                    ack['next_in'] = next_in
-                                    if getattr(settings, 'GPS_BROADCAST_TO_REMOTES', False):
-                                        try:
-                                            ack['gps_lat'] = getattr(settings, 'GPS_LAT', None)
-                                            ack['gps_lng'] = getattr(settings, 'GPS_LNG', None)
-                                            ack['gps_alt_m'] = getattr(settings, 'GPS_ALT_M', None)
-                                            ack['gps_accuracy_m'] = getattr(settings, 'GPS_ACCURACY_M', None)
-                                        except Exception:
-                                            pass
-                                    try:
-                                        settings.REMOTE_SYNC_SCHEDULE[str(uid)] = {'next_expected': int(time.time() + next_in)}
-                                        save_remote_sync_schedule()
-                                    except Exception:
-                                        pass
-                                    try:
-                                        # send ack (best-effort). Radio may need reconfig, so guard heavily.
-                                        try:
-                                            # Wait for not busy before mode change
-                                            busy_start = time.ticks_ms()
-                                            while lora.gpio.value() and time.ticks_diff(time.ticks_ms(), busy_start) < 2000:
-                                                await asyncio.sleep(0.01)
-                                            lora.setOperatingMode(lora.MODE_TX)
-                                            lora.send(ujson.dumps(ack).encode('utf-8'))
-                                            # Wait briefly for TX_DONE then restore RX mode
-                                            ack_start = time.ticks_ms()
-                                            while time.ticks_diff(time.ticks_ms(), ack_start) < 2000:
-                                                ev = lora._events()
-                                                if getattr(lora, 'TX_DONE', 0) and (ev & lora.TX_DONE):
-                                                    break
-                                                await asyncio.sleep(0.01)
-                                            # Wait for not busy after TX_DONE
-                                            busy_start = time.ticks_ms()
-                                            while lora.gpio.value() and time.ticks_diff(time.ticks_ms(), busy_start) < 2000:
-                                                await asyncio.sleep(0.01)
-                                            lora.setOperatingMode(lora.MODE_RX)
-                                            sdata.lora_last_tx_ts = time.time()
-                                        except Exception:
-                                            # try a more direct sequence if the driver has explicit tx API
-                                            try:
-                                                lora.setOperatingMode(lora.MODE_TX)
-                                                lora.send(ujson.dumps(ack).encode('utf-8'))
-                                                lora.setOperatingMode(lora.MODE_RX)
-                                                sdata.lora_last_tx_ts = time.time()
-                                            except Exception:
-                                                pass
-                                    except Exception:
-                                        pass
-                                except Exception:
-                                    pass
                         except Exception:
                             pass
-                        write_lora_log(f"Base received remote payload: {str(record)[:160]}", 'INFO')
+                        # Check for OTA jobs for this remote
+                        ack = {'ack': 'ok'}
+                        try:
+                            jobs = await poll_ota_jobs()
+                            ota_sent = False
+                            for job in jobs:
+                                if job.get('target') == uid and job.get('type') == 'firmware_update':
+                                    from firmware_updater import download_and_apply_firmware
+                                    dl = download_and_apply_firmware(job.get('url'), job.get('version'), expected_sha=job.get('sha'), manifest_url=job.get('manifest_url'))
+                                    if dl['ok']:
+                                        ota_sent = True
+                                        ack['ota_pending'] = True
+                                        ack['ota_filename'] = os.path.basename(dl['path'])
+                                        ack['ota_sha'] = dl['sha256']
+                                        # Send file after ACK
+                                        await send_ota_file_to_remote(uid, dl['path'], dl['sha256'])
+                                        break
+                        except Exception:
+                            pass
+                        # Best-effort: ACK back to remote with next sync and optional GPS
+                        try:
+                            # schedule next_in seconds (base chooses cadence)
+                            next_in = getattr(settings, 'LORA_CHECK_IN_MINUTES', 5) * 60 + random.randint(-30, 30)
+                            if next_in < 60: next_in = 60
+                            ack['next_in'] = next_in
+                            if getattr(settings, 'GPS_BROADCAST_TO_REMOTES', False):
+                                try:
+                                    ack['gps_lat'] = getattr(settings, 'GPS_LAT', None)
+                                    ack['gps_lng'] = getattr(settings, 'GPS_LNG', None)
+                                    ack['gps_alt_m'] = getattr(settings, 'GPS_ALT_M', None)
+                                    ack['gps_accuracy_m'] = getattr(settings, 'GPS_ACCURACY_M', None)
+                                except Exception:
+                                    pass
+                            try:
+                                settings.REMOTE_SYNC_SCHEDULE[str(uid)] = {'next_expected': int(time.time() + next_in)}
+                                save_remote_sync_schedule()
+                            except Exception:
+                                pass
+                            try:
+                                # send ack (best-effort). Radio may need reconfig, so guard heavily.
+                                try:
+                                    # Wait for not busy before mode change
+                                    busy_start = time.ticks_ms()
+                                    while lora.gpio.value() and time.ticks_diff(time.ticks_ms(), busy_start) < 2000:
+                                        await asyncio.sleep(0.01)
+                                    lora.setOperatingMode(lora.MODE_TX)
+                                    lora.send(ujson.dumps(ack).encode('utf-8'))
+                                    # Wait briefly for TX_DONE then restore RX mode
+                                    ack_start = time.ticks_ms()
+                                    while time.ticks_diff(time.ticks_ms(), ack_start) < 2000:
+                                        ev = lora._events()
+                                        if getattr(lora, 'TX_DONE', 0) and (ev & lora.TX_DONE):
+                                            break
+                                        await asyncio.sleep(0.01)
+                                    # Wait for not busy after TX_DONE
+                                    busy_start = time.ticks_ms()
+                                    while lora.gpio.value() and time.ticks_diff(time.ticks_ms(), busy_start) < 2000:
+                                        await asyncio.sleep(0.01)
+                                    lora.setOperatingMode(lora.MODE_RX)
+                                    sdata.lora_last_tx_ts = time.time()
+                                except Exception:
+                                    # try a more direct sequence if the driver has explicit tx API
+                                    try:
+                                        lora.setOperatingMode(lora.MODE_TX)
+                                        lora.send(ujson.dumps(ack).encode('utf-8'))
+                                        lora.setOperatingMode(lora.MODE_RX)
+                                        sdata.lora_last_tx_ts = time.time()
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
                     except Exception as e:
                         await debug_print(f"lora: processing RX failed: {e}", "ERROR")
             gc.collect()
@@ -2364,37 +2374,40 @@ async def connectLora():
 # OTA file sending from base to remote
 async def send_ota_file_to_remote(remote_uid, file_path, sha256):
     try:
-        with open(file_path, 'rb') as f:
-            data = f.read()
-        max_payload = int(getattr(settings, 'LORA_MAX_PAYLOAD', 220))
         raw_chunk_size = 80
-        parts = [data[i:i+raw_chunk_size] for i in range(0, len(data), raw_chunk_size)]
-        total = len(parts)
-        for idx, chunk in enumerate(parts, start=1):
-            b64 = _ub.b2a_base64(chunk).decode().strip()
-            chunk_msg = {
-                'ota_file': 1,
-                'filename': os.path.basename(file_path),
-                'sha': sha256,
-                'seq': idx,
-                'total': total,
-                'b64': b64,
-                'unit_id': remote_uid
-            }
-            # Send chunk via LoRa
-            lora.send(ujson.dumps(chunk_msg).encode('utf-8'))
-            # Wait for TX_DONE
-            tx_start = time.ticks_ms()
-            while time.ticks_diff(time.ticks_ms(), tx_start) < 10000:
-                ev = lora._events()
-                if TX_DONE_FLAG and (ev & TX_DONE_FLAG):
-                    break
-                await asyncio.sleep(0.01)
-            await asyncio.sleep(0.1)  # small delay between chunks
+        file_size = os.stat(file_path)[6]
+        total = (file_size // raw_chunk_size) + (1 if file_size % raw_chunk_size else 0)
+        with open(file_path, 'rb') as f:
+            seq = 1
+            chunk = f.read(raw_chunk_size)
+            while chunk:
+                b64 = _ub.b2a_base64(chunk).decode().strip()
+                chunk_msg = {
+                    'ota_file': 1,
+                    'filename': os.path.basename(file_path),
+                    'sha': sha256,
+                    'seq': seq,
+                    'total': total,
+                    'b64': b64,
+                    'unit_id': remote_uid
+                }
+                # Send chunk via LoRa
+                lora.send(ujson.dumps(chunk_msg).encode('utf-8'))
+                # Wait for TX_DONE
+                tx_start = time.ticks_ms()
+                while time.ticks_diff(time.ticks_ms(), tx_start) < 10000:
+                    ev = lora._events()
+                    if TX_DONE_FLAG and (ev & TX_DONE_FLAG):
+                        break
+                    await asyncio.sleep(0.01)
+                await asyncio.sleep(0.1)  # small delay between chunks
+                seq += 1
+                chunk = f.read(raw_chunk_size)
         return True
     except Exception as e:
         await debug_print(f"Failed to send OTA file: {e}", "ERROR")
         return False
+    gc.collect()
 
 # NEW: remote send helpers for field data batch and state files
 async def send_remote_field_data_batch(payload):
@@ -2405,6 +2418,7 @@ async def send_remote_field_data_batch(payload):
     except Exception as e:
         await debug_print(f"send_remote_field_data_batch error: {e}", "ERROR")
         return False
+    gc.collect()
 
 async def send_remote_state_files(files):
     """Send state files to base over LoRa, with chunking if needed."""
@@ -2422,6 +2436,7 @@ async def send_remote_state_files(files):
     except Exception as e:
         await debug_print(f"send_remote_state_files error: {e}", "ERROR")
         return False
+    gc.collect()
 
 async def send_lora_payload(data_bytes, confirm=True, max_wait_ms=1500):
     """Send data_bytes over LoRa, chunk if large, wait for confirm ACK if requested."""
@@ -2500,3 +2515,4 @@ async def send_lora_payload(data_bytes, confirm=True, max_wait_ms=1500):
     except Exception as e:
         await debug_print(f"send_lora_payload error: {e}", "ERROR")
         return False
+    gc.collect()
