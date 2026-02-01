@@ -708,7 +708,7 @@ Testing & QA
     - Frost/heat watch shortcode output.
   - Add manual QA checklist for release.
 
-# TMON TODO
+---
 
 ## Fixed / Implemented
 - Unit Connector relay buttons now enqueue `toggle_relay` commands via admin-ajax.
@@ -735,3 +735,26 @@ Testing & QA
   - show relay state (from latest sdata) and disable invalid actions when device offline
 - Documentation:
   - fill in root `COMMANDS.md`, plugin READMEs, and hub/UC install guides
+
+Docs / Starter / Wiki
+- [ ] Add data flow graphics/screenshots.
+- [ ] End-to-end tests for reprovision and command relay via base.
+- [Medium] Update public docs & starter page generation
+  - Update README, public docs and starter page generator to reflect current plugin version and features (include new shortcodes, widgets and staged-settings UI changes).
+- [Medium] Update the wiki
+  - Add application, usage, examples, shortcode/widget docs, and upgrade notes for current version.
+  - Add troubleshooting steps for staged settings not populating and graph visibility issues.
+
+Testing & QA
+- [ ] Add unit/integration tests for:
+  - AJAX settings updates
+  - Graph trace inclusion and cookie persistence
+  - Shortcode outputs
+- [ ] Add manual test cases for UI behaviors and animations.
+- [High] Test plan additions
+  - Add automated tests for:
+    - AJAX save/load for staged/applied settings (device data page).
+    - Switch toggle animation + server update.
+    - Graph legend cookie persistence and toggling across AJAX refreshes.
+    - Frost/heat watch shortcode output.
+  - Add manual QA checklist for release.
