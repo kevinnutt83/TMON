@@ -148,5 +148,3 @@
   - In WordPress/PHP, avoid unnecessary queries and heavy work in loops.
 - When adding non-trivial logic, briefly outline how it can be tested (manual steps or integration flow) based on current data paths.
 - Add only comments that clarify non-obvious behavior or domain rules; prefer clear naming and consistent patterns over heavy commenting.
-- Before making changes to code, review TODO.md first to see if the request is not already been made, record the request in TODO.md is that request has not been previously recorded, update the status of TODO.md listed items. 
-- Update/Replace out of date comments when updates to corsponding code is changed or updated.
