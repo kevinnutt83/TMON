@@ -52,7 +52,7 @@ except ImportError:
         import requests
     except ImportError:
         requests = None
-from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run, led_status_flash, write_lora_log, persist_unit_id, append_field_data_entry
+from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run, led_status_flash, write_lora_log, persist_unit_id, append_field_data_entry, maybe_gc
 from relay import toggle_relay
 try:
     from encryption import chacha20_encrypt, derive_nonce
@@ -256,6 +256,11 @@ async def check_suspend_remove():
                 await debug_print('Device is suspended by admin', 'WARN')
                 while True:
                     await asyncio.sleep(60)
+        # NEW: close response so suspended/active checks do not leak resources
+        try:
+            resp.close()
+        except Exception:
+            pass
     except Exception:
         pass
     gc.collect()
@@ -374,6 +379,11 @@ async def send_settings_to_wp():
             hdrs = {}
         resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/settings', headers=hdrs, json=data)
         await debug_print(f'Sent settings to WP: {resp.status_code}', 'HTTP')
+        # NEW: ensure HTTP response is closed to free sockets/buffers
+        try:
+            resp.close()
+        except Exception:
+            pass
     except Exception as e:
         await debug_print(f'Failed to send settings to WP: {e}', 'ERROR')
     gc.collect()
@@ -401,6 +411,11 @@ async def fetch_settings_from_wp():
             await debug_print('Settings updated from WP', 'HTTP')
         else:
             await debug_print(f'Failed to fetch settings: {resp.status_code}', 'ERROR')
+        # NEW: close HTTP response after processing
+        try:
+            resp.close()
+        except Exception:
+            pass
     except Exception as e:
         await debug_print(f'Failed to fetch settings from WP: {e}', 'ERROR')
     gc.collect()
@@ -420,6 +435,11 @@ async def send_file_to_wp(filepath):
                 hdrs = {}
             resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/file', headers=hdrs, files=files)
             await debug_print(f'Sent file to WP: {resp.status_code}', 'HTTP')
+            # NEW: close response for file upload
+            try:
+                resp.close()
+            except Exception:
+                pass
         del file_content
     except Exception as e:
         await debug_print(f'Failed to send file to WP: {e}', 'ERROR')
@@ -442,6 +462,11 @@ async def request_file_from_wp(filename):
             await debug_print(f'Received file from WP: {filename}', 'HTTP')
         else:
             await debug_print(f'Failed to fetch file: {resp.status_code}', 'ERROR')
+        # NEW: close response after file transfer
+        try:
+            resp.close()
+        except Exception:
+            pass
     except Exception as e:
         await debug_print(f'Failed to fetch file from WP: {e}', 'ERROR')
     gc.collect()
@@ -1467,13 +1492,6 @@ async def connectLora():
                                             st_code = int(resp[0])
                                         except Exception:
                                             st_code = -999
-                                elif isinstance(resp, int):
-                                    st_code = resp
-                                else:
-                                    try:
-                                        st_code = int(resp)
-                                    except Exception:
-                                        st_code = -999
                             except Exception:
                                 st_code = -999
 
@@ -1616,17 +1634,18 @@ async def connectLora():
                                                                             f.write('pending')
                                                                         machine.reset()
                                                                         break
+                                                    break
                                             break
                                     except Exception:
                                         pass
-                            await asyncio.sleep(0.01)
-                        if not ack_received:
-                            fallback = 300 + random.randint(-30, 30)
-                            if fallback < 60: fallback = 60
-                            settings.nextLoraSync = int(time.time() + fallback)
-                            write_lora_log(f"Remote no ACK, fallback next sync in {fallback} sec", 'INFO')
-                        gc.collect()
-                        return True
+                                await asyncio.sleep(0.01)
+                            if not ack_received:
+                                fallback = 300 + random.randint(-30, 30)
+                                if fallback < 60: fallback = 60
+                                settings.nextLoraSync = int(time.time() + fallback)
+                                write_lora_log(f"Remote no ACK, fallback next sync in {fallback} sec", 'INFO')
+                            gc.collect()
+                            return True
 
                     # If we reached here, single-frame failed after retries: treat as re-init trigger
                     await debug_print("lora: single-frame send failed after retries, re-initing radio", "ERROR")
@@ -1723,7 +1742,7 @@ async def connectLora():
                                 if isinstance(resp, (tuple, list)):
                                     if len(resp) >= 2 and isinstance(resp[1], int):
                                         st_code = resp[1]
-                                    elif len(resp) >= 1 and isinstance(resp[0], int):
+                                    elif isinstance(resp[0], int):
                                         st_code = resp[0]
                                     else:
                                         try:
@@ -2078,7 +2097,7 @@ async def connectLora():
                                                         obj2 = None
                                                     if isinstance(obj2, dict) and obj2.get('ack') == 'ok':
                                                         ack_received = True
-                                                        # Capture signal info
+                                                        # Capture signal info for display
                                                         try:
                                                             if hasattr(lora, 'getRSSI'):
                                                                 sdata.lora_SigStr = lora.getRSSI()
@@ -2088,7 +2107,7 @@ async def connectLora():
                                                                 sdata.last_message = ujson.dumps(obj2)[:32]
                                                         except Exception:
                                                             pass
-                                                        # Adopt next sync
+                                                        # Adopt next sync if provided
                                                         try:
                                                             if 'next_in' in obj2:
                                                                 rel = int(obj2['next_in'])
@@ -2101,7 +2120,7 @@ async def connectLora():
                                                                 settings.nextLoraSync = int(obj2['next'])
                                                         except Exception:
                                                             pass
-                                                        # Adopt GPS
+                                                        # Adopt GPS from base if provided and allowed
                                                         try:
                                                             if getattr(settings, 'GPS_ACCEPT_FROM_BASE', True):
                                                                 blat = obj2.get('gps_lat')
@@ -2148,9 +2167,9 @@ async def connectLora():
                                                                                         f.write('pending')
                                                                                     machine.reset()
                                                                                     break
-                                                        break
-                                                except Exception:
-                                                    pass
+                                                    break
+                                            except Exception:
+                                                pass
                                         await asyncio.sleep(0.01)
                                     if not ack_received:
                                         fallback = 300 + random.randint(-30, 30)
@@ -2204,6 +2223,7 @@ async def connectLora():
                                     try:
                                         if hasattr(lora, 'getRSSI'):
                                             sdata.lora_SigStr = lora.getRSSI()
+                                            sdata.lora_last_rx_ts = time.time()
                                         if hasattr(lora, 'getSNR'):
                                             sdata.lora_snr = lora.getSNR()
                                             sdata.last_message = ujson.dumps(obj2)[:32]
@@ -2269,15 +2289,28 @@ async def connectLora():
                                                                     f.write('pending')
                                                                 machine.reset()
                                                                 break
-                                    break
+                                                    break
+                                            except Exception:
+                                                pass
+                                        await asyncio.sleep(0.01)
+                                    if not ack_received:
+                                        fallback = 300 + random.randint(-30, 30)
+                                        if fallback < 60: fallback = 60
+                                        settings.nextLoraSync = int(time.time() + fallback)
+                                        write_lora_log(f"Remote no ACK, fallback next sync in {fallback} sec", 'INFO')
+                                    gc.collect()
+                                    return True
+                            # If we reached here, chunked send failed after retries: treat as re-init trigger
+                            await debug_print("lora: chunk send failed after retries, re-initing radio", "ERROR")
+                            try:
+                                if hasattr(lora, 'spi') and lora.spi:
+                                    lora.spi.deinit()
+                                _last_tx_exception_ms = time.ticks_ms()
                             except Exception:
                                 pass
-                    await asyncio.sleep(0.01)
-                if not ack_received:
-                    fallback = 300 + random.randint(-30, 30)
-                    if fallback < 60: fallback = 60
-                    settings.nextLoraSync = int(time.time() + fallback)
-                    write_lora_log(f"Remote no ACK, fallback next sync in {fallback} sec", 'INFO')
+                            lora = None
+                            gc.collect()
+                            return False
 
                 # After sending all chunks, done for this cycle
                 _last_send_ms = time.ticks_ms()

@@ -475,6 +475,11 @@ async def first_boot_provision():
                     disable_wifi()
             except Exception:
                 pass
+        # NEW: ensure HTTP response is closed after use
+        try:
+            resp.close()
+        except Exception:
+            pass
     except Exception as e:
         await debug_print('Provisioning check-in failed: %s' % e, 'ERROR')
 
