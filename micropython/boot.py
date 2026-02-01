@@ -10,7 +10,6 @@ import settings
 from utils import flash_led
 import uasyncio as asyncio
 from oled import display_message
-import gc  # NEW: collect once after boot-time work
 
 async def boot():
     fw_msg = f"Firmware: {settings.FIRMWARE_VERSION}"
@@ -75,6 +74,5 @@ async def boot():
                 pass
     except Exception:
         pass
-    gc.collect()  # NEW: reclaim memory from one-time boot tasks
 
 asyncio.run(boot())

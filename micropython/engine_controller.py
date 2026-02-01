@@ -5,7 +5,6 @@ import time
 import settings
 import sdata
 from utils import debug_print
-import gc  # NEW: GC after UART/struct work
 
 # Build UARTs lazily to allow re-init
 
@@ -100,7 +99,6 @@ async def poll_engine(dev_idx):
         sdata.engine2_speed_rpm = res_b[0]
         sdata.engine2_batt_v = res_b[3] / 10
     sdata.engine_last_poll_ts = time.time()
-    gc.collect()  # NEW: free temporary buffers after poll
     return stats
 
 
@@ -156,4 +154,3 @@ async def engine_loop():
             except Exception:
                 pass
             await asyncio.sleep(settings.ENGINE_POLL_INTERVAL_S)
-        gc.collect()  # NEW: clean up allocations each loop cycle

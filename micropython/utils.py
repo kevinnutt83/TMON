@@ -714,7 +714,7 @@ class TMONAI:
             machine.soft_reset()
         except Exception as e:
             await log_error(f'AI: Recovery failed: {e}', 'recovery')
- 
+
     async def suggest_action(self, context):
         if 'wifi' in str(context).lower():
             return 'Check WiFi credentials or signal.'
