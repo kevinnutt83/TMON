@@ -95,38 +95,100 @@ voc_i2c_address = 0x59
 ENABLE_sensorTSL2591 = False
 lux_i2c_address = 0x29
 
-# Pin definitions
-SYS_VOLTAGE_PIN = 3                # ADC pin used for voltage divider (adjust as needed)
-# LED Light control pin
-LED_PIN = 21
-# Relay control pins
-RELAY_PIN1 = 17
-RELAY_PIN2 = 18
-RELAY_PIN3 = None
-RELAY_PIN4 = None
-RELAY_PIN5 = None
-RELAY_PIN6 = None
-RELAY_PIN7 = None
-RELAY_PIN8 = None
-# I2C pins
-I2C_A_SCL_PIN = 33
-I2C_A_SDA_PIN = 34
-I2C_B_SCL_PIN = 38
-I2C_B_SDA_PIN = 39
-# LoRa Radio pins
-SPI_BUS = 1
-CLK_PIN = 35
-MOSI_PIN = 36
-MISO_PIN = 37
-CS_PIN = 14
-IRQ_PIN = 4
-RST_PIN = 40
-BUSY_PIN = 13
-# RS485 / Engine controller pins
-CH1_TX_PIN = 4
-CH1_RX_PIN = 5
-CH2_TX_PIN = 6
-CH2_RX_PIN = 7
+# MCU type selection
+MCU_TYPE = "pico"  # Set to "pico" or "esp32"
+
+# Pin maps for each MCU type
+pico_pins = {
+    "SYS_VOLTAGE_PIN": 29,
+    "LED_PIN": 25,
+    "RELAY_PIN1": 6,
+    "RELAY_PIN2": 7,
+    "RELAY_PIN3": None,
+    "RELAY_PIN4": None,
+    "RELAY_PIN5": None,
+    "RELAY_PIN6": None,
+    "RELAY_PIN7": None,
+    "RELAY_PIN8": None,
+    "I2C_A_SCL_PIN": 8,
+    "I2C_A_SDA_PIN": 9,
+    "I2C_B_SCL_PIN": 13,
+    "I2C_B_SDA_PIN": 14,
+    "SPI_BUS": 1,
+    "CLK_PIN": 10,
+    "MOSI_PIN": 11,
+    "MISO_PIN": 12,
+    "CS_PIN": 3,
+    "IRQ_PIN": 20,
+    "RST_PIN": 15,
+    "BUSY_PIN": 2,
+    "CH1_TX_PIN": 20,
+    "CH1_RX_PIN": 21,
+    "CH2_TX_PIN": 22,
+    "CH2_RX_PIN": 26,
+}
+
+esp32_pins = {
+    "SYS_VOLTAGE_PIN": 3,
+    "LED_PIN": 21,
+    "RELAY_PIN1": 17,
+    "RELAY_PIN2": 18,
+    "RELAY_PIN3": None,
+    "RELAY_PIN4": None,
+    "RELAY_PIN5": None,
+    "RELAY_PIN6": None,
+    "RELAY_PIN7": None,
+    "RELAY_PIN8": None,
+    "I2C_A_SCL_PIN": 33,
+    "I2C_A_SDA_PIN": 34,
+    "I2C_B_SCL_PIN": 38,
+    "I2C_B_SDA_PIN": 39,
+    "SPI_BUS": 1,
+    "CLK_PIN": 35,
+    "MOSI_PIN": 36,
+    "MISO_PIN": 37,
+    "CS_PIN": 14,
+    "IRQ_PIN": 4,
+    "RST_PIN": 40,
+    "BUSY_PIN": 13,
+    "CH1_TX_PIN": 4,
+    "CH1_RX_PIN": 5,
+    "CH2_TX_PIN": 6,
+    "CH2_RX_PIN": 7,
+}
+
+# Assign pins based on MCU_TYPE
+if MCU_TYPE == "pico":
+    pins = pico_pins
+else:
+    pins = esp32_pins
+
+SYS_VOLTAGE_PIN = pins["SYS_VOLTAGE_PIN"]
+LED_PIN = pins["LED_PIN"]
+RELAY_PIN1 = pins["RELAY_PIN1"]
+RELAY_PIN2 = pins["RELAY_PIN2"]
+RELAY_PIN3 = pins["RELAY_PIN3"]
+RELAY_PIN4 = pins["RELAY_PIN4"]
+RELAY_PIN5 = pins["RELAY_PIN5"]
+RELAY_PIN6 = pins["RELAY_PIN6"]
+RELAY_PIN7 = pins["RELAY_PIN7"]
+RELAY_PIN8 = pins["RELAY_PIN8"]
+I2C_A_SCL_PIN = pins["I2C_A_SCL_PIN"]
+I2C_A_SDA_PIN = pins["I2C_A_SDA_PIN"]
+I2C_B_SCL_PIN = pins["I2C_B_SCL_PIN"]
+I2C_B_SDA_PIN = pins["I2C_B_SDA_PIN"]
+SPI_BUS = pins["SPI_BUS"]
+CLK_PIN = pins["CLK_PIN"]
+MOSI_PIN = pins["MOSI_PIN"]
+MISO_PIN = pins["MISO_PIN"]
+CS_PIN = pins["CS_PIN"]
+IRQ_PIN = pins["IRQ_PIN"]
+RST_PIN = pins["RST_PIN"]
+BUSY_PIN = pins["BUSY_PIN"]
+CH1_TX_PIN = pins["CH1_TX_PIN"]
+CH1_RX_PIN = pins["CH1_RX_PIN"]
+CH2_TX_PIN = pins["CH2_TX_PIN"]
+CH2_RX_PIN = pins["CH2_RX_PIN"]
 
 #Debug toggles flags
 DEBUG = False
@@ -168,7 +230,6 @@ ENGINE_PUMP2_COIL = 1                 # Coil address for Pump2
 COMM_BAUD = 9600
 COMM_PARITY = None
 COMM_STOP_BITS = 1
-
 
 # Relay Settings
 ENABLE_RELAY1 = True
@@ -273,7 +334,7 @@ COMPARE_BAR = True
 SAMPLE_HUMID = True
 COMPARE_HUMID = True
 SAMPLE_LIGHT = False                    # Future light sensor enable
-SAMPLE_VOC = False                      # VOC sensor enable
+SAMPLE_VOC = False                     
 SAMPLE_LUX = False                      # Lux sensor enable
 
 #Frost & Heat Monitoring
