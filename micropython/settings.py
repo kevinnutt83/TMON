@@ -96,7 +96,7 @@ ENABLE_sensorTSL2591 = False
 lux_i2c_address = 0x29
 
 # MCU type selection
-MCU_TYPE = "pico"  # Set to "pico" or "esp32"
+MCU_TYPE = "esp32"  # Set to "pico" or "esp32"
 
 # Pin maps for each MCU type
 pico_pins = {
@@ -334,7 +334,7 @@ COMPARE_BAR = True
 SAMPLE_HUMID = True
 COMPARE_HUMID = True
 SAMPLE_LIGHT = False                    # Future light sensor enable
-SAMPLE_VOC = False                     
+SAMPLE_VOC = False                                         
 SAMPLE_LUX = False                      # Lux sensor enable
 
 #Frost & Heat Monitoring
@@ -616,3 +616,4 @@ LORA_SINGLE_FRAME_RETRIES = 2
 # NEW: explicit lists for handling chunk send errors
 LORA_CHUNK_SHRINK_CODES = [-4]            # codes that indicate "packet too long" and should trigger chunk size shrink
 LORA_CHUNK_TRANSIENT_CODES = [86, 87, 89] # codes considered transient — retry the chunk rather than shrink
+LORA_CHUNK_FATAL_CODES = [-2, -3]        # codes that indicate fatal errors — abort chunked transfer
