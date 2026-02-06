@@ -157,11 +157,47 @@ esp32_pins = {
     "CH2_RX_PIN": 7,
 }
 
+zero_pins = {
+    "SYS_VOLTAGE_PIN": None,
+    "LED_PIN": 25,
+    "RELAY_PIN1": 4,
+    "RELAY_PIN2": 17,
+    "RELAY_PIN3": None,
+    "RELAY_PIN4": None,
+    "RELAY_PIN5": None,
+    "RELAY_PIN6": None,
+    "RELAY_PIN7": None,
+    "RELAY_PIN8": None,
+    "I2C_A_SCL_PIN": 3,
+    "I2C_A_SDA_PIN": 2,
+    "I2C_B_SCL_PIN": 6,
+    "I2C_B_SDA_PIN": 5,
+    "SPI_BUS": 0,
+    "CLK_PIN": 11,
+    "MOSI_PIN": 10,
+    "MISO_PIN": 9,
+    "CS_PIN": 8,
+    "IRQ_PIN": 16,
+    "RST_PIN": 20,
+    "BUSY_PIN": 21,
+    "CH1_TX_PIN": 14,
+    "CH1_RX_PIN": 15,
+    "CH2_TX_PIN": 22,
+    "CH2_RX_PIN": 23,
+}
+
+
 # Assign pins based on MCU_TYPE
 if MCU_TYPE == "pico":
     pins = pico_pins
-else:
+elif MCU_TYPE == "zero":
+    pins = zero_pins
+elif MCU_TYPE == "esp32":
     pins = esp32_pins
+else:
+    raise ValueError("Invalid MCU_TYPE")
+
+
 
 SYS_VOLTAGE_PIN = pins["SYS_VOLTAGE_PIN"]
 LED_PIN = pins["LED_PIN"]
