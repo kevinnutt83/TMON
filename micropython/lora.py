@@ -1253,7 +1253,9 @@ async def connectLora():
                         # Best-effort: ACK back to remote with next sync and optional GPS
                         try:
                             # schedule next_in seconds (base chooses cadence)
-                            next_in = getattr(settings, 'LORA_CHECK_IN_MINUTES', 5) * 60 + random.randint(-30, 30)
+                            base_interval = getattr(settings, 'LORA_CHECK_IN_MINUTES', 5) * 60
+                            jitter = (sum(ord(c) for c in str(uid)) % 120) - 60
+                            next_in = base_interval + jitter
                             if next_in < 60: next_in = 60
                             ack['next_in'] = next_in
                             if getattr(settings, 'GPS_BROADCAST_TO_REMOTES', False):
