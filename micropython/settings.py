@@ -253,6 +253,7 @@ WIFI_BACKOFF_S = 15                       # Base backoff between retry bursts
 WIFI_SIGNAL_SAMPLE_INTERVAL_S = 30        # Interval to refresh RSSI for OLED
 
 # --- LoRa sync & recovery ---
+LORA_LOOP_INTERVAL_S = 5                    # Main loop interval (seconds)
 nextLoraSync = 100                      # Remote next absolute sync epoch (assigned by base)
 LORA_SYNC_WINDOW = 2                    # seconds of minimum spacing between remote sync slots
 LORA_SLOT_SPACING_S = LORA_SYNC_WINDOW  # alias for clarity
