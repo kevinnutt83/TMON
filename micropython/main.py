@@ -256,81 +256,47 @@ def get_script_runtime():
     now = time.ticks_ms()
     return (now - script_start_time) // 1000
 
-def is_provisioned():  # CHANGED: local helper (keeps callsites intact)
+# NEW: scheduler task wrappers (fix NameError; preserve existing logic by delegating to current functions)
+async def sample_task():
     try:
-        return bool(getattr(settings, "UNIT_PROVISIONED", False))
-    except Exception:
-        return False
-
-class TaskManager:
-    def __init__(self):
-        self.tasks = []
-    def add_task(self, coro_func, name, interval):
-        self.tasks.append({
-            'coro_func': coro_func,
-            'name': name,
-            'interval': interval,
-            'last_run': 0,
-            'task': None
-        })
-    async def run(self):
-        for t in self.tasks:
-            t['task'] = asyncio.create_task(self._task_wrapper(t))
-        await asyncio.gather(*(t['task'] for t in self.tasks if t['task'] is not None))
-    async def _task_wrapper(self, t):
-        while True:
-            start = time.ticks_ms()
-            try:
-                await t['coro_func']()
-            except Exception as e:
-                await debug_print(f"Task {t['name']} error: {e}", "ERROR")
-                await log_error(f"Task {t['name']} error: {e}")
-            t['last_run'] = time.ticks_ms()
-            elapsed = (t['last_run'] - start) // 1000
-            sleep_time = max(0, t['interval'] - elapsed)
-            await asyncio.sleep(sleep_time)
-
-async def lora_comm_task():
-    """Periodic LoRa communication init/retry loop."""
-    global sdata
-    from utils import led_status_flash
-    while True:
-        loop_start_time = time.ticks_ms()
-        led_status_flash('INFO')
-        result = None
-        error_msg = None
-        # Defensive init
-        if not hasattr(sdata, 'loop_runtime'):
-            sdata.loop_runtime = 0
-        if not hasattr(sdata, 'script_runtime'):
-            sdata.script_runtime = 0
+        r = sampleEnviroment()
+        if hasattr(r, "__await__"):
+            await r
+    except Exception as e:
         try:
-            sdata.loop_runtime = (time.ticks_ms() - loop_start_time) // 1000
-            sdata.script_runtime = get_script_runtime()
-            if getattr(settings, 'DEVICE_SUSPENDED', False):
-                await debug_print("Device suspended; skipping LoRa connect", "WARN")
-                result = None
-            else:
-                result = await connectLora()
-            if result is False:
-                led_status_flash('WARN')
-                await debug_print("lora: init fail, retry", "WARN")
-                for _ in range(10):
-                    await asyncio.sleep(1)  # CHANGED: was empty (syntax break)
-        except Exception as e:
-            led_status_flash('ERROR')
-            error_msg = f"lora_task err: {e}"
-            if "blocking" in error_msg:
-                error_msg += " | .blocking attribute does not exist on SX1262."
-            await debug_print(error_msg, "ERROR")
-            await log_error(error_msg)
-            await free_pins_lora()
-            for _ in range(10):
-                await asyncio.sleep(1)
-        loop_runtime = (time.ticks_ms() - loop_start_time) // 1000
-        led_status_flash('INFO')
-        await debug_print(f"lora_comm_task loop runtime: {loop_runtime}s | script runtime: {get_script_runtime()}s", "TASK")
-        await asyncio.sleep(1)
+            await debug_print(f"sample_task error: {e}", "ERROR")
+        except Exception:
+            pass
+
+async def periodic_field_data_task():
+    # Preserve current behavior: send log using the existing uploader (utils.send_field_data_log via periodic_field_data_send loop elsewhere)
+    try:
+        from utils import send_field_data_log
+    except Exception:
+        send_field_data_log = None
+    try:
+        if send_field_data_log:
+            await send_field_data_log()
+    except Exception as e:
+        try:
+            await debug_print(f"periodic_field_data_task error: {e}", "ERROR")
+        except Exception:
+            pass
+
+async def periodic_command_poll_task():
+    # Preserve current behavior: poll commands through wprest helper when present
+    try:
+        from wprest import poll_device_commands
+    except Exception:
+        poll_device_commands = None
+    try:
+        if poll_device_commands:
+            await poll_device_commands()
+    except Exception as e:
+        try:
+            await debug_print(f"periodic_command_poll_task error: {e}", "ERROR")
+        except Exception:
+            pass
 
 async def first_boot_provision():
     # Check for provisioning flag; if absent, try WiFi check-in to TMON Admin hub

@@ -508,7 +508,8 @@ async def flash_led(num_flashes, interval, lightColor, pattern):
                 pass
 
 def led_status_flash(status):
-    import uasyncio as _a
+    # CHANGED: use the module-selected asyncio (uasyncio on MicroPython, asyncio on CPython/Zero)
+    _a = asyncio
     color_map = {
         'BOOT': 'mint',
         'INFO': 'light_green',
@@ -549,7 +550,8 @@ def led_status_flash(status):
     }
     color = color_map.get(status, 'white')
     try:
-        _a.create_task(flash_led(1, 0.2, color, 'short'))
+        if _a:
+            _a.create_task(flash_led(1, 0.2, color, 'short'))
     except Exception:
         pass
     
