@@ -240,6 +240,12 @@ from ota import check_for_update, apply_pending_update
 from oled import update_display, display_message
 from settings_apply import load_applied_settings_on_boot, settings_apply_loop
 
+# NEW: engine controller import must be guarded (not present / not usable on Zero)
+try:
+    from engine_controller import engine_loop  # type: ignore
+except Exception:
+    engine_loop = None
+
 try:
     from wifi import connectToWifiNetwork, wifi_rssi_monitor  # CHANGED
 except Exception:
@@ -605,7 +611,7 @@ async def startup():
 
 # If blocking tasks are added later, start them in a separate thread here
 try:
-    import uasyncio as asyncio
+    # CHANGED: do not re-import uasyncio here; platform_compat already selected the correct asyncio
     from utils import start_background_tasks, update_sys_voltage, runGC  # CHANGED: use runGC alias
     from oled import display_message
 
@@ -649,9 +655,18 @@ try:
 
     if __name__ == '__main__':
         try:
+            # CHANGED: works on MicroPython (uasyncio) and CPython (asyncio) when provided by platform_compat
             asyncio.run(main())
         except Exception:
             # Older uasyncio compatibility
             loop = asyncio.get_event_loop()
             loop.create_task(main())
             loop.run_forever()
+
+except Exception as _boot_exc:
+    # NEW: close the outer try to avoid SyntaxError on CPython, and keep boot resilient.
+    try:
+        # Best-effort minimal diagnostics without assuming debug_print is available
+        print("main.py bootstrap failed:", _boot_exc)
+    except Exception:
+        pass

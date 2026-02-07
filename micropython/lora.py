@@ -1,7 +1,7 @@
 # Firmware Version: v2.06.0
+
 # Utility to print remote node info
 def print_remote_nodes():
-    import settings
     remote_info = getattr(settings, 'REMOTE_NODE_INFO', {})
     for node_id, node_data in remote_info.items():
         print(f"[REMOTE NODE] {node_id}: {node_data}")
@@ -18,6 +18,24 @@ from platform_compat import (
     asyncio, time, os, gc, requests, machine, network, IS_ZERO, IS_MICROPYTHON
 )  # CHANGED
 
+# NEW: stdlib/micropython compatibility imports (parse-safe on both runtimes)
+try:
+    import sys
+except Exception:
+    sys = None
+try:
+    import io
+except Exception:
+    io = None
+try:
+    import random
+except Exception:
+    random = None
+try:
+    import select
+except Exception:
+    select = None
+
 try:
     import ujson as ujson
 except Exception:
@@ -33,10 +51,26 @@ try:
 except Exception:
     import hashlib as uhashlib
 
+# NEW: base64 helpers with a MicroPython-like surface (_ub.b2a_base64 / _ub.a2b_base64)
 try:
-    import urandom as random
+    _ub = ubinascii  # MicroPython: ubinascii provides b2a_base64/a2b_base64 on many ports
+    if not hasattr(_ub, "b2a_base64") or not hasattr(_ub, "a2b_base64"):
+        raise ImportError("no base64 helpers")
 except Exception:
-    import random
+    import base64 as _py_b64
+
+    class _Base64Shim:
+        @staticmethod
+        def b2a_base64(b):
+            return _py_b64.b64encode(b) + b"\n"
+
+        @staticmethod
+        def a2b_base64(s):
+            if isinstance(s, str):
+                s = s.encode("ascii")
+            return _py_b64.b64decode(s)
+
+    _ub = _Base64Shim()
 
 # MicroPython-only SX1262 driver
 try:
@@ -47,29 +81,17 @@ except Exception:
     except Exception:
         SX1262 = None
 
+# CHANGED: previously empty try blocks caused SyntaxError; import settings/sdata explicitly.
 try:
     import sdata
     import settings
-except ImportError:
+except Exception:
     sdata = None
     settings = None
-try:
-    import machine
-except ImportError:
-    machine = None
-try:
-    import utime as time
-except ImportError:
-    import time
-try:
-    import urequests as requests
-except ImportError:
-    try:
-        import requests
-    except ImportError:
-        requests = None
+
 from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run, led_status_flash, write_lora_log, persist_unit_id, append_field_data_entry
 from relay import toggle_relay
+
 try:
     from encryption import chacha20_encrypt, derive_nonce
 except Exception:
@@ -97,36 +119,7 @@ except Exception:
     register_with_wp = send_data_to_wp = send_settings_to_wp = fetch_settings_from_wp = None
     send_file_to_wp = request_file_from_wp = heartbeat_ping = poll_ota_jobs = handle_ota_job = _auth_headers = None
 
-async def user_input_listener():
-    """Non-blocking input for user commands via UART/serial."""
-    if not sys or not hasattr(sys, 'stdin'):
-        return
-    while True:
-        if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
-            cmd = sys.stdin.readline().strip()
-            if cmd:
-                await handle_user_command(cmd)
-        await asyncio.sleep(0.1)
-
-async def handle_user_command(cmd):
-    """Parse and execute user commands for system/AI."""
-    from utils import debug_print
-    if cmd.lower() == 'reset_ai':
-        TMON_AI.error_count = 0
-        await debug_print('AI error count reset by user', 'user_input')
-    elif cmd.lower().startswith('call '):
-        # Example: call <function_name>
-        fn = cmd[5:].strip()
-        if hasattr(TMON_AI, fn):
-            await debug_print(f'Calling AI function: {fn}', 'user_input')
-            getattr(TMON_AI, fn)()
-        else:
-            await debug_print(f'No such AI function: {fn}', 'user_input')
-    else:
-        await debug_print(f'Unknown command: {cmd}', 'user_input')
-
 # File to persist remote node info and remote sync schedule
-import settings
 REMOTE_NODE_INFO_FILE = settings.LOG_DIR + '/remote_node_info.json'
 REMOTE_SYNC_SCHEDULE_FILE = settings.LOG_DIR + '/remote_sync_schedule.json'
 GPS_STATE_FILE = settings.LOG_DIR + '/gps.json'
@@ -151,7 +144,7 @@ def load_remote_node_info():
         with open(GPS_STATE_FILE, 'r') as f:
             gps = ujson.load(f)
             try:
-                import sdata as _s
+                _s = sdata
                 _s.gps_lat = gps.get('gps_lat')
                 _s.gps_lng = gps.get('gps_lng')
                 _s.gps_alt_m = gps.get('gps_alt_m')
@@ -197,7 +190,7 @@ def save_gps_state(lat=None, lng=None, alt=None, acc=None, ts=None):
     try:
         # Update sdata mirror
         try:
-            import sdata as _s
+            _s = sdata
             _s.gps_lat = lat
             _s.gps_lng = lng
             _s.gps_alt_m = alt
@@ -257,8 +250,6 @@ async def check_suspend_remove():
     if not WORDPRESS_API_URL:
         return
     try:
-        import settings
-        import urequests as requests
         headers = {}
         try:
             headers = _auth_headers()
@@ -947,13 +938,9 @@ def _save_remote_counters(ctrs):
 # Copy from firmware_updater for remote OTA verify
 def _get_hashlib():
     try:
-        import uhashlib as _uh
-        import ubinascii as _ub
-        return _uh, _ub
+        return uhashlib, _ub
     except Exception:
-        import hashlib as _uh
-        import binascii as _ub
-        return _uh, _ub
+        return uhashlib, _ub
 
 def compute_sha256_from_bytes(data):
     _uh, _ub = _get_hashlib()
@@ -971,7 +958,6 @@ def compute_sha256_from_bytes(data):
         except Exception:
             hexsum = ''
     return hexsum
-    gc.collect()
 
 async def connectLora():
     """Non-blocking LoRa routine called frequently from lora_comm_task.
@@ -1560,6 +1546,7 @@ async def connectLora():
                                             try:
                                                 if hasattr(lora, 'getRSSI'):
                                                     sdata.lora_SigStr = lora.getRSSI()
+                                                    sdata.lora_last_rx_ts = time.time()
                                                 if hasattr(lora, 'getSNR'):
                                                     sdata.lora_snr = lora.getSNR()
                                                     sdata.last_message = ujson.dumps(obj2)[:32]
@@ -1787,7 +1774,7 @@ async def connectLora():
                                                     obj2 = None
                                                 if isinstance(obj2, dict) and obj2.get('ack') == 'ok':
                                                     ack_received = True
-                                                    # Capture signal info
+                                                    # Capture signal info for display
                                                     try:
                                                         if hasattr(lora, 'getRSSI'):
                                                             sdata.lora_SigStr = lora.getRSSI()
@@ -1797,7 +1784,7 @@ async def connectLora():
                                                             sdata.last_message = ujson.dumps(obj2)[:32]
                                                     except Exception:
                                                         pass
-                                                    # Adopt next sync
+                                                    # Adopt next sync if provided
                                                     try:
                                                         if 'next_in' in obj2:
                                                             rel = int(obj2['next_in'])
@@ -1810,7 +1797,7 @@ async def connectLora():
                                                             settings.nextLoraSync = int(obj2['next'])
                                                     except Exception:
                                                         pass
-                                                    # Adopt GPS
+                                                    # Adopt GPS from base if provided and allowed
                                                     try:
                                                         if getattr(settings, 'GPS_ACCEPT_FROM_BASE', True):
                                                             blat = obj2.get('gps_lat')
@@ -1858,14 +1845,14 @@ async def connectLora():
                                                                                 machine.reset()
                                                                                 break
                                                     break
-                                            except Exception:
-                                                pass
-                                        await asyncio.sleep(0.01)
-                                    if not ack_received:
-                                        fallback = 300 + random.randint(-30, 30)
-                                        if fallback < 60: fallback = 60
-                                        settings.nextLoraSync = int(time.time() + fallback)
-                                        write_lora_log(f"Remote no ACK, fallback next sync in {fallback} sec", 'INFO')
+                                                except Exception:
+                                                    pass
+                                            await asyncio.sleep(0.01)
+                                        if not ack_received:
+                                            fallback = 300 + random.randint(-30, 30)
+                                            if fallback < 60: fallback = 60
+                                            settings.nextLoraSync = int(time.time() + fallback)
+                                            write_lora_log(f"Remote no ACK, fallback next sync in {fallback} sec", 'INFO')
                                     gc.collect()
                                     return True
                             else:

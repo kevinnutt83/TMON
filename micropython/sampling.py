@@ -6,7 +6,12 @@ from utils import free_pins_i2c
 from platform_compat import asyncio  # CHANGED: replaces `import uasyncio as asyncio`
 from utils import debug_print
 from tmon import frostwatchCheck, heatwatchCheck, beginFrostOperations, beginHeatOperations, endFrostOperations, endHeatOperations
-from lib.BME280 import BME280
+
+# CHANGED: don't hard-import sensor drivers at module import time (Zero/CPython-safe)
+try:
+    from lib.BME280 import BME280 as _BME280
+except Exception:
+    _BME280 = None
 
 
 #Sampling Routine for sample all sensor types if they are enabled
@@ -32,6 +37,12 @@ async def sampleTemp():
 
 async def sampleBME280():
     if settings.ENABLE_sensorBME280:
+        # NEW: Zero/CPython does not have the MicroPython I2C/sensor stack by default.
+        if str(getattr(settings, "MCU_TYPE", "")).lower() == "zero":
+            if settings.DEBUG and settings.DEBUG_TEMP:
+                await debug_print("sample:BME280 skipped on MCU_TYPE=zero", "DEBUG TEMP")
+            return
+
         from utils import led_status_flash
         import sdata as _s
         _s.sampling_active = True
@@ -51,8 +62,19 @@ async def sampleBME280():
                         pass
                     lora_module.lora = None
             await free_pins_i2c()
-            from BME280 import BME280
-            sensor = BME280()
+            # CHANGED: resolve driver via guarded import above; keep fallback for legacy layouts
+            BME = _BME280
+            if BME is None:
+                try:
+                    from BME280 import BME280 as BME  # legacy path on some builds
+                except Exception:
+                    BME = None
+            if BME is None:
+                if settings.DEBUG and settings.DEBUG_TEMP:
+                    await debug_print("sample:BME280 driver missing", "SAMPLE ERROR TEMP")
+                return
+
+            sensor = BME()
             sensor.get_calib_param()
             try:
                 led_status_flash('SAMPLE_BME280')
