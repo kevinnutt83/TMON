@@ -4,7 +4,11 @@ try:
 except Exception:
     import json
 
-import os
+try:
+    import uos as os
+except Exception:
+    import os
+
 import gc  # NEW: run GC after JSON/file operations
 
 def ensure_dir(path):

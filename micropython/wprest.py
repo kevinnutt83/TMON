@@ -16,6 +16,12 @@ try:
 except Exception:
     import json
 
+# NEW: time module used below (time.time())
+try:
+    import utime as time
+except Exception:
+    import time
+
 from utils import debug_print, get_machine_id, persist_unit_id, persist_unit_name, append_to_backlog, read_backlog, clear_backlog
 import settings
 import os

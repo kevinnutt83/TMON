@@ -1,9 +1,13 @@
 # Firmware Version: v2.06.0
 # OTA scaffolding: version check and pending flag
+
 try:
     import urequests as requests
 except Exception:
-    requests = None
+    try:
+        import requests  # type: ignore
+    except Exception:
+        requests = None
 
 # Ensure we can use asyncio.sleep in this async module
 try:
@@ -50,11 +54,25 @@ async def _sleep(seconds):
 import settings
 from config_persist import write_text
 from utils import debug_print
-# NEW: GC helper
 from utils import maybe_gc
-import ujson as json
-import os
-import binascii as _binascii
+
+# JSON: MicroPython ujson vs CPython json
+try:
+    import ujson as json
+except Exception:
+    import json  # type: ignore
+
+try:
+    import uos as os
+except Exception:
+    import os
+
+# binascii: ubinascii vs binascii
+try:
+    import ubinascii as _binascii
+except Exception:
+    import binascii as _binascii  # type: ignore
+
 import re as _re
 
 def _safe_join(base: str, name: str) -> str:
@@ -297,8 +315,15 @@ async def apply_pending_update():
                     except Exception:
                         pass
 
-        import ubinascii as _ub
-        import uhashlib as _uh
+        # Replace MicroPython-only imports with fallbacks
+        try:
+            import ubinascii as _ub
+        except Exception:
+            import binascii as _ub  # type: ignore
+        try:
+            import uhashlib as _uh
+        except Exception:
+            import hashlib as _uh  # type: ignore
 
         max_hash_failures = int(getattr(settings, 'OTA_MAX_HASH_FAILURES', 3))
         retry_interval_s = int(getattr(settings, 'OTA_HASH_RETRY_INTERVAL_S', 2))

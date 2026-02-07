@@ -1,5 +1,7 @@
 # Firmware Version: v2.06.0
 
+import settings  # REQUIRED: used by print_remote_nodes() at import-time
+
 # Utility to print remote node info
 def print_remote_nodes():
     remote_info = getattr(settings, 'REMOTE_NODE_INFO', {})
@@ -13,12 +15,11 @@ async def print_remote_nodes_async():
     except Exception:
         pass
 
-# --- All imports at the top ---
+# --- All imports at the top (MCU-aware, MicroPython/CPython safe) ---
 try:
     import uasyncio as asyncio
 except ImportError:
     import asyncio
-import settings
 
 try:
     import sdata
@@ -38,6 +39,16 @@ except ImportError:
     import os
 
 try:
+    import ujson as ujson
+except Exception:
+    import json as ujson  # type: ignore
+
+try:
+    import urandom as random
+except Exception:
+    import random  # type: ignore
+
+try:
     import sys
 except Exception:
     sys = None
@@ -48,84 +59,53 @@ except Exception:
     gc = None
 
 try:
-    import urandom as random
-except ImportError:
-    import random
-
-try:
     import uselect as select
-except ImportError:
+except Exception:
     try:
         import select  # type: ignore
     except Exception:
         select = None
 
 try:
-    import ujson as ujson
-except ImportError:
-    import json as ujson
-
-try:
     import ubinascii as ubinascii
-except ImportError:
-    import binascii as ubinascii
-_ub = ubinascii  # existing code uses _ub.*
+except Exception:
+    import binascii as ubinascii  # type: ignore
+_ub = ubinascii
 
 try:
     import uhashlib as uhashlib
-except ImportError:
-    import hashlib as uhashlib
-_uh = uhashlib  # existing code uses _uh.*
+except Exception:
+    import hashlib as uhashlib  # type: ignore
+_uh = uhashlib
 
 try:
     import io
 except Exception:
     io = None
 
+# machine is optional on "zero"; main.py/boot.py may register a shim into sys.modules.
 try:
-    import machine
-except ImportError:
-    # main.py registers a 'machine' shim into sys.modules for MCU_TYPE="zero"
-    try:
-        import machine  # type: ignore
-    except Exception:
-        machine = None
+    import machine  # MicroPython (or shim)
+except Exception:
+    machine = None
 
-try:
-    from sx1262 import SX1262
-except ImportError:
-    try:
-        from lib.sx1262 import SX1262  # fallback to lib path
-    except ImportError:
-        SX1262 = None
-
+# requests: MicroPython urequests vs CPython requests
 try:
     import urequests as requests
-except ImportError:
+except Exception:
     try:
         import requests  # type: ignore
     except Exception:
         requests = None
 
-from sampling import (
-    sampleEnviroment, findLowestTemp, findHighestTemp,
-    findLowestBar, findHighestBar, findLowestHumid, findHighestHumid
-)
-from utils import (
-    free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run,
-    led_status_flash, write_lora_log, persist_unit_id, append_field_data_entry
-)
-from relay import toggle_relay
-
+# sx1262 driver is optional; keep module importable on "zero" even if absent
 try:
-    from encryption import chacha20_encrypt, derive_nonce
+    from sx1262 import SX1262
 except Exception:
-    chacha20_encrypt = None
-    derive_nonce = None
-
-# Add decrypt since ChaCha20 is symmetric
-def chacha20_decrypt(key, nonce, aad, ciphertext):
-    return chacha20_encrypt(key, nonce, aad, ciphertext)
+    try:
+        from lib.sx1262 import SX1262  # fallback to lib path
+    except Exception:
+        SX1262 = None
 
 # Guarded import of optional wprest helpers to avoid ImportError on devices that don't expose all names.
 try:
@@ -173,7 +153,6 @@ async def handle_user_command(cmd):
         await debug_print(f'Unknown command: {cmd}', 'user_input')
 
 # File to persist remote node info and remote sync schedule
-import settings
 REMOTE_NODE_INFO_FILE = settings.LOG_DIR + '/remote_node_info.json'
 REMOTE_SYNC_SCHEDULE_FILE = settings.LOG_DIR + '/remote_sync_schedule.json'
 GPS_STATE_FILE = settings.LOG_DIR + '/gps.json'

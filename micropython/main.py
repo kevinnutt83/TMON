@@ -5,6 +5,7 @@ try:
     import uasyncio as asyncio
 except ImportError:
     import asyncio
+
 import settings
 
 from debug import info as dbg_info, warn as dbg_warn, error as dbg_error
@@ -24,6 +25,20 @@ try:
     import gc
 except Exception:
     gc = None
+
+# Also needed by the "zero" machine shim below
+try:
+    import sys as _sys
+except Exception:
+    _sys = None
+try:
+    import types as _types
+except Exception:
+    _types = None
+try:
+    import uuid as _uuid
+except Exception:
+    _uuid = None
 
 # CPython fallback: ticks_* + sleep_ms shims (used throughout firmware)
 if not hasattr(time, "ticks_ms"):
@@ -51,23 +66,21 @@ try:
 except ImportError:
     machine = None
 
-if (machine is None) and (str(getattr(settings, "MCU_TYPE", "")).lower() == "zero"):
-    import sys as _sys
-    import types as _types
-    import uuid as _uuid
-
+if (machine is None) and (str(getattr(settings, "MCU_TYPE", "")).lower() == "zero") and _sys and _types:
     _m = _types.SimpleNamespace()
 
     def _unique_id():
+        # Prefer Linux machine-id when available
         try:
             with open("/etc/machine-id", "r") as f:
                 mid = (f.read() or "").strip()
                 if mid:
-                    return bytes.fromhex(mid[:32])
+                    return mid.encode("utf-8")[:12]
         except Exception:
             pass
+        # Fallback: MAC-based
         try:
-            node = _uuid.getnode()
+            node = (_uuid.getnode() if _uuid else 0)
             return int(node).to_bytes(6, "big", signed=False)
         except Exception:
             return b"\x00" * 6
@@ -83,34 +96,19 @@ if (machine is None) and (str(getattr(settings, "MCU_TYPE", "")).lower() == "zer
             self.pull = pull
             self._val = 0
             self._gpio = None
+            # Best-effort: no-op on desktop unless a GPIO lib is present
             try:
-                import RPi.GPIO as GPIO  # type: ignore
-                self._gpio = GPIO
-                GPIO.setwarnings(False)
-                GPIO.setmode(GPIO.BCM)
-                if mode == self.OUT:
-                    GPIO.setup(pin, GPIO.OUT)
-                else:
-                    pud = GPIO.PUD_OFF
-                    if pull == self.PULL_UP:
-                        pud = GPIO.PUD_UP
-                    elif pull == self.PULL_DOWN:
-                        pud = GPIO.PUD_DOWN
-                    GPIO.setup(pin, GPIO.IN, pull_up_down=pud)
+                import gpiozero  # type: ignore
+                self._gpio = gpiozero.LED(pin) if mode == self.OUT else None
             except Exception:
                 self._gpio = None
         def value(self, v=None):
             if v is None:
-                if self._gpio:
-                    try:
-                        return int(self._gpio.input(self.pin))
-                    except Exception:
-                        return int(self._val)
-                return int(self._val)
+                return self._val
             self._val = 1 if v else 0
             if self._gpio:
                 try:
-                    self._gpio.output(self.pin, self._val)
+                    self._gpio.on() if self._val else self._gpio.off()
                 except Exception:
                     pass
             return self._val
