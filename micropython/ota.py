@@ -57,9 +57,11 @@ async def _sleep(seconds):
 import settings
 from config_persist import write_text
 from utils import debug_print
-# NEW: GC helper
 from utils import maybe_gc
-import ujson as json
+try:
+    import ujson as json  # CHANGED: MicroPython fast-path
+except Exception:
+    import json  # CHANGED: CPython (Zero) fallback
 import os
 import binascii as _binascii
 import re as _re
@@ -110,8 +112,6 @@ async def check_for_update():
                 await debug_print(f'ota: update {remote_ver} available', 'OTA')
                 try:
                     from oled import display_message
-                    # concise user message
-                    import uasyncio
                     await display_message("OTA Available", 2)
                 except Exception:
                     pass

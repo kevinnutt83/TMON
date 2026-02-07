@@ -161,11 +161,9 @@
 - [🚧] GPS acceptance from base on remote nodes
 
 ### 1.X Raspberry Pi Zero (CPython) Compatibility
-- [🚧] Replace direct `utime`/`uasyncio`/`urequests` imports with `platform_compat` (keyed off `settings.MCU_TYPE`)
-- [⏳] Fix `/micropython/utils.py` import crash on Zero: `import utime as time` → `from platform_compat import time`
-- [⏳] Ensure `platform_compat.py` selects correct backends for:
-  - MicroPython (ESP32/Pico): `utime/uasyncio/urequests/machine/network/framebuf`
-  - CPython (Zero): `time/asyncio/requests` (+ GPIO/I2C/SPI stubs or shims as needed)
+- [🚧] Provide CPython shims for MicroPython-only modules used by firmware (`utime` first)
+- [🚧] Eliminate remaining direct `uasyncio` / `ujson` imports in shared modules (use fallbacks or `platform_compat`)
+- [⏳] Verify firmware imports cleanly on Zero with `settings.MCU_TYPE="zero"` (no `ModuleNotFoundError` at boot)
 
 ---
 

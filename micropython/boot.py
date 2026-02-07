@@ -19,12 +19,16 @@ async def boot():
     # If remote node, try to load persisted next sync time
     try:
         if getattr(settings, 'NODE_TYPE', None) == 'remote':
-            import ujson, os
+            try:
+                import ujson as _json  # CHANGED: MicroPython
+            except Exception:
+                import json as _json  # CHANGED: CPython (Zero)
+            import os
             path = settings.LOG_DIR + '/remote_next_sync.json'
             try:
                 os.stat(path)
                 with open(path, 'r') as f:
-                    obj = ujson.load(f)
+                    obj = _json.load(f)
                     if 'next' in obj:
                         settings.nextLoraSync = int(obj['next'])
             except OSError:
