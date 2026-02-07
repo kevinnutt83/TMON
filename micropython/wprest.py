@@ -5,9 +5,75 @@
 import gc
 from platform_compat import requests as _pc_requests, time as _pc_time, asyncio as _pc_asyncio  # CHANGED
 import sys  # NEW
-import urllib.request  # CHANGED: CPython fallback when 'requests' isn't installed
-import urllib.error  # CHANGED
-import urllib.parse  # CHANGED
+
+try:
+    import ujson as json
+except Exception:
+    import json
+
+import settings
+import os
+
+# CHANGED: determine runtime early so we can safely import CPython-only libs conditionally
+def _is_micropython() -> bool:
+    try:
+        return str(getattr(sys.implementation, "name", "")).lower() == "micropython"
+    except Exception:
+        return False
+
+_IS_MICROPYTHON = _is_micropython()
+
+# CHANGED: CPython-only urllib imports must not run on MicroPython
+if not _IS_MICROPYTHON:
+    import urllib.request  # type: ignore
+    import urllib.error  # type: ignore
+    import urllib.parse  # type: ignore
+else:
+    urllib = None  # type: ignore
+
+# CHANGED: Guard utils import so Zero can still check-in/provision even if other code paths
+# (e.g., neopixel usage inside utils.flash_led) are problematic at runtime.
+try:
+    from utils import (
+        debug_print,
+        get_machine_id,
+        persist_unit_id,
+        persist_unit_name,
+        append_to_backlog,
+        read_backlog,
+        clear_backlog,
+    )
+except Exception:
+    async def debug_print(msg, tag="DEBUG"):
+        try:
+            print(f"[{tag}] {msg}")
+        except Exception:
+            pass
+
+    def get_machine_id():
+        try:
+            return getattr(settings, "MACHINE_ID", "") or ""
+        except Exception:
+            return ""
+
+    def persist_unit_id(_uid):
+        return None
+
+    def persist_unit_name(_name):
+        return None
+
+    def append_to_backlog(_entry):
+        return False
+
+    def read_backlog():
+        return []
+
+    def clear_backlog():
+        return True
+
+WORDPRESS_API_URL = getattr(settings, 'WORDPRESS_API_URL', '')
+WORDPRESS_USERNAME = getattr(settings, 'WORDPRESS_USERNAME', None)
+WORDPRESS_PASSWORD = getattr(settings, 'WORDPRESS_PASSWORD', None)
 
 # CHANGED: CPython/Zero fallback for HTTP + time when platform_compat provides None
 requests = _pc_requests
@@ -25,18 +91,24 @@ if time is None:
     except Exception:
         time = None  # type: ignore
 
+# CHANGED: prefer a to_thread-capable asyncio on CPython even if platform_compat shims are minimal
 try:
-    import ujson as json
+    import asyncio as _py_asyncio  # type: ignore
 except Exception:
-    import json
+    _py_asyncio = None  # type: ignore
 
-from utils import debug_print, get_machine_id, persist_unit_id, persist_unit_name, append_to_backlog, read_backlog, clear_backlog
-import settings
-import os
-
-WORDPRESS_API_URL = getattr(settings, 'WORDPRESS_API_URL', '')
-WORDPRESS_USERNAME = getattr(settings, 'WORDPRESS_USERNAME', None)
-WORDPRESS_PASSWORD = getattr(settings, 'WORDPRESS_PASSWORD', None)
+def _to_thread_asyncio():
+    try:
+        if (not _IS_MICROPYTHON) and _pc_asyncio and hasattr(_pc_asyncio, "to_thread"):
+            return _pc_asyncio
+    except Exception:
+        pass
+    try:
+        if (not _IS_MICROPYTHON) and _py_asyncio and hasattr(_py_asyncio, "to_thread"):
+            return _py_asyncio
+    except Exception:
+        pass
+    return None
 
 # Minimal async HTTP client wrappers are not necessary when using urequests synchronously,
 # but we wrap calls with try/except and timeouts where possible for safety.
@@ -108,12 +180,6 @@ def _auth_headers(mode=None):
         pass
     # default: return headers w/o auth
     return headers
-
-def _is_micropython() -> bool:
-    try:
-        return getattr(sys.implementation, "name", "") == "micropython"
-    except Exception:
-        return False
 
 # CHANGED: minimal urllib-based response shim to preserve current call sites
 class _UrlLibResp:
@@ -193,11 +259,12 @@ async def _http_post(url, payload=None, headers=None, timeout_s=8):
     CPython: run requests.post in a thread to avoid freezing the event loop.
     MicroPython/urequests: fall back to data=json.dumps(payload) and omit timeout when unsupported.
     """
-    # CHANGED: if 'requests' is unavailable on CPython, fall back to urllib
-    if requests is None and not _is_micropython():
+    # CHANGED: if 'requests' is unavailable on CPython, fall back to urllib (only on CPython)
+    if requests is None and not _IS_MICROPYTHON:
+        a = _to_thread_asyncio()
         try:
-            if hasattr(_pc_asyncio, "to_thread"):
-                return await _pc_asyncio.to_thread(_urllib_post, url, payload, headers, timeout_s)
+            if a and hasattr(a, "to_thread"):
+                return await a.to_thread(_urllib_post, url, payload, headers, timeout_s)
         except Exception:
             pass
         return _urllib_post(url, payload, headers, timeout_s)
@@ -206,11 +273,8 @@ async def _http_post(url, payload=None, headers=None, timeout_s=8):
         return None
 
     def _do_post():
-        # CPython requests supports json= and timeout=
-        if not _is_micropython():
+        if not _IS_MICROPYTHON:
             return requests.post(url, json=payload, headers=headers, timeout=timeout_s)
-
-        # MicroPython urequests often lacks json=/timeout=
         try:
             return requests.post(url, json=payload, headers=headers)  # type: ignore[arg-type]
         except TypeError:
@@ -220,19 +284,21 @@ async def _http_post(url, payload=None, headers=None, timeout_s=8):
                 body = "{}"
             return requests.post(url, data=body, headers=headers)
 
+    a = _to_thread_asyncio()
     try:
-        if (not _is_micropython()) and hasattr(_pc_asyncio, "to_thread"):
-            return await _pc_asyncio.to_thread(_do_post)
+        if (not _IS_MICROPYTHON) and a and hasattr(a, "to_thread"):
+            return await a.to_thread(_do_post)
     except Exception:
         pass
     return _do_post()
 
 async def _http_get(url, headers=None, timeout_s=8):
-    # CHANGED: if 'requests' is unavailable on CPython, fall back to urllib
-    if requests is None and not _is_micropython():
+    # CHANGED: if 'requests' is unavailable on CPython, fall back to urllib (only on CPython)
+    if requests is None and not _IS_MICROPYTHON:
+        a = _to_thread_asyncio()
         try:
-            if hasattr(_pc_asyncio, "to_thread"):
-                return await _pc_asyncio.to_thread(_urllib_get, url, headers, timeout_s)
+            if a and hasattr(a, "to_thread"):
+                return await a.to_thread(_urllib_get, url, headers, timeout_s)
         except Exception:
             pass
         return _urllib_get(url, headers, timeout_s)
@@ -241,16 +307,17 @@ async def _http_get(url, headers=None, timeout_s=8):
         return None
 
     def _do_get():
-        if not _is_micropython():
+        if not _IS_MICROPYTHON:
             return requests.get(url, headers=headers, timeout=timeout_s)
         try:
             return requests.get(url, headers=headers)  # urequests
         except TypeError:
             return requests.get(url, headers=headers)
 
+    a = _to_thread_asyncio()
     try:
-        if (not _is_micropython()) and hasattr(_pc_asyncio, "to_thread"):
-            return await _pc_asyncio.to_thread(_do_get)
+        if (not _IS_MICROPYTHON) and a and hasattr(a, "to_thread"):
+            return await a.to_thread(_do_get)
     except Exception:
         pass
     return _do_get()
