@@ -4,6 +4,21 @@ from platform_compat import time, asyncio, requests as urequests, network, gc, I
 
 import sdata
 
+# CHANGED: Zero WiFi helpers (OS-managed connectivity)
+if IS_ZERO:
+	try:
+		import subprocess  # type: ignore
+	except Exception:
+		subprocess = None  # type: ignore
+	try:
+		import re  # type: ignore
+	except Exception:
+		re = None  # type: ignore
+	try:
+		import binascii  # type: ignore
+	except Exception:
+		binascii = None  # type: ignore
+
 gc.enable()
 
 # --- GC: best-effort cleanup after module import / heavy init ---
@@ -87,8 +102,58 @@ def _should_attempt_connect():
 		pass
 	return getattr(s, 'ENABLE_WIFI', True)
 
+def _zero_get_ip():
+	if not subprocess:
+		return ""
+	try:
+		# hostname -I returns all IPs; pick first IPv4
+		out = subprocess.check_output(["hostname", "-I"]).decode("utf-8", "ignore").strip()
+		for tok in (out.split() if out else []):
+			if "." in tok:
+				return tok
+	except Exception:
+		pass
+	return ""
+
+def _zero_get_mac():
+	if not subprocess:
+		return ""
+	try:
+		mac = subprocess.check_output(["cat", "/sys/class/net/wlan0/address"]).decode("utf-8", "ignore").strip()
+		return mac
+	except Exception:
+		return ""
+
+def _zero_get_rssi_dbm():
+	if not subprocess:
+		return None
+	# Prefer: iw dev wlan0 link -> "signal: -XX dBm"
+	try:
+		out = subprocess.check_output(["iw", "dev", "wlan0", "link"]).decode("utf-8", "ignore")
+		if re:
+			m = re.search(r"signal:\s*(-?\d+)\s*dBm", out)
+			if m:
+				return int(m.group(1))
+	except Exception:
+		pass
+	# Fallback: iwconfig wlan0 -> "Signal level=-XX dBm"
+	try:
+		out = subprocess.check_output(["iwconfig", "wlan0"]).decode("utf-8", "ignore")
+		if re:
+			m = re.search(r"Signal level=(-?\d+)\s*dBm", out)
+			if m:
+				return int(m.group(1))
+	except Exception:
+		pass
+	return None
+
 def _refresh_rssi(wlan):
-	# ...existing code...
+	if IS_ZERO:
+		try:
+			sdata.wifi_rssi = _zero_get_rssi_dbm()
+		except Exception:
+			sdata.wifi_rssi = None
+		return
 	try:
 		rssi = None
 		try:
@@ -105,9 +170,45 @@ def _refresh_rssi(wlan):
 async def connectToWifiNetwork():
 	s = get_settings()
 
-	# NEW: Zero has no MicroPython 'network' stack; keep logic intact but no-op safely.
+	# CHANGED: Zero has no MicroPython 'network' stack; treat WiFi as OS-managed.
+	# If wlan0 has an IP, mark connected and populate fields; otherwise return False.
 	if IS_ZERO or network is None:
+		try:
+			ip = _zero_get_ip()
+			if ip:
+				sdata.WIFI_CONNECTED = True
+				try:
+					s.net_wifi_IP = ip
+				except Exception:
+					pass
+				try:
+					mac_txt = _zero_get_mac()
+					if mac_txt and binascii:
+						# keep existing MAC semantics (bytes) where possible
+						try:
+							s.net_wifi_MAC = binascii.unhexlify(mac_txt.replace(":", ""))
+						except Exception:
+							s.net_wifi_MAC = mac_txt
+					else:
+						s.net_wifi_MAC = mac_txt
+				except Exception:
+					pass
+				try:
+					_refresh_rssi(None)
+				except Exception:
+					pass
+				try:
+					await debug_print(f"wifi(zero): connected ip={ip}", "WIFI")
+				except Exception:
+					pass
+				return True
+		except Exception:
+			pass
 		sdata.WIFI_CONNECTED = False
+		try:
+			await debug_print("wifi(zero): no IP on wlan0; OS WiFi not connected", "WARN")
+		except Exception:
+			pass
 		return False
 
 	if not _should_attempt_connect():
@@ -192,9 +293,21 @@ async def connectToWifiNetwork():
 	return False
 
 async def scanToWifiNetwork():
-	# NEW: Zero has no MicroPython 'network' stack
+	# CHANGED: Zero: best-effort scan via iw (optional). Returns list of SSIDs.
 	if IS_ZERO or network is None:
-		return []
+		if not subprocess:
+			return []
+		try:
+			# May require capabilities; best-effort only.
+			out = subprocess.check_output(["sh", "-lc", "iwlist wlan0 scan 2>/dev/null | grep -o 'ESSID:\".*\"' || true"]).decode("utf-8", "ignore")
+			ssids = []
+			for line in out.splitlines():
+				line = line.strip()
+				if line.startswith('ESSID:"') and line.endswith('"'):
+					ssids.append(line[7:-1])
+			return ssids
+		except Exception:
+			return []
 	# Real scan implementation: return list of (ssid, channel, RSSI, authmode) tuples and show a brief OLED page
 	try:
 		wlan = network.WLAN(network.STA_IF)
@@ -281,7 +394,25 @@ async def showNetworkWIFI():
 		await debug_print(f"showNetworkWIFI err: {e}", "ERROR")
 
 async def check_internet_connection():
-	# ...existing code...
+	# CHANGED: Zero: use a TCP connect probe if urequests isn't available.
+	if IS_ZERO:
+		try:
+			import socket  # type: ignore
+			sock = socket.socket()
+			try:
+				sock.settimeout(3)
+				sock.connect(("1.1.1.1", 53))
+				sdata.WAN_CONNECTED = True
+				return True
+			finally:
+				try:
+					sock.close()
+				except Exception:
+					pass
+		except Exception:
+			sdata.WAN_CONNECTED = False
+			return False
+
 	try:
 		if not urequests:
 			await debug_print("No HTTP client available.", "ERROR")
@@ -332,11 +463,15 @@ async def wifi_rssi_monitor():
 	interval = int(getattr(s, 'WIFI_SIGNAL_SAMPLE_INTERVAL_S', 30))
 	while True:
 		try:
-			if not getattr(s, 'ENABLE_WIFI', True):
-				sdata.WIFI_CONNECTED = False
-				sdata.wifi_rssi = None
+			if IS_ZERO or network is None:
+				# CHANGED: Zero OS-managed status refresh
+				ip = _zero_get_ip()
+				sdata.WIFI_CONNECTED = bool(ip)
+				_refresh_rssi(None)
 				await asyncio.sleep(interval)
 				continue
+
+			# ...existing MicroPython monitor...
 			wlan = network.WLAN(network.STA_IF)
 			if wlan.isconnected():
 				_refresh_rssi(wlan)

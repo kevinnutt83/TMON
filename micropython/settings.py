@@ -98,6 +98,15 @@ lux_i2c_address = 0x29
 # MCU type selection
 MCU_TYPE = "esp32"  # Set to "pico" or "esp32" or "zero"
 
+# CHANGED: If running on CPython (Pi Zero), force MCU_TYPE to "zero" so pin map selection is correct.
+# This preserves existing behavior on MicroPython boards (pico/esp32).
+try:
+    import sys as _sys
+    if str(getattr(_sys.implementation, "name", "")).lower() != "micropython":
+        MCU_TYPE = "zero"
+except Exception:
+    pass
+
 # Pin maps for each MCU type
 pico_pins = {
     "SYS_VOLTAGE_PIN": 29,
