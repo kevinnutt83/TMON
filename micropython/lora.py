@@ -2,7 +2,12 @@
 
 # Utility to print remote node info
 def print_remote_nodes():
-    remote_info = getattr(settings, 'REMOTE_NODE_INFO', {})
+    # CHANGED: avoid NameError at import-time if settings isn't loaded yet
+    try:
+        import settings as _settings
+    except Exception:
+        _settings = None
+    remote_info = getattr(_settings, 'REMOTE_NODE_INFO', {}) if _settings else {}
     for node_id, node_data in remote_info.items():
         print(f"[REMOTE NODE] {node_id}: {node_data}")
 
@@ -20,52 +25,60 @@ from platform_compat import (
 
 # NEW: stdlib/micropython compatibility imports (parse-safe on both runtimes)
 try:
-    import sys
+    import sys  # CHANGED: was empty try-block
 except Exception:
     sys = None
 try:
-    import io
+    import io  # CHANGED: was empty try-block
 except Exception:
     io = None
 try:
-    import random
+    import random  # CHANGED: was empty try-block
 except Exception:
     random = None
 try:
-    import select
+    import select  # CHANGED: was empty try-block
 except Exception:
     select = None
 
 try:
-    import ujson as ujson
+    import ujson as ujson  # CHANGED: ensure ujson exists on both runtimes
 except Exception:
-    import json as ujson
+    import json as ujson  # type: ignore
 
 try:
-    import ubinascii as ubinascii
+    import ubinascii as ubinascii  # CHANGED
 except Exception:
-    import binascii as ubinascii
+    import binascii as ubinascii  # type: ignore
 
 try:
-    import uhashlib as uhashlib
+    import uhashlib as uhashlib  # CHANGED
 except Exception:
-    import hashlib as uhashlib
+    import hashlib as uhashlib  # type: ignore
+
+# Base64 helpers for CPython fallback
+try:
+    import base64 as _py_b64  # CHANGED: required by _Base64Shim
+except Exception:
+    _py_b64 = None
 
 # NEW: base64 helpers with a MicroPython-like surface (_ub.b2a_base64 / _ub.a2b_base64)
 try:
-    _ub = ubinascii  # MicroPython: ubinascii provides b2a_base64/a2b_base64 on many ports
+    _ub = ubinascii
     if not hasattr(_ub, "b2a_base64") or not hasattr(_ub, "a2b_base64"):
         raise ImportError("no base64 helpers")
 except Exception:
-    import base64 as _py_b64
-
     class _Base64Shim:
         @staticmethod
         def b2a_base64(b):
+            if _py_b64 is None:
+                raise RuntimeError("base64 unavailable")
             return _py_b64.b64encode(b) + b"\n"
 
         @staticmethod
         def a2b_base64(s):
+            if _py_b64 is None:
+                raise RuntimeError("base64 unavailable")
             if isinstance(s, str):
                 s = s.encode("ascii")
             return _py_b64.b64decode(s)
@@ -83,8 +96,8 @@ except Exception:
 
 # CHANGED: previously empty try blocks caused SyntaxError; import settings/sdata explicitly.
 try:
-    import sdata
-    import settings
+    import sdata  # CHANGED: was empty try-block
+    import settings  # CHANGED: was empty try-block
 except Exception:
     sdata = None
     settings = None
@@ -98,13 +111,12 @@ except Exception:
     chacha20_encrypt = None
     derive_nonce = None
 
-# Add decrypt since ChaCha20 is symmetric
 def chacha20_decrypt(key, nonce, aad, ciphertext):
     return chacha20_encrypt(key, nonce, aad, ciphertext)
 
 # Guarded import of optional wprest helpers to avoid ImportError on devices that don't expose all names.
 try:
-    import wprest as _wp
+    import wprest as _wp  # CHANGED: _wp must exist
     register_with_wp = getattr(_wp, 'register_with_wp', None)
     send_data_to_wp = getattr(_wp, 'send_data_to_wp', None)
     send_settings_to_wp = getattr(_wp, 'send_settings_to_wp', None)
@@ -1613,6 +1625,8 @@ async def connectLora():
                                                                         machine.reset()
                                                                         break
                                                     break
+                                                except Exception:
+                                                    pass
                                             break
                                     except Exception:
                                         pass

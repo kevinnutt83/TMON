@@ -164,6 +164,8 @@
 - [🚧] Provide CPython shims for MicroPython-only modules (`machine`, `network`, `uasyncio`, `urequests`, etc.) so legacy imports work on Zero without code duplication
 - [⏳] Decide/implement real hardware backends for Zero (GPIO/I2C/SPI/UART) where needed
 - [🚧] Make firmware imports runtime-selectable by `MCU_TYPE` (Zero vs MicroPython) and fix parse/runtime blockers (e.g., `main.py` outer try/except, LoRa import/parse hardening)
+  - [🔄] boot.py: install shims before importing wifi/oled so Zero can boot without MicroPython modules
+  - [🔄] lora.py: remove empty try-block syntax errors; guard/normalize imports for CPython vs MicroPython
 
 ---
 

@@ -654,11 +654,11 @@ try:
                 await asyncio.sleep(5)
 
     if __name__ == '__main__':
+        # CHANGED: keep runner structure simple and indentation-stable to avoid SyntaxError on CPython
         try:
-            # CHANGED: works on MicroPython (uasyncio) and CPython (asyncio) when provided by platform_compat
             asyncio.run(main())
         except Exception:
-            # Older uasyncio compatibility
+            # Older uasyncio / alternate event loop compatibility
             loop = asyncio.get_event_loop()
             loop.create_task(main())
             loop.run_forever()
