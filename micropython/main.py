@@ -1,12 +1,32 @@
 # Firmware Version: v2.06.0
 
 # --- Single-threaded asyncio event loop ---
-from platform_compat import asyncio, time, os, gc, machine, requests, IS_ZERO  # CHANGED
+from platform_compat import time, os, gc, machine, requests, IS_ZERO as _PC_IS_ZERO  # CHANGED
 
 import sys  # RESTORED
 import types  # RESTORED
 import settings  # RESTORED
 import sdata  # RESTORED
+
+# CHANGED: pick asyncio implementation by runtime/MCU_TYPE
+try:
+    _mcu_type = str(getattr(settings, "MCU_TYPE", "")).lower()
+except Exception:
+    _mcu_type = ""
+try:
+    _is_cpython = str(getattr(sys.implementation, "name", "")).lower() != "micropython"
+except Exception:
+    _is_cpython = False
+
+if _is_cpython or _mcu_type == "zero":
+    import asyncio as asyncio  # CHANGED (Zero/CPython)
+    IS_ZERO = True  # CHANGED
+else:
+    from platform_compat import asyncio  # CHANGED (MicroPython)
+    try:
+        IS_ZERO = bool(_PC_IS_ZERO)
+    except Exception:
+        IS_ZERO = False
 
 from debug import info as dbg_info, warn as dbg_warn, error as dbg_error  # RESTORED
 from sampling import sampleEnviroment  # RESTORED
@@ -609,6 +629,9 @@ async def startup():
 from utils import start_background_tasks, runGC, update_sys_voltage  # type: ignore
 
 async def main():
+    # NEW: must be installed before any background tasks that can call machine.soft_reset()
+    _install_zero_soft_reset_handler()
+
     try:
         start_background_tasks()
     except Exception:
@@ -645,9 +668,24 @@ async def main():
             await asyncio.sleep(5)
 
 if __name__ == "__main__":
+    # CHANGED: On Zero, treat machine.soft_reset()->SystemExit as a "restart" (preserves reset semantics)
     try:
-        asyncio.run(main())
+        if IS_ZERO_RUNTIME:
+            while True:
+                try:
+                    asyncio.run(main())
+                    break
+                except SystemExit as e:
+                    if "soft_reset requested" in str(e):
+                        try:
+                            os.execv(sys.executable, [sys.executable] + sys.argv)
+                        except Exception:
+                            raise
+                    raise
+        else:
+            asyncio.run(main())
     except Exception:
+        # ...existing code...
         try:
             loop = asyncio.get_event_loop()
             loop.create_task(main())

@@ -332,6 +332,73 @@ if IS_ZERO:
     except Exception:
         pass
 
+# NEW: NeoPixel compatibility (MicroPython: real neopixel; Zero/CPython: best-effort rpi_ws281x or no-op)
+NeoPixel = None
+if IS_MICROPYTHON:
+    try:
+        from neopixel import NeoPixel as NeoPixel  # type: ignore
+    except Exception:
+        NeoPixel = None  # type: ignore
+elif IS_ZERO:
+    try:
+        from rpi_ws281x import PixelStrip as _PixelStrip, Color as _Color  # type: ignore
+
+        class NeoPixel:  # type: ignore[no-redef]
+            def __init__(self, pin, n, bpp=3, timing=1):
+                self.n = int(n or 0)
+                # utils.py passes machine.Pin(...) -> try common attribute names, else int(pin)
+                gpio = None
+                for attr in ("pin", "id", "gpio", "_id"):
+                    try:
+                        gpio = getattr(pin, attr)
+                        break
+                    except Exception:
+                        pass
+                if gpio is None:
+                    try:
+                        gpio = int(pin)
+                    except Exception:
+                        gpio = 18  # safe-ish default; caller should pass correct LED_PIN
+
+                # rpi_ws281x requires root + correct channel/pin wiring
+                self._strip = _PixelStrip(self.n, int(gpio), freq_hz=800000, dma=10, invert=False, brightness=255)
+                self._strip.begin()
+
+            def __setitem__(self, i, rgb):
+                try:
+                    r, g, b = rgb
+                except Exception:
+                    r = g = b = 0
+                # WS2812 commonly uses GRB ordering
+                self._strip.setPixelColor(int(i), _Color(int(g) & 255, int(r) & 255, int(b) & 255))
+
+            def write(self):
+                self._strip.show()
+
+            def fill(self, rgb):
+                for i in range(self.n):
+                    self[i] = rgb
+                self.write()
+
+    except Exception:
+        class NeoPixel:  # type: ignore[no-redef]
+            def __init__(self, *_a, **_kw):
+                self.n = int(_kw.get("n", 0) or (_a[1] if len(_a) > 1 else 0) or 0)
+            def __setitem__(self, *_a, **_kw):  # no-op
+                return None
+            def write(self):  # no-op
+                return None
+            def fill(self, *_a, **_kw):  # no-op
+                return None
+
+    # Ensure `from neopixel import NeoPixel` works on Zero
+    try:
+        _np_mod = types.ModuleType("neopixel")
+        _np_mod.NeoPixel = NeoPixel  # type: ignore[attr-defined]
+        sys.modules.setdefault("neopixel", _np_mod)
+    except Exception:
+        pass
+
 __all__ = [
     "MCU_TYPE",
     "IS_ZERO",
@@ -350,4 +417,6 @@ __all__ = [
     "ADC",
     "network",
     "framebuf",
+    # NEW
+    "NeoPixel",
 ]

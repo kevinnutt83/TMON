@@ -647,7 +647,7 @@ Firmware (Micropython) — Optimization Plan
 
 # CHANGED: Zero (CPython) compatibility tracking
 - [🔄] Zero: make wprest.py import-safe on MicroPython (avoid unconditional urllib imports) and resilient to optional utils import failures.
-- [⏳] Zero: fix neopixel dependency path (utils.flash_led should import a Zero-capable NeoPixel shim via platform_compat or a conditional backend).
+- [🔄] Zero: fix neopixel dependency path (utils.flash_led should import a Zero-capable NeoPixel shim via platform_compat or a conditional backend).
   - Acceptance: running `python3 micropython/main.py` on Zero produces no `ModuleNotFoundError: neopixel` task exceptions.
   - Note: requires editing `micropython/utils.py` and likely `micropython/platform_compat.py`.
 

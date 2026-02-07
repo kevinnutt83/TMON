@@ -195,6 +195,9 @@ class _UrlLibResp:
         return None
 
 def _urllib_post(url, payload=None, headers=None, timeout_s=8):
+    # CHANGED: defensive no-op on MicroPython (urllib not available there)
+    if _IS_MICROPYTHON:
+        return _UrlLibResp(0, "urllib_unavailable", None)
     try:
         body = json.dumps(payload or {}).encode("utf-8")
     except Exception:
@@ -228,6 +231,9 @@ def _urllib_post(url, payload=None, headers=None, timeout_s=8):
         return _UrlLibResp(0, str(e), None)
 
 def _urllib_get(url, headers=None, timeout_s=8):
+    # CHANGED: defensive no-op on MicroPython (urllib not available there)
+    if _IS_MICROPYTHON:
+        return _UrlLibResp(0, "urllib_unavailable", None)
     hdrs = dict(headers or {})
     try:
         req = urllib.request.Request(url, headers=hdrs, method="GET")

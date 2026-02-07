@@ -392,8 +392,11 @@ async def debug_print(message, status="INFO"):
         pass
 
 async def flash_led(num_flashes, interval, lightColor, pattern):
-    from neopixel import NeoPixel
-    from machine import Pin
+    # CHANGED: use platform_compat so Zero/CPython can run (and MicroPython keeps real neopixel)
+    from platform_compat import NeoPixel, machine
+    Pin = getattr(machine, "Pin", None)
+    if NeoPixel is None or Pin is None:
+        return
     duty_cycle = color_to_duty.get(str(lightColor).lower())
     if duty_cycle is None:
         return
