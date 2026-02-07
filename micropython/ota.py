@@ -1,18 +1,25 @@
 # Firmware Version: v2.06.0
 # OTA scaffolding: version check and pending flag
+
 try:
-    import urequests as requests
+    from platform_compat import requests  # CHANGED: unified HTTP client
 except Exception:
-    requests = None
+    try:
+        import urequests as requests
+    except Exception:
+        requests = None
 
 # Ensure we can use asyncio.sleep in this async module
 try:
-    import uasyncio as asyncio
+    from platform_compat import asyncio  # CHANGED: unified asyncio
 except Exception:
     try:
-        import asyncio
+        import uasyncio as asyncio
     except Exception:
-        asyncio = None
+        try:
+            import asyncio
+        except Exception:
+            asyncio = None
 
 async def _sleep(seconds):
 	"""Robust async sleep: prefer event loop sleep, fall back to blocking sleep."""

@@ -2,9 +2,12 @@
 # Wraps utils.debug_print and centralizes category toggles.
 
 try:
-    import uasyncio as asyncio
-except Exception:  # desktop lint fallback
-    import asyncio
+    from platform_compat import asyncio  # CHANGED: unified import for MicroPython + CPython (Zero)
+except Exception:  # fallback if platform_compat isn't available in some contexts
+    try:
+        import uasyncio as asyncio
+    except Exception:
+        import asyncio
 
 import settings
 

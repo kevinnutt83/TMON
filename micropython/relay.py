@@ -1,8 +1,12 @@
 """Relay control with safety caps and runtime telemetry.
 Firmware Version: v2.06.0
 """
-import uasyncio as asyncio
-import machine
+try:
+    from platform_compat import asyncio, machine  # CHANGED: unified import for MicroPython + CPython (Zero)
+except Exception:
+    import uasyncio as asyncio
+    import machine
+
 import sdata
 import settings
 from utils import debug_print
