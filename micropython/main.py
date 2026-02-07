@@ -654,14 +654,20 @@ try:
                 await asyncio.sleep(5)
 
     if __name__ == '__main__':
-        # CHANGED: keep runner structure simple and indentation-stable to avoid SyntaxError on CPython
+        # CHANGED: make runner block structurally unambiguous for CPython parsing
         try:
             asyncio.run(main())
-        except Exception:
-            # Older uasyncio / alternate event loop compatibility
-            loop = asyncio.get_event_loop()
-            loop.create_task(main())
-            loop.run_forever()
+        except Exception as _run_exc:
+            try:
+                loop = asyncio.get_event_loop()
+                loop.create_task(main())
+                loop.run_forever()
+            except Exception as _loop_exc:
+                try:
+                    print("main.py event loop bootstrap failed:", _run_exc, _loop_exc)
+                except Exception:
+                    pass
+                raise
 
 except Exception as _boot_exc:
     # NEW: close the outer try to avoid SyntaxError on CPython, and keep boot resilient.

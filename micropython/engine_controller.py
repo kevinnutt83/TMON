@@ -1,8 +1,18 @@
-from platform_compat import asyncio, time, Pin, UART, IS_ZERO  # CHANGED
+from platform_compat import asyncio, time, IS_ZERO, machine  # CHANGED
 import struct
 import settings
 import sdata
 from utils import debug_print
+
+# CHANGED: derive Pin/UART from machine (works on MicroPython; stays None on Zero stubs)
+try:
+    Pin = getattr(machine, "Pin", None)
+except Exception:
+    Pin = None
+try:
+    UART = getattr(machine, "UART", None)
+except Exception:
+    UART = None
 
 # Build UARTs lazily to allow re-init
 
