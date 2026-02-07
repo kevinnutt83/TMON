@@ -21,6 +21,8 @@ except Exception:
         except Exception:
             asyncio = None
 
+from platform_compat import machine as _machine  # CHANGED
+
 async def _sleep(seconds):
 	"""Robust async sleep: prefer event loop sleep, fall back to blocking sleep."""
 	try:
@@ -543,8 +545,8 @@ async def apply_pending_update():
         await debug_print('OTA: apply completed', 'OTA')
         # Reboot device after OTA files are downloaded and applied
         try:
-            from machine import soft_reset
-            soft_reset()
+            if _machine and hasattr(_machine, "soft_reset"):
+                _machine.soft_reset()  # CHANGED
         except Exception:
             pass
         # NEW: GC after OTA apply completes (before returning to loops)

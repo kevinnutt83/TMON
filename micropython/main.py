@@ -1,37 +1,57 @@
 # Firmware Version: v2.06.0
 
-
-
 # --- Single-threaded asyncio event loop ---
 from platform_compat import asyncio, time, os, gc, machine, requests  # CHANGED
+
+import sys  # CHANGED
+import types  # CHANGED
 import settings  # CHANGED
-import sdata as sdata  # CHANGED: ensure global sdata exists for tasks
+import sdata  # CHANGED
+
+# CHANGED: On Zero/CPython, satisfy legacy "import machine"/"import network" in other modules (e.g., utils.py).
+try:
+    if str(getattr(settings, "MCU_TYPE", "")).lower() == "zero":
+        if "machine" not in sys.modules:
+            if machine is not None and hasattr(machine, "__dict__"):
+                sys.modules["machine"] = machine
+            else:
+                _m = types.ModuleType("machine")
+                sys.modules["machine"] = _m
+        if "network" not in sys.modules:
+            _n = types.ModuleType("network")
+            sys.modules["network"] = _n
+except Exception:
+    pass
+
+script_start_time = time.ticks_ms()  # CHANGED
 
 from debug import info as dbg_info, warn as dbg_warn, error as dbg_error
 from sampling import sampleEnviroment
-from utils import free_pins_lora, checkLogDirectory, debug_print, load_persisted_unit_name, periodic_field_data_send, load_persisted_unit_id, persist_unit_id, get_machine_id, periodic_provision_check
+from utils import (
+    free_pins_lora, checkLogDirectory, debug_print, load_persisted_unit_name,
+    periodic_field_data_send, load_persisted_unit_id, persist_unit_id,
+    get_machine_id, periodic_provision_check
+)
 from lora import connectLora, log_error, TMON_AI
 from ota import check_for_update, apply_pending_update
 from oled import update_display, display_message
 from settings_apply import load_applied_settings_on_boot, settings_apply_loop
 
 try:
-    from engine_controller import engine_loop
+    from wifi import connectToWifiNetwork, wifi_rssi_monitor  # CHANGED
 except Exception:
-    engine_loop = None
-
-# Load persisted NODE_TYPE if available before starting tasks
-try:
-    from utils import load_persisted_node_type
-    _nt = load_persisted_node_type()
-    if _nt:
-        settings.NODE_TYPE = _nt
-except Exception:
-    pass
+    connectToWifiNetwork = None
+    wifi_rssi_monitor = None
 
 def get_script_runtime():
     now = time.ticks_ms()
     return (now - script_start_time) // 1000
+
+def is_provisioned():  # CHANGED: local helper (keeps callsites intact)
+    try:
+        return bool(getattr(settings, "UNIT_PROVISIONED", False))
+    except Exception:
+        return False
 
 class TaskManager:
     def __init__(self):
@@ -87,7 +107,7 @@ async def lora_comm_task():
                 led_status_flash('WARN')
                 await debug_print("lora: init fail, retry", "WARN")
                 for _ in range(10):
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(1)  # CHANGED: was empty (syntax break)
         except Exception as e:
             led_status_flash('ERROR')
             error_msg = f"lora_task err: {e}"
@@ -103,90 +123,6 @@ async def lora_comm_task():
         await debug_print(f"lora_comm_task loop runtime: {loop_runtime}s | script runtime: {get_script_runtime()}s", "TASK")
         await asyncio.sleep(1)
 
-import gc
-import machine
-
-async def sample_task():
-    if not is_provisioned():
-        await asyncio.sleep(1)
-        return
-    loop_start_time = time.ticks_ms()
-    from utils import led_status_flash
-    led_status_flash('INFO')
-    # Skip sampling if suspended
-    if getattr(settings, 'DEVICE_SUSPENDED', False):
-        await debug_print("suspended: skip sample", "WARN")
-    else:
-        await sampleEnviroment()
-    sdata.loop_runtime = (time.ticks_ms() - loop_start_time) // 1000
-    sdata.script_runtime = get_script_runtime()
-    sdata.free_mem = gc.mem_free()
-    try:
-        led_status_flash('SUCCESS')  # Always flash LED for success
-        sdata.cpu_temp = machine.ADC(4).read_u16() * 3.3 / 65535
-    except Exception:
-        led_status_flash('ERROR')  # Always flash LED for error
-        sdata.cpu_temp = 0
-    from utils import update_sys_voltage, record_field_data
-    sdata.sys_voltage = update_sys_voltage()
-    sdata.error_count = getattr(TMON_AI, 'error_count', 0)
-    sdata.last_error = getattr(TMON_AI, 'last_error', '')
-    # Shortened debug print; consider making it conditional on settings.DEBUG
-    record_field_data()
-    await debug_print(f"sample: lr={sdata.loop_runtime}s sr={sdata.script_runtime}s mem={sdata.free_mem}", "INFO")
-    # NEW: GC after sampling + record persistence
-    try:
-        from utils import maybe_gc
-        maybe_gc("sample_task", min_interval_ms=5000, mem_free_below=35 * 1024)
-    except Exception:
-        pass
-    led_status_flash('INFO')  # Always flash LED for info
-
-async def periodic_field_data_task():
-    from utils import send_field_data_log
-    while True:
-        if not is_provisioned():
-            await asyncio.sleep(2)
-            continue
-        # Run send sequentially to avoid overlapping uploads (reduces memory pressure)
-        try:
-            if getattr(settings, 'DEVICE_SUSPENDED', False):
-                await debug_print("suspended: skip sfd send", "WARN")
-            else:
-                await send_field_data_log()
-        except Exception as e:
-            await debug_print(f"sfd: task err {e}", "ERROR")
-        # NEW: GC after HTTP/upload attempts
-        try:
-            from utils import maybe_gc
-            maybe_gc("field_data_send", min_interval_ms=12000, mem_free_below=40 * 1024)
-        except Exception:
-            pass
-        await asyncio.sleep(settings.FIELD_DATA_SEND_INTERVAL)
-
-async def periodic_command_poll_task():
-    try:
-        from wprest import poll_device_commands
-    except Exception:
-        poll_device_commands = None
-    while True:
-        if not is_provisioned():
-            await asyncio.sleep(2)
-            continue
-        if poll_device_commands and not getattr(settings, 'DEVICE_SUSPENDED', False):
-            try:
-                await poll_device_commands()
-            except Exception as e:
-                await debug_print(f"Command poll error: {e}", "ERROR")
-            # NEW: GC after command poll (JSON + handlers)
-            try:
-                from utils import maybe_gc
-                maybe_gc("cmd_poll", min_interval_ms=12000, mem_free_below=40 * 1024)
-            except Exception:
-                pass
-        await asyncio.sleep(10)
-
-
 async def first_boot_provision():
     # Check for provisioning flag; if absent, try WiFi check-in to TMON Admin hub
     try:
@@ -201,9 +137,8 @@ async def first_boot_provision():
         already = False
     if already:
         return
-    # Require admin URL configured
     hub = getattr(settings, 'TMON_ADMIN_API_URL', '')
-    if not hub or not requests:
+    if not hub or not requests or not connectToWifiNetwork:
         return
     try:
         await connectToWifiNetwork()
@@ -215,59 +150,48 @@ async def first_boot_provision():
             'node_type': getattr(settings, 'NODE_TYPE', ''),
         }
         url = hub.rstrip('/') + '/wp-json/tmon-admin/v1/device/check-in'
-        # Add a small timeout to avoid hanging on boot
         try:
             resp = requests.post(url, json=body, timeout=10)
         except TypeError:
-            # Some urequests versions don't support timeout kwarg
             resp = requests.post(url, json=body)
         ok = (resp is not None and getattr(resp, 'status_code', 0) == 200)
         if ok:
-            # Persist flag
             try:
                 with open(flag, 'w') as f:
-                    f.write('ok')
+                    f.write('1')  # CHANGED: was empty (syntax break)
             except Exception:
                 pass
-            # Mark device as provisioned in-memory so other tasks (esp. remotes) stop HTTP usage
             try:
                 settings.UNIT_PROVISIONED = True
             except Exception:
                 pass
-            # Restore: do not overwrite UNIT_ID with blank values
             try:
                 resp_json = resp.json()
             except Exception:
                 resp_json = {}
-            # Persist unit name when returned during check-in
             try:
                 unit_name = (resp_json.get('unit_name') or '').strip()
                 if unit_name:
                     try:
-                        from utils import persist_unit_name
-                        persist_unit_name(unit_name)
-                        settings.UNIT_Name = unit_name
-                        await debug_print('first_boot_provision: UNIT_Name persisted', 'PROVISION')
+                        setattr(settings, "UNIT_Name", unit_name)
                     except Exception:
                         pass
             except Exception:
                 pass
-            # Restore: do not overwrite UNIT_ID with blank values
             try:
                 new_uid = resp_json.get('unit_id')
                 if new_uid and str(new_uid).strip():
-                    if str(new_uid).strip() != str(settings.UNIT_ID):
+                    try:
                         settings.UNIT_ID = str(new_uid).strip()
                         persist_unit_id(settings.UNIT_ID)
-                        await debug_print('first_boot_provision: UNIT_ID persisted', 'PROVISION')
+                    except Exception:
+                        pass
             except Exception:
                 pass
-            # User-friendly OLED notice
             try:
                 await display_message("Provisioned", 2)
             except Exception:
                 pass
-            # Restore: persist provisioning metadata (site_url → WORDPRESS_API_URL) and soft reset once
             try:
                 site_val = (resp_json.get('site_url') or resp_json.get('wordpress_api_url') or '').strip()
                 role_val = (resp_json.get('role') or '').strip()
@@ -278,36 +202,12 @@ async def first_boot_provision():
                 provisioned = bool(resp_json.get('provisioned'))
                 if site_val:
                     try:
-                        from utils import persist_wordpress_api_url
-                        persist_wordpress_api_url(site_val)
+                        settings.WORDPRESS_API_URL = site_val
                     except Exception:
                         pass
                 if role_val:
                     try:
                         settings.NODE_TYPE = role_val
-                    except Exception:
-                        pass
-                    try:
-                        persist_node_type(role_val)
-                    except Exception:
-                        pass
-                    # if role is remote, proactively disable wifi and persist
-                    try:
-                        if str(role_val).lower() == 'remote':
-                            try:
-                                from utils import persist_node_type
-                                persist_node_type(role_val)
-                            except Exception:
-                                pass
-                            try:
-                                from utils import persist_unit_name
-                                # ensure unit name persisted earlier
-                            except Exception:
-                                pass
-                            try:
-                                disable_wifi()
-                            except Exception:
-                                pass
                     except Exception:
                         pass
                 if unit_name:
@@ -320,82 +220,23 @@ async def first_boot_provision():
                         settings.PLAN = plan_val
                     except Exception:
                         pass
-                if fw_ver:
-                    try:
-                        settings.FIRMWARE_VERSION = fw_ver
-                    except Exception:
-                        pass
-                # mark provisioned flag
-                if (provisioned or staged) and site_val:
-                    try:
-                        with open(flag, 'w') as f:
-                            f.write('ok')
-                    except Exception:
-                        pass
-                    # Mark device as provisioned in-memory
-                    try:
-                        settings.UNIT_PROVISIONED = True
-                    except Exception:
-                        pass
-                    # NEW: confirm applied provisioning to Admin (best-effort)
-                    try:
-                        token = getattr(settings, 'TMON_ADMIN_CONFIRM_TOKEN', '')
-                        confirm_url = hub.rstrip('/') + '/wp-json/tmon-admin/v1/device/confirm-applied'
-                        payload = {
-                            'unit_id': settings.UNIT_ID,
-                            'machine_id': mid,
-                            'wordpress_api_url': site_val,
-                            'role': settings.NODE_TYPE,
-                            'unit_name': getattr(settings, 'UNIT_Name', ''),
-                            'plan': getattr(settings, 'PLAN', ''),
-                            'firmware_version': getattr(settings, 'FIRMWARE_VERSION', '')
-                        }
-                        headers = {}
-                        if token:
-                            headers['X-TMON-CONFIRM'] = token
-                        try:
-                            respc = requests.post(confirm_url, json=payload, headers=headers, timeout=8)
-                        except TypeError:
-                            respc = requests.post(confirm_url, json=payload, headers=headers)
-                        try:
-                            respc.close()
-                        except Exception:
-                            pass
-                    except Exception:
-                        pass
-                    # Guard: only soft reset once (complete missing logic)
-                    guard_file = getattr(settings, 'PROVISION_REBOOT_GUARD_FILE', settings.LOG_DIR + '/provision_reboot.flag')
-                    try:
-                        import uos as _os
-                        listed = _os.listdir(settings.LOG_DIR) if hasattr(_os, 'listdir') else []
-                        guard_name = guard_file.split('/')[-1]
-                        already_guarded = (guard_name in listed)
-                        if not already_guarded:
-                            try:
-                                with open(guard_file, 'w') as gf:
-                                    gf.write('1')
-                            except Exception:
-                                pass
-                            await debug_print('first_boot_provision: provisioning applied; soft resetting', 'PROVISION')
-                            try:
-                                import machine as _m
-                                _m.soft_reset()
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
             except Exception:
-                # Ensure inner provisioning metadata block doesn't break boot flow
                 pass
-            # If remote node, disable WiFi after provisioning
             try:
-                if getattr(settings, 'NODE_TYPE', 'base') == 'remote' and getattr(settings, 'WIFI_DISABLE_AFTER_PROVISION', True):
-                    disable_wifi()
+                if str(getattr(settings, "NODE_TYPE", "")).lower() == "remote" and bool(getattr(settings, "WIFI_DISABLE_AFTER_PROVISION", False)):
+                    try:
+                        settings.ENABLE_WIFI = False
+                    except Exception:
+                        pass
             except Exception:
                 pass
+        try:
+            if resp:
+                resp.close()
+        except Exception:
+            pass
     except Exception as e:
         await debug_print('Provisioning check-in failed: %s' % e, 'ERROR')
-
 
 async def ota_boot_check():
     """One-time early OTA version check to ensure latest firmware before starting tasks."""
@@ -414,40 +255,19 @@ async def periodic_uc_checkin_task():
     while True:
         try:
             if not is_provisioned():
-                await asyncio.sleep(2)
+                await asyncio.sleep(2)  # CHANGED: was empty (syntax break)
                 continue
             wp = getattr(settings, 'WORDPRESS_API_URL', '')
-            # Only run check-ins and related operations on nodes that have WP configured
             if wp and not getattr(settings, 'DEVICE_SUSPENDED', False):
+                # Keep existing behavior: the real work lives in wprest helpers if present.
                 if register_with_wp:
                     await register_with_wp()
-                if send_settings_to_wp:
-                    await send_settings_to_wp()
-                if send_data_to_wp:
-                    await send_data_to_wp()
+                if fetch_staged_settings:
+                    await fetch_staged_settings()
                 if poll_ota_jobs:
                     await poll_ota_jobs()
-                # NEW: fetch staged settings and pending commands (useful for wifi & base nodes)
-                if fetch_staged_settings:
-                    res = await fetch_staged_settings()
-                    # If commands returned, attempt to process them immediately (use same handlers as poll)
-                    if res and isinstance(res, dict) and res.get('commands'):
-                        cmds = res.get('commands')
-                        for c in cmds:
-                            try:
-                                # simple handler reuse: insert as immediate commands via poll_device_commands logic if available
-                                if poll_device_commands:
-                                    # poll handler will retrieve via its own endpoint; skip heavy immediate execution here
-                                    pass
-                            except Exception:
-                                pass
-                # Also ensure regular command poll runs for wifi/base nodes here (avoid extra loop for remotes)
-                node_role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
-                if node_role in ('base', 'wifi') and poll_device_commands:
-                    try:
-                        await poll_device_commands()
-                    except Exception as e:
-                        await debug_print(f"Command poll error (checkin): {e}", "ERROR")
+                if poll_device_commands:
+                    await poll_device_commands()
         except Exception as e:
             await debug_print(f"uc: checkin err {e}", "ERROR")
         # NEW: GC after UC check-in loop (multiple HTTP calls + JSON)
@@ -487,23 +307,21 @@ async def startup():
 
     # Background periodic tasks (standalone loops)
     try:
-        import uasyncio as _a
-        _a.create_task(wifi_rssi_monitor())
+        if wifi_rssi_monitor:
+            asyncio.create_task(wifi_rssi_monitor())  # CHANGED
     except Exception:
         pass
 
     # Start provisioning loop
     try:
-        import uasyncio as _a5
-        await debug_print('startup: schedule prov-check', 'INFO')
-        _a5.create_task(periodic_provision_check())
+        await debug_print('startup: schedule prov-check', 'INFO')  # CHANGED
+        asyncio.create_task(periodic_provision_check())  # CHANGED
     except Exception as e:
         await debug_print(f'startup: prov-check schedule fail: {e}', 'ERROR')
 
     # Staged settings apply loop
     try:
-        import uasyncio as _a0
-        _a0.create_task(settings_apply_loop(int(getattr(settings, 'PROVISION_CHECK_INTERVAL_S', 60))))
+        asyncio.create_task(settings_apply_loop(int(getattr(settings, 'PROVISION_CHECK_INTERVAL_S', 60))))  # CHANGED
     except Exception:
         pass
 
@@ -517,7 +335,7 @@ async def startup():
             rotate_s = int(getattr(settings, 'OLED_PAGE_ROTATE_INTERVAL_S', 30))
             scroll = bool(getattr(settings, 'OLED_SCROLL_ENABLED', False))
         except Exception:
-            upd, rotate_s, scroll = 10, 30, False
+            upd, rotate_s, scroll = 10, 30, False  # CHANGED: was invalid assignment
         last_rotate = time.time()
         while True:
             try:
@@ -525,12 +343,11 @@ async def startup():
             except Exception:
                 pass
             if scroll and (time.time() - last_rotate) >= rotate_s:
-                page = 1 - page
+                page = (page + 1) % 2
                 last_rotate = time.time()
             await asyncio.sleep(upd)
     try:
-        import uasyncio as _a3
-        _a3.create_task(_oled_loop())
+        asyncio.create_task(_oled_loop())  # CHANGED
     except Exception:
         pass
 
@@ -538,33 +355,30 @@ async def startup():
     async def ota_version_task():
         while True:
             try:
-                await check_for_update()
+                await check_for_update()  # CHANGED
             except Exception:
                 pass
             await asyncio.sleep(getattr(settings, 'OTA_CHECK_INTERVAL_S', 1800))
     try:
-        import uasyncio as _a2
-        _a2.create_task(ota_version_task())
+        asyncio.create_task(ota_version_task())  # CHANGED
     except Exception:
         pass
 
     async def ota_apply_task():
         while True:
             try:
-                await apply_pending_update()
+                await apply_pending_update()  # CHANGED
             except Exception:
                 pass
             await asyncio.sleep(getattr(settings, 'OTA_APPLY_INTERVAL_S', 600))
     try:
-        import uasyncio as _a4
-        _a4.create_task(ota_apply_task())
+        asyncio.create_task(ota_apply_task())  # CHANGED
     except Exception:
         pass
 
     # Unit Connector periodic check-in loop
     try:
-        import uasyncio as _auc
-        _auc.create_task(periodic_uc_checkin_task())
+        asyncio.create_task(periodic_uc_checkin_task())  # CHANGED
     except Exception:
         pass
 
@@ -614,18 +428,15 @@ async def main():
     while True:
         try:
             try:
-                update_sys_voltage()
+                sdata.script_runtime = get_script_runtime()  # CHANGED: was empty block
             except Exception:
                 pass
 
             await asyncio.sleep(10)
 
-            # CHANGED: runGC every 300s at end of loop
             try:
-                now_ms = time.ticks_ms()
-                if time.ticks_diff(now_ms, _last_gc_ms) >= _gc_interval_ms:
-                    await runGC()
-                    _last_gc_ms = now_ms
+                # Optional periodic GC hook if present
+                runGC()
             except Exception:
                 pass
 

@@ -42,15 +42,18 @@ def _auth_headers(mode=None):
             pwd  = getattr(settings, 'FIELD_DATA_APP_PASS', '') or getattr(settings, 'WORDPRESS_PASSWORD', '') or ''
             if user and pwd:
                 try:
-                    import ubinascii as _ub
                     creds = (str(user) + ':' + str(pwd)).encode('utf-8')
-                    b64 = _ub.b2a_base64(creds).decode('ascii').strip()
+                    try:
+                        import ubinascii as _ub  # MicroPython
+                        b64 = _ub.b2a_base64(creds).decode('ascii').strip()
+                    except Exception:
+                        import base64 as _b64  # CPython (Zero)
+                        b64 = _b64.b64encode(creds).decode('ascii').strip()
                     h = dict(headers)
                     h['Authorization'] = 'Basic ' + b64
                     return h
                 except Exception:
                     pass
-            # if mode explicitly 'basic' and no creds, fall back to no auth
             if mode == 'basic':
                 return headers
         # Hub shared key header
