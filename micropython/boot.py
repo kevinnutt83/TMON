@@ -8,7 +8,7 @@
 from wifi import connectToWifiNetwork
 import settings
 from utils import flash_led
-import uasyncio as asyncio
+from platform_compat import asyncio  # CHANGED
 from oled import display_message
 
 async def boot():

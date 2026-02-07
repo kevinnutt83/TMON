@@ -3,13 +3,7 @@
 # Handles WordPress REST API communication for TMON MicroPython device
 
 import gc
-try:
-    import urequests as requests
-except Exception:
-    try:
-        import requests
-    except Exception:
-        requests = None
+from platform_compat import requests, time  # CHANGED
 
 try:
     import ujson as json

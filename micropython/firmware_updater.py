@@ -2,10 +2,7 @@
 # Actual flash/install must be implemented per-hardware in device-specific code.
 
 import os
-try:
-    import urequests as requests
-except Exception:
-    import requests
+from platform_compat import requests  # CHANGED
 
 # Import device settings robustly: prefer package import micropython.settings; fallback to local 'settings' if present
 device_settings = None

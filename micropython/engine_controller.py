@@ -1,7 +1,5 @@
-import uasyncio as asyncio
-from machine import Pin, UART
+from platform_compat import asyncio, time, Pin, UART, IS_ZERO  # CHANGED
 import struct
-import time
 import settings
 import sdata
 from utils import debug_print
@@ -9,6 +7,9 @@ from utils import debug_print
 # Build UARTs lazily to allow re-init
 
 def _build_uart(idx, tx_pin, rx_pin):
+    # NEW: On Zero, UART is a stub unless you later wire a real backend; keep import/load safe.
+    if IS_ZERO or UART is None or Pin is None:
+        return None
     try:
         return UART(idx, baudrate=settings.COMM_BAUD, parity=settings.COMM_PARITY, stop=settings.COMM_STOP_BITS, tx=Pin(tx_pin), rx=Pin(rx_pin))
     except Exception as e:

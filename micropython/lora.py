@@ -14,27 +14,39 @@ async def print_remote_nodes_async():
         pass
 
 # --- All imports at the top ---
-import gc
-import ujson
-import os
-import uasyncio as asyncio
-import select
-import random  # Added for jitter/backoff
-import ubinascii as _ub  # NEW: base64 encode/decode for chunking
-from sampling import sampleEnviroment, findLowestTemp, findHighestTemp, findLowestBar, findHighestBar, findLowestHumid, findHighestHumid
+from platform_compat import (
+    asyncio, time, os, gc, requests, machine, network, IS_ZERO, IS_MICROPYTHON
+)  # CHANGED
+
 try:
-    import machine
-    import sys
-except ImportError:
-    machine = None
-    sys = None
+    import ujson as ujson
+except Exception:
+    import json as ujson
+
+try:
+    import ubinascii as ubinascii
+except Exception:
+    import binascii as ubinascii
+
+try:
+    import uhashlib as uhashlib
+except Exception:
+    import hashlib as uhashlib
+
+try:
+    import urandom as random
+except Exception:
+    import random
+
+# MicroPython-only SX1262 driver
 try:
     from sx1262 import SX1262
-except ImportError:
+except Exception:
     try:
-        from lib.sx1262 import SX1262  # fallback to lib path
-    except ImportError:
+        from lib.sx1262 import SX1262
+    except Exception:
         SX1262 = None
+
 try:
     import sdata
     import settings
@@ -42,9 +54,13 @@ except ImportError:
     sdata = None
     settings = None
 try:
+    import machine
+except ImportError:
+    machine = None
+try:
     import utime as time
 except ImportError:
-    time = None
+    import time
 try:
     import urequests as requests
 except ImportError:
@@ -1467,13 +1483,6 @@ async def connectLora():
                                             st_code = int(resp[0])
                                         except Exception:
                                             st_code = -999
-                                elif isinstance(resp, int):
-                                    st_code = resp
-                                else:
-                                    try:
-                                        st_code = int(resp)
-                                    except Exception:
-                                        st_code = -999
                             except Exception:
                                 st_code = -999
 
@@ -1616,17 +1625,18 @@ async def connectLora():
                                                                             f.write('pending')
                                                                         machine.reset()
                                                                         break
+                                                    break
                                             break
                                     except Exception:
                                         pass
-                            await asyncio.sleep(0.01)
-                        if not ack_received:
-                            fallback = 300 + random.randint(-30, 30)
-                            if fallback < 60: fallback = 60
-                            settings.nextLoraSync = int(time.time() + fallback)
-                            write_lora_log(f"Remote no ACK, fallback next sync in {fallback} sec", 'INFO')
-                        gc.collect()
-                        return True
+                                await asyncio.sleep(0.01)
+                            if not ack_received:
+                                fallback = 300 + random.randint(-30, 30)
+                                if fallback < 60: fallback = 60
+                                settings.nextLoraSync = int(time.time() + fallback)
+                                write_lora_log(f"Remote no ACK, fallback next sync in {fallback} sec", 'INFO')
+                            gc.collect()
+                            return True
 
                     # If we reached here, single-frame failed after retries: treat as re-init trigger
                     await debug_print("lora: single-frame send failed after retries, re-initing radio", "ERROR")
@@ -1720,10 +1730,10 @@ async def connectLora():
                             # normalize
                             st_code = None
                             try:
-                                if isinstance(resp, (tuple, list)):
+                                if isinstance(resp, (tuple, list)) and len(resp) > 0:
                                     if len(resp) >= 2 and isinstance(resp[1], int):
                                         st_code = resp[1]
-                                    elif len(resp) >= 1 and isinstance(resp[0], int):
+                                    elif isinstance(resp[0], int):
                                         st_code = resp[0]
                                     else:
                                         try:
@@ -2078,7 +2088,7 @@ async def connectLora():
                                                         obj2 = None
                                                     if isinstance(obj2, dict) and obj2.get('ack') == 'ok':
                                                         ack_received = True
-                                                        # Capture signal info
+                                                        # Capture signal info for display
                                                         try:
                                                             if hasattr(lora, 'getRSSI'):
                                                                 sdata.lora_SigStr = lora.getRSSI()
@@ -2088,7 +2098,7 @@ async def connectLora():
                                                                 sdata.last_message = ujson.dumps(obj2)[:32]
                                                         except Exception:
                                                             pass
-                                                        # Adopt next sync
+                                                        # Adopt next sync if provided
                                                         try:
                                                             if 'next_in' in obj2:
                                                                 rel = int(obj2['next_in'])
@@ -2101,7 +2111,7 @@ async def connectLora():
                                                                 settings.nextLoraSync = int(obj2['next'])
                                                         except Exception:
                                                             pass
-                                                        # Adopt GPS
+                                                        # Adopt GPS from base if provided and allowed
                                                         try:
                                                             if getattr(settings, 'GPS_ACCEPT_FROM_BASE', True):
                                                                 blat = obj2.get('gps_lat')
@@ -2148,15 +2158,15 @@ async def connectLora():
                                                                                         f.write('pending')
                                                                                     machine.reset()
                                                                                     break
-                                                        break
+                                                    break
                                                 except Exception:
                                                     pass
-                                        await asyncio.sleep(0.01)
-                                    if not ack_received:
-                                        fallback = 300 + random.randint(-30, 30)
-                                        if fallback < 60: fallback = 60
-                                        settings.nextLoraSync = int(time.time() + fallback)
-                                        write_lora_log(f"Remote no ACK, fallback next sync in {fallback} sec", 'INFO')
+                                            await asyncio.sleep(0.01)
+                                        if not ack_received:
+                                            fallback = 300 + random.randint(-30, 30)
+                                            if fallback < 60: fallback = 60
+                                            settings.nextLoraSync = int(time.time() + fallback)
+                                            write_lora_log(f"Remote no ACK, fallback next sync in {fallback} sec", 'INFO')
                                     gc.collect()
                                     return True
                             # If we reached here, chunked send failed after retries: treat as re-init trigger
@@ -2204,6 +2214,7 @@ async def connectLora():
                                     try:
                                         if hasattr(lora, 'getRSSI'):
                                             sdata.lora_SigStr = lora.getRSSI()
+                                            sdata.lora_last_rx_ts = time.time()
                                         if hasattr(lora, 'getSNR'):
                                             sdata.lora_snr = lora.getSNR()
                                             sdata.last_message = ujson.dumps(obj2)[:32]
@@ -2269,15 +2280,28 @@ async def connectLora():
                                                                     f.write('pending')
                                                                 machine.reset()
                                                                 break
-                                    break
+                                                    break
+                                                except Exception:
+                                                    pass
+                                            await asyncio.sleep(0.01)
+                                        if not ack_received:
+                                            fallback = 300 + random.randint(-30, 30)
+                                            if fallback < 60: fallback = 60
+                                            settings.nextLoraSync = int(time.time() + fallback)
+                                            write_lora_log(f"Remote no ACK, fallback next sync in {fallback} sec", 'INFO')
+                                    gc.collect()
+                                    return True
+                            # If we reached here, chunked send failed after retries: treat as re-init trigger
+                            await debug_print("lora: chunk send failed after retries, re-initing radio", "ERROR")
+                            try:
+                                if hasattr(lora, 'spi') and lora.spi:
+                                    lora.spi.deinit()
+                                _last_tx_exception_ms = time.ticks_ms()
                             except Exception:
                                 pass
-                    await asyncio.sleep(0.01)
-                if not ack_received:
-                    fallback = 300 + random.randint(-30, 30)
-                    if fallback < 60: fallback = 60
-                    settings.nextLoraSync = int(time.time() + fallback)
-                    write_lora_log(f"Remote no ACK, fallback next sync in {fallback} sec", 'INFO')
+                            lora = None
+                            gc.collect()
+                            return False
 
                 # After sending all chunks, done for this cycle
                 _last_send_ms = time.ticks_ms()

@@ -1,17 +1,13 @@
 # Firmware Version: v2.06.0
 
-import utime as time
-import network
-import uasyncio as asyncio
-import urequests
-import gc
+from platform_compat import time, asyncio, requests as urequests, network, gc, IS_ZERO  # CHANGED
+
 import sdata
 
 gc.enable()
 
 # --- GC: best-effort cleanup after module import / heavy init ---
 try:
-    import gc
     gc.collect()
 except Exception:
     pass
@@ -108,15 +104,12 @@ def _refresh_rssi(wlan):
 
 async def connectToWifiNetwork():
 	s = get_settings()
-	# Enforce explicit early return for remote nodes
-	if getattr(s, 'NODE_TYPE', 'base') == 'remote':
-		try:
-			wlan = network.WLAN(network.STA_IF)
-			wlan.active(False)
-		except Exception:
-			pass
+
+	# NEW: Zero has no MicroPython 'network' stack; keep logic intact but no-op safely.
+	if IS_ZERO or network is None:
 		sdata.WIFI_CONNECTED = False
 		return False
+
 	if not _should_attempt_connect():
 		try:
 			wlan = network.WLAN(network.STA_IF)
@@ -199,6 +192,9 @@ async def connectToWifiNetwork():
 	return False
 
 async def scanToWifiNetwork():
+	# NEW: Zero has no MicroPython 'network' stack
+	if IS_ZERO or network is None:
+		return []
 	# Real scan implementation: return list of (ssid, channel, RSSI, authmode) tuples and show a brief OLED page
 	try:
 		wlan = network.WLAN(network.STA_IF)
@@ -235,6 +231,9 @@ async def scanToWifiNetwork():
 		return []
 
 async def showNetworkWIFI():
+	# NEW: Zero has no MicroPython 'network' stack
+	if IS_ZERO or network is None:
+		return
 	# Display current WiFi state (SSID / IP / MAC / RSSI) on OLED
 	try:
 		wlan = network.WLAN(network.STA_IF)
@@ -284,6 +283,9 @@ async def showNetworkWIFI():
 async def check_internet_connection():
 	# ...existing code...
 	try:
+		if not urequests:
+			await debug_print("No HTTP client available.", "ERROR")
+			return False
 		response = urequests.get("http://www.google.com")
 		try:
 			if response and getattr(response, 'status_code', 0) == 200:

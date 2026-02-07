@@ -2,10 +2,7 @@
 
 import json
 import os
-try:
-    import urequests as requests
-except Exception:
-    import requests  # fallback for host testing
+from platform_compat import requests  # CHANGED
 
 # Import device settings robustly: prefer local settings module; fallback to micropython.settings
 device_settings = None

@@ -1,11 +1,8 @@
 # Firmware Version: v2.00j
 
-import uasyncio as asyncio
-import time
+from platform_compat import asyncio, time, machine, framebuf, IS_ZERO  # CHANGED
 import settings
 import sdata
-import machine
-import framebuf
 from settings import I2C_B_SCL_PIN, I2C_B_SDA_PIN
 
 # Globals / state
@@ -30,96 +27,99 @@ RENDER_INTERVAL_S = 0.5
 MAX_TEXT_CHARS = 16
 
 # Simple SSD1309 driver (robust for 128x64)
-class SSD1309_I2C(framebuf.FrameBuffer):
-    def __init__(self, width, height, i2c, addr=0x3C, external_vcc=False):
-        self.i2c = i2c
-        self.addr = addr
-        self.temp = bytearray(2)
-        self.write_list = [b'\x40', None]
-        self.external_vcc = external_vcc
-        self.width = width
-        self.height = height
-        self.pages = height // 8
-        self.buffer = bytearray(self.pages * self.width)
-        self.col_start = 0
-        self.col_end = self.col_start + self.width - 1
-        super().__init__(self.buffer, self.width, self.height, framebuf.MONO_VLSB)
-        self.init_display()
+if framebuf is not None and not IS_ZERO:
+	class SSD1309_I2C(framebuf.FrameBuffer):
+		def __init__(self, width, height, i2c, addr=0x3C, external_vcc=False):
+			self.i2c = i2c
+			self.addr = addr
+			self.temp = bytearray(2)
+			self.write_list = [b'\x40', None]
+			self.external_vcc = external_vcc
+			self.width = width
+			self.height = height
+			self.pages = height // 8
+			self.buffer = bytearray(self.pages * self.width)
+			self.col_start = 0
+			self.col_end = self.col_start + self.width - 1
+			super().__init__(self.buffer, self.width, self.height, framebuf.MONO_VLSB)
+			self.init_display()
 
-    def write_cmd(self, cmd):
-        self.temp[0] = 0x00
-        self.temp[1] = cmd
-        self.i2c.writeto(self.addr, self.temp)
+		def write_cmd(self, cmd):
+			self.temp[0] = 0x00
+			self.temp[1] = cmd
+			self.i2c.writeto(self.addr, self.temp)
 
-    def write_data(self, buf):
-        self.write_list[1] = buf
-        try:
-            self.i2c.writevto(self.addr, self.write_list)
-        except Exception:
-            # Some ports may not implement writevto
-            self.i2c.writeto(self.addr, b'\x40' + buf)
+		def write_data(self, buf):
+			self.write_list[1] = buf
+			try:
+				self.i2c.writevto(self.addr, self.write_list)
+			except Exception:
+				# Some ports may not implement writevto
+				self.i2c.writeto(self.addr, b'\x40' + buf)
 
-    def init_display(self):
-        for cmd in (
-            0xAE, 0xD5, 0x80, 0xA8, 0x3F, 0xD3, 0x00, 0x40,
-            0x8D, 0x14 if not self.external_vcc else 0x10,
-            0x20, 0x00, 0xA1, 0xC8, 0xDA, 0x12, 0x81, 0xCF,
-            0xD9, 0xF1 if not self.external_vcc else 0x22, 0xDB, 0x40,
-            0xA4, 0xA6, 0xAF
-        ):
-            try:
-                self.write_cmd(cmd)
-            except Exception:
-                pass
-        self.fill(0)
-        self.show()
+		def init_display(self):
+			for cmd in (
+				0xAE, 0xD5, 0x80, 0xA8, 0x3F, 0xD3, 0x00, 0x40,
+				0x8D, 0x14 if not self.external_vcc else 0x10,
+				0x20, 0x00, 0xA1, 0xC8, 0xDA, 0x12, 0x81, 0xCF,
+				0xD9, 0xF1 if not self.external_vcc else 0x22, 0xDB, 0x40,
+				0xA4, 0xA6, 0xAF
+			):
+				try:
+					self.write_cmd(cmd)
+				except Exception:
+					pass
+			self.fill(0)
+			self.show()
 
-    def show(self):
-        try:
-            self.write_cmd(0x21)
-            self.write_cmd(self.col_start)
-            self.write_cmd(self.col_end)
-            self.write_cmd(0x22)
-            self.write_cmd(0)
-            self.write_cmd(self.pages - 1)
-            self.write_data(self.buffer)
-        except Exception:
-            pass
+		def show(self):
+			try:
+				self.write_cmd(0x21)
+				self.write_cmd(self.col_start)
+				self.write_cmd(self.col_end)
+				self.write_cmd(0x22)
+				self.write_cmd(0)
+				self.write_cmd(self.pages - 1)
+				self.write_data(self.buffer)
+			except Exception:
+				pass
 
-    def poweroff(self):
-        try:
-            self.write_cmd(0xAE)
-        except Exception:
-            pass
+		def poweroff(self):
+			try:
+				self.write_cmd(0xAE)
+			except Exception:
+				pass
 
-    def poweron(self):
-        try:
-            self.write_cmd(0xAF)
-        except Exception:
-            pass
+		def poweron(self):
+			try:
+				self.write_cmd(0xAF)
+			except Exception:
+				pass
 
-    def contrast(self, contrast):
-        try:
-            self.write_cmd(0x81)
-            self.write_cmd(contrast)
-        except Exception:
-            pass
+		def contrast(self, contrast):
+			try:
+				self.write_cmd(0x81)
+				self.write_cmd(contrast)
+			except Exception:
+				pass
 
-    def invert(self, invert):
-        try:
-            self.write_cmd(0xA6 | (invert & 1))
-        except Exception:
-            pass
+		def invert(self, invert):
+			try:
+				self.write_cmd(0xA6 | (invert & 1))
+			except Exception:
+				pass
+else:
+	SSD1309_I2C = None  # CHANGED: allow import on Zero
 
 # Initialize OLED if enabled
 oled = None
-if getattr(settings, 'ENABLE_OLED', False):
-    try:
-        i2c = machine.I2C(1, scl=machine.Pin(I2C_B_SCL_PIN), sda=machine.Pin(I2C_B_SDA_PIN), freq=100000)
-        oled = SSD1309_I2C(128, 64, i2c, addr=0x3C)
-    except Exception as e:
-        print(f"[ERROR] OLED init failed: {e}")
-        oled = None
+if getattr(settings, 'ENABLE_OLED', False) and SSD1309_I2C is not None:
+	try:
+		i2c = machine.I2C(1, scl=machine.Pin(I2C_B_SCL_PIN), sda=machine.Pin(I2C_B_SDA_PIN), freq=100000)
+		oled = SSD1309_I2C(128, 64, i2c, addr=0x3C)
+	except Exception as e:
+		print(f"[ERROR] OLED init failed: {e}")
+		oled = None
 
 # Utils
 async def fade_display(on=True, steps=10, delay=0.03):

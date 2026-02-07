@@ -3,104 +3,22 @@
 
 
 # --- Single-threaded asyncio event loop ---
-import uasyncio as asyncio
-import settings
+from platform_compat import asyncio, time, os, gc, machine, requests  # CHANGED
+import settings  # CHANGED
+import sdata as sdata  # CHANGED: ensure global sdata exists for tasks
+
 from debug import info as dbg_info, warn as dbg_warn, error as dbg_error
-import sdata
-import utime as time
 from sampling import sampleEnviroment
 from utils import free_pins_lora, checkLogDirectory, debug_print, load_persisted_unit_name, periodic_field_data_send, load_persisted_unit_id, persist_unit_id, get_machine_id, periodic_provision_check
 from lora import connectLora, log_error, TMON_AI
 from ota import check_for_update, apply_pending_update
 from oled import update_display, display_message
 from settings_apply import load_applied_settings_on_boot, settings_apply_loop
+
 try:
     from engine_controller import engine_loop
 except Exception:
     engine_loop = None
-import ujson as json
-import uos as os
-try:
-    import urequests as requests
-except Exception:
-    requests = None
-from wifi import disable_wifi, connectToWifiNetwork, wifi_rssi_monitor
-# duplicate import removed
-
-checkLogDirectory()
-
-# Apply any previously applied settings snapshot on boot
-try:
-    load_applied_settings_on_boot()
-except Exception:
-    pass
-
-script_start_time = time.ticks_ms()
-
-# Detect and persist MACHINE_ID on first boot if missing
-try:
-    if settings.MACHINE_ID is None:
-        mid = get_machine_id()
-        if mid:
-            settings.MACHINE_ID = mid
-            try:
-                with open(settings.MACHINE_ID_FILE, 'w') as f:
-                    f.write(mid)
-            except Exception:
-                pass
-except Exception:
-    pass
-
-# Load persisted UNIT_ID mapping if available
-try:
-    stored_uid = load_persisted_unit_id()
-    if stored_uid and str(stored_uid) != str(settings.UNIT_ID):
-        settings.UNIT_ID = str(stored_uid)
-    print(f"[BOOT] Loaded persisted UNIT_ID: {settings.UNIT_ID}")
-except Exception:
-    pass
-
-# Load persisted UNIT_Name mapping if available
-try:
-    stored_uname = load_persisted_unit_name()
-    if stored_uname and str(stored_uname) != str(settings.UNIT_Name):
-        settings.UNIT_Name = str(stored_uname)
-    print(f"[BOOT] Loaded persisted UNIT_Name: {settings.UNIT_Name}")
-except Exception:
-    pass
-
-# NEW: load persisted WORDPRESS_API_URL before starting tasks
-try:
-    from utils import load_persisted_wordpress_api_url
-    load_persisted_wordpress_api_url()
-except Exception:
-    pass
-
-# NEW: simple provisioned check (flag existence or configured hub URL)
-_provision_warned = False
-def is_provisioned():
-    global _provision_warned
-    try:
-        flag = getattr(settings, 'PROVISIONED_FLAG_FILE', '/logs/provisioned.flag')
-        wp_url = str(getattr(settings, 'WORDPRESS_API_URL', '')).strip()
-        # If a hub URL is configured, allow tasks to proceed even if the flag is missing
-        if wp_url:
-            return True
-        try:
-            os.stat(flag)
-            return True
-        except Exception:
-            pass
-    except Exception:
-        pass
-    if not _provision_warned:
-        # One-time warning so we know tasks are gated
-        try:
-            print('[WARN] Device not marked provisioned (no flag or WORDPRESS_API_URL).')
-        except Exception:
-            pass
-        _provision_warned = True
-    return False
 
 # Load persisted NODE_TYPE if available before starting tasks
 try:
