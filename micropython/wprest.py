@@ -5,6 +5,9 @@
 import gc
 from platform_compat import requests as _pc_requests, time as _pc_time, asyncio as _pc_asyncio  # CHANGED
 import sys  # NEW
+import urllib.request  # CHANGED: CPython fallback when 'requests' isn't installed
+import urllib.error  # CHANGED
+import urllib.parse  # CHANGED
 
 # CHANGED: CPython/Zero fallback for HTTP + time when platform_compat provides None
 requests = _pc_requests
@@ -112,11 +115,93 @@ def _is_micropython() -> bool:
     except Exception:
         return False
 
+# CHANGED: minimal urllib-based response shim to preserve current call sites
+class _UrlLibResp:
+    def __init__(self, code=0, text="", content=None):
+        self.status_code = int(code or 0)
+        self.text = text or ""
+        self.content = content if content is not None else (self.text.encode("utf-8", "ignore") if isinstance(self.text, str) else b"")
+
+    def json(self):
+        return json.loads(self.text or "{}")
+
+    def close(self):
+        return None
+
+def _urllib_post(url, payload=None, headers=None, timeout_s=8):
+    try:
+        body = json.dumps(payload or {}).encode("utf-8")
+    except Exception:
+        body = b"{}"
+    hdrs = dict(headers or {})
+    try:
+        if "Content-Type" not in hdrs:
+            hdrs["Content-Type"] = "application/json"
+        req = urllib.request.Request(url, data=body, headers=hdrs, method="POST")
+        with urllib.request.urlopen(req, timeout=timeout_s) as r:
+            raw = r.read()
+            txt = ""
+            try:
+                txt = raw.decode("utf-8", "ignore")
+            except Exception:
+                txt = ""
+            return _UrlLibResp(getattr(r, "status", 200), txt, raw)
+    except urllib.error.HTTPError as e:
+        raw = b""
+        try:
+            raw = e.read()
+        except Exception:
+            pass
+        txt = ""
+        try:
+            txt = raw.decode("utf-8", "ignore")
+        except Exception:
+            txt = ""
+        return _UrlLibResp(getattr(e, "code", 0), txt, raw)
+    except Exception as e:
+        return _UrlLibResp(0, str(e), None)
+
+def _urllib_get(url, headers=None, timeout_s=8):
+    hdrs = dict(headers or {})
+    try:
+        req = urllib.request.Request(url, headers=hdrs, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout_s) as r:
+            raw = r.read()
+            txt = ""
+            try:
+                txt = raw.decode("utf-8", "ignore")
+            except Exception:
+                txt = ""
+            return _UrlLibResp(getattr(r, "status", 200), txt, raw)
+    except urllib.error.HTTPError as e:
+        raw = b""
+        try:
+            raw = e.read()
+        except Exception:
+            pass
+        txt = ""
+        try:
+            txt = raw.decode("utf-8", "ignore")
+        except Exception:
+            txt = ""
+        return _UrlLibResp(getattr(e, "code", 0), txt, raw)
+    except Exception as e:
+        return _UrlLibResp(0, str(e), None)
+
 async def _http_post(url, payload=None, headers=None, timeout_s=8):
     """
     CPython: run requests.post in a thread to avoid freezing the event loop.
     MicroPython/urequests: fall back to data=json.dumps(payload) and omit timeout when unsupported.
     """
+    # CHANGED: if 'requests' is unavailable on CPython, fall back to urllib
+    if requests is None and not _is_micropython():
+        try:
+            if hasattr(_pc_asyncio, "to_thread"):
+                return await _pc_asyncio.to_thread(_urllib_post, url, payload, headers, timeout_s)
+        except Exception:
+            pass
+        return _urllib_post(url, payload, headers, timeout_s)
+
     if requests is None:
         return None
 
@@ -133,10 +218,7 @@ async def _http_post(url, payload=None, headers=None, timeout_s=8):
                 body = json.dumps(payload or {})
             except Exception:
                 body = "{}"
-            try:
-                return requests.post(url, data=body, headers=headers)
-            except TypeError:
-                return requests.post(url, data=body, headers=headers)  # last-ditch
+            return requests.post(url, data=body, headers=headers)
 
     try:
         if (not _is_micropython()) and hasattr(_pc_asyncio, "to_thread"):
@@ -146,6 +228,15 @@ async def _http_post(url, payload=None, headers=None, timeout_s=8):
     return _do_post()
 
 async def _http_get(url, headers=None, timeout_s=8):
+    # CHANGED: if 'requests' is unavailable on CPython, fall back to urllib
+    if requests is None and not _is_micropython():
+        try:
+            if hasattr(_pc_asyncio, "to_thread"):
+                return await _pc_asyncio.to_thread(_urllib_get, url, headers, timeout_s)
+        except Exception:
+            pass
+        return _urllib_get(url, headers, timeout_s)
+
     if requests is None:
         return None
 

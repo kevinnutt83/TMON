@@ -39,12 +39,34 @@ except Exception:
     connectToWifiNetwork = None
     wifi_rssi_monitor = None
 
+# CHANGED: Make Zero detection resilient:
+# - platform_compat.IS_ZERO when available
+# - settings.MCU_TYPE == "zero"
+# - CPython runtime (sys.implementation.name != "micropython")
+def _runtime_is_zero():
+    try:
+        if bool(IS_ZERO):
+            return True
+    except Exception:
+        pass
+    try:
+        if str(getattr(settings, "MCU_TYPE", "")).lower() == "zero":
+            return True
+    except Exception:
+        pass
+    try:
+        return str(getattr(sys.implementation, "name", "")).lower() != "micropython"
+    except Exception:
+        return False
+
+IS_ZERO_RUNTIME = _runtime_is_zero()
+
 # Guard LoRa import for Zero/CPython (keeps booting even if LoRa stack not present)
 try:
     _mcu = str(getattr(settings, "MCU_TYPE", "")).lower()
 except Exception:
     _mcu = ""
-if IS_ZERO:
+if IS_ZERO_RUNTIME:
     try:
         from lora import connectLora, log_error, TMON_AI  # type: ignore
     except Exception:
@@ -416,9 +438,9 @@ async def startup():
         pass
 
     # Start provisioning loop
-    # CHANGED: on Zero, avoid running unknown blocking HTTP inside existing provision loops.
+    # CHANGED: keep existing behavior on MicroPython; on Zero use the dedicated bootstrap loop below.
     try:
-        if not IS_ZERO:
+        if not IS_ZERO_RUNTIME:
             asyncio.create_task(periodic_provision_check())
     except Exception:
         pass
@@ -517,7 +539,7 @@ async def startup():
         return fn(*a, **kw)
 
     async def _zero_http_bootstrap_loop():
-        if not IS_ZERO:
+        if not IS_ZERO_RUNTIME:
             return
 
         try:
@@ -537,6 +559,7 @@ async def startup():
                     await asyncio.sleep(interval)
                     continue
 
+                # Check-in/registration attempt (does not depend on MicroPython WiFi stack on Zero)
                 if register_with_wp:
                     try:
                         await register_with_wp()
@@ -546,7 +569,7 @@ async def startup():
                         except Exception:
                             pass
 
-                # If not provisioned, try fetch/apply. Run sync code in threads on CPython.
+                # Provision fetch/apply (sync code in thread on CPython)
                 try:
                     is_prov = bool(getattr(settings, "UNIT_PROVISIONED", False)) or bool(
                         str(getattr(settings, "WORDPRESS_API_URL", "")).strip()
@@ -575,7 +598,7 @@ async def startup():
             await asyncio.sleep(interval)
 
     try:
-        if IS_ZERO:
+        if IS_ZERO_RUNTIME:
             asyncio.create_task(_zero_http_bootstrap_loop())
     except Exception:
         pass
