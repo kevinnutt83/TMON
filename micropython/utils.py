@@ -340,7 +340,7 @@ def get_unix_time():
         return int(time.time())
 
 async def debug_print(message, status="INFO"):
-    # CHANGED: make module import-safe on Zero/CPython and fix syntax errors in debug flag map.
+    # CHANGED: ensure settings is available (or safely None) on CPython/Zero
     try:
         import settings  # type: ignore
     except Exception:
@@ -353,40 +353,36 @@ async def debug_print(message, status="INFO"):
         tag = "INFO"
 
     # Map tags/categories to debug flags (safe even if settings is None)
-    s = settings
     debug_flags = {
-        "TEMP": bool(getattr(s, "DEBUG_TEMP", False)) if s else False,
-        "BAR": bool(getattr(s, "DEBUG_BAR", False)) if s else False,
-        "HUMID": bool(getattr(s, "DEBUG_HUMID", False)) if s else False,
-        "BME280": bool(getattr(s, "DEBUG_BME280", False)) if s else False,
-        "DHT11": bool(getattr(s, "DEBUG_DHT11", False)) if s else False,
-        "SAMPLING": bool(getattr(s, "DEBUG_SAMPLING", False)) if s else False,
-        "SAMPLE": bool(getattr(s, "DEBUG_SAMPLING", False)) if s else False,  # CHANGED: was broken 'SAMPLE_' + 'LORA' on same line
-        "LORA": bool(getattr(s, "DEBUG_LORA", False)) if s else False,
-        "LORA_RX": bool(getattr(s, "DEBUG_LORA", False)) if s else False,
-        "LORA_TX": bool(getattr(s, "DEBUG_LORA", False)) if s else False,
-        "WIFI": bool(getattr(s, "DEBUG_WIFI_CONNECT", False)) if s else False,
-        "WIFI_CONNECT": bool(getattr(s, "DEBUG_WIFI_CONNECT", False)) if s else False,
-        "OTA": bool(getattr(s, "DEBUG_OTA", False)) if s else False,
-        "PROVISION": bool(getattr(s, "DEBUG_PROVISION", False)) if s else False,
-        "DISPLAY": bool(getattr(s, "DEBUG_DISPLAY", False)) if s else False,
-        "OLED": bool(getattr(s, "DEBUG_DISPLAY", False)) if s else False,
-        "WPREST": bool(getattr(s, "DEBUG_WPREST", False)) if s else False,
-        "FIELD_DATA": bool(getattr(s, "DEBUG_FIELD_DATA", False)) if s else False,
-        "RS485": bool(getattr(s, "DEBUG_RS485", False)) if s else False,
-        "BASE_NODE": bool(getattr(s, "DEBUG_BASE_NODE", False)) if s else False,
-        "REMOTE_NODE": bool(getattr(s, "DEBUG_REMOTE_NODE", False)) if s else False,
-        "WIFI_NODE": bool(getattr(s, "DEBUG_WIFI_NODE", False)) if s else False,
-        "HTTP": bool(getattr(s, "DEBUG_WPREST", False)) if s else False,
-        "TASK": bool(getattr(s, "DEBUG", False)) if s else False,
-        "INFO": bool(getattr(s, "DEBUG", False)) if s else False,
-        "WARN": bool(getattr(s, "DEBUG", False)) if s else False,
-        "ERROR": True,  # CHANGED: always allow ERROR visibility
-        "COMMAND": bool(getattr(s, "DEBUG", False)) if s else False,
-        "DEBUG": bool(getattr(s, "DEBUG", False)) if s else False,
+        'TEMP': getattr(settings, 'DEBUG_TEMP', False) if settings else False,
+        'BAR': getattr(settings, 'DEBUG_BAR', False) if settings else False,
+        'HUMID': getattr(settings, 'DEBUG_HUMID', False) if settings else False,
+        'BME280': getattr(settings, 'DEBUG_BME280', False) if settings else False,
+        'DHT11': getattr(settings, 'DEBUG_DHT11', False) if settings else False,
+        'SAMPLING': getattr(settings, 'DEBUG_SAMPLING', False) if settings else False,
+        # CHANGED: fix broken line that combined two dict entries and caused parse/runtime issues
+        'SAMPLE_': getattr(settings, 'DEBUG_SAMPLING', False) if settings else False,
+        'LORA': getattr(settings, 'DEBUG_LORA', False) if settings else False,
+
+        'LORA_RX': getattr(settings, 'DEBUG_LORA', False) if settings else False,
+        'LORA_TX': getattr(settings, 'DEBUG_LORA', False) if settings else False,
+        'WIFI': getattr(settings, 'DEBUG_WIFI_CONNECT', False) if settings else False,
+        'WIFI_CONNECT': getattr(settings, 'DEBUG_WIFI_CONNECT', False) if settings else False,
+        'OTA': getattr(settings, 'DEBUG_OTA', False) if settings else False,
+        'PROVISION': getattr(settings, 'DEBUG_PROVISION', False) if settings else False,
+        'DISPLAY': getattr(settings, 'DEBUG_DISPLAY', False) if settings else False,
+        'WPREST': getattr(settings, 'DEBUG_WPREST', False) if settings else False,
+        'FIELD_DATA': getattr(settings, 'DEBUG_FIELD_DATA', False) if settings else False,
+        'RS485': getattr(settings, 'DEBUG_RS485', False) if settings else False,
+        'BASE_NODE': getattr(settings, 'DEBUG_BASE_NODE', False) if settings else False,
+        'REMOTE_NODE': getattr(settings, 'DEBUG_REMOTE_NODE', False) if settings else False,
+        'WIFI_NODE': getattr(settings, 'DEBUG_WIFI_NODE', False) if settings else False,
+        'INFO': getattr(settings, 'DEBUG', False) if settings else False,
+        'WARN': getattr(settings, 'DEBUG', False) if settings else False,
+        'ERROR': getattr(settings, 'DEBUG', False) if settings else False,
     }
 
-    enabled = bool(debug_flags.get(tag, bool(getattr(s, "DEBUG", False)) if s else False))
+    enabled = bool(debug_flags.get(tag, bool(getattr(settings, "DEBUG", False)) if settings else False))
     if not enabled:
         return
 

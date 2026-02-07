@@ -134,64 +134,63 @@ async def register_with_wp():
         candidates = []
         try:
             candidates.append('/wp-json/tmon-admin/v1/device/check-in')
+            candidates.append('/wp-json/tmon-admin/v1/device/checkin')  # CHANGED: common variant (no dash)
             candidates.append(getattr(settings, 'ADMIN_REGISTER_PATH', '/wp-json/tmon-admin/v1/device/register'))
+            candidates.append('/wp-json/tmon-admin/v1/device/check-in/')  # CHANGED: tolerate trailing slash
             candidates.append(getattr(settings, 'ADMIN_V2_CHECKIN_PATH', '/wp-json/tmon-admin/v2/device/checkin'))
         except Exception:
-            candidates = ['/wp-json/tmon-admin/v1/device/check-in', '/wp-json/tmon-admin/v1/device/register', '/wp-json/tmon-admin/v2/device/checkin']
+            candidates = [
+                '/wp-json/tmon-admin/v1/device/check-in',
+                '/wp-json/tmon-admin/v1/device/checkin',
+                '/wp-json/tmon-admin/v1/device/register',
+                '/wp-json/tmon-admin/v2/device/checkin',
+            ]
 
-        hdrs = _auth_headers() if callable(_auth_headers) else {}
+        # CHANGED: try multiple auth modes; many hubs allow unauth register/check-in
+        auth_modes = [None, 'none', 'basic', 'hub', 'admin', 'read', 'api_key']
+
+        last = None
         for path in candidates:
-            try:
-                url = base.rstrip('/') + path
+            for mode in auth_modes:
                 try:
-                    resp = requests.post(url, json=payload, headers=hdrs, timeout=8)
-                except TypeError:
-                    resp = requests.post(url, json=payload, headers=hdrs)
-                status = getattr(resp, 'status_code', 0)
-                body_snip = ''
-                try:
-                    body_snip = (getattr(resp, 'text', '') or '')[:400]
-                except Exception:
-                    body_snip = ''
-                # Parse and persist name if present
-                try:
-                    if status in (200, 201):
-                        try:
-                            j = resp.json()
-                        except Exception:
-                            j = {}
-                        unit_name = (j.get('unit_name') or '').strip()
-                        if unit_name:
-                            try:
-                                from utils import persist_unit_name
-                                persist_unit_name(unit_name)
-                            except Exception:
-                                pass
-                except Exception:
-                    pass
-                try:
-                    if resp:
-                        resp.close()
-                except Exception:
-                    pass
-                if status in (200, 201):
-                    await debug_print(f'wprest: register ok via {path}', 'INFO')
+                    url = base.rstrip('/') + path
                     try:
-                        from oled import display_message
-                        await display_message("Registered", 2)
+                        hdrs = _auth_headers(mode)
+                    except Exception:
+                        hdrs = {}
+                    try:
+                        resp = requests.post(url, json=payload, headers=hdrs, timeout=8)
+                    except TypeError:
+                        resp = requests.post(url, json=payload, headers=hdrs)
+
+                    status = getattr(resp, 'status_code', 0)
+                    body_snip = ''
+                    try:
+                        body_snip = (getattr(resp, 'text', '') or '')[:400]
+                    except Exception:
+                        body_snip = ''
+
+                    try:
+                        if resp:
+                            resp.close()
                     except Exception:
                         pass
-                    return True
-                # Log diagnostic per-candidate
-                if status == 404:
-                    await debug_print(f'wprest: register endpoint {path} not found (404)', 'WARN')
-                elif status == 401:
-                    await debug_print(f'wprest: register endpoint {path} returned 401 Unauthorized. Check FIELD_DATA_APP_PASS / credentials.', 'WARN')
-                else:
-                    await debug_print(f'wprest: register failed {status} for {path} ({body_snip})', 'WARN')
-            except Exception as e:
-                await debug_print(f'wprest: register attempt {path} exception: {e}', 'ERROR')
-        await debug_print('wprest: register_all_attempts_failed', 'ERROR')
+
+                    last = (path, mode, status, body_snip[:200])
+
+                    if status in (200, 201):
+                        await debug_print(f'wprest: register ok via {path} auth={mode}', 'INFO')
+                        try:
+                            from oled import display_message
+                            await display_message("Registered", 2)
+                        except Exception:
+                            pass
+                        return True
+                except Exception as e:
+                    last = (path, mode, 'exc', str(e)[:200])
+
+        # CHANGED: include last attempt details on ERROR so it shows even with DEBUG=False
+        await debug_print(f'wprest: register_all_attempts_failed last={last}', 'ERROR')
         try:
             from oled import display_message
             await display_message("Register Failed", 2)

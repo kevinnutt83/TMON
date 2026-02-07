@@ -27,7 +27,17 @@ except Exception:
 
 # Resolve configuration from settings or sensible defaults
 DEFAULT_BASE = getattr(device_settings, 'TMON_ADMIN_API_URL', "https://tmonsystems.com") if device_settings else "https://tmonsystems.com"
-API_PATHS = getattr(device_settings, 'PROVISION_PATHS', ['/wp-json/tmon/v1/device/provision', '/wp-json/tmon/v1/provision']) if device_settings else ['/wp-json/tmon/v1/device/provision', '/wp-json/tmon/v1/provision']
+
+# CHANGED: default paths should include Admin provisioning endpoint(s) first
+_DEFAULT_PROVISION_PATHS = [
+    '/wp-json/tmon-admin/v1/device/provision',
+    '/wp-json/tmon-admin/v1/device/provision/',  # tolerate trailing slash
+    # legacy/alternate routes (keep as fallbacks)
+    '/wp-json/tmon/v1/device/provision',
+    '/wp-json/tmon/v1/provision',
+]
+API_PATHS = getattr(device_settings, 'PROVISION_PATHS', _DEFAULT_PROVISION_PATHS) if device_settings else _DEFAULT_PROVISION_PATHS
+
 REQUEST_TIMEOUT = getattr(device_settings, 'HTTP_TIMEOUT_S', 20) if device_settings else 20
 CHUNK_SIZE = getattr(device_settings, 'FIRMWARE_DOWNLOAD_CHUNK_SIZE', 1024) if device_settings else 1024
 

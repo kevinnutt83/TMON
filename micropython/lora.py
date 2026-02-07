@@ -24,25 +24,25 @@ from platform_compat import (
 
 # CHANGED: stdlib/micropython compatibility imports (parse-safe on both runtimes)
 try:
-    import sys
+    import sys  # type: ignore
 except Exception:
     sys = None  # type: ignore
 try:
-    import io
+    import io  # type: ignore
 except Exception:
     io = None  # type: ignore
 try:
-    import random
+    import random  # type: ignore
 except Exception:
     random = None  # type: ignore
 try:
-    import select
+    import select  # type: ignore
 except Exception:
     select = None  # type: ignore
 
-# CHANGED: ujson / ubinascii / uhashlib compatibility (no empty try blocks)
+# CHANGED: ujson / ubinascii / uhashlib compatibility
 try:
-    import ujson as ujson  # MicroPython
+    import ujson as ujson  # type: ignore
 except Exception:
     try:
         import json as ujson  # type: ignore
@@ -50,7 +50,7 @@ except Exception:
         ujson = None  # type: ignore
 
 try:
-    import ubinascii as ubinascii  # MicroPython
+    import ubinascii as ubinascii  # type: ignore
 except Exception:
     try:
         import binascii as ubinascii  # type: ignore
@@ -58,7 +58,7 @@ except Exception:
         ubinascii = None  # type: ignore
 
 try:
-    import uhashlib as uhashlib  # MicroPython
+    import uhashlib as uhashlib  # type: ignore
 except Exception:
     try:
         import hashlib as uhashlib  # type: ignore
@@ -71,46 +71,14 @@ try:
 except Exception:
     _py_b64 = None  # type: ignore
 
-# Provide a MicroPython-like base64 surface (_ub.b2a_base64/_ub.a2b_base64)
-try:
-    _ub = ubinascii
-    if _ub is None or not hasattr(_ub, "b2a_base64") or not hasattr(_ub, "a2b_base64"):
-        raise ImportError("no base64 helpers")
-except Exception:
-    class _Base64Shim:
-        @staticmethod
-        def b2a_base64(b):
-            if _py_b64 is None:
-                raise RuntimeError("base64 unavailable")
-            return _py_b64.b64encode(b) + b"\n"
-
-        @staticmethod
-        def a2b_base64(s):
-            if _py_b64 is None:
-                raise RuntimeError("base64 unavailable")
-            if isinstance(s, str):
-                s = s.encode("ascii")
-            return _py_b64.b64decode(s)
-    _ub = _Base64Shim()
-
 # Sleep-ms helper used by existing code (_pulse_reset/_attempt_begin)
 try:
-    import utime as _time
+    import utime as _time  # type: ignore
 except Exception:
     try:
-        import time as _time
+        import time as _time  # type: ignore
     except Exception:
-        _time = None
-try:
-    if _time is not None and not hasattr(_time, "sleep_ms"):
-        def _sleep_ms(ms):
-            try:
-                _time.sleep(float(ms) / 1000.0)
-            except Exception:
-                pass
-        _time.sleep_ms = _sleep_ms  # type: ignore[attr-defined]
-except Exception:
-    pass
+        _time = None  # type: ignore
 
 # MicroPython-only SX1262 driver
 try:
@@ -121,7 +89,7 @@ except Exception:
     except Exception:
         SX1262 = None
 
-# CHANGED: import settings/sdata explicitly and safely (no empty try blocks)
+# CHANGED: import settings/sdata explicitly and safely
 try:
     import settings  # type: ignore
 except Exception:
