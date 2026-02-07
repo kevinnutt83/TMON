@@ -629,13 +629,18 @@ async def startup():
 from utils import start_background_tasks, runGC, update_sys_voltage  # type: ignore
 
 async def main():
-    # NEW: must be installed before any background tasks that can call machine.soft_reset()
-    _install_zero_soft_reset_handler()
-
+    # CHANGED: install Zero handler after a loop exists
     try:
-        start_background_tasks()
+        _install_zero_soft_reset_handler()
     except Exception:
         pass
+
+    # CHANGED: avoid Zero starting MicroPython-style background tasks that can spawn provisioning loops
+    if not IS_ZERO_RUNTIME:
+        try:
+            start_background_tasks()
+        except Exception:
+            pass
 
     asyncio.create_task(startup())
 

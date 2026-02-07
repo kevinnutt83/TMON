@@ -646,10 +646,13 @@ Firmware (Micropython) — Optimization Plan
 - [ ] Add adaptive upload backpressure: reduce batch size on errors/low memory.
 
 # CHANGED: Zero (CPython) compatibility tracking
-- [🔄] Zero: make wprest.py import-safe on MicroPython (avoid unconditional urllib imports) and resilient to optional utils import failures.
-- [🔄] Zero: fix neopixel dependency path (utils.flash_led should import a Zero-capable NeoPixel shim via platform_compat or a conditional backend).
+- [✅] Zero: make wprest.py import-safe on MicroPython (avoid unconditional urllib imports) and resilient to optional utils import failures.
+- [✅] Zero: fix neopixel dependency path (utils.flash_led should import a Zero-capable NeoPixel shim via platform_compat or a conditional backend).
   - Acceptance: running `python3 micropython/main.py` on Zero produces no `ModuleNotFoundError: neopixel` task exceptions.
   - Note: requires editing `micropython/utils.py` and likely `micropython/platform_compat.py`.
+- [🔄] Zero: prevent MicroPython-style provisioning loop from running on Zero (duplicate task) and restart cleanly when `machine.soft_reset()` is raised inside a task (no "Task exception was never retrieved").
+  - Repro (current): `SystemExit('soft_reset requested')` raised from `utils.periodic_provision_check()` shows as un-retrieved task exception.
+  - Fix: install Zero asyncio exception handler to restart process on `soft_reset requested`.
 
 Testing
 - [ ] Verify UC hourly backfill populates devices when Admin is reachable.
