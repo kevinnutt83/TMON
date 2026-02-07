@@ -24,12 +24,13 @@ try:
     import sdata
 except Exception:
     sdata = None
+_s = sdata  # existing code references _s for sdata mirroring
 
 try:
     import utime as time
 except ImportError:
     import time
-_time = time  # driver code uses _time.sleep_ms in several places
+_time = time  # existing code uses _time.sleep_ms
 
 try:
     import uos as os
@@ -55,7 +56,7 @@ try:
     import uselect as select
 except ImportError:
     try:
-        import select
+        import select  # type: ignore
     except Exception:
         select = None
 
@@ -68,11 +69,13 @@ try:
     import ubinascii as ubinascii
 except ImportError:
     import binascii as ubinascii
+_ub = ubinascii  # existing code uses _ub.*
 
 try:
     import uhashlib as uhashlib
 except ImportError:
     import hashlib as uhashlib
+_uh = uhashlib  # existing code uses _uh.*
 
 try:
     import io
@@ -82,8 +85,9 @@ except Exception:
 try:
     import machine
 except ImportError:
+    # main.py registers a 'machine' shim into sys.modules for MCU_TYPE="zero"
     try:
-        import machine_compat as machine
+        import machine  # type: ignore
     except Exception:
         machine = None
 
@@ -99,12 +103,18 @@ try:
     import urequests as requests
 except ImportError:
     try:
-        import requests
+        import requests  # type: ignore
     except Exception:
         requests = None
 
-from sampling import sampleEnviroment, findLowestTemp, findHighestTemp, findLowestBar, findHighestBar, findLowestHumid, findHighestHumid
-from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run, led_status_flash, write_lora_log, persist_unit_id, append_field_data_entry
+from sampling import (
+    sampleEnviroment, findLowestTemp, findHighestTemp,
+    findLowestBar, findHighestBar, findLowestHumid, findHighestHumid
+)
+from utils import (
+    free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run,
+    led_status_flash, write_lora_log, persist_unit_id, append_field_data_entry
+)
 from relay import toggle_relay
 
 try:
@@ -340,8 +350,9 @@ except ImportError:
 try:
     import machine
 except ImportError:
+    # main.py registers a 'machine' shim into sys.modules for MCU_TYPE="zero"
     try:
-        import machine_compat as machine
+        import machine  # type: ignore
     except Exception:
         machine = None
 try:
@@ -353,7 +364,7 @@ try:
     import urequests as requests
 except ImportError:
     try:
-        import requests
+        import requests  # type: ignore
     except Exception:
         requests = None
 from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run
@@ -1602,6 +1613,7 @@ async def connectLora():
                                             try:
                                                 if hasattr(lora, 'getRSSI'):
                                                     sdata.lora_SigStr = lora.getRSSI()
+                                                    sdata.lora_last_rx_ts = time.time()
                                                 if hasattr(lora, 'getSNR'):
                                                     sdata.lora_snr = lora.getSNR()
                                                     sdata.last_message = ujson.dumps(obj2)[:32]
@@ -1828,7 +1840,7 @@ async def connectLora():
                                                     obj2 = None
                                                 if isinstance(obj2, dict) and obj2.get('ack') == 'ok':
                                                     ack_received = True
-                                                    # Capture signal info
+                                                    # Capture signal info for display
                                                     try:
                                                         if hasattr(lora, 'getRSSI'):
                                                             sdata.lora_SigStr = lora.getRSSI()
@@ -1838,7 +1850,7 @@ async def connectLora():
                                                             sdata.last_message = ujson.dumps(obj2)[:32]
                                                     except Exception:
                                                         pass
-                                                    # Adopt next sync
+                                                    # Adopt next sync if provided
                                                     try:
                                                         if 'next_in' in obj2:
                                                             rel = int(obj2['next_in'])
@@ -1851,7 +1863,7 @@ async def connectLora():
                                                             settings.nextLoraSync = int(obj2['next'])
                                                     except Exception:
                                                         pass
-                                                    # Adopt GPS
+                                                    # Adopt GPS from base if provided and allowed
                                                     try:
                                                         if getattr(settings, 'GPS_ACCEPT_FROM_BASE', True):
                                                             blat = obj2.get('gps_lat')
@@ -1899,14 +1911,14 @@ async def connectLora():
                                                                                 machine.reset()
                                                                                 break
                                                     break
-                                            except Exception:
-                                                pass
-                                        await asyncio.sleep(0.01)
-                                    if not ack_received:
-                                        fallback = 300 + random.randint(-30, 30)
-                                        if fallback < 60: fallback = 60
-                                        settings.nextLoraSync = int(time.time() + fallback)
-                                        write_lora_log(f"Remote no ACK, fallback next sync in {fallback} sec", 'INFO')
+                                                except Exception:
+                                                    pass
+                                            await asyncio.sleep(0.01)
+                                        if not ack_received:
+                                            fallback = 300 + random.randint(-30, 30)
+                                            if fallback < 60: fallback = 60
+                                            settings.nextLoraSync = int(time.time() + fallback)
+                                            write_lora_log(f"Remote no ACK, fallback next sync in {fallback} sec", 'INFO')
                                     gc.collect()
                                     return True
                             else:

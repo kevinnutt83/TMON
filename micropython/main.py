@@ -1,16 +1,15 @@
 # Firmware Version: v2.06.0
 
-
-
 # --- Single-threaded asyncio event loop ---
 try:
     import uasyncio as asyncio
 except ImportError:
     import asyncio
 import settings
+
 from debug import info as dbg_info, warn as dbg_warn, error as dbg_error
 
-# FIX: previously-empty try/except broke parsing; normalize time/os/gc/machine imports for MP + CPython
+# FIX: time/os/gc imports must exist before first use
 try:
     import utime as time
 except ImportError:
@@ -26,15 +25,7 @@ try:
 except Exception:
     gc = None
 
-try:
-    import machine
-except ImportError:
-    try:
-        import machine_compat as machine  # CPython/Linux (MCU_TYPE="zero")
-    except Exception:
-        machine = None
-
-# CPython fallback: ticks_* + sleep_ms shims when running on "zero"/host python
+# CPython fallback: ticks_* + sleep_ms shims (used throughout firmware)
 if not hasattr(time, "ticks_ms"):
     _t0_ns = time.monotonic_ns()
     def _ticks_ms():
@@ -48,18 +39,133 @@ if not hasattr(time, "sleep_ms"):
         time.sleep(max(0, ms) / 1000)
     time.sleep_ms = _sleep_ms      # type: ignore[attr-defined]
 
-# Requests import (used by first_boot_provision); MicroPython-first fallback
+# FIX: gc.mem_free exists on MicroPython only; keep logic intact for "zero"
+if gc is not None and not hasattr(gc, "mem_free"):
+    def _mem_free():
+        return 0
+    gc.mem_free = _mem_free  # type: ignore[attr-defined]
+
+# FIX: provide `machine` module for MCU_TYPE="zero" so existing pin usage works without refactor
+try:
+    import machine  # MicroPython
+except ImportError:
+    machine = None
+
+if (machine is None) and (str(getattr(settings, "MCU_TYPE", "")).lower() == "zero"):
+    import sys as _sys
+    import types as _types
+    import uuid as _uuid
+
+    _m = _types.SimpleNamespace()
+
+    def _unique_id():
+        try:
+            with open("/etc/machine-id", "r") as f:
+                mid = (f.read() or "").strip()
+                if mid:
+                    return bytes.fromhex(mid[:32])
+        except Exception:
+            pass
+        try:
+            node = _uuid.getnode()
+            return int(node).to_bytes(6, "big", signed=False)
+        except Exception:
+            return b"\x00" * 6
+
+    class Pin:
+        IN = 0
+        OUT = 1
+        PULL_UP = 2
+        PULL_DOWN = 3
+        def __init__(self, pin, mode=OUT, pull=None):
+            self.pin = pin
+            self.mode = mode
+            self.pull = pull
+            self._val = 0
+            self._gpio = None
+            try:
+                import RPi.GPIO as GPIO  # type: ignore
+                self._gpio = GPIO
+                GPIO.setwarnings(False)
+                GPIO.setmode(GPIO.BCM)
+                if mode == self.OUT:
+                    GPIO.setup(pin, GPIO.OUT)
+                else:
+                    pud = GPIO.PUD_OFF
+                    if pull == self.PULL_UP:
+                        pud = GPIO.PUD_UP
+                    elif pull == self.PULL_DOWN:
+                        pud = GPIO.PUD_DOWN
+                    GPIO.setup(pin, GPIO.IN, pull_up_down=pud)
+            except Exception:
+                self._gpio = None
+        def value(self, v=None):
+            if v is None:
+                if self._gpio:
+                    try:
+                        return int(self._gpio.input(self.pin))
+                    except Exception:
+                        return int(self._val)
+                return int(self._val)
+            self._val = 1 if v else 0
+            if self._gpio:
+                try:
+                    self._gpio.output(self.pin, self._val)
+                except Exception:
+                    pass
+            return self._val
+
+    class ADC:
+        def __init__(self, *_a, **_kw):
+            pass
+        def read_u16(self):
+            return 0
+
+    def soft_reset():
+        raise SystemExit("soft_reset requested")
+
+    def reset():
+        raise SystemExit("reset requested")
+
+    _m.Pin = Pin
+    _m.ADC = ADC
+    _m.unique_id = _unique_id
+    _m.soft_reset = soft_reset
+    _m.reset = reset
+
+    _sys.modules["machine"] = _m
+    machine = _m  # used by this module too
+
+# Requests import (used by first_boot_provision)
 try:
     import urequests as requests
 except ImportError:
     try:
-        import requests
+        import requests  # type: ignore
     except Exception:
         requests = None
-from wifi import disable_wifi, connectToWifiNetwork, wifi_rssi_monitor
-# duplicate import removed
 
-checkLogDirectory()
+# FIX: restore required imports removed by the broken import edits (checkLogDirectory was missing)
+from sampling import sampleEnviroment
+from utils import (
+    free_pins_lora,
+    checkLogDirectory,
+    debug_print,
+    load_persisted_unit_name,
+    load_persisted_unit_id,
+    persist_unit_id,
+    get_machine_id,
+    periodic_provision_check,
+)
+from lora import connectLora, log_error, TMON_AI
+from ota import check_for_update, apply_pending_update
+from oled import update_display, display_message
+from settings_apply import load_applied_settings_on_boot, settings_apply_loop
+try:
+    from engine_controller import engine_loop
+except Exception:
+    engine_loop = None
+from wifi import disable_wifi, connectToWifiNetwork, wifi_rssi_monitor
 
 # Apply any previously applied settings snapshot on boot
 try:
