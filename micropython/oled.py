@@ -1,11 +1,31 @@
 # Firmware Version: v2.00j
 
-import uasyncio as asyncio
-import time
+try:
+    import uasyncio as asyncio
+except ImportError:
+    import asyncio
 import settings
+
+try:
+    import utime as time
+except ImportError:
+    import time
+
 import sdata
-import machine
-import framebuf
+
+try:
+    import machine
+except ImportError:
+    try:
+        import machine_compat as machine
+    except Exception:
+        machine = None
+
+try:
+    import framebuf
+except ImportError:
+    import framebuf_compat as framebuf
+
 from settings import I2C_B_SCL_PIN, I2C_B_SDA_PIN
 
 # Globals / state

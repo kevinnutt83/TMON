@@ -1,8 +1,20 @@
 # Firmware Version: v2.06.0
 
-import utime as time
-import uasyncio as asyncio
-import urequests
+try:
+    import utime as time
+except ImportError:
+    import time
+
+try:
+    import uasyncio as asyncio
+except ImportError:
+    import asyncio
+
+try:
+    import urequests as urequests
+except ImportError:
+    import requests as urequests
+
 import gc
 import sdata
 

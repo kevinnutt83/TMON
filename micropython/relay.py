@@ -1,10 +1,18 @@
 """Relay control with safety caps and runtime telemetry.
 Firmware Version: v2.06.0
 """
-import uasyncio as asyncio
-import machine
-import sdata
+try:
+    import uasyncio as asyncio
+except ImportError:
+    import asyncio
 import settings
+
+try:
+    import machine
+except ImportError:
+    import machine_compat as machine
+
+import sdata
 from utils import debug_print
 
 # Internal state per relay: start time and scheduled task

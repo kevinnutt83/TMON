@@ -3,27 +3,59 @@
 
 
 # --- Single-threaded asyncio event loop ---
-import uasyncio as asyncio
+try:
+    import uasyncio as asyncio
+except ImportError:
+    import asyncio
 import settings
 from debug import info as dbg_info, warn as dbg_warn, error as dbg_error
-import sdata
-import utime as time
-from sampling import sampleEnviroment
-from utils import free_pins_lora, checkLogDirectory, debug_print, load_persisted_unit_name, periodic_field_data_send, load_persisted_unit_id, persist_unit_id, get_machine_id, periodic_provision_check
-from lora import connectLora, log_error, TMON_AI
-from ota import check_for_update, apply_pending_update
-from oled import update_display, display_message
-from settings_apply import load_applied_settings_on_boot, settings_apply_loop
+
+# FIX: previously-empty try/except broke parsing; normalize time/os/gc/machine imports for MP + CPython
 try:
-    from engine_controller import engine_loop
+    import utime as time
+except ImportError:
+    import time
+
+try:
+    import uos as os
+except ImportError:
+    import os
+
+try:
+    import gc
 except Exception:
-    engine_loop = None
-import ujson as json
-import uos as os
+    gc = None
+
+try:
+    import machine
+except ImportError:
+    try:
+        import machine_compat as machine  # CPython/Linux (MCU_TYPE="zero")
+    except Exception:
+        machine = None
+
+# CPython fallback: ticks_* + sleep_ms shims when running on "zero"/host python
+if not hasattr(time, "ticks_ms"):
+    _t0_ns = time.monotonic_ns()
+    def _ticks_ms():
+        return (time.monotonic_ns() - _t0_ns) // 1_000_000
+    def _ticks_diff(a, b):
+        return a - b
+    time.ticks_ms = _ticks_ms      # type: ignore[attr-defined]
+    time.ticks_diff = _ticks_diff  # type: ignore[attr-defined]
+if not hasattr(time, "sleep_ms"):
+    def _sleep_ms(ms):
+        time.sleep(max(0, ms) / 1000)
+    time.sleep_ms = _sleep_ms      # type: ignore[attr-defined]
+
+# Requests import (used by first_boot_provision); MicroPython-first fallback
 try:
     import urequests as requests
-except Exception:
-    requests = None
+except ImportError:
+    try:
+        import requests
+    except Exception:
+        requests = None
 from wifi import disable_wifi, connectToWifiNetwork, wifi_rssi_monitor
 # duplicate import removed
 
@@ -674,7 +706,10 @@ async def startup():
     await tm.run()
 
 # If blocking tasks are added later, start them in a separate thread here
-import uasyncio as asyncio
+try:
+    import uasyncio as asyncio
+except ImportError:
+    import asyncio
 from utils import start_background_tasks, update_sys_voltage, runGC  # CHANGED: use runGC alias
 from oled import display_message
 

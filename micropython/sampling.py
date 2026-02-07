@@ -3,11 +3,17 @@
 import sdata
 import settings
 from utils import free_pins_i2c
-import uasyncio as asyncio
+try:
+    import uasyncio as asyncio
+except ImportError:
+    import asyncio
 from utils import debug_print
 from tmon import frostwatchCheck, heatwatchCheck, beginFrostOperations, beginHeatOperations, endFrostOperations, endHeatOperations
-from BME280 import BME280
 
+try:
+    from BME280 import BME280
+except ImportError:
+    from lib.BME280 import BME280
 
 #Sampling Routine for sample all sensor types if they are enabled
 async def sampleEnviroment():
