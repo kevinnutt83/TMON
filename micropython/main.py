@@ -604,53 +604,54 @@ async def startup():
     await tm.run()
 
 # If blocking tasks are added later, start them in a separate thread here
-import uasyncio as asyncio
-from utils import start_background_tasks, update_sys_voltage, runGC  # CHANGED: use runGC alias
-from oled import display_message
+try:
+    import uasyncio as asyncio
+    from utils import start_background_tasks, update_sys_voltage, runGC  # CHANGED: use runGC alias
+    from oled import display_message
 
-async def main():
-    # Start background tasks (provisioning, field-data uploader, etc.)
-    try:
-        start_background_tasks()
-    except Exception:
-        pass
-
-    asyncio.create_task(startup())
-
-    # Optional: present a short startup message on OLED if enabled
-    try:
-        if bool(getattr(settings, 'ENABLE_OLED', True)):
-            await display_message("TMON Starting", 1.2)
-    except Exception:
-        pass
-
-    # Idle loop to update system metrics and keep loop alive
-    _last_gc_ms = time.ticks_ms()
-    _gc_interval_ms = 300 * 1000  # 300 seconds
-
-    while True:
+    async def main():
+        # Start background tasks (provisioning, field-data uploader, etc.)
         try:
-            try:
-                sdata.script_runtime = get_script_runtime()  # CHANGED: was empty block
-            except Exception:
-                pass
-
-            await asyncio.sleep(10)
-
-            try:
-                # Optional periodic GC hook if present
-                runGC()
-            except Exception:
-                pass
-
+            start_background_tasks()
         except Exception:
-            await asyncio.sleep(5)
+            pass
 
-if __name__ == '__main__':
-    try:
-        asyncio.run(main())
-    except Exception:
-        # Older uasyncio compatibility
-        loop = asyncio.get_event_loop()
-        loop.create_task(main())
-        loop.run_forever()
+        asyncio.create_task(startup())
+
+        # Optional: present a short startup message on OLED if enabled
+        try:
+            if bool(getattr(settings, 'ENABLE_OLED', True)):
+                await display_message("TMON Starting", 1.2)
+        except Exception:
+            pass
+
+        # Idle loop to update system metrics and keep loop alive
+        _last_gc_ms = time.ticks_ms()
+        _gc_interval_ms = 300 * 1000  # 300 seconds
+
+        while True:
+            try:
+                try:
+                    sdata.script_runtime = get_script_runtime()  # CHANGED: was empty block
+                except Exception:
+                    pass
+
+                await asyncio.sleep(10)
+
+                try:
+                    # CHANGED: runGC is async in utils.py
+                    await runGC()
+                except Exception:
+                    pass
+
+            except Exception:
+                await asyncio.sleep(5)
+
+    if __name__ == '__main__':
+        try:
+            asyncio.run(main())
+        except Exception:
+            # Older uasyncio compatibility
+            loop = asyncio.get_event_loop()
+            loop.create_task(main())
+            loop.run_forever()
