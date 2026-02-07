@@ -96,7 +96,7 @@ ENABLE_sensorTSL2591 = False
 lux_i2c_address = 0x29
 
 # MCU type selection
-MCU_TYPE = "esp32"  # Set to "pico" or "esp32"
+MCU_TYPE = "esp32"  # Set to "pico" or "esp32" or "zero"
 
 # Pin maps for each MCU type
 pico_pins = {
