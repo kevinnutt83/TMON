@@ -294,6 +294,44 @@ except Exception:
         except Exception:
             pass
 
+# NEW: On Zero/CPython, provide common MicroPython module names as aliases to stdlib/platform_compat.
+# This keeps other firmware modules import-safe without main.py patching sys.modules at runtime.
+if IS_ZERO:
+    def _alias(name: str, mod) -> None:
+        try:
+            if mod is not None and name not in sys.modules:
+                sys.modules[name] = mod
+        except Exception:
+            pass
+
+    _alias("uasyncio", asyncio)
+    _alias("ujson", json)
+    if requests is not None:
+        _alias("urequests", requests)
+    _alias("utime", time)
+    _alias("uos", os)
+
+    try:
+        import binascii as _binascii
+        _alias("ubinascii", _binascii)
+    except Exception:
+        pass
+    try:
+        import hashlib as _hashlib
+        _alias("uhashlib", _hashlib)
+    except Exception:
+        pass
+    try:
+        import io as _io
+        _alias("uio", _io)
+    except Exception:
+        pass
+    try:
+        import select as _select
+        _alias("uselect", _select)
+    except Exception:
+        pass
+
 __all__ = [
     "MCU_TYPE",
     "IS_ZERO",

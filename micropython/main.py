@@ -1,7 +1,7 @@
 # Firmware Version: v2.06.0
 
 # --- Single-threaded asyncio event loop ---
-from platform_compat import asyncio, time, os, gc, machine, requests  # CHANGED
+from platform_compat import asyncio, time, os, gc, machine, requests, IS_ZERO  # CHANGED
 
 import sys  # RESTORED
 import types  # RESTORED
@@ -44,13 +44,7 @@ try:
     _mcu = str(getattr(settings, "MCU_TYPE", "")).lower()
 except Exception:
     _mcu = ""
-try:
-    _is_micropython = bool(getattr(sys, "implementation", None) and sys.implementation.name == "micropython")
-except Exception:
-    _is_micropython = False
-IS_ZERO_RUNTIME = (_mcu == "zero") or (not _is_micropython)  # NEW
-
-if (_mcu == "zero") or (not _is_micropython):
+if IS_ZERO:
     try:
         from lora import connectLora, log_error, TMON_AI  # type: ignore
     except Exception:
@@ -64,178 +58,6 @@ if (_mcu == "zero") or (not _is_micropython):
                 pass
 else:
     from lora import connectLora, log_error, TMON_AI  # type: ignore
-
-# --- Zero/CPython shims for MicroPython-only modules (keeps legacy imports satisfied) ---
-def _install_micropython_shims_if_needed():
-    try:
-        mcu = str(getattr(settings, "MCU_TYPE", "")).lower()
-    except Exception:
-        mcu = ""
-    try:
-        is_micropython = (getattr(sys, "implementation", None) and sys.implementation.name == "micropython")
-    except Exception:
-        is_micropython = False
-    is_zero_runtime = (mcu == "zero") or (not is_micropython)
-    if not is_zero_runtime:
-        return
-
-    def _ensure_mod(name, mod):
-        try:
-            if name not in sys.modules and mod is not None:
-                sys.modules[name] = mod
-        except Exception:
-            pass
-
-    # stdlib aliases
-    try:
-        import json as _json
-        _ensure_mod("ujson", _json)
-    except Exception:
-        pass
-    try:
-        import binascii as _binascii
-        _ensure_mod("ubinascii", _binascii)
-    except Exception:
-        pass
-    try:
-        import hashlib as _hashlib
-        _ensure_mod("uhashlib", _hashlib)
-    except Exception:
-        pass
-    try:
-        import io as _io
-        _ensure_mod("uio", _io)
-    except Exception:
-        pass
-    try:
-        import select as _select
-        _ensure_mod("uselect", _select)
-    except Exception:
-        pass
-    try:
-        import time as _ptime
-        _ensure_mod("utime", _ptime)
-    except Exception:
-        pass
-    try:
-        import os as _posix_os
-        _ensure_mod("uos", _posix_os)
-    except Exception:
-        pass
-
-    # expose platform_compat-selected libs under legacy names
-    try:
-        if requests is not None:
-            _ensure_mod("urequests", requests)
-    except Exception:
-        pass
-    try:
-        if asyncio is not None:
-            _ensure_mod("uasyncio", asyncio)
-    except Exception:
-        pass
-
-    # machine stub (only if truly missing)
-    if "machine" not in sys.modules:
-        if machine is not None and hasattr(machine, "__dict__"):
-            _ensure_mod("machine", machine)
-        else:
-            _m = types.ModuleType("machine")
-
-            class Pin:
-                IN = 0
-                OUT = 1
-                PULL_UP = 2
-                PULL_DOWN = 3
-
-                def __init__(self, pin, mode=None, pull=None):
-                    self.pin = pin
-                    self.mode = mode
-                    self.pull = pull
-                    self._val = 0
-
-                def value(self, v=None):
-                    if v is None:
-                        return int(self._val)
-                    self._val = 1 if v else 0
-                    return int(self._val)
-
-                def on(self):
-                    self.value(1)
-
-                def off(self):
-                    self.value(0)
-
-                def init(self, *a, **kw):
-                    return None
-
-            class ADC:
-                def __init__(self, *a, **kw):
-                    pass
-
-                def read_u16(self):
-                    return 0
-
-            def soft_reset():
-                raise SystemExit("soft_reset requested")
-
-            def reset():
-                raise SystemExit("reset requested")
-
-            _m.Pin = Pin
-            _m.ADC = ADC
-            _m.soft_reset = soft_reset
-            _m.reset = reset
-            _ensure_mod("machine", _m)
-
-    # network stub (keeps wifi.py import-safe)
-    if "network" not in sys.modules:
-        _n = types.ModuleType("network")
-        _n.STA_IF = 0
-
-        class WLAN:
-            def __init__(self, iface):
-                self.iface = iface
-                self._active = False
-                self._connected = False
-
-            def active(self, v=None):
-                if v is None:
-                    return bool(self._active)
-                self._active = bool(v)
-                if not self._active:
-                    self._connected = False
-                return bool(self._active)
-
-            def isconnected(self):
-                return bool(self._connected)
-
-            def scan(self):
-                return []
-
-            def connect(self, *a, **kw):
-                self._connected = False
-                return None
-
-            def ifconfig(self):
-                return ("0.0.0.0", "0.0.0.0", "0.0.0.0", "0.0.0.0")
-
-            def config(self, *a, **kw):
-                if a and a[0] == "mac":
-                    return b"\x00\x00\x00\x00\x00\x00"
-                if a and a[0] == "rssi":
-                    return -100
-                return None
-
-            def status(self, *a, **kw):
-                if a and a[0] == "rssi":
-                    return -100
-                return 0
-
-        _n.WLAN = WLAN
-        _ensure_mod("network", _n)
-
-_install_micropython_shims_if_needed()
 
 # --- Boot-time initialization restored from earlier v2.06.0 ---
 checkLogDirectory()
@@ -594,8 +416,10 @@ async def startup():
         pass
 
     # Start provisioning loop
+    # CHANGED: on Zero, avoid running unknown blocking HTTP inside existing provision loops.
     try:
-        asyncio.create_task(periodic_provision_check())
+        if not IS_ZERO:
+            asyncio.create_task(periodic_provision_check())
     except Exception:
         pass
 
@@ -683,11 +507,19 @@ async def startup():
         except Exception:
             pass
 
-    # NEW: Zero/CPython does not execute boot.py; ensure it still attempts check-in + provisioning.
+    # NEW: Zero/CPython bootstrap loop; offload blocking HTTP/file ops to threads.
+    async def _to_thread(fn, *a, **kw):
+        try:
+            if hasattr(asyncio, "to_thread"):
+                return await asyncio.to_thread(fn, *a, **kw)  # CPython
+        except Exception:
+            pass
+        return fn(*a, **kw)
+
     async def _zero_http_bootstrap_loop():
-        # Keep best-effort and do not change MicroPython flows.
-        if not IS_ZERO_RUNTIME:
+        if not IS_ZERO:
             return
+
         try:
             from wprest import register_with_wp  # type: ignore
         except Exception:
@@ -698,13 +530,13 @@ async def startup():
             provision = None
 
         interval = int(getattr(settings, "PROVISION_CHECK_INTERVAL_S", 30) or 30)
+
         while True:
             try:
                 if getattr(settings, "DEVICE_SUSPENDED", False):
                     await asyncio.sleep(interval)
                     continue
 
-                # Check-in to Admin (helps UNIT_ID assignment / registration visibility)
                 if register_with_wp:
                     try:
                         await register_with_wp()
@@ -714,34 +546,37 @@ async def startup():
                         except Exception:
                             pass
 
-                # Provisioning pull/apply (Admin → device) if not provisioned
+                # If not provisioned, try fetch/apply. Run sync code in threads on CPython.
                 try:
-                    is_prov = bool(getattr(settings, "UNIT_PROVISIONED", False)) or bool(str(getattr(settings, "WORDPRESS_API_URL", "")).strip())
+                    is_prov = bool(getattr(settings, "UNIT_PROVISIONED", False)) or bool(
+                        str(getattr(settings, "WORDPRESS_API_URL", "")).strip()
+                    )
                 except Exception:
                     is_prov = False
+
                 if (not is_prov) and provision:
                     try:
-                        doc = provision.fetch_provisioning(
+                        doc = await _to_thread(
+                            provision.fetch_provisioning,
                             unit_id=getattr(settings, "UNIT_ID", None),
                             machine_id=getattr(settings, "MACHINE_ID", None),
                             base_url=getattr(settings, "TMON_ADMIN_API_URL", None),
                         )
                         if isinstance(doc, dict) and doc:
-                            try:
-                                provision.apply_settings(doc)
-                            except Exception as e:
-                                await debug_print(f"zero_bootstrap: apply_settings err {e}", "ERROR")
+                            await _to_thread(provision.apply_settings, doc)
                     except Exception as e:
                         try:
-                            await debug_print(f"zero_bootstrap: fetch_provisioning err {e}", "WARN")
+                            await debug_print(f"zero_bootstrap: provision err {e}", "WARN")
                         except Exception:
                             pass
             except Exception:
                 pass
+
             await asyncio.sleep(interval)
 
     try:
-        asyncio.create_task(_zero_http_bootstrap_loop())  # NEW
+        if IS_ZERO:
+            asyncio.create_task(_zero_http_bootstrap_loop())
     except Exception:
         pass
 

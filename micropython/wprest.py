@@ -3,7 +3,8 @@
 # Handles WordPress REST API communication for TMON MicroPython device
 
 import gc
-from platform_compat import requests as _pc_requests, time as _pc_time  # CHANGED
+from platform_compat import requests as _pc_requests, time as _pc_time, asyncio as _pc_asyncio  # CHANGED
+import sys  # NEW
 
 # CHANGED: CPython/Zero fallback for HTTP + time when platform_compat provides None
 requests = _pc_requests
@@ -105,6 +106,64 @@ def _auth_headers(mode=None):
     # default: return headers w/o auth
     return headers
 
+def _is_micropython() -> bool:
+    try:
+        return getattr(sys.implementation, "name", "") == "micropython"
+    except Exception:
+        return False
+
+async def _http_post(url, payload=None, headers=None, timeout_s=8):
+    """
+    CPython: run requests.post in a thread to avoid freezing the event loop.
+    MicroPython/urequests: fall back to data=json.dumps(payload) and omit timeout when unsupported.
+    """
+    if requests is None:
+        return None
+
+    def _do_post():
+        # CPython requests supports json= and timeout=
+        if not _is_micropython():
+            return requests.post(url, json=payload, headers=headers, timeout=timeout_s)
+
+        # MicroPython urequests often lacks json=/timeout=
+        try:
+            return requests.post(url, json=payload, headers=headers)  # type: ignore[arg-type]
+        except TypeError:
+            try:
+                body = json.dumps(payload or {})
+            except Exception:
+                body = "{}"
+            try:
+                return requests.post(url, data=body, headers=headers)
+            except TypeError:
+                return requests.post(url, data=body, headers=headers)  # last-ditch
+
+    try:
+        if (not _is_micropython()) and hasattr(_pc_asyncio, "to_thread"):
+            return await _pc_asyncio.to_thread(_do_post)
+    except Exception:
+        pass
+    return _do_post()
+
+async def _http_get(url, headers=None, timeout_s=8):
+    if requests is None:
+        return None
+
+    def _do_get():
+        if not _is_micropython():
+            return requests.get(url, headers=headers, timeout=timeout_s)
+        try:
+            return requests.get(url, headers=headers)  # urequests
+        except TypeError:
+            return requests.get(url, headers=headers)
+
+    try:
+        if (not _is_micropython()) and hasattr(_pc_asyncio, "to_thread"):
+            return await _pc_asyncio.to_thread(_do_get)
+    except Exception:
+        pass
+    return _do_get()
+
 async def register_with_wp():
     """Register/check-in device with the configured WordPress/TMON Admin hub (best-effort).
     Tries multiple known admin endpoints to work around differing hub API routes.
@@ -158,15 +217,12 @@ async def register_with_wp():
                         hdrs = _auth_headers(mode)
                     except Exception:
                         hdrs = {}
-                    try:
-                        resp = requests.post(url, json=payload, headers=hdrs, timeout=8)
-                    except TypeError:
-                        resp = requests.post(url, json=payload, headers=hdrs)
 
-                    status = getattr(resp, 'status_code', 0)
+                    resp = await _http_post(url, payload=payload, headers=hdrs, timeout_s=8)
+                    status = getattr(resp, 'status_code', 0) if resp else 0
                     body_snip = ''
                     try:
-                        body_snip = (getattr(resp, 'text', '') or '')[:400]
+                        body_snip = (getattr(resp, 'text', '') or '')[:400] if resp else ''
                     except Exception:
                         body_snip = ''
 

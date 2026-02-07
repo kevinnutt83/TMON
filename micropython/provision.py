@@ -46,29 +46,58 @@ def _attempt_endpoint(base_url, endpoint, params=None, json_body=None, timeout=R
     try:
         if requests is None:
             return None, "no_http_client"
+
         if json_body is not None:
-            resp = requests.post(url, json=json_body, timeout=timeout)
+            # CHANGED: urequests often lacks json=/timeout=
+            try:
+                resp = requests.post(url, json=json_body, timeout=timeout)
+            except TypeError:
+                try:
+                    body = json.dumps(json_body or {})
+                except Exception:
+                    body = "{}"
+                try:
+                    resp = requests.post(url, data=body)
+                except TypeError:
+                    resp = requests.post(url, data=body)
         else:
             if params:
                 qs = "&".join("{}={}".format(k, v) for k, v in params.items())
                 url = url + "?" + qs
-            resp = requests.get(url, timeout=timeout)
+            try:
+                resp = requests.get(url, timeout=timeout)
+            except TypeError:
+                resp = requests.get(url)
+
         if not resp:
-            return None, 'no_response'
-        code = getattr(resp, 'status_code', None)
-        if code not in (200, 201):
-            return None, 'http_error_%s' % code
+            return None, "no_response"
+
+        code = getattr(resp, "status_code", None)
+        text = ""
         try:
-            return resp.json(), None
+            text = getattr(resp, "text", "") or ""
+        except Exception:
+            text = ""
+
+        try:
+            resp.close()
+        except Exception:
+            pass
+
+        if code not in (200, 201):
+            return None, "http_error_%s" % code
+
+        try:
+            return getattr(resp, "json")(), None  # type: ignore[misc]
         except Exception:
             try:
-                return json.loads(getattr(resp, 'text', '{}')), None
+                return json.loads(text or "{}"), None
             except Exception as e:
                 return None, str(e)
+
     except Exception as e:
         return None, str(e)
     finally:
-        # NEW: GC after endpoint attempt
         try:
             import gc
             gc.collect()
