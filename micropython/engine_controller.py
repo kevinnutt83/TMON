@@ -1,34 +1,8 @@
-try:
-    import uasyncio as asyncio
-except ImportError:
-    import asyncio
-import settings
-
-try:
-    import utime as time
-except ImportError:
-    import time
-
-# ticks/sleep_ms shims for CPython ("zero")
-if not hasattr(time, "ticks_ms"):
-    _t0_ns = time.monotonic_ns()
-    def _ticks_ms():
-        return (time.monotonic_ns() - _t0_ns) // 1_000_000
-    def _ticks_diff(a, b):
-        return a - b
-    time.ticks_ms = _ticks_ms      # type: ignore[attr-defined]
-    time.ticks_diff = _ticks_diff  # type: ignore[attr-defined]
-if not hasattr(time, "sleep_ms"):
-    def _sleep_ms(ms):
-        time.sleep(max(0, ms) / 1000)
-    time.sleep_ms = _sleep_ms      # type: ignore[attr-defined]
-
-try:
-    from machine import Pin, UART
-except ImportError:
-    from machine_compat import Pin, UART
-
+import uasyncio as asyncio
+from machine import Pin, UART
 import struct
+import time
+import settings
 import sdata
 from utils import debug_print
 

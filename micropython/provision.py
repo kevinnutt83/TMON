@@ -1,22 +1,11 @@
 # Minimal MicroPython provisioning client that uses the canonical micropython/settings.py values.
 
-try:
-    import ujson as json
-except Exception:
-    import json  # type: ignore
-
-try:
-    import uos as os
-except Exception:
-    import os
-
+import json
+import os
 try:
     import urequests as requests
 except Exception:
-    try:
-        import requests  # type: ignore
-    except Exception:
-        requests = None
+    import requests  # fallback for host testing
 
 # Import device settings robustly: prefer local settings module; fallback to micropython.settings
 device_settings = None

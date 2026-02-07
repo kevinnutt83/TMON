@@ -4,65 +4,11 @@
 # and adds small compatibility aliases (free_pins_lora/free_pins_i2c) without changing logic.
 
 import ujson
-try:
-    import uasyncio as asyncio
-except ImportError:
-    import asyncio
+import uasyncio as asyncio
 import os
-try:
-    import utime as time
-except ImportError:
-    import time  # CPython fallback
-
-    # Minimal compatibility shim for code that expects MicroPython's ticks_* APIs
-    if not hasattr(time, "ticks_ms"):
-        _t0_ns = time.monotonic_ns()
-
-        def _ticks_ms():
-            return (time.monotonic_ns() - _t0_ns) // 1_000_000
-
-        def _ticks_diff(a, b):
-            return a - b
-
-        time.ticks_ms = _ticks_ms      # type: ignore[attr-defined]
-        time.ticks_diff = _ticks_diff  # type: ignore[attr-defined]
-
+import utime as time
 import settings
-try:
-    import machine
-except ImportError:
-    machine = None  # CPython fallback
-
-    class _PinStub:
-        IN = 0
-        OUT = 1
-
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def init(self, *args, **kwargs):
-            pass
-
-    class _ADCStub:
-        def __init__(self, *args, **kwargs):
-            pass
-
-        def read_u16(self):
-            return 0
-
-    class _MachineStub:
-        Pin = _PinStub
-        ADC = _ADCStub
-
-        @staticmethod
-        def unique_id():
-            return b""
-
-        @staticmethod
-        def soft_reset():
-            raise RuntimeError("machine.soft_reset() not available on CPython")
-
-    machine = _MachineStub()
+import machine
 import gc
 
 from config_persist import write_text, read_json, set_flag, is_flag_set, write_json, read_text

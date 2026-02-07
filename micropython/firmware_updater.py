@@ -1,18 +1,11 @@
 # Firmware download helper for MicroPython clients; writes file to OTA_BACKUP_DIR.
 # Actual flash/install must be implemented per-hardware in device-specific code.
 
-try:
-    import uos as os
-except Exception:
-    import os
-
+import os
 try:
     import urequests as requests
 except Exception:
-    try:
-        import requests  # type: ignore
-    except Exception:
-        requests = None
+    import requests
 
 # Import device settings robustly: prefer package import micropython.settings; fallback to local 'settings' if present
 device_settings = None

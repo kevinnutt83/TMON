@@ -5,63 +5,10 @@
 # import webrepl
 # webrepl.start()
 
-import settings
-
-# For MCU_TYPE="zero" (Raspberry Pi Zero / CPython), ensure a `machine` module exists
-# before importing modules that import `machine` at import-time (e.g., oled.py).
-try:
-    import machine  # MicroPython
-except Exception:
-    machine = None
-
-if (machine is None) and (str(getattr(settings, "MCU_TYPE", "")).lower() == "zero"):
-    try:
-        import sys as _sys, types as _types, uuid as _uuid
-        _m = _types.SimpleNamespace()
-
-        def _unique_id():
-            try:
-                with open("/etc/machine-id", "r") as f:
-                    mid = (f.read() or "").strip()
-                    if mid:
-                        return mid.encode("utf-8")[:12]
-            except Exception:
-                pass
-            try:
-                node = _uuid.getnode()
-                return int(node).to_bytes(6, "big", signed=False)
-            except Exception:
-                return b"\x00" * 6
-
-        class Pin:
-            IN = 0; OUT = 1; PULL_UP = 2; PULL_DOWN = 3
-            def __init__(self, pin, mode=OUT, pull=None):
-                self.pin = pin; self.mode = mode; self.pull = pull; self._val = 0
-            def value(self, v=None):
-                if v is None:
-                    return self._val
-                self._val = 1 if v else 0
-                return self._val
-
-        class ADC:
-            def __init__(self, *_a, **_kw): pass
-            def read_u16(self): return 0
-
-        def soft_reset(): raise SystemExit("soft_reset requested")
-        def reset(): raise SystemExit("reset requested")
-
-        _m.Pin = Pin; _m.ADC = ADC; _m.unique_id = _unique_id
-        _m.soft_reset = soft_reset; _m.reset = reset
-        _sys.modules["machine"] = _m
-    except Exception:
-        pass
-
 from wifi import connectToWifiNetwork
+import settings
 from utils import flash_led
-try:
-    import uasyncio as asyncio
-except ImportError:
-    import asyncio
+import uasyncio as asyncio
 from oled import display_message
 
 async def boot():

@@ -1,8 +1,4 @@
-try:
-    from machine import Pin, I2C
-except ImportError:
-    from machine_compat import Pin, I2C
-
+from machine import Pin, I2C
 import time
 import settings
 from time import sleep

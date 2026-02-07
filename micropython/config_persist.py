@@ -4,12 +4,7 @@ try:
 except Exception:
     import json
 
-try:
-    import uos as os
-except Exception:
-    import os
-
-import gc  # NEW: run GC after JSON/file operations
+import os
 
 def ensure_dir(path):
     try:
@@ -56,7 +51,6 @@ def write_json(path, obj):
         ensure_dir(path)
         with open(path, 'w') as f:
             f.write(json.dumps(obj))
-        gc.collect()  # NEW: reclaim JSON serialization buffers
         return True
     except Exception:
         return False
@@ -64,9 +58,7 @@ def write_json(path, obj):
 def read_json(path, default=None):
     try:
         with open(path, 'r') as f:
-            data = json.loads(f.read())
-        gc.collect()  # NEW: reclaim JSON parsing buffers
-        return data
+            return json.loads(f.read())
     except Exception:
         return default
 

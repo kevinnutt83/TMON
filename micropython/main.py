@@ -1,160 +1,15 @@
 # Firmware Version: v2.06.0
 
+
+
 # --- Single-threaded asyncio event loop ---
-try:
-    import uasyncio as asyncio
-except ImportError:
-    import asyncio
-
+import uasyncio as asyncio
 import settings
-
 from debug import info as dbg_info, warn as dbg_warn, error as dbg_error
-
-# FIX: time/os/gc imports must exist before first use
-try:
-    import utime as time
-except ImportError:
-    import time
-
-try:
-    import uos as os
-except ImportError:
-    import os
-
-try:
-    import gc
-except Exception:
-    gc = None
-
-# Also needed by the "zero" machine shim below
-try:
-    import sys as _sys
-except Exception:
-    _sys = None
-try:
-    import types as _types
-except Exception:
-    _types = None
-try:
-    import uuid as _uuid
-except Exception:
-    _uuid = None
-
-# CPython fallback: ticks_* + sleep_ms shims (used throughout firmware)
-if not hasattr(time, "ticks_ms"):
-    _t0_ns = time.monotonic_ns()
-    def _ticks_ms():
-        return (time.monotonic_ns() - _t0_ns) // 1_000_000
-    def _ticks_diff(a, b):
-        return a - b
-    time.ticks_ms = _ticks_ms      # type: ignore[attr-defined]
-    time.ticks_diff = _ticks_diff  # type: ignore[attr-defined]
-if not hasattr(time, "sleep_ms"):
-    def _sleep_ms(ms):
-        time.sleep(max(0, ms) / 1000)
-    time.sleep_ms = _sleep_ms      # type: ignore[attr-defined]
-
-# FIX: gc.mem_free exists on MicroPython only; keep logic intact for "zero"
-if gc is not None and not hasattr(gc, "mem_free"):
-    def _mem_free():
-        return 0
-    gc.mem_free = _mem_free  # type: ignore[attr-defined]
-
-# FIX: provide `machine` module for MCU_TYPE="zero" so existing pin usage works without refactor
-try:
-    import machine  # MicroPython
-except ImportError:
-    machine = None
-
-if (machine is None) and (str(getattr(settings, "MCU_TYPE", "")).lower() == "zero") and _sys and _types:
-    _m = _types.SimpleNamespace()
-
-    def _unique_id():
-        # Prefer Linux machine-id when available
-        try:
-            with open("/etc/machine-id", "r") as f:
-                mid = (f.read() or "").strip()
-                if mid:
-                    return mid.encode("utf-8")[:12]
-        except Exception:
-            pass
-        # Fallback: MAC-based
-        try:
-            node = (_uuid.getnode() if _uuid else 0)
-            return int(node).to_bytes(6, "big", signed=False)
-        except Exception:
-            return b"\x00" * 6
-
-    class Pin:
-        IN = 0
-        OUT = 1
-        PULL_UP = 2
-        PULL_DOWN = 3
-        def __init__(self, pin, mode=OUT, pull=None):
-            self.pin = pin
-            self.mode = mode
-            self.pull = pull
-            self._val = 0
-            self._gpio = None
-            # Best-effort: no-op on desktop unless a GPIO lib is present
-            try:
-                import gpiozero  # type: ignore
-                self._gpio = gpiozero.LED(pin) if mode == self.OUT else None
-            except Exception:
-                self._gpio = None
-        def value(self, v=None):
-            if v is None:
-                return self._val
-            self._val = 1 if v else 0
-            if self._gpio:
-                try:
-                    self._gpio.on() if self._val else self._gpio.off()
-                except Exception:
-                    pass
-            return self._val
-
-    class ADC:
-        def __init__(self, *_a, **_kw):
-            pass
-        def read_u16(self):
-            return 0
-
-    def soft_reset():
-        raise SystemExit("soft_reset requested")
-
-    def reset():
-        raise SystemExit("reset requested")
-
-    _m.Pin = Pin
-    _m.ADC = ADC
-    _m.unique_id = _unique_id
-    _m.soft_reset = soft_reset
-    _m.reset = reset
-
-    _sys.modules["machine"] = _m
-    machine = _m  # used by this module too
-
-# Requests import (used by first_boot_provision)
-try:
-    import urequests as requests
-except ImportError:
-    try:
-        import requests  # type: ignore
-    except Exception:
-        requests = None
-
-# FIX: restore required imports removed by the broken import edits (checkLogDirectory was missing)
+import sdata
+import utime as time
 from sampling import sampleEnviroment
-from utils import (
-    free_pins_lora,
-    checkLogDirectory,
-    debug_print,
-    load_persisted_unit_name,
-    load_persisted_unit_id,
-    persist_unit_id,
-    get_machine_id,
-    periodic_provision_check,
-)
+from utils import free_pins_lora, checkLogDirectory, debug_print, load_persisted_unit_name, periodic_field_data_send, load_persisted_unit_id, persist_unit_id, get_machine_id, periodic_provision_check
 from lora import connectLora, log_error, TMON_AI
 from ota import check_for_update, apply_pending_update
 from oled import update_display, display_message
@@ -163,7 +18,16 @@ try:
     from engine_controller import engine_loop
 except Exception:
     engine_loop = None
+import ujson as json
+import uos as os
+try:
+    import urequests as requests
+except Exception:
+    requests = None
 from wifi import disable_wifi, connectToWifiNetwork, wifi_rssi_monitor
+# duplicate import removed
+
+checkLogDirectory()
 
 # Apply any previously applied settings snapshot on boot
 try:
@@ -611,11 +475,6 @@ async def first_boot_provision():
                     disable_wifi()
             except Exception:
                 pass
-        # NEW: ensure HTTP response is closed after use
-        try:
-            resp.close()
-        except Exception:
-            pass
     except Exception as e:
         await debug_print('Provisioning check-in failed: %s' % e, 'ERROR')
 
@@ -810,10 +669,7 @@ async def startup():
     await tm.run()
 
 # If blocking tasks are added later, start them in a separate thread here
-try:
-    import uasyncio as asyncio
-except ImportError:
-    import asyncio
+import uasyncio as asyncio
 from utils import start_background_tasks, update_sys_voltage, runGC  # CHANGED: use runGC alias
 from oled import display_message
 
