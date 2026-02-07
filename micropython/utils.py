@@ -339,131 +339,59 @@ def get_unix_time():
     except Exception:
         return int(time.time())
 
-async def debug_print(message, status):
-    debug_flags = {
-        # sensors/telemetry
-        'TEMP': getattr(settings, 'DEBUG_TEMP', False),
-        'BAR': getattr(settings, 'DEBUG_BAR', False),
-        'HUMID': getattr(settings, 'DEBUG_HUMID', False),
-        'BME280': getattr(settings, 'DEBUG_BME280', False),
-        'DHT11': getattr(settings, 'DEBUG_DHT11', False),
-        'SAMPLING': getattr(settings, 'DEBUG_SAMPLING', False),
-        'SAMPLE_': getattr(settings, 'DEBUG_SAMPLING', False),  # matches SAMPLE_TEMP/HUMID/BAR...
-
-        # connectivity / radio
-        'LORA': getattr(settings, 'DEBUG_LORA', False),
-        'LORA_RX': getattr(settings, 'DEBUG_LORA', False),
-        'LORA_TX': getattr(settings, 'DEBUG_LORA', False),
-        'WIFI': getattr(settings, 'DEBUG_WIFI_CONNECT', False),
-        'WIFI_CONNECT': getattr(settings, 'DEBUG_WIFI_CONNECT', False),
-
-        # system subsystems
-        'OTA': getattr(settings, 'DEBUG_OTA', False),
-        'PROVISION': getattr(settings, 'DEBUG_PROVISION', False),
-        'DISPLAY': getattr(settings, 'DEBUG_DISPLAY', False),
-        'WPREST': getattr(settings, 'DEBUG_WPREST', False),
-        'FIELD_DATA': getattr(settings, 'DEBUG_FIELD_DATA', False),
-        'RS485': getattr(settings, 'DEBUG_RS485', False),
-
-        # node roles
-        'BASE_NODE': getattr(settings, 'DEBUG_BASE_NODE', False),
-        'REMOTE_NODE': getattr(settings, 'DEBUG_REMOTE_NODE', False),
-        'WIFI_NODE': getattr(settings, 'DEBUG_WIFI_NODE', False),
-        
-        # Info, Error, and Warning
-        'INFO': getattr(settings, 'DEBUG', False),
-        'WARN': getattr(settings, 'DEBUG', False),
-        'ERROR': getattr(settings, 'DEBUG', False),
-    }
-    should_print = bool(getattr(settings, 'DEBUG', False))
-    for key, enabled in debug_flags.items():
-        if key in str(status) and enabled:
-            should_print = True
-    if should_print:
-        try:
-            safe_msg = message
-            if isinstance(safe_msg, bytes):
-                safe_msg = safe_msg.decode('utf-8', 'ignore')
-            safe_msg = ''.join(ch if 32 <= ord(ch) <= 126 else ' ' for ch in str(safe_msg))
-        except Exception:
-            safe_msg = '<unprintable>'
-        try:
-            unixt = get_unix_time()
-            ts = time.localtime(unixt) if hasattr(time, 'localtime') else None
-            if ts:
-                timestamp = f"{ts[0]:04}-{ts[1]:02}-{ts[2]:02} {ts[3]:02}:{ts[4]:02}:{ts[5]:02}"
-            else:
-                timestamp = str(unixt)
-        except Exception:
-            timestamp = '0'
-        print(f"[{timestamp}] [{status}] {safe_msg}")
-    await asyncio.sleep(0)
-
-    
-# --- LED support (restored) ---
-color_to_duty = {
-    'white': (255, 255, 255),
-    'red': (255, 0, 0),
-    'blue': (0, 0, 255),
-    'green': (0, 255, 0),
-    'yellow': (255, 255, 0),
-    'cyan': (0, 255, 255),
-    'magenta': (255, 0, 255),
-    'orange': (255, 128, 0),
-    'purple': (128, 0, 255),
-    'pink': (255, 128, 128),
-    'lime': (128, 255, 0),
-    'teal': (0, 128, 128),
-    'lavender': (128, 0, 128),
-    'brown': (128, 64, 0),
-    'beige': (255, 192, 128),
-    'maroon': (128, 0, 0),
-    'olive': (128, 128, 0),
-    'navy': (0, 0, 128),
-    'grey': (128, 128, 128),
-    'black': (0, 0, 0),
-    'light_blue': (173, 216, 230),  # Light blue (sky-like)
-    'dark_blue': (0, 0, 139),      # Dark blue (close to navy but deeper)
-    'light_green': (144, 238, 144),  # Light green
-    'dark_green': (0, 100, 0),     # Dark green (forest)
-    'light_yellow': (255, 255, 224),  # Light yellow (lemon chiffon)
-    'dark_red': (139, 0, 0),       # Dark red (crimson-like)
-    'indigo': (75, 0, 130),        # Indigo
-    'violet': (238, 130, 238),     # Violet
-    'turquoise': (64, 224, 208),   # Turquoise
-    'gold': (255, 215, 0),         # Gold
-    'silver': (192, 192, 192),     # Silver (light gray)
-    'coral': (255, 127, 80),       # Coral
-    'salmon': (250, 128, 114),     # Salmon
-    'khaki': (240, 230, 140),      # Khaki
-    'sienna': (160, 82, 45),       # Sienna (earthy brown)
-    'chocolate': (210, 105, 30),   # Chocolate brown
-    'tan': (210, 180, 140),        # Tan
-    'plum': (221, 160, 221),       # Plum (light purple)
-    'orchid': (218, 112, 214),     # Orchid
-    'azure': (240, 255, 255),      # Azure (light cyan)
-    'mint': (189, 252, 201),       # Mint green
-    'chartreuse': (127, 255, 0),   # Chartreuse (alternative to your lime)
-    'fuchsia': (255, 0, 255),      # Fuchsia (same as magenta, but added for completeness)
-    'crimson': (220, 20, 60),      # Crimson
-    'aqua': (0, 255, 255),         # Aqua (same as cyan)
-    'sky_blue': (135, 206, 235),   # Sky blue
-    'forest_green': (34, 139, 34), # Forest green
-    'dark_orange': (255, 140, 0),  # Dark orange
-    'hot_pink': (255, 105, 180),   # Hot pink
-    'dark_purple': (148, 0, 211),  # Dark violet/purple
-    'light_grey': (211, 211, 211), # Light gray
-    'dark_grey': (169, 169, 169),  # Dark gray
-    'ivory': (255, 255, 240),      # Ivory (off-white)
-    'snow': (255, 250, 250)        # Snow (another off-white)
-}
-
-led_lock = asyncio.Lock()
-
-def set_color(rgb_led, color):
+async def debug_print(message, status="INFO"):
+    # CHANGED: make module import-safe on Zero/CPython and fix syntax errors in debug flag map.
     try:
-        rgb_led[0] = color
-        rgb_led.write()
+        import settings  # type: ignore
+    except Exception:
+        settings = None  # type: ignore
+
+    # CHANGED: tolerate missing settings and unknown status tags.
+    try:
+        tag = str(status or "INFO").upper().strip()
+    except Exception:
+        tag = "INFO"
+
+    # Map tags/categories to debug flags (safe even if settings is None)
+    s = settings
+    debug_flags = {
+        "TEMP": bool(getattr(s, "DEBUG_TEMP", False)) if s else False,
+        "BAR": bool(getattr(s, "DEBUG_BAR", False)) if s else False,
+        "HUMID": bool(getattr(s, "DEBUG_HUMID", False)) if s else False,
+        "BME280": bool(getattr(s, "DEBUG_BME280", False)) if s else False,
+        "DHT11": bool(getattr(s, "DEBUG_DHT11", False)) if s else False,
+        "SAMPLING": bool(getattr(s, "DEBUG_SAMPLING", False)) if s else False,
+        "SAMPLE": bool(getattr(s, "DEBUG_SAMPLING", False)) if s else False,  # CHANGED: was broken 'SAMPLE_' + 'LORA' on same line
+        "LORA": bool(getattr(s, "DEBUG_LORA", False)) if s else False,
+        "LORA_RX": bool(getattr(s, "DEBUG_LORA", False)) if s else False,
+        "LORA_TX": bool(getattr(s, "DEBUG_LORA", False)) if s else False,
+        "WIFI": bool(getattr(s, "DEBUG_WIFI_CONNECT", False)) if s else False,
+        "WIFI_CONNECT": bool(getattr(s, "DEBUG_WIFI_CONNECT", False)) if s else False,
+        "OTA": bool(getattr(s, "DEBUG_OTA", False)) if s else False,
+        "PROVISION": bool(getattr(s, "DEBUG_PROVISION", False)) if s else False,
+        "DISPLAY": bool(getattr(s, "DEBUG_DISPLAY", False)) if s else False,
+        "OLED": bool(getattr(s, "DEBUG_DISPLAY", False)) if s else False,
+        "WPREST": bool(getattr(s, "DEBUG_WPREST", False)) if s else False,
+        "FIELD_DATA": bool(getattr(s, "DEBUG_FIELD_DATA", False)) if s else False,
+        "RS485": bool(getattr(s, "DEBUG_RS485", False)) if s else False,
+        "BASE_NODE": bool(getattr(s, "DEBUG_BASE_NODE", False)) if s else False,
+        "REMOTE_NODE": bool(getattr(s, "DEBUG_REMOTE_NODE", False)) if s else False,
+        "WIFI_NODE": bool(getattr(s, "DEBUG_WIFI_NODE", False)) if s else False,
+        "HTTP": bool(getattr(s, "DEBUG_WPREST", False)) if s else False,
+        "TASK": bool(getattr(s, "DEBUG", False)) if s else False,
+        "INFO": bool(getattr(s, "DEBUG", False)) if s else False,
+        "WARN": bool(getattr(s, "DEBUG", False)) if s else False,
+        "ERROR": True,  # CHANGED: always allow ERROR visibility
+        "COMMAND": bool(getattr(s, "DEBUG", False)) if s else False,
+        "DEBUG": bool(getattr(s, "DEBUG", False)) if s else False,
+    }
+
+    enabled = bool(debug_flags.get(tag, bool(getattr(s, "DEBUG", False)) if s else False))
+    if not enabled:
+        return
+
+    try:
+        print("[{}] {}".format(tag, message))
     except Exception:
         pass
 

@@ -2,7 +2,16 @@
 
 import json
 import os
-from platform_compat import requests  # CHANGED
+from platform_compat import requests as _pc_requests  # CHANGED
+
+# CHANGED: CPython/Zero fallback when platform_compat.requests is None
+requests = _pc_requests
+if requests is None:
+    try:
+        import requests as _py_requests  # type: ignore
+        requests = _py_requests  # type: ignore
+    except Exception:
+        requests = None  # type: ignore
 
 # Import device settings robustly: prefer local settings module; fallback to micropython.settings
 device_settings = None
@@ -25,6 +34,8 @@ CHUNK_SIZE = getattr(device_settings, 'FIRMWARE_DOWNLOAD_CHUNK_SIZE', 1024) if d
 def _attempt_endpoint(base_url, endpoint, params=None, json_body=None, timeout=REQUEST_TIMEOUT):
     url = base_url.rstrip("/") + endpoint
     try:
+        if requests is None:
+            return None, "no_http_client"
         if json_body is not None:
             resp = requests.post(url, json=json_body, timeout=timeout)
         else:

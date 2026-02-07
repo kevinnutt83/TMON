@@ -165,8 +165,9 @@
 - [⏳] Decide/implement real hardware backends for Zero (GPIO/I2C/SPI/UART) where needed
 - [🚧] Make firmware imports runtime-selectable by `MCU_TYPE` (Zero vs MicroPython) and fix parse/runtime blockers (e.g., `main.py` outer try/except, LoRa import/parse hardening)
   - [🔄] boot.py: install shims before importing wifi/oled so Zero can boot without MicroPython modules
-  - [🚧] main.py: fix missing scheduler symbols (`TaskManager`, `lora_comm_task`, `is_provisioned`) to avoid NameError on Zero/CPython
   - [🚧] lora.py: replace empty/invalid import try-blocks with MCU_TYPE-driven imports so the module is parse-safe on CPython (even if LoRa is not used on Zero)
+  - [🚧] Zero: ensure `wprest.py`/`provision.py` fall back to CPython `requests` when `platform_compat.requests` is None (prevents silent no-op HTTP)
+  - [🚧] Zero: add `main.py` bootstrap loop so Zero performs Admin check-in + provisioning even though `boot.py` is MicroPython-only
 
 ---
 

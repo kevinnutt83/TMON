@@ -3,7 +3,23 @@
 # Handles WordPress REST API communication for TMON MicroPython device
 
 import gc
-from platform_compat import requests, time  # CHANGED
+from platform_compat import requests as _pc_requests, time as _pc_time  # CHANGED
+
+# CHANGED: CPython/Zero fallback for HTTP + time when platform_compat provides None
+requests = _pc_requests
+time = _pc_time
+if requests is None:
+    try:
+        import requests as _py_requests  # type: ignore
+        requests = _py_requests  # type: ignore
+    except Exception:
+        requests = None  # type: ignore
+if time is None:
+    try:
+        import time as _py_time  # type: ignore
+        time = _py_time  # type: ignore
+    except Exception:
+        time = None  # type: ignore
 
 try:
     import ujson as json

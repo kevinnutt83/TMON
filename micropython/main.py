@@ -48,6 +48,7 @@ try:
     _is_micropython = bool(getattr(sys, "implementation", None) and sys.implementation.name == "micropython")
 except Exception:
     _is_micropython = False
+IS_ZERO_RUNTIME = (_mcu == "zero") or (not _is_micropython)  # NEW
 
 if (_mcu == "zero") or (not _is_micropython):
     try:
@@ -681,6 +682,68 @@ async def startup():
             await debug_print(f"startup: engine start fail: {e}", "ERROR")
         except Exception:
             pass
+
+    # NEW: Zero/CPython does not execute boot.py; ensure it still attempts check-in + provisioning.
+    async def _zero_http_bootstrap_loop():
+        # Keep best-effort and do not change MicroPython flows.
+        if not IS_ZERO_RUNTIME:
+            return
+        try:
+            from wprest import register_with_wp  # type: ignore
+        except Exception:
+            register_with_wp = None
+        try:
+            import provision  # type: ignore
+        except Exception:
+            provision = None
+
+        interval = int(getattr(settings, "PROVISION_CHECK_INTERVAL_S", 30) or 30)
+        while True:
+            try:
+                if getattr(settings, "DEVICE_SUSPENDED", False):
+                    await asyncio.sleep(interval)
+                    continue
+
+                # Check-in to Admin (helps UNIT_ID assignment / registration visibility)
+                if register_with_wp:
+                    try:
+                        await register_with_wp()
+                    except Exception as e:
+                        try:
+                            await debug_print(f"zero_bootstrap: register err {e}", "WARN")
+                        except Exception:
+                            pass
+
+                # Provisioning pull/apply (Admin → device) if not provisioned
+                try:
+                    is_prov = bool(getattr(settings, "UNIT_PROVISIONED", False)) or bool(str(getattr(settings, "WORDPRESS_API_URL", "")).strip())
+                except Exception:
+                    is_prov = False
+                if (not is_prov) and provision:
+                    try:
+                        doc = provision.fetch_provisioning(
+                            unit_id=getattr(settings, "UNIT_ID", None),
+                            machine_id=getattr(settings, "MACHINE_ID", None),
+                            base_url=getattr(settings, "TMON_ADMIN_API_URL", None),
+                        )
+                        if isinstance(doc, dict) and doc:
+                            try:
+                                provision.apply_settings(doc)
+                            except Exception as e:
+                                await debug_print(f"zero_bootstrap: apply_settings err {e}", "ERROR")
+                    except Exception as e:
+                        try:
+                            await debug_print(f"zero_bootstrap: fetch_provisioning err {e}", "WARN")
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+            await asyncio.sleep(interval)
+
+    try:
+        asyncio.create_task(_zero_http_bootstrap_loop())  # NEW
+    except Exception:
+        pass
 
     await tm.run()
 

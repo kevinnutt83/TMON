@@ -1,13 +1,12 @@
 # Firmware Version: v2.06.0
 
-# Utility to print remote node info
+# CHANGED: fix NameError / empty try-block; import settings safely
 def print_remote_nodes():
-    # CHANGED: avoid NameError / empty try-block; import settings safely
     try:
-        import settings as _settings
+        import settings as _settings  # type: ignore
     except Exception:
         _settings = None
-    remote_info = getattr(_settings, 'REMOTE_NODE_INFO', {}) if _settings else {}
+    remote_info = getattr(_settings, "REMOTE_NODE_INFO", {}) if _settings else {}
     for node_id, node_data in remote_info.items():
         print(f"[REMOTE NODE] {node_id}: {node_data}")
 
@@ -23,54 +22,54 @@ from platform_compat import (
     asyncio, time, os, gc, requests, machine, network, IS_ZERO, IS_MICROPYTHON
 )  # CHANGED
 
-# NEW: stdlib/micropython compatibility imports (parse-safe on both runtimes)
+# CHANGED: stdlib/micropython compatibility imports (parse-safe on both runtimes)
 try:
     import sys
 except Exception:
-    sys = None
+    sys = None  # type: ignore
 try:
     import io
 except Exception:
-    io = None
+    io = None  # type: ignore
 try:
     import random
 except Exception:
-    random = None
+    random = None  # type: ignore
 try:
     import select
 except Exception:
-    select = None
+    select = None  # type: ignore
 
-# ujson / ubinascii / uhashlib compatibility
+# CHANGED: ujson / ubinascii / uhashlib compatibility (no empty try blocks)
 try:
-    import ujson  # MicroPython
+    import ujson as ujson  # MicroPython
 except Exception:
     try:
-        import json as ujson  # CPython/Zero
+        import json as ujson  # type: ignore
     except Exception:
         ujson = None  # type: ignore
 
 try:
-    import ubinascii  # MicroPython
+    import ubinascii as ubinascii  # MicroPython
 except Exception:
     try:
-        import binascii as ubinascii  # CPython/Zero
+        import binascii as ubinascii  # type: ignore
     except Exception:
         ubinascii = None  # type: ignore
 
 try:
-    import uhashlib  # MicroPython
+    import uhashlib as uhashlib  # MicroPython
 except Exception:
     try:
-        import hashlib as uhashlib  # CPython/Zero
+        import hashlib as uhashlib  # type: ignore
     except Exception:
         uhashlib = None  # type: ignore
 
-# Base64 helpers for CPython fallback
+# CHANGED: Base64 helpers for CPython fallback
 try:
-    import base64 as _py_b64
+    import base64 as _py_b64  # type: ignore
 except Exception:
-    _py_b64 = None
+    _py_b64 = None  # type: ignore
 
 # Provide a MicroPython-like base64 surface (_ub.b2a_base64/_ub.a2b_base64)
 try:
@@ -122,13 +121,13 @@ except Exception:
     except Exception:
         SX1262 = None
 
-# CHANGED: import settings/sdata explicitly and safely
+# CHANGED: import settings/sdata explicitly and safely (no empty try blocks)
 try:
-    import settings
+    import settings  # type: ignore
 except Exception:
     settings = None  # type: ignore
 try:
-    import sdata
+    import sdata  # type: ignore
 except Exception:
     sdata = None  # type: ignore
 
