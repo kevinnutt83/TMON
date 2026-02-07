@@ -3,13 +3,111 @@
 # NOTE: This restores the previously working utils.py behavior (as provided),
 # and adds small compatibility aliases (free_pins_lora/free_pins_i2c) without changing logic.
 
-import ujson
-import uasyncio as asyncio
-import os
-import utime as time
 import settings
-import machine
 import gc
+
+try:
+    import sys
+except Exception:
+    sys = None
+
+# ujson
+try:
+    import ujson  # MicroPython
+except Exception:
+    import json as ujson  # CPython (Zero)
+
+# asyncio
+try:
+    import uasyncio as asyncio  # MicroPython
+except Exception:
+    try:
+        import asyncio  # CPython (Zero)
+    except Exception:
+        asyncio = None
+
+# os / time
+try:
+    import uos as os  # MicroPython
+except Exception:
+    import os  # CPython (Zero)
+
+try:
+    import utime as time  # MicroPython
+except Exception:
+    import time  # CPython (Zero)
+
+# machine
+try:
+    import machine  # MicroPython
+except Exception:
+    machine = None  # CPython (Zero)
+
+# Prefer platform_compat on Zero/CPython if available (keeps one consistent abstraction repo-wide)
+try:
+    _mcu = str(getattr(settings, "MCU_TYPE", "")).lower()
+except Exception:
+    _mcu = ""
+
+try:
+    _is_micropython = bool(sys and getattr(sys, "implementation", None) and sys.implementation.name == "micropython")
+except Exception:
+    _is_micropython = False
+
+if (_mcu == "zero") or (not _is_micropython):
+    try:
+        from platform_compat import asyncio as _pa, time as _pt, os as _po, machine as _pm  # type: ignore
+        if _pa is not None:
+            asyncio = _pa
+        if _pt is not None:
+            time = _pt
+        if _po is not None:
+            os = _po
+        if _pm is not None:
+            machine = _pm
+    except Exception:
+        pass
+
+# Fallback: provide ticks_ms/ticks_diff on CPython if missing (keeps existing logic unchanged)
+try:
+    if not hasattr(time, "ticks_ms"):
+        def _ticks_ms():
+            return int(time.time() * 1000)
+        def _ticks_diff(a, b):
+            return int(a) - int(b)
+        time.ticks_ms = _ticks_ms  # type: ignore[attr-defined]
+        time.ticks_diff = _ticks_diff  # type: ignore[attr-defined]
+except Exception:
+    pass
+
+# Fallback: minimal machine stub on Zero so legacy code paths don't crash on attribute access.
+if machine is None:
+    class _MachineStub:
+        class Pin:
+            IN = 0
+            OUT = 1
+            PULL_UP = 2
+            PULL_DOWN = 3
+            def __init__(self, *a, **kw): pass
+            def init(self, *a, **kw): return None
+            def value(self, *a, **kw): return 0
+            def on(self): return None
+            def off(self): return None
+
+        class ADC:
+            def __init__(self, *a, **kw): pass
+            def read_u16(self): return 0
+
+        def unique_id(self):  # best-effort; utils.get_machine_id() already tolerates failures
+            return b""
+
+        def soft_reset(self):
+            raise SystemExit("soft_reset requested")
+
+        def reset(self):
+            raise SystemExit("reset requested")
+
+    machine = _MachineStub()
 
 from config_persist import write_text, read_json, set_flag, is_flag_set, write_json, read_text
 
