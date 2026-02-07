@@ -90,6 +90,20 @@ class Pin:
 				pass
 		return self._val
 
+	# NEW: common MicroPython Pin helpers used by some callsites
+	def on(self):
+		return self.value(1)
+
+	def off(self):
+		return self.value(0)
+
+	def init(self, mode=None, pull=None):
+		if mode is not None:
+			self.mode = mode
+		if pull is not None:
+			self.pull = pull
+		return None
+
 # --- I2C shim (smbus2 if available) ---
 class I2C:
 	def __init__(self, bus, scl=None, sda=None, freq=100000):
