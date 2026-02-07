@@ -256,15 +256,76 @@ def get_script_runtime():
     now = time.ticks_ms()
     return (now - script_start_time) // 1000
 
-# NEW: scheduler task wrappers (fix NameError; preserve existing logic by delegating to current functions)
-async def sample_task():
+# NEW: provisioned helper used by UC checkin task (was referenced but not defined)
+def is_provisioned():
     try:
-        r = sampleEnviroment()
-        if hasattr(r, "__await__"):
-            await r
+        if bool(getattr(settings, 'UNIT_PROVISIONED', False)):
+            return True
+        flag = getattr(settings, 'PROVISIONED_FLAG_FILE', '/logs/provisioned.flag')
+        try:
+            os.stat(flag)
+            # also require basic identity/url presence to avoid false positives
+            return bool(str(getattr(settings, 'UNIT_ID', '')).strip()) and bool(str(getattr(settings, 'WORDPRESS_API_URL', '')).strip())
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+# NEW: minimal TaskManager fallback (fixes NameError; preserves "interval task" behavior)
+try:
+    TaskManager  # type: ignore[name-defined]
+except Exception:
+    class TaskManager:
+        def __init__(self):
+            self._tasks = []
+
+        def add_task(self, coro_fn, name, interval_s):
+            # coro_fn: async callable; interval_s: seconds
+            self._tasks.append((str(name or 'task'), coro_fn, int(interval_s) if interval_s else 1))
+
+        async def _runner(self, name, coro_fn, interval_s):
+            while True:
+                try:
+                    await coro_fn()
+                except Exception as e:
+                    try:
+                        await debug_print(f"TaskManager[{name}] error: {e}", "ERROR")
+                    except Exception:
+                        pass
+                try:
+                    await asyncio.sleep(interval_s)
+                except Exception:
+                    # keep loop alive even if asyncio is partially stubbed
+                    pass
+
+        async def run(self):
+            # schedule all runners and then idle forever
+            try:
+                for (name, fn, interval_s) in self._tasks:
+                    try:
+                        asyncio.create_task(self._runner(name, fn, interval_s))
+                    except Exception:
+                        pass
+                while True:
+                    await asyncio.sleep(3600)
+            except Exception:
+                # last-resort idle loop
+                while True:
+                    try:
+                        await asyncio.sleep(3600)
+                    except Exception:
+                        pass
+
+# NEW: LoRa comm wrapper expected by startup() (was referenced but not defined)
+async def lora_comm_task():
+    try:
+        if connectLora:
+            r = connectLora()
+            if hasattr(r, "__await__"):
+                await r
     except Exception as e:
         try:
-            await debug_print(f"sample_task error: {e}", "ERROR")
+            await debug_print(f"lora_comm_task error: {e}", "ERROR")
         except Exception:
             pass
 

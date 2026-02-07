@@ -2,7 +2,7 @@
 
 # Utility to print remote node info
 def print_remote_nodes():
-    # CHANGED: avoid NameError at import-time if settings isn't loaded yet
+    # CHANGED: avoid NameError / empty try-block; import settings safely
     try:
         import settings as _settings
     except Exception:
@@ -25,47 +25,57 @@ from platform_compat import (
 
 # NEW: stdlib/micropython compatibility imports (parse-safe on both runtimes)
 try:
-    import sys  # CHANGED: was empty try-block
+    import sys
 except Exception:
     sys = None
 try:
-    import io  # CHANGED: was empty try-block
+    import io
 except Exception:
     io = None
 try:
-    import random  # CHANGED: was empty try-block
+    import random
 except Exception:
     random = None
 try:
-    import select  # CHANGED: was empty try-block
+    import select
 except Exception:
     select = None
 
+# ujson / ubinascii / uhashlib compatibility
 try:
-    import ujson as ujson  # CHANGED: ensure ujson exists on both runtimes
+    import ujson  # MicroPython
 except Exception:
-    import json as ujson  # type: ignore
+    try:
+        import json as ujson  # CPython/Zero
+    except Exception:
+        ujson = None  # type: ignore
 
 try:
-    import ubinascii as ubinascii  # CHANGED
+    import ubinascii  # MicroPython
 except Exception:
-    import binascii as ubinascii  # type: ignore
+    try:
+        import binascii as ubinascii  # CPython/Zero
+    except Exception:
+        ubinascii = None  # type: ignore
 
 try:
-    import uhashlib as uhashlib  # CHANGED
+    import uhashlib  # MicroPython
 except Exception:
-    import hashlib as uhashlib  # type: ignore
+    try:
+        import hashlib as uhashlib  # CPython/Zero
+    except Exception:
+        uhashlib = None  # type: ignore
 
 # Base64 helpers for CPython fallback
 try:
-    import base64 as _py_b64  # CHANGED: required by _Base64Shim
+    import base64 as _py_b64
 except Exception:
     _py_b64 = None
 
-# NEW: base64 helpers with a MicroPython-like surface (_ub.b2a_base64 / _ub.a2b_base64)
+# Provide a MicroPython-like base64 surface (_ub.b2a_base64/_ub.a2b_base64)
 try:
     _ub = ubinascii
-    if not hasattr(_ub, "b2a_base64") or not hasattr(_ub, "a2b_base64"):
+    if _ub is None or not hasattr(_ub, "b2a_base64") or not hasattr(_ub, "a2b_base64"):
         raise ImportError("no base64 helpers")
 except Exception:
     class _Base64Shim:
@@ -82,8 +92,26 @@ except Exception:
             if isinstance(s, str):
                 s = s.encode("ascii")
             return _py_b64.b64decode(s)
-
     _ub = _Base64Shim()
+
+# Sleep-ms helper used by existing code (_pulse_reset/_attempt_begin)
+try:
+    import utime as _time
+except Exception:
+    try:
+        import time as _time
+    except Exception:
+        _time = None
+try:
+    if _time is not None and not hasattr(_time, "sleep_ms"):
+        def _sleep_ms(ms):
+            try:
+                _time.sleep(float(ms) / 1000.0)
+            except Exception:
+                pass
+        _time.sleep_ms = _sleep_ms  # type: ignore[attr-defined]
+except Exception:
+    pass
 
 # MicroPython-only SX1262 driver
 try:
@@ -94,15 +122,22 @@ except Exception:
     except Exception:
         SX1262 = None
 
-# CHANGED: previously empty try blocks caused SyntaxError; import settings/sdata explicitly.
+# CHANGED: import settings/sdata explicitly and safely
 try:
-    import sdata  # CHANGED: was empty try-block
-    import settings  # CHANGED: was empty try-block
+    import settings
 except Exception:
-    sdata = None
-    settings = None
+    settings = None  # type: ignore
+try:
+    import sdata
+except Exception:
+    sdata = None  # type: ignore
 
-from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run, led_status_flash, write_lora_log, persist_unit_id, append_field_data_entry
+from utils import (
+    free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run, led_status_flash,
+    write_lora_log, persist_unit_id, append_field_data_entry,
+    stage_remote_field_data, stage_remote_files,  # CHANGED: used later in base RX path
+)
+
 from relay import toggle_relay
 
 try:
@@ -114,9 +149,9 @@ except Exception:
 def chacha20_decrypt(key, nonce, aad, ciphertext):
     return chacha20_encrypt(key, nonce, aad, ciphertext)
 
-# Guarded import of optional wprest helpers to avoid ImportError on devices that don't expose all names.
+# Guarded import of optional wprest helpers to avoid ImportError
 try:
-    import wprest as _wp  # CHANGED: _wp must exist
+    import wprest as _wp  # CHANGED
     register_with_wp = getattr(_wp, 'register_with_wp', None)
     send_data_to_wp = getattr(_wp, 'send_data_to_wp', None)
     send_settings_to_wp = getattr(_wp, 'send_settings_to_wp', None)
@@ -131,10 +166,11 @@ except Exception:
     register_with_wp = send_data_to_wp = send_settings_to_wp = fetch_settings_from_wp = None
     send_file_to_wp = request_file_from_wp = heartbeat_ping = poll_ota_jobs = handle_ota_job = _auth_headers = None
 
-# File to persist remote node info and remote sync schedule
-REMOTE_NODE_INFO_FILE = settings.LOG_DIR + '/remote_node_info.json'
-REMOTE_SYNC_SCHEDULE_FILE = settings.LOG_DIR + '/remote_sync_schedule.json'
-GPS_STATE_FILE = settings.LOG_DIR + '/gps.json'
+# File paths (safe even if settings failed to import)
+_LOG_DIR = (getattr(settings, 'LOG_DIR', '/logs') if settings else '/logs')
+REMOTE_NODE_INFO_FILE = _LOG_DIR + '/remote_node_info.json'
+REMOTE_SYNC_SCHEDULE_FILE = _LOG_DIR + '/remote_sync_schedule.json'
+GPS_STATE_FILE = _LOG_DIR + '/gps.json'
 
 # Load REMOTE_NODE_INFO from file at startup
 def load_remote_node_info():
