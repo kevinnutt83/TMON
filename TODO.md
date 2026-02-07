@@ -161,9 +161,10 @@
 - [🚧] GPS acceptance from base on remote nodes
 
 ### 1.X Raspberry Pi Zero (CPython) Compatibility
-- [🚧] Provide CPython shims for MicroPython-only modules used by firmware (`utime` first)
-- [🚧] Eliminate remaining direct `uasyncio` / `ujson` imports in shared modules (use fallbacks or `platform_compat`)
-- [⏳] Verify firmware imports cleanly on Zero with `settings.MCU_TYPE="zero"` (no `ModuleNotFoundError` at boot)
+- [🚧] Remove/guard direct imports of MicroPython-only modules on Zero (e.g., `import machine`, `import network`, `import urequests`)
+- [⏳] Update `micropython/utils.py` to import `machine` via `platform_compat` (fixes current `ModuleNotFoundError: machine` on Zero)
+- [⏳] Audit all modules for hardware backends and ensure `MCU_TYPE == "zero"` paths no-op safely (relay, I2C sensors, LoRa, UART/RS485)
+- [🔄] Validate that `platform_compat.py` exports safe stubs/None for `machine`, `network`, `framebuf`, `requests` on Zero and real modules on MicroPython
 
 ---
 
