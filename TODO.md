@@ -161,9 +161,8 @@
 - [🚧] GPS acceptance from base on remote nodes
 
 ### 1.X Raspberry Pi Zero (CPython) Compatibility
-- [🚧] Guard/route MicroPython-only imports (`machine`, `network`, `ubinascii`, `ujson`, `uasyncio`) based on `settings.MCU_TYPE`
-- [⏳] Fix `micropython/utils.py` CPython crash: replace `import machine` with `from platform_compat import machine` (or guard by `MCU_TYPE == "zero"`)
-- [🔄] Verify Zero can boot and run WiFi-only node (`NODE_TYPE="wifi"`) without LoRa/I2C hardware backends
+- [🚧] Provide CPython shims for MicroPython-only modules (`machine`, `network`, `uasyncio`, `urequests`, etc.) so legacy imports work on Zero without code duplication
+- [⏳] Decide/implement real hardware backends for Zero (GPIO/I2C/SPI/UART) where needed
 
 ---
 

@@ -8,7 +8,186 @@ import types  # CHANGED
 import settings  # CHANGED
 import sdata  # CHANGED
 
-# CHANGED: On Zero/CPython, satisfy legacy "import machine"/"import network" in other modules (e.g., utils.py).
+# NEW: CPython/Zero shims for MicroPython-only modules (fixes: "ModuleNotFoundError: machine")
+def _install_micropython_shims_if_needed():
+    try:
+        mcu = str(getattr(settings, "MCU_TYPE", "")).lower()
+    except Exception:
+        mcu = ""
+    try:
+        is_micropython = (getattr(sys, "implementation", None) and sys.implementation.name == "micropython")
+    except Exception:
+        is_micropython = False
+    is_zero_runtime = (mcu == "zero") or (not is_micropython)
+
+    if not is_zero_runtime:
+        return
+
+    def _ensure_mod(name, mod):
+        try:
+            if name not in sys.modules:
+                sys.modules[name] = mod
+        except Exception:
+            pass
+
+    # ujson/ubinascii/uhashlib/uio/uselect/utime/uos/urequests/uasyncio shims
+    try:
+        import json as _json
+        _ensure_mod("ujson", _json)
+    except Exception:
+        pass
+    try:
+        import binascii as _binascii
+        _ensure_mod("ubinascii", _binascii)
+    except Exception:
+        pass
+    try:
+        import hashlib as _hashlib
+        _ensure_mod("uhashlib", _hashlib)
+    except Exception:
+        pass
+    try:
+        import io as _io
+        _ensure_mod("uio", _io)
+    except Exception:
+        pass
+    try:
+        import select as _select
+        _ensure_mod("uselect", _select)
+    except Exception:
+        pass
+    try:
+        import time as _ptime
+        _ensure_mod("utime", _ptime)
+    except Exception:
+        pass
+    try:
+        import os as _posix_os
+        _ensure_mod("uos", _posix_os)
+    except Exception:
+        pass
+    try:
+        # platform_compat already selected the right requests; expose it as urequests for legacy imports
+        if requests is not None:
+            _ensure_mod("urequests", requests)
+    except Exception:
+        pass
+    try:
+        # platform_compat already selected asyncio implementation; expose it as uasyncio for legacy imports
+        if asyncio is not None:
+            _ensure_mod("uasyncio", asyncio)
+    except Exception:
+        pass
+
+    # machine stub (or platform_compat.machine if it is a usable shim)
+    if "machine" not in sys.modules:
+        if machine is not None and hasattr(machine, "__dict__"):
+            _ensure_mod("machine", machine)
+        else:
+            _m = types.ModuleType("machine")
+
+            class Pin:
+                IN = 0
+                OUT = 1
+                PULL_UP = 2
+                PULL_DOWN = 3
+
+                def __init__(self, pin, mode=None, pull=None):
+                    self.pin = pin
+                    self.mode = mode
+                    self.pull = pull
+                    self._val = 0
+
+                def value(self, v=None):
+                    if v is None:
+                        return int(self._val)
+                    self._val = 1 if v else 0
+                    return int(self._val)
+
+                def on(self):
+                    self.value(1)
+
+                def off(self):
+                    self.value(0)
+
+            class I2C:
+                def __init__(self, *a, **kw):
+                    raise RuntimeError("I2C not available on CPython/zero without a backend")
+
+            class SPI:
+                def __init__(self, *a, **kw):
+                    raise RuntimeError("SPI not available on CPython/zero without a backend")
+
+                def init(self, *a, **kw):
+                    return None
+
+                def deinit(self):
+                    return None
+
+            class UART:
+                def __init__(self, *a, **kw):
+                    raise RuntimeError("UART not available on CPython/zero without a backend")
+
+            def soft_reset():
+                raise SystemExit("soft_reset requested")
+
+            _m.Pin = Pin
+            _m.I2C = I2C
+            _m.SPI = SPI
+            _m.UART = UART
+            _m.soft_reset = soft_reset
+            _ensure_mod("machine", _m)
+
+    # network stub
+    if "network" not in sys.modules:
+        _n = types.ModuleType("network")
+        _n.STA_IF = 0
+
+        class WLAN:
+            def __init__(self, iface):
+                self.iface = iface
+                self._active = False
+                self._connected = False
+
+            def active(self, v=None):
+                if v is None:
+                    return bool(self._active)
+                self._active = bool(v)
+                if not self._active:
+                    self._connected = False
+                return bool(self._active)
+
+            def isconnected(self):
+                return bool(self._connected)
+
+            def scan(self):
+                return []
+
+            def connect(self, *a, **kw):
+                self._connected = False
+                return None
+
+            def ifconfig(self):
+                return ("0.0.0.0", "0.0.0.0", "0.0.0.0", "0.0.0.0")
+
+            def config(self, *a, **kw):
+                if a and a[0] == "mac":
+                    return b"\x00\x00\x00\x00\x00\x00"
+                if a and a[0] == "rssi":
+                    return -100
+                return None
+
+            def status(self, *a, **kw):
+                if a and a[0] == "rssi":
+                    return -100
+                return 0
+
+        _n.WLAN = WLAN
+        _ensure_mod("network", _n)
+
+_install_micropython_shims_if_needed()
+
+# CHANGED: keep legacy "import machine"/"import network" satisfied (now covered by shims too)
 try:
     if str(getattr(settings, "MCU_TYPE", "")).lower() == "zero":
         if "machine" not in sys.modules:
@@ -32,7 +211,31 @@ from utils import (
     periodic_field_data_send, load_persisted_unit_id, persist_unit_id,
     get_machine_id, periodic_provision_check
 )
-from lora import connectLora, log_error, TMON_AI
+
+# CHANGED: guard LoRa import on Zero/CPython so firmware can boot without LoRa driver stack
+try:
+    _mcu = str(getattr(settings, "MCU_TYPE", "")).lower()
+except Exception:
+    _mcu = ""
+try:
+    _is_micropython = (getattr(sys, "implementation", None) and sys.implementation.name == "micropython")
+except Exception:
+    _is_micropython = False
+
+if (_mcu == "zero") or (not _is_micropython):
+    try:
+        from lora import connectLora, log_error, TMON_AI
+    except Exception:
+        connectLora = None
+        TMON_AI = None
+        async def log_error(error_msg):
+            try:
+                await debug_print(f"lora unavailable on zero: {error_msg}", "WARN")
+            except Exception:
+                pass
+else:
+    from lora import connectLora, log_error, TMON_AI
+
 from ota import check_for_update, apply_pending_update
 from oled import update_display, display_message
 from settings_apply import load_applied_settings_on_boot, settings_apply_loop
