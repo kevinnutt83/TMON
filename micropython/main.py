@@ -185,6 +185,15 @@ def get_script_runtime():
     now = time.ticks_ms()
     return (now - script_start_time) // 1000
 
+# NEW: run sync/blocking work off the event loop on CPython/Zero (no-op fallback elsewhere)
+async def _to_thread(fn, *a, **kw):
+    try:
+        if hasattr(asyncio, "to_thread"):
+            return await asyncio.to_thread(fn, *a, **kw)  # CPython/Zero
+    except Exception:
+        pass
+    return fn(*a, **kw)
+
 # --- Scheduler restored from earlier v2.06.0 ---
 class TaskManager:
     def __init__(self):
@@ -407,6 +416,127 @@ async def periodic_command_poll_task():
                 pass
         await asyncio.sleep(10)
 
+# RESTORED: first-time check-in + provisioning fetch/apply for ALL MCU types (incl. Zero).
+async def first_boot_provision():
+    try:
+        if is_provisioned():
+            return
+    except Exception:
+        pass
+
+    if getattr(settings, "DEVICE_SUSPENDED", False):
+        return
+
+    # Ensure MACHINE_ID exists before any network calls.
+    try:
+        if not str(getattr(settings, "MACHINE_ID", "") or "").strip():
+            mid = get_machine_id()
+            if mid:
+                settings.MACHINE_ID = mid
+    except Exception:
+        pass
+
+    # Best-effort WiFi connect on MicroPython only (Zero does not use this stack).
+    try:
+        if (not IS_ZERO_RUNTIME) and connectToWifiNetwork and bool(getattr(settings, "ENABLE_WIFI", True)):
+            await connectToWifiNetwork()
+    except Exception:
+        pass
+
+    # 1) First-time check-in/register with Admin hub (best-effort; endpoint variants handled by wprest).
+    try:
+        from wprest import register_with_wp  # type: ignore
+        try:
+            await register_with_wp()
+        except Exception as e:
+            try:
+                await debug_print(f"first_boot_provision: register failed: {e}", "WARN")
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # 2) Fetch/apply provisioning (this is what yields WORDPRESS_API_URL / role / unit_name / firmware).
+    try:
+        import provision as _prov  # type: ignore
+    except Exception:
+        _prov = None
+
+    if _prov:
+        try:
+            doc = await _to_thread(
+                _prov.fetch_provisioning,
+                unit_id=getattr(settings, "UNIT_ID", None),
+                machine_id=getattr(settings, "MACHINE_ID", None),
+                base_url=getattr(settings, "TMON_ADMIN_API_URL", None),
+                force=True,
+            )
+            if isinstance(doc, dict) and doc:
+                await _to_thread(_prov.apply_settings, doc)
+        except Exception as e:
+            try:
+                await debug_print(f"first_boot_provision: provision fetch/apply error: {e}", "ERROR")
+            except Exception:
+                pass
+
+    # 3) If provisioning produced a WP URL, mark provisioned + soft reset once (guarded).
+    try:
+        wp_url = str(getattr(settings, "WORDPRESS_API_URL", "")).strip()
+    except Exception:
+        wp_url = ""
+    if not wp_url:
+        return
+
+    try:
+        flag = getattr(settings, "PROVISIONED_FLAG_FILE", "/logs/provisioned.flag")
+        with open(flag, "w") as f:
+            f.write("ok")
+    except Exception:
+        pass
+    try:
+        settings.UNIT_PROVISIONED = True
+    except Exception:
+        pass
+
+    # Remote nodes: optionally disable WiFi after provisioning.
+    try:
+        if (
+            str(getattr(settings, "NODE_TYPE", "base")).lower() == "remote"
+            and bool(getattr(settings, "WIFI_DISABLE_AFTER_PROVISION", True))
+            and disable_wifi
+        ):
+            disable_wifi()
+    except Exception:
+        pass
+
+    # Guarded soft reset (only once).
+    try:
+        guard = getattr(
+            settings,
+            "PROVISION_REBOOT_GUARD_FILE",
+            str(getattr(settings, "LOG_DIR", "/logs")).rstrip("/") + "/provision_reboot.flag",
+        )
+        try:
+            os.stat(guard)
+            return
+        except Exception:
+            pass
+        try:
+            with open(guard, "w") as gf:
+                gf.write("1")
+        except Exception:
+            pass
+        try:
+            await debug_print("first_boot_provision: provisioning applied; soft resetting", "PROVISION")
+        except Exception:
+            pass
+        try:
+            machine.soft_reset()
+        except Exception:
+            pass
+    except Exception:
+        pass
+
 # --- Keep existing provisioning/OTA/UC logic, but ensure parsing remains valid ---
 # ...existing code...
 # NOTE: your existing first_boot_provision(), ota_boot_check(), periodic_uc_checkin_task()
@@ -421,10 +551,9 @@ async def ota_boot_check():
 async def startup():
     tm = TaskManager()
 
-    # Run first-boot provisioning before normal tasks (only if present and usable)
+    # Run first-boot provisioning before normal tasks (ALL MCU types).
     try:
-        if "first_boot_provision" in globals() and callable(globals().get("first_boot_provision")):
-            await globals()["first_boot_provision"]()
+        await first_boot_provision()
     except Exception as e:
         try:
             await debug_print(f"first_boot_provision error: {e}", "ERROR")
@@ -562,16 +691,7 @@ async def startup():
         if not IS_ZERO_RUNTIME:
             return
 
-        try:
-            from wprest import register_with_wp  # type: ignore
-        except Exception:
-            register_with_wp = None
-        try:
-            import provision  # type: ignore
-        except Exception:
-            provision = None
-
-        # NEW: ensure MACHINE_ID exists on Zero so provisioning/check-in can proceed
+        # Ensure MACHINE_ID exists on Zero so provisioning/check-in can proceed
         try:
             if not str(getattr(settings, "MACHINE_ID", "") or "").strip():
                 mid = get_machine_id()
@@ -588,39 +708,9 @@ async def startup():
                     await asyncio.sleep(interval)
                     continue
 
-                # Check-in/registration attempt (does not depend on MicroPython WiFi stack on Zero)
-                if register_with_wp:
-                    try:
-                        await register_with_wp()
-                    except Exception as e:
-                        try:
-                            await debug_print(f"zero_bootstrap: register err {e}", "WARN")
-                        except Exception:
-                            pass
-
-                # Provision fetch/apply (sync code in thread on CPython)
-                try:
-                    is_prov = bool(getattr(settings, "UNIT_PROVISIONED", False)) or bool(
-                        str(getattr(settings, "WORDPRESS_API_URL", "")).strip()
-                    )
-                except Exception:
-                    is_prov = False
-
-                if (not is_prov) and provision:
-                    try:
-                        doc = await _to_thread(
-                            provision.fetch_provisioning,
-                            unit_id=getattr(settings, "UNIT_ID", None),
-                            machine_id=getattr(settings, "MACHINE_ID", None),
-                            base_url=getattr(settings, "TMON_ADMIN_API_URL", None),
-                        )
-                        if isinstance(doc, dict) and doc:
-                            await _to_thread(provision.apply_settings, doc)
-                    except Exception as e:
-                        try:
-                            await debug_print(f"zero_bootstrap: provision err {e}", "WARN")
-                        except Exception:
-                            pass
+                # Use the same first-time flow on Zero until provisioned.
+                if not is_provisioned():
+                    await first_boot_provision()
             except Exception:
                 pass
 

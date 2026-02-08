@@ -3,6 +3,7 @@
 import json
 import os
 from platform_compat import requests as _pc_requests  # CHANGED
+import sys
 
 # CHANGED: CPython/Zero fallback when platform_compat.requests is None
 requests = _pc_requests
@@ -12,6 +13,73 @@ if requests is None:
         requests = _py_requests  # type: ignore
     except Exception:
         requests = None  # type: ignore
+
+# NEW: urllib fallback for CPython/Zero when 'requests' isn't installed
+def _is_micropython() -> bool:
+    try:
+        return str(getattr(sys.implementation, "name", "")).lower() == "micropython"
+    except Exception:
+        return False
+
+_IS_MICROPYTHON = _is_micropython()
+if not _IS_MICROPYTHON:
+    try:
+        import urllib.request  # type: ignore
+        import urllib.error  # type: ignore
+        import urllib.parse  # type: ignore
+    except Exception:
+        urllib = None  # type: ignore
+else:
+    urllib = None  # type: ignore
+
+class _UrlLibResp:
+    def __init__(self, code=0, text="", content=None):
+        self.status_code = int(code or 0)
+        self.text = text or ""
+        self.content = content if content is not None else (
+            self.text.encode("utf-8", "ignore") if isinstance(self.text, str) else b""
+        )
+    def json(self):
+        try:
+            return json.loads(self.text or "{}")
+        except Exception:
+            return {}
+    def close(self):
+        return None
+
+def _urllib_request(method, url, payload=None, timeout_s=20):
+    if urllib is None:
+        return None
+    data = None
+    headers = {"Accept": "application/json"}
+    if payload is not None:
+        try:
+            data = json.dumps(payload or {}).encode("utf-8")
+        except Exception:
+            data = b"{}"
+        headers["Content-Type"] = "application/json"
+    try:
+        req = urllib.request.Request(url, data=data, headers=headers, method=str(method).upper())
+        with urllib.request.urlopen(req, timeout=timeout_s) as r:
+            raw = r.read() or b""
+            try:
+                txt = raw.decode("utf-8", "ignore")
+            except Exception:
+                txt = ""
+            return _UrlLibResp(getattr(r, "status", 200), txt, raw)
+    except urllib.error.HTTPError as e:
+        raw = b""
+        try:
+            raw = e.read() or b""
+        except Exception:
+            pass
+        try:
+            txt = raw.decode("utf-8", "ignore")
+        except Exception:
+            txt = ""
+        return _UrlLibResp(getattr(e, "code", 0), txt, raw)
+    except Exception:
+        return None
 
 # Import device settings robustly: prefer local settings module; fallback to micropython.settings
 device_settings = None
@@ -44,6 +112,30 @@ CHUNK_SIZE = getattr(device_settings, 'FIRMWARE_DOWNLOAD_CHUNK_SIZE', 1024) if d
 def _attempt_endpoint(base_url, endpoint, params=None, json_body=None, timeout=REQUEST_TIMEOUT):
     url = base_url.rstrip("/") + endpoint
     try:
+        # CPython/Zero: if 'requests' isn't available, use urllib.
+        if requests is None and not _IS_MICROPYTHON:
+            if params:
+                try:
+                    qs = urllib.parse.urlencode(params) if urllib else ""
+                except Exception:
+                    qs = ""
+                if qs:
+                    url = url + ("&" if "?" in url else "?") + qs
+            resp = _urllib_request("POST", url, payload=json_body, timeout_s=timeout) if (json_body is not None) else _urllib_request("GET", url, payload=None, timeout_s=timeout)
+            if not resp:
+                return None, "no_response"
+            code = getattr(resp, "status_code", None)
+            parsed = None
+            try:
+                parsed = resp.json()
+            except Exception:
+                parsed = None
+            if code not in (200, 201):
+                return None, "http_error_%s" % code
+            if isinstance(parsed, (dict, list)):
+                return parsed, None
+            return None, "json_parse_failed"
+
         if requests is None:
             return None, "no_http_client"
 
