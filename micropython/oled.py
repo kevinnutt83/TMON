@@ -5,26 +5,37 @@ import settings
 import sdata
 from settings import I2C_B_SCL_PIN, I2C_B_SDA_PIN
 
-# Globals / state
-_render_task = None
-_status_banner_text = None
-_status_banner_until = 0
-_status_banner_persist = False
-_body_override_lines = None        # NEW: override for body content (list of lines)
-_body_override_until = 0           # NEW: timestamp until override active
-_last_render_sig = None
-_show_voltage = True
-_last_flip_time = 0
+# CHANGED: robust runtime detection + framebuf resolution (MicroPython vs CPython/Zero)
+try:
+	import sys as _sys
+	_IS_CPYTHON = str(getattr(_sys.implementation, "name", "")).lower() != "micropython"
+except Exception:
+	_IS_CPYTHON = False
 
-# Constants derived from settings (fall back to sensible defaults)
-HEADER_HEIGHT = int(getattr(settings, 'OLED_HEADER_HEIGHT', 16))
-FOOTER_HEIGHT = int(getattr(settings, 'OLED_FOOTER_HEIGHT', 12))
-BODY_TOP = HEADER_HEIGHT
-BODY_BOTTOM = 64 - FOOTER_HEIGHT
-BODY_HEIGHT = BODY_BOTTOM - BODY_TOP
-FLIP_INTERVAL_S = int(getattr(settings, 'OLED_HEADER_FLIP_S', 4))
-RENDER_INTERVAL_S = 0.5
-MAX_TEXT_CHARS = 16
+try:
+	_IS_ZERO_SETTINGS = str(getattr(settings, "MCU_TYPE", "")).lower() == "zero"
+except Exception:
+	_IS_ZERO_SETTINGS = False
+
+try:
+	IS_ZERO_RUNTIME = bool(IS_ZERO) or _IS_ZERO_SETTINGS or _IS_CPYTHON
+except Exception:
+	IS_ZERO_RUNTIME = _IS_ZERO_SETTINGS or _IS_CPYTHON
+
+# Prefer a usable framebuf module (native on MicroPython; shim on CPython/Zero)
+try:
+	if framebuf is None or not hasattr(framebuf, "FrameBuffer") or not hasattr(framebuf, "MONO_VLSB"):
+		raise ImportError("platform_compat.framebuf not usable")
+except Exception:
+	try:
+		import framebuf as _fb  # MicroPython built-in
+		framebuf = _fb
+	except Exception:
+		try:
+			import framebuf_compat as _fb  # repo shim for CPython/Zero
+			framebuf = _fb
+		except Exception:
+			framebuf = None
 
 # Simple SSD1309 driver (robust for 128x64)
 # CHANGED: allow SSD1309 on Zero too; rely on I2C init below to decide if it can actually run.
@@ -186,7 +197,7 @@ def _init_oled_i2c():
 
 	# 3) Zero/CPython fallback: use smbus2/smbus on I2C bus 1
 	try:
-		if IS_ZERO:
+		if IS_ZERO_RUNTIME:
 			return _SmbusI2C(1)
 	except Exception:
 		pass

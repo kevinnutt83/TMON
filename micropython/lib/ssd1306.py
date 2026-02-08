@@ -1,7 +1,32 @@
 # MicroPython SSD1306 OLED driver, I2C and SPI interfaces
 
-from micropython import const
-import framebuf
+# CHANGED: CPython/Zero compatibility for imports (keeps MicroPython behavior unchanged)
+try:
+    from micropython import const  # type: ignore
+except Exception:
+    def const(x):  # type: ignore
+        return x
+
+try:
+    import framebuf  # MicroPython
+except Exception:
+    try:
+        import framebuf_compat as framebuf  # CPython/Zero shim in this repo
+    except Exception:
+        # Last-resort minimal shim to allow import without runtime rendering.
+        class _FramebufFallback:
+            MONO_VLSB = 0
+            class FrameBuffer:
+                def __init__(self, buffer, width, height, format=0):  # noqa: A002
+                    self.buffer = buffer
+                    self.width = int(width)
+                    self.height = int(height)
+                def fill(self, c): return None
+                def pixel(self, x, y, c=None): return 0
+                def text(self, s, x, y, c=1): return None
+                def rect(self, x, y, w, h, c): return None
+                def fill_rect(self, x, y, w, h, c): return None
+        framebuf = _FramebufFallback()
 
 
 # register definitions
