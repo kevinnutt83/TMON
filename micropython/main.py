@@ -444,6 +444,11 @@ async def first_boot_provision():
         pass
 
     # 1) First-time check-in/register with Admin hub (best-effort; endpoint variants handled by wprest).
+    # RESTORED: include older direct check-in fallback + persistence semantics.
+    hub = str(getattr(settings, "TMON_ADMIN_API_URL", "") or "").strip()
+    mid = str(getattr(settings, "MACHINE_ID", "") or "").strip()
+
+    resp_json = {}
     try:
         from wprest import register_with_wp  # type: ignore
         try:
@@ -456,12 +461,53 @@ async def first_boot_provision():
     except Exception:
         pass
 
+    # Fallback: call legacy Admin check-in directly if hub+requests available (keeps older v2.06.0 behavior)
+    try:
+        if hub and requests and not is_provisioned():
+            url = hub.rstrip("/") + "/wp-json/tmon-admin/v1/device/check-in"
+            body = {
+                "unit_id": getattr(settings, "UNIT_ID", None),
+                "machine_id": mid or get_machine_id(),
+                "firmware_version": getattr(settings, "FIRMWARE_VERSION", ""),
+                "node_type": getattr(settings, "NODE_TYPE", ""),
+            }
+
+            def _post_checkin():
+                try:
+                    return requests.post(url, json=body, timeout=10)
+                except TypeError:
+                    return requests.post(url, json=body)
+
+            resp = await _to_thread(_post_checkin)
+            ok = bool(resp is not None and getattr(resp, "status_code", 0) == 200)
+            try:
+                if resp is not None:
+                    try:
+                        resp_json.update(resp.json() or {})
+                    except Exception:
+                        pass
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            if ok:
+                try:
+                    await display_message("Provisioned", 2)
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
     # 2) Fetch/apply provisioning (this is what yields WORDPRESS_API_URL / role / unit_name / firmware).
     try:
         import provision as _prov  # type: ignore
     except Exception:
         _prov = None
 
+    doc = None
     if _prov:
         try:
             doc = await _to_thread(
@@ -478,6 +524,80 @@ async def first_boot_provision():
                 await debug_print(f"first_boot_provision: provision fetch/apply error: {e}", "ERROR")
             except Exception:
                 pass
+
+    # RESTORED: persist returned metadata without overwriting with blanks (older behavior)
+    merged = {}
+    try:
+        if isinstance(doc, dict):
+            merged.update(doc)
+    except Exception:
+        pass
+    try:
+        if isinstance(resp_json, dict):
+            merged.update(resp_json)
+    except Exception:
+        pass
+
+    try:
+        new_uid = merged.get("unit_id")
+        if new_uid and str(new_uid).strip() and str(new_uid).strip() != str(getattr(settings, "UNIT_ID", "") or ""):
+            settings.UNIT_ID = str(new_uid).strip()
+            try:
+                persist_unit_id(settings.UNIT_ID)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    try:
+        unit_name = (merged.get("unit_name") or "").strip()
+        if unit_name:
+            settings.UNIT_Name = unit_name
+            try:
+                from utils import persist_unit_name  # type: ignore
+                persist_unit_name(unit_name)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    try:
+        role_val = (merged.get("role") or merged.get("node_type") or "").strip()
+        if role_val:
+            settings.NODE_TYPE = role_val
+            try:
+                from utils import persist_node_type  # type: ignore
+                persist_node_type(role_val)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    try:
+        site_val = (merged.get("site_url") or merged.get("wordpress_api_url") or merged.get("WORDPRESS_API_URL") or "").strip()
+        if site_val:
+            settings.WORDPRESS_API_URL = site_val
+            try:
+                from utils import persist_wordpress_api_url  # type: ignore
+                persist_wordpress_api_url(site_val)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    try:
+        plan_val = (merged.get("plan") or "").strip()
+        if plan_val:
+            settings.PLAN = plan_val
+    except Exception:
+        pass
+
+    try:
+        fw_ver = (merged.get("firmware") or merged.get("firmware_version") or "").strip()
+        if fw_ver:
+            settings.FIRMWARE_VERSION = fw_ver
+    except Exception:
+        pass
 
     # 3) If provisioning produced a WP URL, mark provisioned + soft reset once (guarded).
     try:
@@ -537,10 +657,107 @@ async def first_boot_provision():
     except Exception:
         pass
 
+    # RESTORED: confirm-applied callback to Admin (best-effort; token optional)
+    try:
+        wp_url = str(getattr(settings, "WORDPRESS_API_URL", "") or "").strip()
+        if hub and wp_url and requests:
+            token = str(getattr(settings, "TMON_ADMIN_CONFIRM_TOKEN", "") or "").strip()
+            confirm_url = hub.rstrip("/") + "/wp-json/tmon-admin/v1/device/confirm-applied"
+            payload = {
+                "unit_id": getattr(settings, "UNIT_ID", ""),
+                "machine_id": getattr(settings, "MACHINE_ID", ""),
+                "wordpress_api_url": wp_url,
+                "role": getattr(settings, "NODE_TYPE", ""),
+                "unit_name": getattr(settings, "UNIT_Name", ""),
+                "plan": getattr(settings, "PLAN", ""),
+                "firmware_version": getattr(settings, "FIRMWARE_VERSION", ""),
+            }
+            headers = {}
+            if token:
+                headers["X-TMON-CONFIRM"] = token
+
+            def _post_confirm():
+                try:
+                    return requests.post(confirm_url, json=payload, headers=headers, timeout=8)
+                except TypeError:
+                    return requests.post(confirm_url, json=payload, headers=headers)
+
+            r2 = await _to_thread(_post_confirm)
+            try:
+                if r2 is not None:
+                    r2.close()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
 # --- Keep existing provisioning/OTA/UC logic, but ensure parsing remains valid ---
-# ...existing code...
-# NOTE: your existing first_boot_provision(), ota_boot_check(), periodic_uc_checkin_task()
-# can remain below; restore them if they were previously blanked out during edits.
+
+async def periodic_uc_checkin_task():
+    """Periodic Unit Connector check-in for provisioned devices."""
+    try:
+        from wprest import (
+            register_with_wp,
+            send_settings_to_wp,
+            send_data_to_wp,
+            poll_ota_jobs,
+            fetch_staged_settings,
+            poll_device_commands,
+        )  # type: ignore
+    except Exception:
+        register_with_wp = send_settings_to_wp = send_data_to_wp = poll_ota_jobs = fetch_staged_settings = poll_device_commands = None
+
+    try:
+        from utils import maybe_gc  # type: ignore
+    except Exception:
+        maybe_gc = None
+
+    interval = int(getattr(settings, 'UC_CHECKIN_INTERVAL_S', 300) or 300)
+
+    while True:
+        try:
+            if not is_provisioned():
+                await asyncio.sleep(2)
+                continue
+
+            wp = str(getattr(settings, 'WORDPRESS_API_URL', '') or '').strip()
+            if wp and not getattr(settings, 'DEVICE_SUSPENDED', False):
+                if register_with_wp:
+                    await register_with_wp()
+                if send_settings_to_wp:
+                    await send_settings_to_wp()
+                if send_data_to_wp:
+                    await send_data_to_wp()
+                if poll_ota_jobs:
+                    await poll_ota_jobs()
+
+                # Best-effort: staged settings probe (server may include commands)
+                if fetch_staged_settings:
+                    try:
+                        _ = await fetch_staged_settings()
+                    except Exception:
+                        pass
+
+                node_role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
+                if node_role in ('base', 'wifi') and poll_device_commands:
+                    try:
+                        await poll_device_commands()
+                    except Exception as e:
+                        await debug_print(f"Command poll error (checkin): {e}", "ERROR")
+
+        except Exception as e:
+            try:
+                await debug_print(f"uc: checkin err {e}", "ERROR")
+            except Exception:
+                pass
+
+        try:
+            if maybe_gc:
+                maybe_gc("uc_checkin", min_interval_ms=15000, mem_free_below=45 * 1024)
+        except Exception:
+            pass
+
+        await asyncio.sleep(interval)
 
 async def ota_boot_check():
     try:
@@ -589,8 +806,7 @@ async def startup():
     # Start provisioning loop
     # CHANGED: keep existing behavior on MicroPython; on Zero use the dedicated bootstrap loop below.
     try:
-        if not IS_ZERO_RUNTIME:
-            asyncio.create_task(periodic_provision_check())
+        asyncio.create_task(periodic_provision_check())
     except Exception:
         pass
 
@@ -734,12 +950,11 @@ async def main():
     except Exception:
         pass
 
-    # CHANGED: avoid Zero starting MicroPython-style background tasks that can spawn provisioning loops
-    if not IS_ZERO_RUNTIME:
-        try:
-            start_background_tasks()
-        except Exception:
-            pass
+    # RESTORED: start background tasks hook (older v2.06.0 behavior)
+    try:
+        start_background_tasks()
+    except Exception:
+        pass
 
     asyncio.create_task(startup())
 
@@ -770,7 +985,20 @@ async def main():
                     pass
                 raise
 
-            # ...existing code...
+            # RESTORED: periodic runGC (older v2.06.0 behavior)
+            try:
+                now_ms = time.ticks_ms()
+                td = getattr(time, "ticks_diff", None)
+                if callable(td):
+                    due = td(now_ms, _last_gc_ms) >= _gc_interval_ms
+                else:
+                    due = (now_ms - _last_gc_ms) >= _gc_interval_ms
+                if due:
+                    await runGC()
+                    _last_gc_ms = now_ms
+            except Exception:
+                pass
+
         except Exception as e:
             try:
                 if type(e).__name__ == "CancelledError":

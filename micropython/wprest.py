@@ -181,6 +181,14 @@ def _auth_headers(mode=None):
     # default: return headers w/o auth
     return headers
 
+# NEW: unify node-type HTTP gating (this name is referenced throughout the module)
+def _http_allowed_for_node() -> bool:
+    try:
+        from utils import is_http_allowed_for_node  # type: ignore
+        return bool(is_http_allowed_for_node())
+    except Exception:
+        return True
+
 # CHANGED: minimal urllib-based response shim to preserve current call sites
 class _UrlLibResp:
     def __init__(self, code=0, text="", content=None):

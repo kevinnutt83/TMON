@@ -18,6 +18,16 @@ except NameError:
 # Move LOG_DIR and essential file paths near the top so other constants can reference them.
 LOG_DIR = '/logs'
 
+# NEW: On CPython/Zero, default LOG_DIR to a writable local path (or allow override via env).
+# This prevents endless "provisioned -> soft reset" loops caused by failing to write /logs/*.flag.
+try:
+    import sys as _sys
+    if str(getattr(_sys.implementation, "name", "")).lower() != "micropython":
+        import os as _os  # CPython only
+        LOG_DIR = _os.environ.get("TMON_LOG_DIR") or _os.path.join(_os.getcwd(), "logs")
+except Exception:
+    pass
+
 # Files used for persistence (UNIT_ID, staged/applied settings, provision flag)
 UNIT_ID_FILE = LOG_DIR + '/unit_id.txt'
 MACHINE_ID_FILE = LOG_DIR + '/machine_id.txt'
@@ -26,7 +36,7 @@ PROVISIONED_FLAG_FILE = LOG_DIR + '/provisioned.flag'
 REMOTE_SETTINGS_STAGED_FILE = LOG_DIR + '/remote_settings.staged.json'
 REMOTE_SETTINGS_APPLIED_FILE = LOG_DIR + '/remote_settings.applied.json'
 REMOTE_SETTINGS_PREV_FILE = LOG_DIR + '/remote_settings.prev.json'
-UNIT_NAME_FILE = '/logs/unit_name.txt'   # Persisted human-friendly unit name (applied after provisioning)
+UNIT_NAME_FILE = LOG_DIR + '/unit_name.txt'   # Persisted human-friendly unit name (applied after provisioning)
 
 # Generic logs
 LOG_FILE = LOG_DIR + '/lora.log'
@@ -65,14 +75,14 @@ PROVISION_CHECK_INTERVAL_S = 30         # Seconds between registration attempts
 PROVISION_MAX_RETRIES = 60              # Max immediate retries before backoff escalation
 WIFI_ALWAYS_ON_WHEN_UNPROVISIONED = True  # Keep WiFi on until provisioning completes (remote needs Internet initially)
 WIFI_DISABLE_AFTER_PROVISION = True       # Remote nodes disable WiFi after provisioning (LoRa only thereafter)
-PROVISIONED_FLAG_FILE = '/logs/provisioned.flag'  # Presence indicates initial hub registration completed
-REMOTE_SETTINGS_STAGED_FILE = '/logs/remote_settings.staged.json'  # Admin or UC pushed settings awaiting apply
-REMOTE_SETTINGS_APPLIED_FILE = '/logs/remote_settings.applied.json' # Snapshot of last applied settings
-REMOTE_SETTINGS_PREV_FILE = '/logs/remote_settings.prev.json'       # Snapshot of previous settings before last apply
-UNIT_ID_FILE = '/logs/unit_id.txt'       # Persisted UNIT_ID mapping
-MACHINE_ID_FILE = '/logs/machine_id.txt' # Persisted MACHINE_ID after detection
-LAST_FIRMWARE_CHECK_FILE = '/logs/fw_last_check.txt'
-OTA_PENDING_FILE = '/logs/ota_pending.flag'
+PROVISIONED_FLAG_FILE = LOG_DIR + '/provisioned.flag'  # Presence indicates initial hub registration completed
+REMOTE_SETTINGS_STAGED_FILE = LOG_DIR + '/remote_settings.staged.json'  # Admin or UC pushed settings awaiting apply
+REMOTE_SETTINGS_APPLIED_FILE = LOG_DIR + '/remote_settings.applied.json' # Snapshot of last applied settings
+REMOTE_SETTINGS_PREV_FILE = LOG_DIR + '/remote_settings.prev.json'       # Snapshot of previous settings before last apply
+UNIT_ID_FILE = LOG_DIR + '/unit_id.txt'       # Persisted UNIT_ID mapping
+MACHINE_ID_FILE = LOG_DIR + '/machine_id.txt' # Persisted MACHINE_ID after detection
+LAST_FIRMWARE_CHECK_FILE = LOG_DIR + '/fw_last_check.txt'
+OTA_PENDING_FILE = LOG_DIR + '/ota_pending.flag'
 
 #Feature/device enables 
 ENABLE_WIFI = True

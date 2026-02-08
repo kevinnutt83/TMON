@@ -163,17 +163,28 @@ def enforce_log_caps(path: str):
 def checkLogDirectory():
     """Create log directory (idempotent)."""
     try:
-        from config_persist import ensure_dir
-        ensure_dir(getattr(settings, 'LOG_DIR', '/logs'))
-    except Exception:
+        d = str(getattr(settings, 'LOG_DIR', '/logs') or '/logs')
+        # Prefer shared helper when available
         try:
-            d = getattr(settings, 'LOG_DIR', '/logs')
-            try:
-                os.stat(d)
-            except Exception:
-                os.mkdir(d)
+            from config_persist import ensure_dir
+            ensure_dir(d)
+            return
         except Exception:
             pass
+        # CPython-friendly: mkdir -p semantics
+        try:
+            if hasattr(os, "makedirs"):
+                os.makedirs(d, exist_ok=True)  # type: ignore[arg-type]
+                return
+        except Exception:
+            pass
+        # MicroPython fallback
+        try:
+            os.stat(d)
+        except Exception:
+            os.mkdir(d)
+    except Exception:
+        pass
 
 def append_to_backlog(payload):
     checkLogDirectory()
@@ -1364,6 +1375,12 @@ async def periodic_provision_check():
 
     while True:
         try:
+            # NEW: ensure LOG_DIR exists before any flag/guard writes (prevents endless soft-reset loops on Zero)
+            try:
+                checkLogDirectory()
+            except Exception:
+                pass
+
             try:
                 flag_exists = False
                 try:
