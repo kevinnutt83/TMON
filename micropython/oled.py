@@ -27,7 +27,8 @@ RENDER_INTERVAL_S = 0.5
 MAX_TEXT_CHARS = 16
 
 # Simple SSD1309 driver (robust for 128x64)
-if framebuf is not None and not IS_ZERO:
+# CHANGED: allow SSD1309 on Zero too; rely on I2C init below to decide if it can actually run.
+if framebuf is not None:
 	class SSD1309_I2C(framebuf.FrameBuffer):
 		def __init__(self, width, height, i2c, addr=0x3C, external_vcc=False):
 			self.i2c = i2c
@@ -111,14 +112,98 @@ if framebuf is not None and not IS_ZERO:
 else:
 	SSD1309_I2C = None  # CHANGED: allow import on Zero
 
+# CHANGED: cross-platform I2C init for MicroPython + Zero/CPython.
+def _log_oled_init(msg):
+	try:
+		print(msg)
+	except Exception:
+		pass
+
+class _SmbusI2C:
+	"""CPython fallback I2C wrapper that provides writeto/writevto used by SSD1309_I2C."""
+	def __init__(self, bus_num=1):
+		self._bus = None
+		self._bus_num = int(bus_num)
+		# Prefer smbus2 (supports i2c_rdwr); fallback to smbus if present.
+		try:
+			import smbus2  # type: ignore
+			self._smbus2 = smbus2
+			self._bus = smbus2.SMBus(self._bus_num)
+		except Exception:
+			self._smbus2 = None
+			try:
+				import smbus  # type: ignore
+				self._bus = smbus.SMBus(self._bus_num)
+			except Exception:
+				self._bus = None
+
+	def writeto(self, addr, buf):
+		if not self._bus:
+			raise OSError("smbus not available")
+		a = int(addr) & 0x7F
+		b = bytes(buf) if not isinstance(buf, (bytes, bytearray)) else buf
+		if self._smbus2:
+			msg = self._smbus2.i2c_msg.write(a, b)
+			self._bus.i2c_rdwr(msg)
+		else:
+			# Best-effort: write as a "block" with first byte as command; works for many adapters.
+			if not b:
+				return
+			cmd = b[0]
+			data = list(b[1:]) if len(b) > 1 else []
+			try:
+				self._bus.write_i2c_block_data(a, cmd, data)
+			except Exception:
+				# Last resort: byte-at-a-time
+				for bb in b:
+					self._bus.write_byte(a, int(bb))
+
+	def writevto(self, addr, bufs):
+		out = b""
+		for part in bufs:
+			if part:
+				out += bytes(part) if not isinstance(part, (bytes, bytearray)) else part
+		self.writeto(addr, out)
+
+def _init_oled_i2c():
+	# 1) MicroPython-style hardware I2C with explicit pins (common on ESP32/Pico)
+	try:
+		Pin = getattr(machine, "Pin", None)
+		I2C = getattr(machine, "I2C", None)
+		if Pin and I2C:
+			return I2C(1, scl=Pin(I2C_B_SCL_PIN), sda=Pin(I2C_B_SDA_PIN), freq=100000)
+	except Exception:
+		pass
+
+	# 2) MicroPython SoftI2C fallback
+	try:
+		Pin = getattr(machine, "Pin", None)
+		SoftI2C = getattr(machine, "SoftI2C", None)
+		if Pin and SoftI2C:
+			return SoftI2C(scl=Pin(I2C_B_SCL_PIN), sda=Pin(I2C_B_SDA_PIN), freq=100000)
+	except Exception:
+		pass
+
+	# 3) Zero/CPython fallback: use smbus2/smbus on I2C bus 1
+	try:
+		if IS_ZERO:
+			return _SmbusI2C(1)
+	except Exception:
+		pass
+
+	return None
+
 # Initialize OLED if enabled
 oled = None
 if getattr(settings, 'ENABLE_OLED', False) and SSD1309_I2C is not None:
 	try:
-		i2c = machine.I2C(1, scl=machine.Pin(I2C_B_SCL_PIN), sda=machine.Pin(I2C_B_SDA_PIN), freq=100000)
-		oled = SSD1309_I2C(128, 64, i2c, addr=0x3C)
+		i2c = _init_oled_i2c()
+		if i2c:
+			oled = SSD1309_I2C(128, 64, i2c, addr=0x3C)
+		else:
+			oled = None
 	except Exception as e:
-		print(f"[ERROR] OLED init failed: {e}")
+		_log_oled_init("[ERROR] OLED init failed: {}".format(e))
 		oled = None
 
 # Utils
@@ -449,9 +534,13 @@ async def _render_loop(page=0):
 # Public APIs
 async def show_header():
     global _render_task
-    if _render_task is None or _render_task.done():
+    # CHANGED: tolerate uasyncio Task variants without .done()
+    try:
+        task_done = (_render_task is not None) and bool(getattr(_render_task, "done", lambda: False)())
+    except Exception:
+        task_done = False
+    if _render_task is None or task_done:
         _render_task = asyncio.create_task(_render_loop())
-    # footer loop not separate anymore; header start ensures full renderer runs
     return True
 
 async def display_message(message, display_time_s=0):
