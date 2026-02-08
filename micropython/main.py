@@ -571,6 +571,15 @@ async def startup():
         except Exception:
             provision = None
 
+        # NEW: ensure MACHINE_ID exists on Zero so provisioning/check-in can proceed
+        try:
+            if not str(getattr(settings, "MACHINE_ID", "") or "").strip():
+                mid = get_machine_id()
+                if mid:
+                    settings.MACHINE_ID = mid
+        except Exception:
+            pass
+
         interval = int(getattr(settings, "PROVISION_CHECK_INTERVAL_S", 30) or 30)
 
         while True:

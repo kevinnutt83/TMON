@@ -1,61 +1,51 @@
 """
 CPython/Zero shim for MicroPython's uasyncio API.
 
-This module exists because some firmware modules import uasyncio directly.
-On MicroPython, the built-in/frozen uasyncio should be used.
-On CPython (Zero), we map the subset used by this repo onto asyncio.
+On CPython/Zero: re-export asyncio primitives so legacy `import uasyncio as asyncio` keeps working.
+On MicroPython: this file is expected to be ignored in favor of the built-in/frozen uasyncio.
 """
 
-import sys
+import sys as _sys
 
 try:
-    _is_mpy = str(getattr(sys.implementation, "name", "")).lower() == "micropython"
+    _is_mpy = str(getattr(_sys.implementation, "name", "")).lower() == "micropython"
 except Exception:
     _is_mpy = False
 
-if _is_mpy:
-    # On MicroPython, prefer the real uasyncio (frozen). If this file is loaded anyway,
-    # provide a minimal compatible surface using whatever is available.
-    try:
-        import uasyncio as _ua  # type: ignore  # may resolve to frozen module on some ports
-    except Exception:
-        _ua = None  # type: ignore
+try:
+    import asyncio as _a  # CPython asyncio; also exists on some MicroPython builds
+except Exception:
+    _a = None  # type: ignore
 
-    if _ua is not None:
-        # Re-export commonly used names
-        sleep = _ua.sleep
-        sleep_ms = getattr(_ua, "sleep_ms", None)
-        create_task = _ua.create_task
-        Lock = getattr(_ua, "Lock", None)
-        Event = getattr(_ua, "Event", None)
-        get_event_loop = getattr(_ua, "get_event_loop", None)
-
-        def run(coro):
-            return _ua.run(coro)
-    else:
-        raise ImportError("uasyncio unavailable on this MicroPython build")
+if _a is None:
+    # Minimal placeholders (should not be used in normal firmware paths)
+    class CancelledError(Exception):
+        pass
+    def get_event_loop(): raise NotImplementedError("asyncio unavailable")
+    def run(_coro): raise NotImplementedError("asyncio unavailable")
+    def create_task(_coro): raise NotImplementedError("asyncio unavailable")
+    async def sleep(_s): return None
+    class Lock:
+        def __init__(self): raise NotImplementedError("asyncio unavailable")
 else:
-    import asyncio as _a  # CPython
-
-    sleep = _a.sleep
-
-    async def sleep_ms(ms: int):
-        return await _a.sleep(float(ms) / 1000.0)
-
-    create_task = _a.create_task
-    Lock = _a.Lock
-    Event = _a.Event
-    get_event_loop = _a.get_event_loop
-
-    def run(coro):
-        return _a.run(coro)
+    CancelledError = getattr(_a, "CancelledError", Exception)
+    Lock = getattr(_a, "Lock")
+    Event = getattr(_a, "Event", None)
+    Queue = getattr(_a, "Queue", None)
+    create_task = getattr(_a, "create_task")
+    sleep = getattr(_a, "sleep")
+    gather = getattr(_a, "gather", None)
+    get_event_loop = getattr(_a, "get_event_loop")
+    run = getattr(_a, "run")
 
 __all__ = [
-    "sleep",
-    "sleep_ms",
-    "create_task",
+    "CancelledError",
     "Lock",
     "Event",
+    "Queue",
+    "create_task",
+    "sleep",
+    "gather",
     "get_event_loop",
     "run",
 ]

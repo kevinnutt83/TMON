@@ -653,6 +653,8 @@ Firmware (Micropython) — Optimization Plan
 - [🔄] Zero: prevent MicroPython-style provisioning loop from running on Zero (duplicate task) and restart cleanly when `machine.soft_reset()` is raised inside a task (no "Task exception was never retrieved").
   - Repro (current): `SystemExit('soft_reset requested')` raised from `utils.periodic_provision_check()` shows as un-retrieved task exception.
   - Fix: install Zero asyncio exception handler to restart process on `soft_reset requested`.
+- [⏳] Zero: provide a stable `machine.unique_id()`/`MACHINE_ID` source (e.g., `/etc/machine-id`) so provisioning/check-in actually attempt HTTP.
+- [⏳] Zero: wprest missing `_http_allowed_for_node()` caused check-in/provision callouts to short-circuit under broad exception handlers.
 
 Testing
 - [ ] Verify UC hourly backfill populates devices when Admin is reachable.

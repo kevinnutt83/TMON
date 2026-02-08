@@ -38,9 +38,13 @@ IS_ZERO = MCU_TYPE == "zero"
 IS_MICROPYTHON = (getattr(sys.implementation, "name", "") == "micropython") and not IS_ZERO
 
 # --- asyncio ---
-try:
-    import uasyncio as asyncio  # type: ignore
-except Exception:
+# CHANGED: On Zero/CPython, prefer stdlib asyncio explicitly (avoid importing a local uasyncio.py shim accidentally).
+if IS_MICROPYTHON:
+    try:
+        import uasyncio as asyncio  # type: ignore
+    except Exception:
+        import asyncio  # type: ignore
+else:
     import asyncio  # type: ignore
 
 # --- json ---
@@ -171,6 +175,27 @@ except Exception:
             def read_u16(self): return 0
 
         def unique_id():
+            # CHANGED: provide stable identity on Zero so utils.get_machine_id() is non-empty.
+            try:
+                if IS_ZERO:
+                    try:
+                        with open("/etc/machine-id", "r") as f:
+                            mid = (f.read() or "").strip()
+                    except Exception:
+                        mid = ""
+                    if not mid:
+                        try:
+                            import uuid as _uuid  # type: ignore
+                            mid = hex(int(_uuid.getnode()))[2:]
+                        except Exception:
+                            mid = ""
+                    try:
+                        import hashlib as _hh  # type: ignore
+                        return _hh.sha256(mid.encode("utf-8")).digest()[:12]
+                    except Exception:
+                        return (mid or "0").encode("utf-8")[:12]
+            except Exception:
+                pass
             return b""
 
         def soft_reset():
