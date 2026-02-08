@@ -73,11 +73,42 @@ def _attempt_endpoint(base_url, endpoint, params=None, json_body=None, timeout=R
             return None, "no_response"
 
         code = getattr(resp, "status_code", None)
+
+        # CHANGED: read/parse body BEFORE closing resp (works for both requests and urequests variants).
+        parsed = None
         text = ""
         try:
-            text = getattr(resp, "text", "") or ""
+            # Prefer response-provided json() when available
+            if hasattr(resp, "json") and callable(getattr(resp, "json")):
+                try:
+                    parsed = resp.json()
+                except Exception:
+                    parsed = None
         except Exception:
-            text = ""
+            parsed = None
+
+        if parsed is None:
+            # Try .text then .content (requests) then .content-like (urequests)
+            try:
+                text = getattr(resp, "text", "") or ""
+            except Exception:
+                text = ""
+            if not text:
+                raw = b""
+                try:
+                    raw = getattr(resp, "content", b"") or b""
+                except Exception:
+                    raw = b""
+                if raw:
+                    try:
+                        text = raw.decode("utf-8", "ignore")
+                    except Exception:
+                        text = ""
+            if text:
+                try:
+                    parsed = json.loads(text)
+                except Exception:
+                    parsed = None
 
         try:
             resp.close()
@@ -87,13 +118,9 @@ def _attempt_endpoint(base_url, endpoint, params=None, json_body=None, timeout=R
         if code not in (200, 201):
             return None, "http_error_%s" % code
 
-        try:
-            return getattr(resp, "json")(), None  # type: ignore[misc]
-        except Exception:
-            try:
-                return json.loads(text or "{}"), None
-            except Exception as e:
-                return None, str(e)
+        if isinstance(parsed, (dict, list)):
+            return parsed, None
+        return None, "json_parse_failed"
 
     except Exception as e:
         return None, str(e)
