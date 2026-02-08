@@ -191,7 +191,7 @@ zero_pins = {
     "I2C_A_SDA_PIN": 2,
     "I2C_B_SCL_PIN": 6,
     "I2C_B_SDA_PIN": 5,
-    "SPI_BUS": 0,
+    "SPI_BUS": 27,
     "CLK_PIN": 11,
     "MOSI_PIN": 10,
     "MISO_PIN": 9,
@@ -676,4 +676,5 @@ LORA_SINGLE_FRAME_RETRIES = 2
 # NEW: explicit lists for handling chunk send errors
 LORA_CHUNK_SHRINK_CODES = [-4]            # codes that indicate "packet too long" and should trigger chunk size shrink
 LORA_CHUNK_TRANSIENT_CODES = [86, 87, 89] # codes considered transient — retry the chunk rather than shrink
+
 LORA_CHUNK_FATAL_CODES = [-2, -3]        # codes that indicate fatal errors — abort chunked transfer
