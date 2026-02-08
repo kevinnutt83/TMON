@@ -83,3 +83,27 @@ async def warn(msg, category=None):
 
 async def error(msg, category=None):
     await log(msg, 'ERROR', category)
+
+"""
+Minimal debug helpers (compatible with MicroPython + CPython/Zero).
+"""
+
+def info(msg):
+	try:
+		print(f"[INFO] {msg}")
+	except Exception:
+		pass
+
+def warn(msg):
+	try:
+		print(f"[WARN] {msg}")
+	except Exception:
+		pass
+
+def error(msg):
+	try:
+		print(f"[ERROR] {msg}")
+	except Exception:
+		pass
+
+__all__ = ["info", "warn", "error"]

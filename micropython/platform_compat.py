@@ -111,14 +111,20 @@ try:
     else:
         raise ImportError()
 except Exception:
-    # Prefer machine_compat if present
+    # Prefer machine_compat if present (but only if it provides the attributes we rely on)
     _mc = None
     try:
         import machine_compat as _mc  # type: ignore
     except Exception:
         _mc = None
 
-    if _mc is not None:
+    def _mc_ok(mod) -> bool:
+        try:
+            return all(hasattr(mod, k) for k in ("Pin", "I2C", "SPI", "UART", "ADC", "unique_id", "soft_reset"))
+        except Exception:
+            return False
+
+    if _mc is not None and _mc_ok(_mc):
         machine = _mc  # type: ignore[assignment]
         try:
             sys.modules.setdefault("machine", _mc)

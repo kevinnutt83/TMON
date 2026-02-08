@@ -783,17 +783,19 @@ async def poll_device_commands():
             # handle them best-effort
             for c in (commands or []):
                 try:
-                    # Try to call local handler (if implemented elsewhere)
                     from commands import handle_command as _hc
                     try:
                         await _hc(c)
                     except Exception:
                         pass
                 except Exception:
-                    # No local handler; queue confirm attempt as pending
                     try:
-                        # best-effort confirm as received
-                        await _queue_command_confirm({'job_id': c.get('id') if isinstance(c, dict) else None, 'ok': True, 'result': 'handled_locally_not_implemented'})
+                        # CHANGED: _queue_command_confirm is sync; do not await it
+                        _queue_command_confirm({
+                            'job_id': c.get('id') if isinstance(c, dict) else None,
+                            'ok': True,
+                            'result': 'handled_locally_not_implemented'
+                        })
                     except Exception:
                         pass
             return commands
