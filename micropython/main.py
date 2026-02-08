@@ -660,25 +660,35 @@ async def main():
             except Exception:
                 pass
 
-            await asyncio.sleep(10)
-
             try:
-                now_ms = time.ticks_ms()
-                if time.ticks_diff(now_ms, _last_gc_ms) >= _gc_interval_ms:
-                    await runGC()
-                    _last_gc_ms = now_ms
+                await asyncio.sleep(10)
+            except Exception as e:
+                # CHANGED: On CPython, Ctrl+C cancels pending awaits and surfaces as CancelledError.
+                try:
+                    if type(e).__name__ == "CancelledError":
+                        return
+                except Exception:
+                    pass
+                raise
+
+            # ...existing code...
+        except Exception as e:
+            try:
+                if type(e).__name__ == "CancelledError":
+                    return
             except Exception:
                 pass
-        except Exception:
             await asyncio.sleep(5)
 
 if __name__ == "__main__":
-    # CHANGED: On Zero, treat machine.soft_reset()->SystemExit as a "restart" (preserves reset semantics)
+    # CHANGED: On Zero, treat Ctrl+C as a clean exit (no traceback).
     try:
         if IS_ZERO_RUNTIME:
             while True:
                 try:
                     asyncio.run(main())
+                    break
+                except KeyboardInterrupt:
                     break
                 except SystemExit as e:
                     if "soft_reset requested" in str(e):
@@ -688,7 +698,10 @@ if __name__ == "__main__":
                             raise
                     raise
         else:
-            asyncio.run(main())
+            try:
+                asyncio.run(main())
+            except KeyboardInterrupt:
+                pass
     except Exception:
         # ...existing code...
         try:

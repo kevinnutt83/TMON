@@ -1,30 +1,29 @@
 """
-CPython/Linux compatibility shim for MicroPython `framebuf`.
+Minimal CPython/Zero-compatible shim for MicroPython's framebuf module.
 
-This is intentionally minimal: it only supports the attributes/methods
-used by `oled.py` so the module can import on MCU_TYPE="zero".
+Only implements the surface used by oled.py when imported.
 """
 
 MONO_VLSB = 0
 
 class FrameBuffer:
-	def __init__(self, buffer, width, height, fmt=MONO_VLSB):
-		self.buffer = buffer
-		self.width = int(width)
-		self.height = int(height)
-		self.fmt = fmt
+    def __init__(self, buffer, width, height, format=MONO_VLSB):
+        self.buffer = buffer
+        self.width = int(width)
+        self.height = int(height)
+        self.format = format
 
-	def fill(self, *_a, **_kw): 
-		return None
+    def fill(self, c):
+        return None
 
-	def pixel(self, *_a, **_kw):
-		return None
+    def pixel(self, x, y, c=None):
+        return 0
 
-	def rect(self, *_a, **_kw):
-		return None
+    def text(self, s, x, y, c=1):
+        return None
 
-	def fill_rect(self, *_a, **_kw):
-		return None
+    def rect(self, x, y, w, h, c):
+        return None
 
-	def text(self, *_a, **_kw):
-		return None
+    def fill_rect(self, x, y, w, h, c):
+        return None

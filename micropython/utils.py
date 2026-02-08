@@ -391,6 +391,73 @@ async def debug_print(message, status="INFO"):
     except Exception:
         pass
 
+# --- LED support (restored) ---
+color_to_duty = {
+    'white': (255, 255, 255),
+    'red': (255, 0, 0),
+    'blue': (0, 0, 255),
+    'green': (0, 255, 0),
+    'yellow': (255, 255, 0),
+    'cyan': (0, 255, 255),
+    'magenta': (255, 0, 255),
+    'orange': (255, 128, 0),
+    'purple': (128, 0, 255),
+    'pink': (255, 128, 128),
+    'lime': (128, 255, 0),
+    'teal': (0, 128, 128),
+    'lavender': (128, 0, 128),
+    'brown': (128, 64, 0),
+    'beige': (255, 192, 128),
+    'maroon': (128, 0, 0),
+    'olive': (128, 128, 0),
+    'navy': (0, 0, 128),
+    'grey': (128, 128, 128),
+    'black': (0, 0, 0),
+    'light_blue': (173, 216, 230),  # Light blue (sky-like)
+    'dark_blue': (0, 0, 139),      # Dark blue (close to navy but deeper)
+    'light_green': (144, 238, 144),  # Light green
+    'dark_green': (0, 100, 0),     # Dark green (forest)
+    'light_yellow': (255, 255, 224),  # Light yellow (lemon chiffon)
+    'dark_red': (139, 0, 0),       # Dark red (crimson-like)
+    'indigo': (75, 0, 130),        # Indigo
+    'violet': (238, 130, 238),     # Violet
+    'turquoise': (64, 224, 208),   # Turquoise
+    'gold': (255, 215, 0),         # Gold
+    'silver': (192, 192, 192),     # Silver (light gray)
+    'coral': (255, 127, 80),       # Coral
+    'salmon': (250, 128, 114),     # Salmon
+    'khaki': (240, 230, 140),      # Khaki
+    'sienna': (160, 82, 45),       # Sienna (earthy brown)
+    'chocolate': (210, 105, 30),   # Chocolate brown
+    'tan': (210, 180, 140),        # Tan
+    'plum': (221, 160, 221),       # Plum (light purple)
+    'orchid': (218, 112, 214),     # Orchid
+    'azure': (240, 255, 255),      # Azure (light cyan)
+    'mint': (189, 252, 201),       # Mint green
+    'chartreuse': (127, 255, 0),   # Chartreuse (alternative to your lime)
+    'fuchsia': (255, 0, 255),      # Fuchsia (same as magenta, but added for completeness)
+    'crimson': (220, 20, 60),      # Crimson
+    'aqua': (0, 255, 255),         # Aqua (same as cyan)
+    'sky_blue': (135, 206, 235),   # Sky blue
+    'forest_green': (34, 139, 34), # Forest green
+    'dark_orange': (255, 140, 0),  # Dark orange
+    'hot_pink': (255, 105, 180),   # Hot pink
+    'dark_purple': (148, 0, 211),  # Dark violet/purple
+    'light_grey': (211, 211, 211), # Light gray
+    'dark_grey': (169, 169, 169),  # Dark gray
+    'ivory': (255, 255, 240),      # Ivory (off-white)
+    'snow': (255, 250, 250)        # Snow (another off-white)
+}
+
+led_lock = asyncio.Lock()
+
+def set_color(rgb_led, color):
+    try:
+        rgb_led[0] = color
+        rgb_led.write()
+    except Exception:
+        pass
+
 async def flash_led(num_flashes, interval, lightColor, pattern):
     # CHANGED: use platform_compat so Zero/CPython can run (and MicroPython keeps real neopixel)
     from platform_compat import NeoPixel, machine

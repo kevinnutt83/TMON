@@ -28,7 +28,6 @@ def _mcu_type() -> str:
             return v
     except Exception:
         pass
-    # Fallback: infer from interpreter
     try:
         return "zero" if getattr(sys.implementation, "name", "") != "micropython" else "esp32"
     except Exception:
@@ -36,7 +35,7 @@ def _mcu_type() -> str:
 
 MCU_TYPE = _mcu_type()
 IS_ZERO = MCU_TYPE == "zero"
-IS_MICROPYTHON = not IS_ZERO and (getattr(sys.implementation, "name", "") == "micropython")
+IS_MICROPYTHON = (getattr(sys.implementation, "name", "") == "micropython") and not IS_ZERO
 
 # --- asyncio ---
 try:
@@ -69,7 +68,6 @@ try:
 except Exception:
     import time as _time  # type: ignore
 
-# Provide MicroPython-style APIs when running on CPython.
 if not hasattr(_time, "ticks_ms"):
     _t0 = _time.monotonic()
 
@@ -102,112 +100,88 @@ if gc and not hasattr(gc, "mem_free"):
         return 0
     gc.mem_free = _mem_free  # type: ignore[attr-defined]
 
-# --- machine/network/framebuf (MicroPython-only) + stubs ---
+# --- machine (MicroPython-only) + stubs ---
 try:
     if IS_MICROPYTHON:
         import machine as machine  # type: ignore
     else:
         raise ImportError()
 except Exception:
-    # CHANGED: On Zero/CPython, prefer the richer compatibility shim so get_machine_id()
-    # can derive a stable identity via machine.unique_id().
+    # Prefer machine_compat if present
     _mc = None
     try:
         import machine_compat as _mc  # type: ignore
     except Exception:
-        try:
-            from micropython import machine_compat as _mc  # type: ignore
-        except Exception:
-            _mc = None
+        _mc = None
 
     if _mc is not None:
         machine = _mc  # type: ignore[assignment]
         try:
-            sys.modules.setdefault("machine", _mc)  # allow "import machine"
+            sys.modules.setdefault("machine", _mc)
         except Exception:
             pass
     else:
         machine = types.SimpleNamespace()
 
-        class Pin:  # minimal no-op stub
+        class Pin:
             IN = 0
             OUT = 1
             PULL_UP = 2
             PULL_DOWN = 3
-
             def __init__(self, *args, **kwargs):
                 self._v = 0
-
             def value(self, v=None):
                 if v is None:
                     return self._v
                 self._v = 1 if v else 0
                 return self._v
+            def init(self, *a, **k):
+                return None
 
-        class UART:  # minimal no-op stub
-            def __init__(self, *args, **kwargs):
-                pass
+        class UART:
+            def __init__(self, *args, **kwargs): pass
+            def write(self, *args, **kwargs): return 0
+            def any(self): return 0
+            def read(self, *args, **kwargs): return b""
 
-            def write(self, *args, **kwargs):
-                return 0
-
-            def any(self):
-                return 0
-
-            def read(self, *args, **kwargs):
-                return b""
-
-        class I2C:  # minimal no-op stub
-            def __init__(self, *args, **kwargs):
-                pass
-
-            def writeto_mem(self, *args, **kwargs):
-                return 0
-
+        class I2C:
+            def __init__(self, *args, **kwargs): pass
+            def writeto(self, *args, **kwargs): return 0
+            def writeto_mem(self, *args, **kwargs): return 0
             def readfrom_mem(self, addr, mem, n, *args, **kwargs):
                 try:
                     n = int(n)
                 except Exception:
                     n = 0
                 return bytes([0] * max(0, n))
-
-        class SPI:  # minimal no-op stub
-            def __init__(self, *args, **kwargs):
-                pass
-
-            def init(self, *args, **kwargs):
-                return None
-
-            def write(self, *args, **kwargs):
-                return None
-
-            def read(self, nbytes, *args, **kwargs):
-                return bytes([0] * int(nbytes))
-
-            def readinto(self, *args, **kwargs):
-                return None
-
-            def write_readinto(self, *args, **kwargs):
-                return None
-
-            def deinit(self, *args, **kwargs):
-                return None
-
-        class ADC:  # minimal no-op stub
-            def __init__(self, *args, **kwargs):
-                pass
-
-            def read_u16(self):
+            def writevto(self, *args, **kwargs):
                 return 0
 
+        class SPI:
+            def __init__(self, *args, **kwargs): pass
+            def init(self, *args, **kwargs): return None
+            def write(self, *args, **kwargs): return None
+            def read(self, nbytes, *args, **kwargs): return bytes([0] * int(nbytes))
+            def readinto(self, *args, **kwargs): return None
+            def write_readinto(self, *args, **kwargs): return None
+            def deinit(self, *args, **kwargs): return None
+
+        class ADC:
+            def __init__(self, *args, **kwargs): pass
+            def read_u16(self): return 0
+
+        def unique_id():
+            return b""
+
         def soft_reset():
-            return None
+            raise SystemExit("soft_reset requested")
 
         machine.Pin = Pin
         machine.UART = UART
         machine.I2C = I2C
         machine.SPI = SPI
         machine.ADC = ADC
+        machine.unique_id = unique_id
         machine.soft_reset = soft_reset
 
 Pin = getattr(machine, "Pin", None)
@@ -216,22 +190,21 @@ I2C = getattr(machine, "I2C", None)
 SPI = getattr(machine, "SPI", None)
 ADC = getattr(machine, "ADC", None)
 
+# --- network stub on Zero ---
 try:
     if IS_MICROPYTHON:
         import network as network  # type: ignore
     else:
         raise ImportError()
 except Exception:
-    # CHANGED: Provide a minimal network module on Zero so "import network" doesn't explode.
     network = types.ModuleType("network")
     network.STA_IF = 0  # type: ignore[attr-defined]
 
-    class WLAN:  # noqa: D401 - minimal stub
+    class WLAN:
         def __init__(self, iface):
             self.iface = iface
             self._active = False
             self._connected = False
-
         def active(self, v=None):
             if v is None:
                 return bool(self._active)
@@ -239,27 +212,21 @@ except Exception:
             if not self._active:
                 self._connected = False
             return bool(self._active)
-
         def isconnected(self):
             return bool(self._connected)
-
         def scan(self):
             return []
-
         def connect(self, *a, **kw):
             self._connected = False
             return None
-
         def ifconfig(self):
             return ("0.0.0.0", "0.0.0.0", "0.0.0.0", "0.0.0.0")
-
         def config(self, *a, **kw):
             if a and a[0] == "mac":
                 return b"\x00\x00\x00\x00\x00\x00"
             if a and a[0] == "rssi":
                 return -100
             return None
-
         def status(self, *a, **kw):
             if a and a[0] == "rssi":
                 return -100
@@ -271,22 +238,18 @@ except Exception:
     except Exception:
         pass
 
+# --- framebuf shim ---
 try:
     if IS_MICROPYTHON:
         import framebuf as framebuf  # type: ignore
     else:
         raise ImportError()
 except Exception:
-    # CHANGED: Provide framebuf shim on Zero so oled.py can import.
     _fb = None
     try:
         import framebuf_compat as _fb  # type: ignore
     except Exception:
-        try:
-            from micropython import framebuf_compat as _fb  # type: ignore
-        except Exception:
-            _fb = None
-
+        _fb = None
     framebuf = _fb
     if _fb is not None:
         try:
@@ -294,8 +257,7 @@ except Exception:
         except Exception:
             pass
 
-# NEW: On Zero/CPython, provide common MicroPython module names as aliases to stdlib/platform_compat.
-# This keeps other firmware modules import-safe without main.py patching sys.modules at runtime.
+# --- MicroPython module aliases on Zero ---
 if IS_ZERO:
     def _alias(name: str, mod) -> None:
         try:
@@ -311,28 +273,7 @@ if IS_ZERO:
     _alias("utime", time)
     _alias("uos", os)
 
-    try:
-        import binascii as _binascii
-        _alias("ubinascii", _binascii)
-    except Exception:
-        pass
-    try:
-        import hashlib as _hashlib
-        _alias("uhashlib", _hashlib)
-    except Exception:
-        pass
-    try:
-        import io as _io
-        _alias("uio", _io)
-    except Exception:
-        pass
-    try:
-        import select as _select
-        _alias("uselect", _select)
-    except Exception:
-        pass
-
-# NEW: NeoPixel compatibility (MicroPython: real neopixel; Zero/CPython: best-effort rpi_ws281x or no-op)
+# --- NeoPixel compatibility ---
 NeoPixel = None
 if IS_MICROPYTHON:
     try:
@@ -346,7 +287,6 @@ elif IS_ZERO:
         class NeoPixel:  # type: ignore[no-redef]
             def __init__(self, pin, n, bpp=3, timing=1):
                 self.n = int(n or 0)
-                # utils.py passes machine.Pin(...) -> try common attribute names, else int(pin)
                 gpio = None
                 for attr in ("pin", "id", "gpio", "_id"):
                     try:
@@ -358,9 +298,7 @@ elif IS_ZERO:
                     try:
                         gpio = int(pin)
                     except Exception:
-                        gpio = 18  # safe-ish default; caller should pass correct LED_PIN
-
-                # rpi_ws281x requires root + correct channel/pin wiring
+                        gpio = 18
                 self._strip = _PixelStrip(self.n, int(gpio), freq_hz=800000, dma=10, invert=False, brightness=255)
                 self._strip.begin()
 
@@ -369,7 +307,6 @@ elif IS_ZERO:
                     r, g, b = rgb
                 except Exception:
                     r = g = b = 0
-                # WS2812 commonly uses GRB ordering
                 self._strip.setPixelColor(int(i), _Color(int(g) & 255, int(r) & 255, int(b) & 255))
 
             def write(self):
@@ -382,16 +319,11 @@ elif IS_ZERO:
 
     except Exception:
         class NeoPixel:  # type: ignore[no-redef]
-            def __init__(self, *_a, **_kw):
-                self.n = int(_kw.get("n", 0) or (_a[1] if len(_a) > 1 else 0) or 0)
-            def __setitem__(self, *_a, **_kw):  # no-op
-                return None
-            def write(self):  # no-op
-                return None
-            def fill(self, *_a, **_kw):  # no-op
-                return None
+            def __init__(self, *_a, **_kw): self.n = 0
+            def __setitem__(self, *_a, **_kw): return None
+            def write(self): return None
+            def fill(self, *_a, **_kw): return None
 
-    # Ensure `from neopixel import NeoPixel` works on Zero
     try:
         _np_mod = types.ModuleType("neopixel")
         _np_mod.NeoPixel = NeoPixel  # type: ignore[attr-defined]
@@ -417,6 +349,5 @@ __all__ = [
     "ADC",
     "network",
     "framebuf",
-    # NEW
     "NeoPixel",
 ]

@@ -1,29 +1,5 @@
-# Firmware Version: v2.06.0
-from utils import debug_print
+"""
+TMON module placeholder.
 
-# --- GC: best-effort cleanup after module import / heavy init ---
-try:
-    import gc
-    gc.collect()
-except Exception:
-    pass
-
-async def frostwatchCheck():
-    await debug_print(f"Frostwatch Checks", "FROSTWATCH")
-
-async def heatwatchCheck():
-    await debug_print(f"Heatwatch Checks", "HEATWATCH")
-
-async def beginFrostOperations():
-    await debug_print(f"Frostwatch Operations Start", "FROSTWATCH")
-    pass
-
-async def beginHeatOperations():
-    await debug_print(f"Heatwatch Operations Start", "HEATWATCH")
-    pass
-
-async def endFrostOperations():
-    pass
-
-async def endHeatOperations():
-    pass
+This file exists to reserve the module name and keep imports stable across platforms.
+"""

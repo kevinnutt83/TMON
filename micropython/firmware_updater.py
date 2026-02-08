@@ -245,3 +245,16 @@ def download_and_apply_firmware(url, version_hint=None, target_path=None, chunk_
 
 # Export helper
 __all__ = ['download_and_apply_firmware']
+
+"""
+Optional firmware updater hook.
+
+Provisioning calls this if present; keep it as a no-op unless/until a real implementation is added.
+"""
+
+def download_and_apply_firmware(url, version_hint=None, chunk_size=1024):
+    try:
+        print("firmware_updater: no-op download_and_apply_firmware:", url, version_hint)
+    except Exception:
+        pass
+    return True

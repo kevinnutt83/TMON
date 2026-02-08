@@ -1,36 +1,61 @@
 """
-CPython shim for MicroPython's `uasyncio`.
+CPython/Zero shim for MicroPython's uasyncio API.
 
-Purpose: allow TMON firmware modules that do `import uasyncio as asyncio`
-to run under Python 3 on Raspberry Pi Zero.
-
-This intentionally implements only the small surface used in this repo.
+This module exists because some firmware modules import uasyncio directly.
+On MicroPython, the built-in/frozen uasyncio should be used.
+On CPython (Zero), we map the subset used by this repo onto asyncio.
 """
 
-import asyncio as _a
+import sys
 
-# Commonly used API surface
-sleep = _a.sleep
-gather = _a.gather
-create_task = _a.create_task
-CancelledError = _a.CancelledError
-TimeoutError = _a.TimeoutError
+try:
+    _is_mpy = str(getattr(sys.implementation, "name", "")).lower() == "micropython"
+except Exception:
+    _is_mpy = False
 
-Lock = _a.Lock
-Event = _a.Event
+if _is_mpy:
+    # On MicroPython, prefer the real uasyncio (frozen). If this file is loaded anyway,
+    # provide a minimal compatible surface using whatever is available.
+    try:
+        import uasyncio as _ua  # type: ignore  # may resolve to frozen module on some ports
+    except Exception:
+        _ua = None  # type: ignore
 
-def get_event_loop():
-	# Python 3.10+: get_event_loop is deprecated in some contexts; keep compatibility.
-	try:
-		return _a.get_event_loop()
-	except RuntimeError:
-		loop = _a.new_event_loop()
-		_a.set_event_loop(loop)
-		return loop
+    if _ua is not None:
+        # Re-export commonly used names
+        sleep = _ua.sleep
+        sleep_ms = getattr(_ua, "sleep_ms", None)
+        create_task = _ua.create_task
+        Lock = getattr(_ua, "Lock", None)
+        Event = getattr(_ua, "Event", None)
+        get_event_loop = getattr(_ua, "get_event_loop", None)
 
-def run(coro):
-	return _a.run(coro)
+        def run(coro):
+            return _ua.run(coro)
+    else:
+        raise ImportError("uasyncio unavailable on this MicroPython build")
+else:
+    import asyncio as _a  # CPython
 
-# Convenience helpers occasionally used in MicroPython code
-async def sleep_ms(ms):
-	await _a.sleep(float(ms) / 1000.0)
+    sleep = _a.sleep
+
+    async def sleep_ms(ms: int):
+        return await _a.sleep(float(ms) / 1000.0)
+
+    create_task = _a.create_task
+    Lock = _a.Lock
+    Event = _a.Event
+    get_event_loop = _a.get_event_loop
+
+    def run(coro):
+        return _a.run(coro)
+
+__all__ = [
+    "sleep",
+    "sleep_ms",
+    "create_task",
+    "Lock",
+    "Event",
+    "get_event_loop",
+    "run",
+]
