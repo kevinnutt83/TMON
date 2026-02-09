@@ -187,11 +187,11 @@ zero_pins = {
     "RELAY_PIN6": None,
     "RELAY_PIN7": None,
     "RELAY_PIN8": None,
-    "I2C_A_SCL_PIN": 3,
-    "I2C_A_SDA_PIN": 2,
-    "I2C_B_SCL_PIN": 6,
-    "I2C_B_SDA_PIN": 5,
-    "SPI_BUS": 27,
+    "I2C_A_SCL_PIN": 20,
+    "I2C_A_SDA_PIN": 21,
+    "I2C_B_SCL_PIN": 5,
+    "I2C_B_SDA_PIN": 6,
+    "SPI_BUS": 0,
     "CLK_PIN": 11,
     "MOSI_PIN": 10,
     "MISO_PIN": 9,
@@ -204,6 +204,7 @@ zero_pins = {
     "CH2_TX_PIN": 22,
     "CH2_RX_PIN": 23,
 }
+
 
 
 # Assign pins based on MCU_TYPE

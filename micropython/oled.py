@@ -13,14 +13,14 @@ except Exception:
 	_IS_CPYTHON = False
 
 try:
-	_IS_ZERO_SETTINGS = str(getattr(settings, "MCU_TYPE", "")).lower() == "zero"
+	_MCU_TYPE = str(getattr(settings, "MCU_TYPE", "") or "").lower().strip()
 except Exception:
-	_IS_ZERO_SETTINGS = False
+	_MCU_TYPE = ""
 
 try:
-	IS_ZERO_RUNTIME = bool(IS_ZERO) or _IS_ZERO_SETTINGS or _IS_CPYTHON
+	IS_ZERO_RUNTIME = (_MCU_TYPE == "zero") or bool(IS_ZERO) or _IS_CPYTHON
 except Exception:
-	IS_ZERO_RUNTIME = _IS_ZERO_SETTINGS or _IS_CPYTHON
+	IS_ZERO_RUNTIME = (_MCU_TYPE == "zero") or _IS_CPYTHON
 
 # Prefer a usable framebuf module (native on MicroPython; shim on CPython/Zero)
 try:
@@ -177,30 +177,33 @@ class _SmbusI2C:
 		self.writeto(addr, out)
 
 def _init_oled_i2c():
-	# 1) MicroPython-style hardware I2C with explicit pins (common on ESP32/Pico)
-	try:
-		Pin = getattr(machine, "Pin", None)
-		I2C = getattr(machine, "I2C", None)
-		if Pin and I2C:
-			return I2C(1, scl=Pin(I2C_B_SCL_PIN), sda=Pin(I2C_B_SDA_PIN), freq=100000)
-	except Exception:
-		pass
+	# 1) MicroPython boards: use machine I2C/SoftI2C with configured pins.
+	if _MCU_TYPE in ("esp32", "pico", "") and not IS_ZERO_RUNTIME:
+		try:
+			Pin = getattr(machine, "Pin", None)
+			I2C = getattr(machine, "I2C", None)
+			if Pin and I2C:
+				return I2C(1, scl=Pin(I2C_B_SCL_PIN), sda=Pin(I2C_B_SDA_PIN), freq=100000)
+		except Exception:
+			pass
+		try:
+			Pin = getattr(machine, "Pin", None)
+			SoftI2C = getattr(machine, "SoftI2C", None)
+			if Pin and SoftI2C:
+				return SoftI2C(scl=Pin(I2C_B_SCL_PIN), sda=Pin(I2C_B_SDA_PIN), freq=100000)
+		except Exception:
+			pass
 
-	# 2) MicroPython SoftI2C fallback
-	try:
-		Pin = getattr(machine, "Pin", None)
-		SoftI2C = getattr(machine, "SoftI2C", None)
-		if Pin and SoftI2C:
-			return SoftI2C(scl=Pin(I2C_B_SCL_PIN), sda=Pin(I2C_B_SDA_PIN), freq=100000)
-	except Exception:
-		pass
-
-	# 3) Zero/CPython fallback: use smbus2/smbus on I2C bus 1
-	try:
-		if IS_ZERO_RUNTIME:
-			return _SmbusI2C(1)
-	except Exception:
-		pass
+	# 2) Zero/CPython: use SMBus on configured bus number (default 1).
+	if _MCU_TYPE == "zero" or IS_ZERO_RUNTIME:
+		try:
+			bus_num = int(getattr(settings, "OLED_I2C_BUS", 1) or 1)
+		except Exception:
+			bus_num = 1
+		try:
+			return _SmbusI2C(bus_num)
+		except Exception:
+			return None
 
 	return None
 
@@ -210,12 +213,50 @@ if getattr(settings, 'ENABLE_OLED', False) and SSD1309_I2C is not None:
 	try:
 		i2c = _init_oled_i2c()
 		if i2c:
-			oled = SSD1309_I2C(128, 64, i2c, addr=0x3C)
+			oled = SSD1309_I2C(128, 64, i2c, addr=int(getattr(settings, "OLED_I2C_ADDR", 0x3C)))
 		else:
 			oled = None
 	except Exception as e:
 		_log_oled_init("[ERROR] OLED init failed: {}".format(e))
 		oled = None
+
+# NEW: restore constants/state used by render loop
+OLED_W = 128
+OLED_H = 64
+try:
+	HEADER_HEIGHT = int(getattr(settings, "OLED_HEADER_HEIGHT", 16) or 16)
+except Exception:
+	HEADER_HEIGHT = 16
+try:
+	FOOTER_HEIGHT = int(getattr(settings, "OLED_FOOTER_HEIGHT", 12) or 12)
+except Exception:
+	FOOTER_HEIGHT = 12
+
+BODY_TOP = HEADER_HEIGHT
+BODY_BOTTOM = OLED_H - FOOTER_HEIGHT
+BODY_HEIGHT = max(0, BODY_BOTTOM - BODY_TOP)
+
+MAX_TEXT_CHARS = 16
+try:
+	RENDER_INTERVAL_S = float(getattr(settings, "OLED_RENDER_INTERVAL_S", 1.0) or 1.0)
+except Exception:
+	RENDER_INTERVAL_S = 1.0
+try:
+	FLIP_INTERVAL_S = float(getattr(settings, "OLED_HEADER_FLIP_S", 4) or 4)
+except Exception:
+	FLIP_INTERVAL_S = 4.0
+
+_render_task = None
+_last_render_sig = None
+_show_voltage = True
+_last_flip_time = 0
+
+_status_banner_text = None
+_status_banner_until = 0
+_status_banner_persist = False
+
+_body_override_lines = None
+_body_override_until = 0
 
 # Utils
 async def fade_display(on=True, steps=10, delay=0.03):

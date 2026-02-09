@@ -1,3 +1,4 @@
+# /workspaces/TMON/scripts/tmon-pi-installer.sh
 #!/usr/bin/env bash
 set -euo pipefail
 IFS=$'\n\t'
@@ -43,11 +44,13 @@ sudo apt-get install -y \
   python3-spidev python3-rpi.gpio python3-smbus || true
 
 # ---- 2) Enable interfaces (non-interactive) ----
+# Enables: I2C, SPI, Serial HW, SSH, VNC
 if command -v raspi-config >/dev/null 2>&1; then
   sudo raspi-config nonint do_i2c 0 || true
   sudo raspi-config nonint do_spi 0 || true
   sudo raspi-config nonint do_serial_hw 0 || true
   sudo raspi-config nonint do_ssh 0 || true
+  sudo raspi-config nonint do_vnc 0 || true
 else
   echo "Warning: raspi-config not found; skipping interface enable." >&2
 fi
