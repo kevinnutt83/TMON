@@ -61,6 +61,9 @@ sudo usermod -aG i2c,spi,gpio,dialout "$RUN_USER" || true
 # ---- 3) Fetch firmware (svn export if possible; fallback to git clone) ----
 mkdir -p "$TMON_DIR"
 mkdir -p "$FIRMWARE_DIR"
+if [ ! -e /tmon ]; then
+  sudo ln -s "$TMON_DIR" /tmon || true
+fi
 
 fetch_firmware() {
   echo "Fetching firmware from $REPO_HTTP ..."
@@ -137,6 +140,11 @@ EOF
 sudo systemctl daemon-reload
 sudo systemctl enable tmon.service
 sudo systemctl restart tmon.service || true
+
+# ---- 6) Cron @reboot fallback (ensures start on boot) ----
+CRON_TAG="# tmon-firmware"
+CRON_CMD="$VENV_DIR/bin/python /tmon/firmware/main.py"
+( crontab -l 2>/dev/null | grep -v "$CRON_TAG" || true; echo "@reboot $CRON_CMD $CRON_TAG" ) | crontab -
 
 echo
 echo "Install finished."
