@@ -97,6 +97,7 @@
 - [⏳] LoRa signal strength bars display
 - [⏳] Current time display
 - [⏳] Node name/Unit ID display
+- [🔄] Fix OLED header/body redraw after fade (force redraw on screen_on; gate LoRa bars by NODE_TYPE)
 - [🔄] Optimized display message function review in oled.py
 
 ### 1.9 Relay Control

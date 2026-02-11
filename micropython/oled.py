@@ -1,3 +1,5 @@
+# Firmware Version: v2.00j
+
 from platform_compat import asyncio, time, machine, framebuf, IS_ZERO  # CHANGED
 import settings
 import sdata
@@ -271,12 +273,6 @@ async def fade_display(on=True, steps=10, delay=0.03):
             oled.contrast(c)
             await asyncio.sleep(delay)
         oled.contrast(0)
-        # NEW: Explicitly clear buffer after fade to black to prevent ghosting
-        try:
-            oled.fill(0)
-            oled.show()
-        except Exception:
-            pass
 
 def _safe_attr(obj, name, default=None):
     try:
@@ -685,14 +681,12 @@ async def screen_off():
     try:
         oled.fill_rect(0, 0, 128, HEADER_HEIGHT, 0)  # Clear header specifically before fade
         oled.show()  # Update display with cleared header
-        await asyncio.sleep(0.05)  # Short delay to ensure update
     except Exception:
         pass
     await fade_display(on=False)
     try:
         oled.fill(0)  # Clear entire buffer after fade for good measure
         oled.show()
-        await asyncio.sleep(0.05)  # Short delay
     except Exception:
         pass
     oled.poweroff()
