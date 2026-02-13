@@ -465,37 +465,46 @@ async def _render_loop(page=0):
                             block_w = lora_icon_w + 2 + bars_w + (4 if text_w else 0) + text_w
                             blocks.append({'type': 'lora', 'w': block_w, 'icon': 'L', 'bars': lb, 'text': ltext})
 
-                    # Layout right-aligned, compute start_x; if overlapping with voltage area, try compacting texts
-                    start_x, xs = _layout_header_right(vol_w, blocks)
-                    # If start_x would be <= vol_w + margin, we need to compact labels
-                    min_gap = 6
-                    if start_x <= (2 + vol_w + min_gap):
-                        # Attempt compacting text labels and recompute widths
-                        for b in blocks:
-                            if b.get('text'):
-                                # try progressively smaller max lengths
-                                for maxc in (6, 4, 2, 0):
-                                    short = _compact_label(b['text'], maxc)
-                                    b['text_compact'] = short
-                                    b['w'] = _measure_text_w(b['icon']) + 2 + 3 * 6 + (4 if _measure_text_w(short) else 0) + _measure_text_w(short)
-                                # if still overlapping, remove text entirely
-                                if start_x <= (2 + vol_w + min_gap):
-                                    b['text_compact'] = ''
-                                    b['w'] = _measure_text_w(b['icon']) + 2 + 3 * 6
-                        # recompute positions
-                        start_x, xs = _layout_header_right(vol_w, blocks)
+                    # Clear the right area of the header to remove any persistent content (e.g., previous bars)
+                    clear_x = vol_w + 4  # Padding after voltage/temp
+                    clear_w = 128 - clear_x
+                    oled.fill_rect(clear_x, 0, clear_w, HEADER_HEIGHT, 0)
 
-                    # Finally render blocks at computed positions
-                    for b, x in zip(blocks, xs):
-                        try:
-                            icon_x = x
-                            oled.text(b.get('icon','?'), icon_x, 0)
-                            _draw_bars(oled, icon_x + _measure_text_w(b.get('icon','')) + 2, 0, int(b.get('bars', 0)))
-                            t = b.get('text_compact', b.get('text',''))
-                            if t:
-                                oled.text(t, icon_x + _measure_text_w(b.get('icon','')) + 2 + (3 * 6) + 4, 0)
-                        except Exception:
-                            pass
+                    # If there are blocks, proceed with layout and drawing
+                    if blocks:
+                        # Layout right-aligned, compute start_x; if overlapping with voltage area, try compacting texts
+                        start_x, xs = _layout_header_right(vol_w, blocks)
+                        # If start_x would be <= vol_w + margin, we need to compact labels
+                        min_gap = 6
+                        if start_x <= (2 + vol_w + min_gap):
+                            # Attempt compacting text labels and recompute widths
+                            for b in blocks:
+                                if b.get('text'):
+                                    # try progressively smaller max lengths
+                                    for maxc in (6, 4, 2, 0):
+                                        short = _compact_label(b['text'], maxc)
+                                        b['text_compact'] = short
+                                        b['w'] = _measure_text_w(b['icon']) + 2 + 3 * 6 + (4 if _measure_text_w(short) else 0) + _measure_text_w(short)
+                                    # if still overlapping, remove text entirely
+                                    if start_x <= (2 + vol_w + min_gap):
+                                        b['text_compact'] = ''
+                                        b['w'] = _measure_text_w(b['icon']) + 2 + 3 * 6
+                            # recompute positions
+                            start_x, xs = _layout_header_right(vol_w, blocks)
+
+                        # Finally render blocks at computed positions
+                        for b, x in zip(blocks, xs):
+                            try:
+                                icon_x = x
+                                oled.text(b.get('icon','?'), icon_x, 0)
+                                bars_x = icon_x + _measure_text_w(b.get('icon','')) + 2
+                                _draw_bars(oled, bars_x, 0, int(b.get('bars', 0)))
+                                t = b.get('text_compact', b.get('text',''))
+                                if t:
+                                    text_x = bars_x + (3 * 6) + 4
+                                    oled.text(t, text_x, 0)
+                            except Exception:
+                                pass
                 except Exception:
                     pass
 
@@ -510,14 +519,6 @@ async def _render_loop(page=0):
                     _status_banner_text = None
             except Exception:
                 pass
-
-            # NEW: Conditional clear of header content if no active net blocks (e.g., to ensure blank header when idle)
-            if getattr(settings, 'DISPLAY_NET_BARS', False):
-                if not blocks:  # No blocks added (no active connections), clear the entire header to prevent any residual drawing
-                    oled.fill_rect(0, 0, 128, HEADER_HEIGHT, 0)
-                    # Redraw voltage/temp if desired, or leave blank as per "clear everything"
-                    # For now, leaving blank to test if it fixes persistent bars
-                    pass  # Comment out if you want to redraw voltage: oled.text(txt, 2, 0)
 
             # Body area (below header)
             oled.fill_rect(0, BODY_TOP, 128, BODY_HEIGHT, 0)
