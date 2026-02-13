@@ -35,8 +35,10 @@ cur_temp_c = 0
 cur_temp_f = 0
 cur_bar_pres = 0
 cur_humid = 0
-# NEW: indicate sampling in progress so OLED can render sampling-only content
-sampling_active = False
+
+# Indicate sampling in progress so OLED can render sampling-only content
+import settings
+sampling_active = settings.SAMPLE_TEMP or settings.SAMPLE_BAR or settings.SAMPLE_HUMID
 
 # Base Station Data Variables
 lowest_temp_f = 0

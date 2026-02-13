@@ -3,10 +3,10 @@
 # --- Single-threaded asyncio event loop ---
 from platform_compat import time, os, gc, machine, requests, IS_ZERO as _PC_IS_ZERO  # CHANGED
 
-import sys  # RESTORED
-import types  # RESTORED
-import settings  # RESTORED
-import sdata  # RESTORED
+import sys  
+import types  
+import settings  
+import sdata  
 
 # CHANGED: pick asyncio implementation by runtime/MCU_TYPE
 try:
@@ -28,8 +28,8 @@ else:
     except Exception:
         IS_ZERO = False
 
-from debug import info as dbg_info, warn as dbg_warn, error as dbg_error  # RESTORED
-from sampling import sampleEnviroment  # RESTORED
+from debug import info as dbg_info, warn as dbg_warn, error as dbg_error  
+from sampling import sampleEnviroment  
 from utils import (
     free_pins_lora,
     checkLogDirectory,
@@ -39,11 +39,11 @@ from utils import (
     persist_unit_id,
     get_machine_id,
     periodic_provision_check,
-)  # RESTORED
+)  
 
-from ota import check_for_update, apply_pending_update  # RESTORED
-from oled import update_display, display_message  # RESTORED
-from settings_apply import load_applied_settings_on_boot, settings_apply_loop  # RESTORED
+from ota import check_for_update, apply_pending_update  
+from oled import update_display, display_message  
+from settings_apply import load_applied_settings_on_boot, settings_apply_loop  
 
 # Guarded optional engine controller
 try:
@@ -159,7 +159,7 @@ except Exception:
 
 _provision_warned = False
 def is_provisioned():
-    # RESTORED: earlier semantics (flag OR configured WORDPRESS_API_URL) with one-time warning
+    : earlier semantics (flag OR configured WORDPRESS_API_URL) with one-time warning
     global _provision_warned
     try:
         wp_url = str(getattr(settings, "WORDPRESS_API_URL", "")).strip()
@@ -416,7 +416,7 @@ async def periodic_command_poll_task():
                 pass
         await asyncio.sleep(10)
 
-# RESTORED: first-time check-in + provisioning fetch/apply for ALL MCU types (incl. Zero).
+: first-time check-in + provisioning fetch/apply for ALL MCU types (incl. Zero).
 async def first_boot_provision():
     try:
         if is_provisioned():
@@ -444,7 +444,7 @@ async def first_boot_provision():
         pass
 
     # 1) First-time check-in/register with Admin hub (best-effort; endpoint variants handled by wprest).
-    # RESTORED: include older direct check-in fallback + persistence semantics.
+    : include older direct check-in fallback + persistence semantics.
     hub = str(getattr(settings, "TMON_ADMIN_API_URL", "") or "").strip()
     mid = str(getattr(settings, "MACHINE_ID", "") or "").strip()
 
@@ -525,7 +525,7 @@ async def first_boot_provision():
             except Exception:
                 pass
 
-    # RESTORED: persist returned metadata without overwriting with blanks (older behavior)
+    : persist returned metadata without overwriting with blanks (older behavior)
     merged = {}
     try:
         if isinstance(doc, dict):
@@ -657,7 +657,7 @@ async def first_boot_provision():
     except Exception:
         pass
 
-    # RESTORED: confirm-applied callback to Admin (best-effort; token optional)
+    : confirm-applied callback to Admin (best-effort; token optional)
     try:
         wp_url = str(getattr(settings, "WORDPRESS_API_URL", "") or "").strip()
         if hub and wp_url and requests:
@@ -791,7 +791,7 @@ async def startup():
     tm.add_task(sample_task, "sample", 60)
 
     wp_url = str(getattr(settings, "WORDPRESS_API_URL", "")).strip()
-    if node_role in ("base", "wifi"):
+    if node_role in ("base", "wifi", "remote"):
         if wp_url:
             tm.add_task(periodic_field_data_task, "field_data", int(getattr(settings, "FIELD_DATA_SEND_INTERVAL", 30)))
         tm.add_task(periodic_command_poll_task, "cmd_poll", 10)
@@ -950,7 +950,7 @@ async def main():
     except Exception:
         pass
 
-    # RESTORED: start background tasks hook (older v2.06.0 behavior)
+    : start background tasks hook (older v2.06.0 behavior)
     try:
         start_background_tasks()
     except Exception:
@@ -985,7 +985,7 @@ async def main():
                     pass
                 raise
 
-            # RESTORED: periodic runGC (older v2.06.0 behavior)
+            : periodic runGC (older v2.06.0 behavior)
             try:
                 now_ms = time.ticks_ms()
                 td = getattr(time, "ticks_diff", None)

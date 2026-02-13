@@ -16,43 +16,16 @@ except Exception:
 
 #Sampling Routine for sample all sensor types if they are enabled
 async def sampleEnviroment():
-    """
-    Keep existing intent: update sdata.cur_* fields when sampling is enabled.
-    On Zero: do not attempt hardware sensor imports here.
-    """
-    if sdata is None:
-        return False
-
+    from utils import led_status_flash
+    import sdata as _s
+    _s.sampling_active = True
     try:
-        sdata.sampling_active = True
-    except Exception:
-        pass
-
-    try:
-        # Placeholder behavior (hardware-specific drivers should live behind their existing modules).
-        # Preserve logic gates so remote settings still control sampling flow.
-        do_temp = bool(getattr(settings, "SAMPLE_TEMP", True)) if settings else True
-        do_hum = bool(getattr(settings, "SAMPLE_HUMID", True)) if settings else True
-        do_bar = bool(getattr(settings, "SAMPLE_BAR", True)) if settings else True
-
-        # If other sensor modules exist in the repo, they can update sdata directly.
-        # Here: keep previous values; just mark last_message for visibility.
-        if do_temp or do_hum or do_bar:
-            try:
-                sdata.last_message = "sampled"
-            except Exception:
-                pass
-
-        await asyncio.sleep(0)
-        return True
-    except Exception as e:
-        await _dbg(f"sampleEnviroment error: {e}", "ERROR")
-        return False
+        led_status_flash('SAMPLE_TEMP')
+        await sampleTemp()
+        led_status_flash('SAMPLE_BAR')
+        await frost_and_heat_watch()  # Call frost and heat watch after sampling
     finally:
-        try:
-            sdata.sampling_active = False
-        except Exception:
-            pass
+        _s.sampling_active = False
         try:
             gc.collect()
         except Exception:
