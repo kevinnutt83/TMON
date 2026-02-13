@@ -990,7 +990,8 @@ async def _post_command_confirm(payload):
 __all__ = [
     'register_with_wp', 'send_data_to_wp', 'send_settings_to_wp',
     'fetch_staged_settings', 'fetch_settings_from_wp', 'poll_device_commands', 'poll_ota_jobs',
-    'send_file_to_wp', 'request_file_from_wp', 'heartbeat_ping'
+    'send_file_to_wp', 'request_file_from_wp', 'heartbeat_ping',
+    '_auth_headers'
 ]
 
 async def heartbeat_ping():

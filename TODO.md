@@ -45,10 +45,13 @@
 - [✅] LoRa HMAC signing for frame authentication
 - [✅] LoRa encryption (ChaCha20) for secure payload
 - [✅] LoRa replay protection with counter tracking
+- [🚧] Restore legacy LoRa behaviors removed during Zero integration (chunking, GPS sync, remote info persistence, OTA over LoRa, WP sync helpers)
+  - [🚧] Deduplicate lora.py and restore legacy base/remote flows (chunking, replay-protect, OTA, GPS sync)
+  - [🚧] Integrate legacy LoRa chunking + decrypt/HMAC verify + remote info persistence into current lora.py (in progress)
 - [⏳] LORA_NETWORK_NAME and LORA_NETWORK_PASSWORD variables
 - [⏳] Base station secure LoRa network management with credential verification
 - [🚧] Remote node scheduled check-in time assignment from base station
-- [🚧] Base station tracking table for remote nodes (UNIT IDs, check-in times)
+- [🔄] Base station tracking table for remote nodes (UNIT IDs, check-in times)
 - [🚧] Automatic base station listening during remote node check-in windows
 - [✅] CAD (Channel Activity Detection) before transmission
 - [✅] LoRa backoff when channel busy
@@ -159,7 +162,7 @@
 - [✅] GPS coordinate storage (lat, lng, alt, accuracy)
 - [✅] GPS override allowed flag
 - [✅] GPS broadcast to remotes from base station
-- [🚧] GPS acceptance from base on remote nodes
+- [🔄] GPS acceptance from base on remote nodes
 
 ### 1.X Raspberry Pi Zero (CPython) Compatibility
 - [🚧] Provide CPython shims for MicroPython-only modules (`machine`, `network`, `uasyncio`, `urequests`, etc.) so legacy imports work on Zero without code duplication

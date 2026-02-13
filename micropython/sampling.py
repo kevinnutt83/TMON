@@ -200,6 +200,25 @@ async def findHighestHumid(compareHumid, source='local'):
     except Exception:
         pass
 
+async def update_minmax_from_payload(payload, source='remote'):
+    try:
+        if not isinstance(payload, dict):
+            return
+        t_f = payload.get('t_f')
+        bar = payload.get('bar')
+        hum = payload.get('hum')
+        if t_f is not None:
+            await findLowestTemp(t_f, source=source)
+            await findHighestTemp(t_f, source=source)
+        if bar is not None:
+            await findLowestBar(bar, source=source)
+            await findHighestBar(bar, source=source)
+        if hum is not None:
+            await findLowestHumid(hum, source=source)
+            await findHighestHumid(hum, source=source)
+    except Exception:
+        pass
+
 async def beginFrostOperations():
     # Implement frost operations (e.g., engage relays or notify)
     await debug_print("beginFrostOperations: executing frost response", "FROSTWATCH")

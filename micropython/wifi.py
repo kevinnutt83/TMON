@@ -252,7 +252,7 @@ async def connectToWifiNetwork():
 			await display_message("SSID Not Found", 2)
 		except Exception:
 			pass
-		return
+		return False
 	await debug_print(f"wifi: connect {getattr(s, 'WIFI_SSID', '')}", "WIFI")
 	retries = int(getattr(s, 'WIFI_CONN_RETRIES', 5))
 	backoff = int(getattr(s, 'WIFI_BACKOFF_S', 15))
