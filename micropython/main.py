@@ -4,7 +4,7 @@
 from platform_compat import time, os, gc, machine, requests, IS_ZERO as _PC_IS_ZERO  # CHANGED
 
 import sys  
-import types  
+
 import settings  
 import sdata  
 
@@ -20,6 +20,7 @@ except Exception:
 
 if _is_cpython or _mcu_type == "zero":
     import asyncio as asyncio  # CHANGED (Zero/CPython)
+    import types  
     IS_ZERO = True  # CHANGED
 else:
     from platform_compat import asyncio  # CHANGED (MicroPython)
@@ -159,7 +160,6 @@ except Exception:
 
 _provision_warned = False
 def is_provisioned():
-    : earlier semantics (flag OR configured WORDPRESS_API_URL) with one-time warning
     global _provision_warned
     try:
         wp_url = str(getattr(settings, "WORDPRESS_API_URL", "")).strip()
@@ -416,7 +416,6 @@ async def periodic_command_poll_task():
                 pass
         await asyncio.sleep(10)
 
-: first-time check-in + provisioning fetch/apply for ALL MCU types (incl. Zero).
 async def first_boot_provision():
     try:
         if is_provisioned():
@@ -444,7 +443,6 @@ async def first_boot_provision():
         pass
 
     # 1) First-time check-in/register with Admin hub (best-effort; endpoint variants handled by wprest).
-    : include older direct check-in fallback + persistence semantics.
     hub = str(getattr(settings, "TMON_ADMIN_API_URL", "") or "").strip()
     mid = str(getattr(settings, "MACHINE_ID", "") or "").strip()
 
@@ -525,7 +523,6 @@ async def first_boot_provision():
             except Exception:
                 pass
 
-    : persist returned metadata without overwriting with blanks (older behavior)
     merged = {}
     try:
         if isinstance(doc, dict):
@@ -657,7 +654,6 @@ async def first_boot_provision():
     except Exception:
         pass
 
-    : confirm-applied callback to Admin (best-effort; token optional)
     try:
         wp_url = str(getattr(settings, "WORDPRESS_API_URL", "") or "").strip()
         if hub and wp_url and requests:
@@ -950,7 +946,6 @@ async def main():
     except Exception:
         pass
 
-    : start background tasks hook (older v2.06.0 behavior)
     try:
         start_background_tasks()
     except Exception:
@@ -985,7 +980,6 @@ async def main():
                     pass
                 raise
 
-            : periodic runGC (older v2.06.0 behavior)
             try:
                 now_ms = time.ticks_ms()
                 td = getattr(time, "ticks_diff", None)
@@ -1030,7 +1024,6 @@ if __name__ == "__main__":
             except KeyboardInterrupt:
                 pass
     except Exception:
-        # ...existing code...
         try:
             loop = asyncio.get_event_loop()
             loop.create_task(main())

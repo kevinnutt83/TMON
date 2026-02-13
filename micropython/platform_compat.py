@@ -9,10 +9,7 @@ Goal:
 Selection is keyed off settings.MCU_TYPE ('pico'|'esp32'|'zero').
 """
 
-from __future__ import annotations
-
 import sys
-import types
 
 # --- settings / MCU selection ---
 try:
@@ -63,6 +60,8 @@ if IS_MICROPYTHON:
 else:
     try:
         import requests as requests  # type: ignore
+        from __future__ import annotations
+        import types
     except Exception:
         requests = None
 
