@@ -451,19 +451,18 @@ async def _render_loop(page=0):
                         recent = (last_rx and (now_epoch - last_rx) <= stale_s) or (last_tx and (now_epoch - last_tx) <= stale_s)
                         connected = bool(_safe_attr(sdata, 'LORA_CONNECTED', False)) or recent
 
-                        if connected:
-                            lora_icon_w = _measure_text_w('L')
-                            bars_w = 3 * 6
-                            # Connected: show bars when RSSI known, otherwise show empty bars but no "Search"
-                            lrssi = _safe_attr(sdata, 'lora_SigStr', None)
-                            try:
-                                lb = _net_bars_from_rssi(int(lrssi), (-80, -100, -120)) if lrssi is not None else 0
-                            except Exception:
-                                lb = 0
-                            ltext = ''
-                            text_w = _measure_text_w(ltext)
-                            block_w = lora_icon_w + 2 + bars_w + (4 if text_w else 0) + text_w
-                            blocks.append({'type': 'lora', 'w': block_w, 'icon': 'L', 'bars': lb, 'text': ltext})
+                        lora_icon_w = _measure_text_w('L')
+                        bars_w = 3 * 6
+                        # Connected: show bars when RSSI known, otherwise show empty bars but no "Search"
+                        lrssi = _safe_attr(sdata, 'lora_SigStr', None)
+                        try:
+                            lb = _net_bars_from_rssi(int(lrssi), (-80, -100, -120)) if lrssi is not None else 0
+                        except Exception:
+                            lb = 0
+                        ltext = ''
+                        text_w = _measure_text_w(ltext)
+                        block_w = lora_icon_w + 2 + bars_w + (4 if text_w else 0) + text_w
+                        blocks.append({'type': 'lora', 'w': block_w, 'icon': 'L', 'bars': lb, 'text': ltext})
 
                     # Clear the right area of the header to remove any persistent content (e.g., previous bars)
                     clear_x = vol_w + 4  # Padding after voltage/temp
@@ -523,8 +522,6 @@ async def _render_loop(page=0):
             # Body area (below header)
             oled.fill_rect(0, BODY_TOP, 128, BODY_HEIGHT, 0)
 
-            # Previously displayed unit/machine suffix here; intentionally omitted.
-
             # If a body override is active (e.g., display_message showing sampling), honor it
             try:
                 if _body_override_lines and time.time() < _body_override_until:
@@ -538,12 +535,10 @@ async def _render_loop(page=0):
                     # Default content: show sensor summary only while actively sampling
                     if page == 0:
                         if getattr(sdata, 'sampling_active', False):
-                            # Pulled up to utilize space after secondary label removal
                             oled.text(f"T {_safe_attr(sdata, 'cur_temp_f', 0):.1f}F", 0, BODY_TOP + 4)
                             oled.text(f"H {_safe_attr(sdata, 'cur_humid', 0):.1f}%", 0, BODY_TOP + 14)
                             oled.text(f"B {_safe_attr(sdata, 'cur_bar_pres', 0):.1f}", 0, BODY_TOP + 24)
                         else:
-                            # leave body blank when not sampling to avoid persistent "sampling" content
                             pass
                     else:
                         for i in range(8):
@@ -559,7 +554,6 @@ async def _render_loop(page=0):
             except Exception:
                 pass
 
-            # Last message bottom (moved up a little to account for footer/device name)
             try:
                 msg = str(_safe_attr(sdata, 'last_message', ''))[:MAX_TEXT_CHARS]
                 oled.text(msg, 0, 52)
@@ -569,7 +563,6 @@ async def _render_loop(page=0):
             # Footer band
             oled.fill_rect(0, BODY_BOTTOM, 128, FOOTER_HEIGHT, 0)
             try:
-                # Removed temperature display and moved device name to left footer
                 unit_name = str(_safe_attr(settings, 'UNIT_Name', ''))[:MAX_TEXT_CHARS]
                 oled.text(unit_name, 0, BODY_BOTTOM + 2)
             except Exception:
@@ -587,7 +580,6 @@ async def _render_loop(page=0):
 async def show_header():
     global _render_task, _display_on
     _display_on = True  # NEW: Ensure rendering resumes
-    # CHANGED: tolerate uasyncio Task variants without .done()
     try:
         task_done = (_render_task is not None) and bool(getattr(_render_task, "done", lambda: False)())
     except Exception:

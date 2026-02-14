@@ -134,7 +134,6 @@ async def boot():
                                 await debug_print("Provisioning applied", "PROVISION")
                                 if node_type != 'remote':
                                     from wifi import disable_wifi
-                                    settings.ENABLE_WIFI = False
                                     await disable_wifi()
                                     await debug_print("Non-remote Node Provisioning", "PROVISION")
                             except Exception:

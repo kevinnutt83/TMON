@@ -1,5 +1,6 @@
 # Firmware Version: v2.06.0
 
+from micropython import settings
 from platform_compat import time, asyncio, requests as urequests, network, gc, IS_ZERO  # CHANGED
 
 import sdata
@@ -455,6 +456,7 @@ def disable_wifi():
 	except Exception:
 		pass
 	sdata.WIFI_CONNECTED = False
+	settings.ENABLE_WIFI = False
 	await debug_print("WiFi disabled.", "INFO")
 
 async def wifi_rssi_monitor():
