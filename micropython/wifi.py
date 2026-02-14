@@ -449,13 +449,13 @@ async def check_internet_connection():
 		await asyncio.sleep(0)
 
 def disable_wifi():
-	# ...existing code...
 	try:
 		wlan = network.WLAN(network.STA_IF)
 		wlan.active(False)
 	except Exception:
 		pass
 	sdata.WIFI_CONNECTED = False
+	await debug_print("WiFi disabled.", "INFO")
 
 async def wifi_rssi_monitor():
 	"""Periodic RSSI sampler for OLED display and telemetry."""

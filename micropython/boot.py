@@ -67,7 +67,7 @@ def _install_zero_shims_if_needed():
 _install_zero_shims_if_needed()
 
 # CHANGED: import these after shims
-from utils import flash_led
+from utils import debug_print, flash_led
 from oled import display_message
 
 async def boot():
@@ -103,6 +103,7 @@ async def boot():
         if enabled:
             if node_type != 'remote':
                 should_connect = True
+                await debug_print("Non-remote Node Provisioning", "INFO")
             else:
                 # remote: only if not provisioned and policy allows
                 if not getattr(settings, 'UNIT_PROVISIONED', False) and allow_remote_wifi_if_unprovisioned:
@@ -122,14 +123,20 @@ async def boot():
                     inet_ok = False
                 if inet_ok:
                     try:
-                        from main import first_boot_provision
-                        await first_boot_provision()
+                        # from main import first_boot_provision
+                        # await first_boot_provision()
                         import provision
                         mid = getattr(settings, 'MACHINE_ID', None)
                         prov = provision.fetch_provisioning(unit_id=getattr(settings, 'UNIT_ID', None), machine_id=mid, base_url=getattr(settings, 'TMON_ADMIN_API_URL', None))
                         if isinstance(prov, dict) and prov:
                             try:
                                 provision.apply_settings(prov)
+                                await debug_print("Provisioning applied", "PROVISION")
+                                if node_type != 'remote':
+                                    from wifi import disable_wifi
+                                    settings.ENABLE_WIFI = False
+                                    await disable_wifi()
+                                    await debug_print("Non-remote Node Provisioning", "PROVISION")
                             except Exception:
                                 pass
                     except Exception:
