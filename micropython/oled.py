@@ -361,6 +361,24 @@ def _layout_header_right(vol_w, right_blocks):
     except Exception:
         return 128, [128] * len(right_blocks)
 
+def _display_net_bars_enabled():
+    try:
+        return bool(getattr(settings, 'DISPLAY_NET_BARS', False))
+    except Exception:
+        return False
+
+def _wifi_bars_enabled():
+    try:
+        return _display_net_bars_enabled() and bool(getattr(settings, 'ENABLE_WIFI', False))
+    except Exception:
+        return False
+
+def _lora_bars_enabled():
+    try:
+        return _display_net_bars_enabled() and bool(getattr(settings, 'ENABLE_LORA', False))
+    except Exception:
+        return False
+
 def _render_signature(page):
     try:
         return (
@@ -427,36 +445,30 @@ async def _render_loop(page=0):
                 vol_w = 16
                 txt = ""
             # Optional adaptive net blocks on header (right-aligned, auto-compact if space tight)
-            if getattr(settings, 'DISPLAY_NET_BARS', False):
+            if _display_net_bars_enabled():
                 try:
-                    # Build block descriptors (wifi then lora) with measured widths
                     blocks = []
-                    # WiFi block - FIXED: Only add if enabled and connected (hide when disconnected for "blank" periods)
-                    if getattr(settings, 'ENABLE_WIFI', False) and getattr(sdata, 'WIFI_CONNECTED', False):
+
+                    # WiFi block: show only when WiFi feature is enabled.
+                    if _wifi_bars_enabled():
                         wifi_icon_w = _measure_text_w('W')
-                        bars_w = 3 * 6  # matches _draw_bars spacing
+                        bars_w = 3 * 6
                         wrssi = _safe_attr(sdata, 'wifi_rssi', None)
-                        wb = _net_bars_from_rssi(wrssi, (-60, -80, -90))
-                        wifi_text = ''  # No text when connected (keep compact)
+                        wifi_connected = bool(_safe_attr(sdata, 'WIFI_CONNECTED', False))
+                        wb = _net_bars_from_rssi(wrssi, (-60, -80, -90)) if wifi_connected else 0
+                        wifi_text = ''
                         text_w = _measure_text_w(wifi_text)
                         block_w = wifi_icon_w + 2 + bars_w + (4 if text_w else 0) + text_w
                         blocks.append({'type': 'wifi', 'w': block_w, 'icon': 'W', 'bars': wb, 'text': wifi_text})
-                    # LoRa block - FIXED: Only add if enabled and connected/recent (hide when no activity)
-                    if getattr(settings, 'ENABLE_LORA', False):
-                        # determine "connected" based on recent activity
-                        now_epoch = time.time()
-                        stale_s = int(getattr(settings, 'OLED_LORA_STALE_S', 120))
-                        last_rx = int(_safe_attr(sdata, 'lora_last_rx_ts', 0) or 0)
-                        last_tx = int(_safe_attr(sdata, 'lora_last_tx_ts', 0) or 0)
-                        recent = (last_rx and (now_epoch - last_rx) <= stale_s) or (last_tx and (now_epoch - last_tx) <= stale_s)
-                        connected = bool(_safe_attr(sdata, 'LORA_CONNECTED', False)) or recent
 
+                    # LoRa block: show only when LoRa feature is enabled.
+                    if _lora_bars_enabled():
                         lora_icon_w = _measure_text_w('L')
                         bars_w = 3 * 6
-                        # Connected: show bars when RSSI known, otherwise show empty bars but no "Search"
                         lrssi = _safe_attr(sdata, 'lora_SigStr', None)
+                        lora_connected = bool(_safe_attr(sdata, 'LORA_CONNECTED', False))
                         try:
-                            lb = _net_bars_from_rssi(int(lrssi), (-80, -100, -120)) if lrssi is not None else 0
+                            lb = _net_bars_from_rssi(int(lrssi), (-80, -100, -120)) if (lora_connected and lrssi is not None) else 0
                         except Exception:
                             lb = 0
                         ltext = ''
