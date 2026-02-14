@@ -35,6 +35,7 @@ from utils import (
     free_pins_lora,
     checkLogDirectory,
     debug_print,
+    led_status_flash,
     load_persisted_unit_name,
     load_persisted_unit_id,
     persist_unit_id,
@@ -302,7 +303,7 @@ async def sample_task():
     loop_start_time = time.ticks_ms()
     from utils import led_status_flash, update_sys_voltage, record_field_data  # type: ignore
 
-    led_status_flash("INFO")
+    led_status_flash("SAMPLE_TEMP")
 
     if getattr(settings, "DEVICE_SUSPENDED", False):
         await debug_print("suspended: skip sample", "WARN")
@@ -350,7 +351,7 @@ async def sample_task():
         pass
 
     await debug_print(
-        f"sample: lr={getattr(sdata,'loop_runtime',0)}s sr={getattr(sdata,'script_runtime',0)}s mem={getattr(sdata,'free_mem',0)}",
+        f"sample: loop runtime={getattr(sdata,'loop_runtime',0)}s script runtime={getattr(sdata,'script_runtime',0)}s mem={getattr(sdata,'free_mem',0)}",
         "INFO",
     )
 
@@ -360,11 +361,12 @@ async def sample_task():
     except Exception:
         pass
 
+    led_status_flash("SCUCCESS")
     led_status_flash("INFO")
 
 async def periodic_field_data_task():
     try:
-        from utils import send_field_data_log, maybe_gc  # type: ignore
+        from utils import send_field_data_log, maybe_gc
     except Exception:
         send_field_data_log = None
         maybe_gc = None
@@ -387,7 +389,7 @@ async def periodic_field_data_task():
                 maybe_gc("field_data_send", min_interval_ms=12000, mem_free_below=40 * 1024)
         except Exception:
             pass
-
+        led_status_flash("SCUCCESS")
         await asyncio.sleep(int(getattr(settings, "FIELD_DATA_SEND_INTERVAL", 30)))
 
 async def periodic_command_poll_task():
