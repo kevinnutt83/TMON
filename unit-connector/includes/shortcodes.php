@@ -236,7 +236,7 @@ add_action('wp_dashboard_setup', function(){
                             var tb = tbl.tBodies[0];
                             if (tb) tb.innerHTML = res.data.html;
                         }
-                    }).catch(function(e){ console.error('summary refresh error', e); });
+                    }).catch(e=>console.error('summary refresh error', e); });
             }
             // initial refresh and periodic
             refresh();
@@ -484,11 +484,7 @@ add_shortcode('tmon_device_status', function($atts) {
             echo '<label class="tmon-text-muted">Run (min)</label><input type="number" min="0" max="1440" step="1" class="tmon-runtime-min" title="Runtime minutes (0 = no auto-off)" value="0">';
             echo '<label class="tmon-text-muted">At</label><input type="datetime-local" class="tmon-schedule-at" title="Optional schedule time">';
             foreach ($enabled_relays as $n) {
-                echo '<div class="tmon-relay-row">'
-                    .'<span class="tmon-text-muted">R'.$n.'</span> '
-                    .'<button type="button" class="button button-small tmon-relay-btn" data-relay="'.$n.'" data-state="on">On</button> '
-                    .'<button type="button" class="button button-small tmon-relay-btn" data-relay="'.$n.'" data-state="off">Off</button>'
-                    .'</div>';
+                echo '<div class="tmon-relay-row"><span class="tmon-text-muted">R'.$n.'</span> <button type="button" class="button button-small tmon-relay-btn" data-relay="'.$n.'" data-state="on">On</button> <button type="button" class="button button-small tmon-relay-btn" data-relay="'.$n.'" data-state="off">Off</button></div>';
             }
             echo '</div>';
         } else if (empty($enabled_relays)) {
@@ -529,22 +525,22 @@ add_shortcode('tmon_device_status', function($atts) {
                 var d = res.data || {}; var msg = d.scheduled ? "Scheduled" : "Queued"; alert(msg+" relay "+relay+" "+state+ (runtime_min? (" for "+runtime_min+" min"): "") );
             }).catch(function(){ btn.textContent = old; btn.disabled=false; alert("Network error"); });
          });
-+        // Auto-refresh device status tbody periodically (admin context)
-+        (function(){
-+            var tbl = document.getElementById("tmon-device-status-table");
-+            if (!tbl) return;
-+            function refreshStatus(){
-+                fetch("'.esc_js($ajax_url).'?action=tmon_device_status_refresh&_wpnonce='.$status_nonce.'")
-+                    .then(r=>r.json()).then(function(res){
-+                        if (res && res.success && res.data && res.data.html){
-+                            var tb = tbl.tBodies[0];
-+                            if (tb) tb.innerHTML = res.data.html;
-+                        }
-+                    }).catch(function(e){ console.error("status refresh", e); });
-+            }
-+            refreshStatus();
-+            setInterval(refreshStatus, 30000);
-+        })();
+        // Auto-refresh device status tbody periodically (admin context)
+        (function(){
+            var tbl = document.getElementById("tmon-device-status-table");
+            if (!tbl) return;
+            function refreshStatus(){
+                fetch("'.esc_js($ajax_url).'?action=tmon_device_status_refresh&_wpnonce='.$status_nonce.'")
+                    .then(r=>r.json()).then(function(res){
+                        if (res && res.success && res.data && res.data.html){
+                            var tb = tbl.tBodies[0];
+                            if (tb) tb.innerHTML = res.data.html;
+                        }
+                    }).catch(function(e){ console.error("status refresh", e); });
+            }
+            refreshStatus();
+            setInterval(refreshStatus, 30000);
+        })();
      })();</script>';
     return ob_get_clean();
 });
@@ -1025,7 +1021,6 @@ JS;
 
 // Shortcode: [tmon_device_settings] — admin/uc device settings editor
 add_shortcode('tmon_device_settings', function($atts = array()){
-	// Gather device list (best-effort): prefer helper if available
 	$devices = array();
 	if (function_exists('tmon_admin_get_all_devices')) {
 		foreach ((array) tmon_admin_get_all_devices() as $d) {
@@ -1033,181 +1028,217 @@ add_shortcode('tmon_device_settings', function($atts = array()){
 		}
 	} else {
 		$opt = get_option('tmon_admin_provisioned_devices', array());
-		if (is_array($opt)) {
-			foreach ($opt as $u => $m) { $devices[$u] = $u; }
+		if (is_array($opt)) foreach ($opt as $u => $m) { $devices[$u] = $u; }
+	}
+
+	// Fallback for UC pages where admin options/helpers are absent.
+	if (empty($devices)) {
+		global $wpdb;
+		$rows = $wpdb->get_results("SELECT unit_id, unit_name FROM {$wpdb->prefix}tmon_devices ORDER BY unit_name ASC, unit_id ASC", ARRAY_A);
+		foreach ((array)$rows as $r) {
+			if (empty($r['unit_id'])) continue;
+			$devices[$r['unit_id']] = $r['unit_name'] ? ($r['unit_name'] . ' (' . $r['unit_id'] . ')') : $r['unit_id'];
 		}
 	}
+
+	$iid = wp_generate_password(6, false, false);
+	$wrap_id = 'tmon-device-settings-' . $iid;
+	$local_select_id = 'tmon_ds_unit_' . $iid;
+	$local_wrap_id = 'tmon_ds_local_picker_wrap_' . $iid;
+	$load_id = 'tmon_ds_load_' . $iid;
+	$form_wrap_id = 'tmon_ds_form_' . $iid;
+	$fields_id = 'tmon_ds_fields_' . $iid;
+	$save_id = 'tmon_ds_save_' . $iid;
+	$status_id = 'tmon_ds_status_' . $iid;
+
 	ob_start();
 	?>
-	<div id="tmon-device-settings" class="tmon-device-settings">
-		<p><em>Use the page-level Unit selector (id="tmon-unit-picker") to select a device. The settings panel will follow that selection.</em></p>
-		<button id="tmon_ds_load" class="button">Load</button>
+	<div id="<?php echo esc_attr($wrap_id); ?>" class="tmon-device-settings">
+		<p><em>Use the page-level Unit selector (id="tmon-unit-picker") when available. Otherwise use the local selector below.</em></p>
 
-		<div id="tmon_ds_form" style="margin-top:12px; display:none;">
-			<form id="tmon_ds_editor">
-				<!-- Controls are rendered by JS for flexibility -->
-				<div id="tmon_ds_fields"></div>
+		<p id="<?php echo esc_attr($local_wrap_id); ?>" style="margin:8px 0;">
+			<label for="<?php echo esc_attr($local_select_id); ?>"><strong>Unit</strong></label><br/>
+			<select id="<?php echo esc_attr($local_select_id); ?>">
+				<option value="">-- choose unit --</option>
+				<?php foreach ($devices as $uid => $label) : ?>
+					<option value="<?php echo esc_attr($uid); ?>"><?php echo esc_html($label); ?></option>
+				<?php endforeach; ?>
+			</select>
+		</p>
+
+		<button id="<?php echo esc_attr($load_id); ?>" class="button">Load</button>
+
+		<div id="<?php echo esc_attr($form_wrap_id); ?>" style="margin-top:12px; display:none;">
+			<form>
+				<div id="<?php echo esc_attr($fields_id); ?>"></div>
 				<p class="submit">
-					<button id="tmon_ds_save" class="button button-primary">Stage settings</button>
-					<span id="tmon_ds_status" style="margin-left:12px"></span>
+					<button id="<?php echo esc_attr($save_id); ?>" class="button button-primary">Stage settings</button>
+					<span id="<?php echo esc_attr($status_id); ?>" style="margin-left:12px"></span>
 				</p>
 			</form>
 		</div>
 	</div>
 
-	<!-- Ensure a global 'picker' variable exists (null when no page-level picker is present) -->
-	<script>var picker = (document && typeof document.getElementById === 'function') ? document.getElementById('tmon-unit-picker') || null : null;</script>
-
-	<!-- Expose a REST nonce as a fallback when wp.apiSettings.nonce is not available -->
 	<script>var TMON_REST_NONCE = '<?php echo esc_js(wp_create_nonce('wp_rest')); ?>';</script>
-
 	<script>
 	(function(){
-		// Use the canonical page-level picker (id="tmon-unit-picker") only.
-		// We rely on the global `picker` var defined above to avoid ReferenceError.
-		var external = (typeof picker !== 'undefined' && picker) ? picker : (document.getElementById ? document.getElementById('tmon-unit-picker') : null);
- 		var btnLoad = document.getElementById('tmon_ds_load');
- 		var formWrap = document.getElementById('tmon_ds_form');
- 		var fields = document.getElementById('tmon_ds_fields');
- 		var status = document.getElementById('tmon_ds_status');
- 		var saveBtn = document.getElementById('tmon_ds_save');
- 
- 		// Keep an inline, local SCHEMA identical to what the UI expects
- 		var SCHEMA = [
- 			{key:'NODE_TYPE', type:'select', opts:['base','wifi','remote'], label:'Node Type'},
- 			{key:'UNIT_Name', type:'text', label:'Unit Name'},
- 			{key:'SAMPLE_TEMP', type:'bool', label:'Enable Temperature Sampling'},
- 			{key:'SAMPLE_HUMID', type:'bool', label:'Enable Humidity Sampling'},
- 			{key:'SAMPLE_BAR', type:'bool', label:'Enable Barometric Pressure Sampling'},
- 			{key:'ENABLE_OLED', type:'bool', label:'Enable OLED'},
- 			{key:'ENGINE_ENABLED', type:'bool', label:'Enable Engine Controller'},
- 			{key:'RELAY_PIN1', type:'number', label:'Relay Pin 1'},
- 			{key:'RELAY_PIN2', type:'number', label:'Relay Pin 2'},
- 			{key:'WIFI_SSID', type:'text', label:'WiFi SSID'},
- 			{key:'WIFI_PASS', type:'text', label:'WiFi Password'}
- 		];
+		var root = document.getElementById('<?php echo esc_js($wrap_id); ?>');
+		if (!root) return;
 
- 		function renderFields(values){
- 			fields.innerHTML = '';
- 			SCHEMA.forEach(function(f){
- 				var v = values && (values[f.key] !== undefined) ? values[f.key] : '';
- 				var row = document.createElement('div');
- 				row.style.marginBottom = '8px';
- 				var label = document.createElement('label');
- 				label.style.display = 'block';
- 				label.style.fontWeight = '600';
- 				label.textContent = f.label;
- 				row.appendChild(label);
+		var external = document.querySelector('select#tmon-unit-picker');
+		var local = document.getElementById('<?php echo esc_js($local_select_id); ?>');
+		var localWrap = document.getElementById('<?php echo esc_js($local_wrap_id); ?>');
 
- 				if (f.type === 'bool') {
- 					var chk = document.createElement('input');
- 					chk.type = 'checkbox';
- 					chk.name = f.key;
- 					chk.checked = !!v;
- 					row.appendChild(chk);
- 				} else if (f.type === 'select') {
- 					var sel = document.createElement('select');
- 					sel.name = f.key;
- 					f.opts.forEach(function(o){
- 						var opt = document.createElement('option');
- 						opt.value = o;
- 						opt.textContent = o;
- 						if (o === v) opt.selected = true;
- 						sel.appendChild(opt);
- 					});
- 					row.appendChild(sel);
- 				} else {
- 					var inp = document.createElement('input');
- 					inp.type = (f.type === 'number') ? 'number' : 'text';
- 					inp.name = f.key;
- 					inp.value = (v === null || v === undefined) ? '' : v;
- 					inp.className = 'regular-text';
- 					row.appendChild(inp);
- 				}
- 				fields.appendChild(row);
- 			});
- 		}
+		var useExternal = !!(external && external.options && external.options.length);
+		if (localWrap) localWrap.style.display = useExternal ? 'none' : '';
+		var activePicker = useExternal ? external : local;
 
- 		function fetchStaged(unit){
- 			status.textContent = 'Loading...';
- 			return fetch(window.location.origin + '/wp-json/tmon/v1/device/staged-settings?unit_id=' + encodeURIComponent(unit), { credentials: 'same-origin' })
- 				.then(function(r){ return r.json(); })
- 				.then(function(j){ status.textContent = ''; return j.staged || {}; })
- 				.catch(function(){ status.textContent = 'Load failed'; return {}; });
- 		}
+		var btnLoad = document.getElementById('<?php echo esc_js($load_id); ?>');
+		var formWrap = document.getElementById('<?php echo esc_js($form_wrap_id); ?>');
+		var fields = document.getElementById('<?php echo esc_js($fields_id); ?>');
+		var status = document.getElementById('<?php echo esc_js($status_id); ?>');
+		var saveBtn = document.getElementById('<?php echo esc_js($save_id); ?>');
 
- 		function loadVals(unit){
- 			if (!unit) { status.textContent = 'Choose a unit'; return; }
- 			status.textContent = 'Loading...';
- 			fetchStaged(unit).then(function(vals){
- 				status.textContent = '';
- 				renderFields(vals);
- 				formWrap.style.display = '';
- 			}).catch(function(){ status.textContent = 'Load failed'; });
- 		}
+		// Keep an inline, local SCHEMA identical to what the UI expects
+		var SCHEMA = [
+			{key:'NODE_TYPE', type:'select', opts:['base','wifi','remote'], label:'Node Type'},
+			{key:'UNIT_Name', type:'text', label:'Unit Name'},
+			{key:'SAMPLE_TEMP', type:'bool', label:'Enable Temperature Sampling'},
+			{key:'SAMPLE_HUMID', type:'bool', label:'Enable Humidity Sampling'},
+			{key:'SAMPLE_BAR', type:'bool', label:'Enable Barometric Pressure Sampling'},
+			{key:'ENABLE_OLED', type:'bool', label:'Enable OLED'},
+			{key:'ENGINE_ENABLED', type:'bool', label:'Enable Engine Controller'},
+			{key:'RELAY_PIN1', type:'number', label:'Relay Pin 1'},
+			{key:'RELAY_PIN2', type:'number', label:'Relay Pin 2'},
+			{key:'WIFI_SSID', type:'text', label:'WiFi SSID'},
+			{key:'WIFI_PASS', type:'text', label:'WiFi Password'}
+		];
 
- 		// If no page-level picker, disable controls and show a hint.
- 		// We intentionally do NOT clone or create a picker here — the admin should provide the canonical selector.
- 		if (!external) {
- 			if (status) status.textContent = 'Page-level unit selector (id=\"tmon-unit-picker\") not found; add it to use this panel.';
- 			if (btnLoad) btnLoad.disabled = true;
- 			if (saveBtn) saveBtn.disabled = true;
- 			return;
- 		}
+		function renderFields(values){
+			fields.innerHTML = '';
+			SCHEMA.forEach(function(f){
+				var v = values && (values[f.key] !== undefined) ? values[f.key] : '';
+				var row = document.createElement('div');
+				row.style.marginBottom = '8px';
+				var label = document.createElement('label');
+				label.style.display = 'block';
+				label.style.fontWeight = '600';
+				label.textContent = f.label;
+				row.appendChild(label);
 
- 		// Auto-load when picker changes
- 		external.addEventListener('change', function(){ loadVals(external.value); });
+				if (f.type === 'bool') {
+					var chk = document.createElement('input');
+					chk.type = 'checkbox';
+					chk.name = f.key;
+					chk.checked = !!v;
+					row.appendChild(chk);
+				} else if (f.type === 'select') {
+					var sel = document.createElement('select');
+					sel.name = f.key;
+					f.opts.forEach(function(o){
+						var opt = document.createElement('option');
+						opt.value = o;
+						opt.textContent = o;
+						if (o === v) opt.selected = true;
+						sel.appendChild(opt);
+					});
+					row.appendChild(sel);
+				} else {
+					var inp = document.createElement('input');
+					inp.type = (f.type === 'number') ? 'number' : 'text';
+					inp.name = f.key;
+					inp.value = (v === null || v === undefined) ? '' : v;
+					inp.className = 'regular-text';
+					row.appendChild(inp);
+				}
+				fields.appendChild(row);
+			});
+		}
 
- 		// Load button uses the page-level picker
- 		if (btnLoad) btnLoad.addEventListener('click', function(e){
- 			e.preventDefault();
- 			var unit = external.value;
- 			if (!unit) { alert('Choose a unit'); return; }
- 			loadVals(unit);
- 		});
+		function fetchStaged(unit){
+			status.textContent = 'Loading...';
+			return fetch('<?php echo $staged_get_url; ?>?unit_id=' + encodeURIComponent(unit), { credentials: 'same-origin' })
+				.then(function(r){ return r.json(); })
+				.then(function(j){
+					status.textContent = '';
+					if (!j || j.error) return {};
+					if (j.staged && typeof j.staged === 'object') return j.staged;
+					if (j.data && j.data.staged && typeof j.data.staged === 'object') return j.data.staged;
+					if (j.settings && typeof j.settings === 'object') return j.settings;
+					return {};
+				})
+				.catch(function(){ status.textContent = 'Load failed'; return {}; });
+		}
 
- 		// Initial populate: auto-load for current selection if available
- 		(function(){
- 			var initial = (external && external.value) ? external.value : (external && external.options && external.options.length ? external.options[0].value : null);
- 			if (initial) loadVals(initial);
- 		})();
+		function loadVals(unit){
+			if (!unit) { status.textContent = 'Choose a unit'; return; }
+			status.textContent = 'Loading...';
+			fetchStaged(unit).then(function(vals){
+				status.textContent = '';
+				renderFields(vals);
+				formWrap.style.display = '';
+			}).catch(function(){ status.textContent = 'Load failed'; });
+		}
 
- 		// Save: stage settings to server (uses page-level picker)
- 		if (saveBtn) saveBtn.addEventListener('click', function(e){
- 			e.preventDefault();
- 			status.textContent = 'Saving...';
- 			var unit = external.value;
- 			if (!unit) { alert('Choose a unit'); status.textContent = ''; return; }
- 			var payload = { unit_id: unit, settings: {} };
- 			SCHEMA.forEach(function(f){
- 				var el = document.querySelector('[name="'+f.key+'"]');
- 				if (!el) return;
- 				var v;
- 				if (f.type === 'bool') v = !!el.checked;
- 				else if (f.type === 'number') v = el.value !== '' ? Number(el.value) : '';
- 				else v = el.value;
- 				payload.settings[f.key] = v;
- 			});
-			// include WP REST nonce (if available) to authenticate cookie-based POSTs.
-			// Use wp.apiSettings.nonce when available, otherwise fallback to TMON_REST_NONCE injected above.
+		if (!activePicker) {
+			if (status) status.textContent = 'No unit selector available.';
+			if (btnLoad) btnLoad.disabled = true;
+			if (saveBtn) saveBtn.disabled = true;
+			return;
+		}
+
+		activePicker.addEventListener('change', function(){ loadVals(ensureUnitSelected()); });
+		if (btnLoad) btnLoad.addEventListener('click', function(e){ e.preventDefault(); loadVals(ensureUnitSelected()); });
+
+		function ensureUnitSelected(){
+			if (!activePicker) return '';
+			var v = activePicker.value || '';
+			if (!v && activePicker.options && activePicker.options.length) {
+				for (var i = 0; i < activePicker.options.length; i++) {
+					if (activePicker.options[i].value) { v = activePicker.options[i].value; break; }
+				}
+				if (v) activePicker.value = v;
+			}
+			return v;
+		}
+
+		(function(){
+			var initial = ensureUnitSelected();
+			if (initial) loadVals(initial);
+		})();
+
+		if (saveBtn) saveBtn.addEventListener('click', function(e){
+			e.preventDefault();
+			status.textContent = 'Saving...';
+			var unit = ensureUnitSelected();
+			if (!unit) { status.textContent = 'Choose a unit'; return; }
+
+			var payload = { unit_id: unit, settings: {} };
+			SCHEMA.forEach(function(f){
+				var el = fields ? fields.querySelector('[name="'+f.key+'"]') : null;
+				if (!el) return;
+				var v = (f.type === 'bool') ? !!el.checked : ((f.type === 'number') ? (el.value !== '' ? Number(el.value) : '') : el.value);
+				payload.settings[f.key] = v;
+			});
+
 			var nonce = (window.wp && wp.apiSettings && wp.apiSettings.nonce) ? wp.apiSettings.nonce : (typeof TMON_REST_NONCE !== 'undefined' ? TMON_REST_NONCE : '');
 			var headers = {'Content-Type': 'application/json'};
 			if (nonce) headers['X-WP-Nonce'] = nonce;
-			fetch(window.location.origin + '/wp-json/tmon/v1/admin/device/settings-staged', {
+
+			fetch('<?php echo $staged_post_url; ?>', {
 				method: 'POST',
 				credentials: 'same-origin',
 				headers: headers,
 				body: JSON.stringify(payload)
 			}).then(function(r){ return r.json(); }).then(function(j){
-				if (j && j.ok) {
+				if (j && (j.ok || j.success)) {
 					status.textContent = 'Staged. Will be delivered at next device check-in.';
 					loadVals(unit);
 				} else {
 					status.textContent = (j && j.message) ? j.message : 'Save failed';
-					if (j && j.code === 'rest_forbidden') alert('Permission denied: you must be an admin to stage settings.');
 				}
 			}).catch(function(){ status.textContent = 'Save request failed'; });
- 		});
+		});
 	})();
 	</script>
 	<?php
@@ -1508,7 +1539,7 @@ add_action('wp_ajax_tmon_device_status_refresh', function(){
     if (!current_user_can('manage_options') && !current_user_can('edit_tmon_units')) wp_send_json_error(['message'=>'forbidden'], 403);
     check_ajax_referer('tmon_uc_relay'); // reuse relay nonce for status refresh
     global $wpdb;
-    // Build the same tbody as the shortcode does
+
     $devices = $wpdb->get_results("SELECT unit_id, unit_name, last_seen, suspended, settings FROM {$wpdb->prefix}tmon_devices ORDER BY last_seen DESC", ARRAY_A);
     $index = [];
     foreach ($devices as $r) { $index[$r['unit_id']] = $r; }
@@ -1522,12 +1553,18 @@ add_action('wp_ajax_tmon_device_status_refresh', function(){
         }
     }
     $rows = array_values($index);
-    ob_start();
+
     $now = current_time('timestamp');
+    $nonce = wp_create_nonce('tmon_uc_relay');
+    $can_control = current_user_can('manage_options') || current_user_can('edit_tmon_units');
+
+    ob_start();
     foreach ($rows as $r) {
         $last = $r['last_seen'] ? tmon_uc_mysql_to_local_timestamp($r['last_seen']) : 0;
-        if (!$last) { $age = PHP_INT_MAX; $cls = 'tmon-red'; $title = 'Never seen'; }
-        else {
+        if (!$last) {
+            $cls = 'tmon-red';
+            $title = 'Never seen';
+        } else {
             $age = max(0, $now - $last);
             if (intval($r['suspended'])) $cls = 'tmon-red';
             else if ($age <= 15 * 60) $cls = 'tmon-green';
@@ -1535,44 +1572,52 @@ add_action('wp_ajax_tmon_device_status_refresh', function(){
             else $cls = 'tmon-red';
             $title = 'Last seen: ' . tmon_uc_format_mysql_datetime($r['last_seen'], get_option('date_format') . ' ' . get_option('time_format')) . ' (' . human_time_diff($last, $now) . ' ago)';
         }
-        // Relay detection (lightweight)
-        $enabled_relays = [1,2];
+
+        $enabled_relays = [1, 2];
         $settings = !empty($r['settings']) ? json_decode($r['settings'], true) : [];
         if (is_array($settings)) {
             foreach ($settings as $k => $v) {
                 if (preg_match('/^enable[_]?relay[_]?(\d+)$/i', $k, $m) && isset($m[1])) {
-                    $n = intval($m[1]); if ($n>=1 && $n<=8 && tmon_uc_truthy_flag($v)) $enabled_relays[] = $n;
+                    $n = intval($m[1]);
+                    if ($n >= 1 && $n <= 8 && tmon_uc_truthy_flag($v)) $enabled_relays[] = $n;
                 }
             }
         }
         $fd = $wpdb->get_row($wpdb->prepare("SELECT data FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s ORDER BY created_at DESC LIMIT 1", $r['unit_id']), ARRAY_A);
-        $fddata = $fd['data'] ?? '';
-        $d = $fddata ? json_decode($fddata, true) : [];
+        $d = !empty($fd['data']) ? json_decode($fd['data'], true) : [];
         if (is_array($d)) {
             foreach ($d as $k => $v) {
                 if (preg_match('/^enable[_]?relay[_]?(\d+)$/i', $k, $m) && isset($m[1])) {
-                    $n = intval($m[1]); if ($n>=1 && $n<=8 && tmon_uc_truthy_flag($v)) $enabled_relays[] = $n;
+                    $n = intval($m[1]);
+                    if ($n >= 1 && $n <= 8 && tmon_uc_truthy_flag($v)) $enabled_relays[] = $n;
                 }
             }
         }
         $enabled_relays = array_values(array_unique($enabled_relays));
+
         echo '<tr>';
         echo '<td><span class="tmon-dot '.$cls.'" title="'.esc_attr($title).'"></span></td>';
         echo '<td>'.esc_html($r['unit_id']).'</td>';
         echo '<td>'.esc_html($r['unit_name']).'</td>';
         echo '<td>'.esc_html(tmon_uc_format_mysql_datetime($r['last_seen'])).'</td>';
         echo '<td>';
-        if (!empty($enabled_relays)) {
+        if ($can_control && !empty($enabled_relays)) {
+            echo '<div class="tmon-relay-ctl" data-unit="'.esc_attr($r['unit_id']).'" data-nonce="'.esc_attr($nonce).'">';
+            echo '<label class="tmon-text-muted">Run (min)</label><input type="number" min="0" max="1440" step="1" class="tmon-runtime-min" title="Runtime minutes (0 = no auto-off)" value="0">';
+            echo '<label class="tmon-text-muted">At</label><input type="datetime-local" class="tmon-schedule-at" title="Optional schedule time">';
             foreach ($enabled_relays as $n) {
                 echo '<div class="tmon-relay-row"><span class="tmon-text-muted">R'.$n.'</span> <button type="button" class="button button-small tmon-relay-btn" data-relay="'.$n.'" data-state="on">On</button> <button type="button" class="button button-small tmon-relay-btn" data-relay="'.$n.'" data-state="off">Off</button></div>';
             }
-        } else {
+            echo '</div>';
+        } else if (empty($enabled_relays)) {
             echo '<span class="tmon-text-muted">No relays enabled</span>';
+        } else {
+            echo '<span class="tmon-text-muted">No control permission</span>';
         }
         echo '</td>';
         echo '</tr>';
     }
     $html = ob_get_clean();
-    wp_send_json_success(['html'=>$html]);
+    wp_send_json_success(['html' => $html]);
 });
 add_action('wp_ajax_nopriv_tmon_device_status_refresh', function(){ wp_send_json_error(['message'=>'not_authenticated'], 403); });

@@ -58,7 +58,7 @@ UNIT_Name = "No Device Name"    # Human-friendly name (provisioned)
 NODE_TYPE = 'wifi'             # 'base','wifi', or 'remote'; base can host LoRa network & WiFi; remote uses LoRa primarily
 #NODE_TYPE = 'remote'          # Uncomment for remote role during flashing
 
-FIRMWARE_VERSION = "v2.07.5c"   # Firmware version string
+FIRMWARE_VERSION = "v2.07.5d"   # Firmware version string
 
  # WordPress Unit Connector API integration
 WORDPRESS_API_URL = ""   # Customer Unit Connector site for provisioned devices
@@ -679,3 +679,8 @@ LORA_CHUNK_SHRINK_CODES = [-4]            # codes that indicate "packet too long
 LORA_CHUNK_TRANSIENT_CODES = [86, 87, 89] # codes considered transient — retry the chunk rather than shrink
 
 LORA_CHUNK_FATAL_CODES = [-2, -3]        # codes that indicate fatal errors — abort chunked transfer
+
+# --- LoRa legacy compatibility toggles ---
+# When True, remote transmits legacy "TS:...,UID:..." text payloads.
+# JSON/HMAC/chunk flow remains available when False.
+LORA_LEGACY_TEXT_MODE = False

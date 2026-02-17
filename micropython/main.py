@@ -83,6 +83,18 @@ def _runtime_is_zero():
 
 IS_ZERO_RUNTIME = _runtime_is_zero()
 
+def _install_zero_soft_reset_handler():
+    """On Zero/CPython, map machine.soft_reset() to controlled restart path."""
+    if not IS_ZERO_RUNTIME:
+        return
+    try:
+        if machine and not hasattr(machine, "soft_reset"):
+            def _soft_reset():
+                raise SystemExit("soft_reset requested")
+            machine.soft_reset = _soft_reset
+    except Exception:
+        pass
+
 # Guard LoRa import for Zero/CPython (keeps booting even if LoRa stack not present)
 try:
     _mcu = str(getattr(settings, "MCU_TYPE", "")).lower()
