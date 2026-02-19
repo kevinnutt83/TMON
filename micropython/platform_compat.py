@@ -11,6 +11,26 @@ Selection is keyed off settings.MCU_TYPE ('pico'|'esp32'|'zero').
 
 import sys
 
+try:
+    import types as _types  # CPython (Zero)
+except Exception:
+    _types = None  # MicroPython may not provide this
+
+if _types is not None:
+    _SimpleNamespace = _types.SimpleNamespace
+    _ModuleType = _types.ModuleType
+else:
+    class _SimpleNamespace:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    def _ModuleType(name):
+        class _Mod:
+            pass
+        m = _Mod()
+        m.__name__ = name
+        return m
+
 # --- settings / MCU selection ---
 try:
     import settings as _settings
@@ -60,8 +80,6 @@ if IS_MICROPYTHON:
 else:
     try:
         import requests as requests  # type: ignore
-        from __future__ import annotations
-        import types
     except Exception:
         requests = None
 
@@ -130,7 +148,7 @@ except Exception:
         except Exception:
             pass
     else:
-        machine = types.SimpleNamespace()
+        machine = _SimpleNamespace()
 
         class Pin:
             IN = 0
@@ -227,7 +245,7 @@ try:
     else:
         raise ImportError()
 except Exception:
-    network = types.ModuleType("network")
+    network = _ModuleType("network")
     network.STA_IF = 0  # type: ignore[attr-defined]
 
     class WLAN:
@@ -355,7 +373,7 @@ elif IS_ZERO:
             def fill(self, *_a, **_kw): return None
 
     try:
-        _np_mod = types.ModuleType("neopixel")
+        _np_mod = _ModuleType("neopixel")
         _np_mod.NeoPixel = NeoPixel  # type: ignore[attr-defined]
         sys.modules.setdefault("neopixel", _np_mod)
     except Exception:
