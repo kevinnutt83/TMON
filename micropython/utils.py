@@ -1413,15 +1413,9 @@ async def periodic_provision_check():
                     try:
                         try:
                             import socket as _sock
-                            _sock.setdefaulttimeout(timeout_s)
                         except ImportError:
                             import usocket as _sock
-                            _sock.setdefaulttimeout(timeout_s)
-                        try:
-                            import usocket as _sock
-                            _sock.setdefaulttimeout(timeout_s)
-                        except Exception:
-                            pass
+                        _sock.setdefaulttimeout(timeout_s)
                     except Exception:
                         pass
                     mid = get_machine_id()
@@ -1538,6 +1532,8 @@ async def periodic_provision_check():
                 pass
 
         await _a.sleep(interval)
+
+
 
 def compute_bars(rssi, cuts=None):
     try:
