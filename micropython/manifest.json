@@ -50,6 +50,7 @@
     "lib/future-1.0.0.dist-info/METADATA": "sha256:30d35a50a3116d9026558ab9026ffed4db58675562102a526bc56c4235db913e",
     "lib/pyserial-3.5.dist-info/METADATA": "sha256:a38cd71e6b2edaf16b2d785148ee6fa146e1800c73fcd60e5d44b1dbca2d034c",
     "lib/pyserial-3.5.dist-info/RECORD": "sha256:5ee62ad21ba91ba149df8b8bb361bd8ac79368facdb877a1c402c596f6eef71a",
+    "lib/requests.py": "sha256:fadffbb36e31d066362c2fa52be24523f80e47979850fe8460fcafe083844518",
     "lib/requests/__init__.py": "sha256:d215f41495fbb6ed9d1f3cd470533d0da299482a7967f8fc3e15ca0d09f5e7ba",
     "lib/serial-0.0.97.dist-info/METADATA": "sha256:cdcf85e98148ff4bca07e020ddba272e40cb3f6e90fd00610815562c946e4cf2",
     "lib/serial/__init__.py": "sha256:f77c2f30611a52e058b9770593d92766cb8956b53a53151501f1b201706027de",
@@ -77,7 +78,7 @@
     "lora.py": "sha256:0feb75a9aa5db58f698027ddfc6eb52d708e45f82fe67e42541c75bcc9c8bfec",
     "machine_compat.py": "sha256:b9300ddc35ae4fedf32e1a1aa5214552a8c889174ad28c410f68398491d7f91b",
     "main.py": "sha256:268a6354d145d24ce8807946a2d840003facea4946f0887ae948ffb5bf69bc57",
-    "manifest.json.bak": "sha256:94a1b91ff40d33d9263e2ef722ff875f750d19c7e9ef0dc0262d87856ecc44f4",
+    "manifest.json.bak": "sha256:2e9a7f174bc034b58f631d0fadefb8d773cbcca087a44ff129860a4d18a03a28",
     "oled.py": "sha256:c06e283ba1e5d043f37d0b448f06e9a14bffc1cab2347e1d15f22e0386cffd67",
     "ota.py": "sha256:bcbb24ba49dbec0ac20223a4def159ff56c1d5601365b7439937bca5c33a97a5",
     "platform_compat.py": "sha256:b0a02f121428bd3610ea324bbc8d4f6ae792fac36d7d20edeb1f316e8704e061",
@@ -86,7 +87,7 @@
     "relay.py": "sha256:8e625ba82f56aee594c43ce8e623dab775a26ee0d3f8dc2a4cfd6d46b1a588b0",
     "sampling.py": "sha256:9f6b26e2c421dabd1243b67c015bb80ffecfd61de210e182627a963f356613e4",
     "sdata.py": "sha256:ca6f1fc0ca9fc4a541eeeff75aba0a91925a660d3e8ccb97daf885bd6ef332e4",
-    "settings.py": "sha256:f9ee981d230f87cb107c5baad834fa2ee9366da51bd32f58ae1213969ad12110",
+    "settings.py": "sha256:26975e590c1140f9b162675855e7c63cd2ef2b05eda91ba5ce3ce99ad24ae50c",
     "settings_apply.py": "sha256:9058995340c5ec1260d6e180f9769e91c7986d0b10a62e9a073deb74fb330978",
     "tests/lora_selective_retransmit.py": "sha256:ab5a7a6df216b9a61e41fe40b2a3688530133eac89afb99ca82353fb294c4768",
     "tests/lora_sim.py": "sha256:5060f82cfca31fa7cb0f62729ef9607c36609afe4ea16735397fb746ece929a0",
@@ -94,12 +95,12 @@
     "tests/test_log_trim.py": "sha256:5933ec391a1cefcaeb401a461c1957744d4452987abb1d46f6c7ec74d3c0fc03",
     "tmon.py": "sha256:6e02972339d39337069fa2a98c720b2d5cf0e01e55b25ffddcb73c34b2fe65d1",
     "uasyncio.py": "sha256:ce0e94ce44343f0835a119409127f565e6b56d628044cfd150430746074e905e",
-    "utils.py": "sha256:d9c1f4fc14795a7451ae79e4058a3e93e17e297e6c63cc15e1218eff56b5be68",
+    "utils.py": "sha256:416ea24afd8601b29e52f95c5cccef78d41f0f69723d409ee6b966cd4e61f1d5",
     "utime.py": "sha256:3df73d5520415a18493b9e8237a52b4d221f9fa83f2e23c66508b53dff0a1d54",
-    "version.txt": "sha256:4e15bc7bb3e46b70b20ae8a36fa53b39d3b3bb02040b86d52ea2ec236ac2584b",
+    "version.txt": "sha256:234f6c40590acc80d147032f73116779bb798cb27ae63713adb704ce3c0ed2b9",
     "wifi.py": "sha256:cb4c3378effed85af85898a0d98b4a36f7d613daf41b814857b3af4efe8e3799",
     "wprest.py": "sha256:071fbdf64a3bdddb7e4b69e9d17348cc4899b37523ae3816843fde8f02dc0ca7"
   },
   "name": "tmon-micropython",
-  "version": "v2.07.5d"
+  "version": "v2.07.5e"
 }
