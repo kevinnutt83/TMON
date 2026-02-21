@@ -1411,7 +1411,11 @@ async def periodic_provision_check():
                 resp = None
                 if _r:
                     try:
+                        import socket as _sock
+                    except ImportError:
                         import usocket as _sock
+
+                    try:
                         _sock.setdefaulttimeout(timeout_s)
                     except Exception:
                         pass
