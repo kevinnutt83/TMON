@@ -899,264 +899,268 @@ async def connectLora():
     role = getattr(settings, 'NODE_TYPE', 'base')
 
     if role == 'base':
-        try:
-            RX_DONE_FLAG = getattr(SX1262, 'RX_DONE', None)
+        while True:
             try:
-                ev = lora._events()
-            except Exception:
-                ev = 0
-            if RX_DONE_FLAG is not None and (ev & RX_DONE_FLAG):
+                RX_DONE_FLAG = getattr(SX1262, 'RX_DONE', None)
                 try:
-                    msg_bytes, err = lora._readData(0)
-                    await debug_print(f"lora: RX len={len(msg_bytes if msg_bytes else b'')} err={err}", "LORA")
-                    if err != 0:
-                        await debug_print(f"lora: RX err={err} discarded", "LORA")
-                except Exception as rexc:
-                    await debug_print(f"lora: _readData exception: {rexc}", "ERROR")
-                    msg_bytes = None
-                    err = -1
-                if err == 0 and msg_bytes:
+                    ev = lora._events()
+                except Exception:
+                    ev = 0
+                if RX_DONE_FLAG is not None and (ev & RX_DONE_FLAG):
                     try:
-                        sdata.lora_SigStr = lora.getRSSI()
-                        sdata.lora_snr = lora.getSNR()
-                        sdata.lora_last_rx_ts = time.time()
-                    except Exception:
-                        pass
-                    try:
-                        if isinstance(msg_bytes, (bytes, bytearray)):
-                            msg_str = msg_bytes.decode('utf-8', 'ignore')
-                        else:
-                            msg_str = str(msg_bytes)
-                        await debug_print(f"lora: RX txt={msg_str}", "LORA")
+                        msg_bytes, err = lora._readData(0)
+                        await debug_print(f"lora: RX len={len(msg_bytes if msg_bytes else b'')} err={err}", "LORA")
+                        if err != 0:
+                            await debug_print(f"lora: RX err={err} discarded", "LORA")
+                    except Exception as rexc:
+                        await debug_print(f"lora: _readData exception: {rexc}", "ERROR")
+                        msg_bytes = None
+                        err = -1
+                    if err == 0 and msg_bytes:
                         try:
-                            payload = ujson.loads(msg_str)
+                            sdata.lora_SigStr = lora.getRSSI()
+                            sdata.lora_snr = lora.getSNR()
+                            sdata.lora_last_rx_ts = time.time()
                         except Exception:
-                            payload = None
-                        if payload is None:
-                            # Try old string format
-                            if msg_str.startswith('TS:'):
-                                parts = msg_str.split(',')
-                                payload = {}
-                                for part in parts:
-                                    if ':' in part:
-                                        key, value = part.split(':', 1)
-                                        payload[key.lower().strip()] = value.strip()
-                            else:
-                                payload = {'raw': msg_str}
-
-                        if isinstance(payload, dict) and payload.get('chunked'):
-                            try:
-                                uid = str(payload.get('uid') or payload.get('unit_id') or 'unknown')
-                                seq = int(payload.get('seq', 1))
-                                total = int(payload.get('total', 1))
-                                b64 = payload.get('b64', '') or ''
-                                if not b64:
-                                    raise ValueError('empty_chunk')
-                                raw_chunk = _ub.a2b_base64(b64)
-                                entry = _lora_incoming_chunks.get(uid, {'total': total, 'parts': {}, 'ts': int(time.time())})
-                                entry['total'] = total
-                                entry['parts'][seq] = raw_chunk
-                                entry['ts'] = int(time.time())
-                                _lora_incoming_chunks[uid] = entry
-                                await debug_print(f"lora: chunk {seq}/{total} for {uid}, parts: {len(entry['parts'])}", 'LORA')
-                                if len(entry['parts']) == entry['total']:
-                                    assembled = b''.join(entry['parts'][i] for i in range(1, entry['total'] + 1))
-                                    try:
-                                        assembled_obj = ujson.loads(assembled.decode('utf-8', 'ignore'))
-                                    except Exception:
-                                        assembled_obj = {'raw': assembled.decode('utf-8', 'ignore')}
-                                    payload = assembled_obj
-                                    await debug_print(f"lora: assembled for {uid}", 'LORA')
-                                    del _lora_incoming_chunks[uid]
-                                else:
-                                    gc.collect()
-                                    return True
-                            except Exception as e:
-                                await debug_print(f"lora: chunk handling error: {e}", "ERROR")
-                                gc.collect()
-                                return True
-
-                        if 'enc' in payload and payload['enc'] == 1:
-                            try:
-                                secret = getattr(settings, 'LORA_ENCRYPT_SECRET', '')
-                                key = secret.encode()
-                                if len(key) < 32:
-                                    key = (key + b'\x00'*32)[:32]
-                                nonce_str = payload.get('nonce', '')
-                                nonce = bytes(int(nonce_str[i:i+2], 16) for i in range(0, len(nonce_str), 2))
-                                ct_str = payload.get('ct', '')
-                                ct = bytes(int(ct_str[i:i+2], 16) for i in range(0, len(ct_str), 2))
-                                pt = chacha20_decrypt(key, nonce, 1, ct)
-                                inner = ujson.loads(pt.decode('utf-8', 'ignore'))
-                                payload = inner
-                            except Exception as de:
-                                await debug_print(f"lora: decrypt failed: {de}", "ERROR")
-                                return True
-
-                        if getattr(settings, 'LORA_HMAC_ENABLED', False):
-                            if 'sig' not in payload:
-                                if getattr(settings, 'LORA_HMAC_REJECT_UNSIGNED', False):
-                                    await debug_print("lora: unsigned payload rejected", "WARN")
-                                    return True
-                            else:
-                                try:
-                                    secret = getattr(settings, 'LORA_HMAC_SECRET', '').encode()
-                                    ctr = payload.get('ctr', 0)
-                                    mac_src = b"|".join([
-                                        secret,
-                                        str(payload.get('uid', '')).encode(),
-                                        str(payload.get('ts', '')).encode(),
-                                        str(ctr).encode()
-                                    ])
-                                    import uhashlib
-                                    h = uhashlib.sha256(mac_src)
-                                    import ubinascii
-                                    expected = ubinascii.hexlify(h.digest())[:32].decode()
-                                    if expected != payload['sig']:
-                                        await debug_print("lora: invalid signature", "ERROR")
-                                        return True
-                                    if getattr(settings, 'LORA_HMAC_REPLAY_PROTECT', False):
-                                        ctrs = _load_remote_counters()
-                                        uid = str(payload.get('uid', ''))
-                                        last = ctrs.get(uid, 0)
-                                        if ctr <= last:
-                                            await debug_print("lora: replay detected", "ERROR")
-                                            return True
-                                        ctrs[uid] = ctr
-                                        _save_remote_counters(ctrs)
-                                    del payload['sig']
-                                    del payload['ctr']
-                                except Exception as ve:
-                                    await debug_print(f"lora: hmac verify failed: {ve}", "ERROR")
-                                    return True
-
-                        uid = payload.get('uid', '') or payload.get('unit_id', '')
-
-                        if 'data' in payload and isinstance(payload['data'], list):
-                            stage_remote_field_data(uid, payload['data'])
-                        elif 'files' in payload and isinstance(payload['files'], dict):
-                            stage_remote_files(uid, payload['files'])
-                        else:
-                            record = {'timestamp': int(time.time()),
-                                      'remote_timestamp': payload.get('ts'),
-                                      'cur_temp_f': payload.get('temp_f') or payload.get('temp_f'),
-                                      'cur_temp_c': payload.get('temp_c') or payload.get('temp_c'),
-                                      'cur_humid': payload.get('humid') or payload.get('humid'),
-                                      'cur_bar_pres': payload.get('bar') or payload.get('bar'),
-                                      'sys_voltage': payload.get('v'),
-                                      'free_mem': payload.get('fm'),
-                                      'remote_unit_id': uid,
-                                      'node_type': 'remote',
-                                      'source': 'remote'
-                                      }
-                            try:
-                                append_field_data_entry(record)
-                                await debug_print("persisted remote data to field log", 'LORA')
-                            except Exception as e:
-                                await debug_print(f"lora: failed to persist remote line: {e}", "ERROR")
-                            write_lora_log(f"Base received remote payload: {str(record)[:160]}", 'INFO')
-
+                            pass
                         try:
-                            if uid:
-                                settings.REMOTE_NODE_INFO = getattr(settings, 'REMOTE_NODE_INFO', {})
-                                last_payload = record if 'record' in locals() else payload
-                                settings.REMOTE_NODE_INFO[str(uid)] = {'last_seen': int(time.time()), 'last_payload': last_payload}
+                            if isinstance(msg_bytes, (bytes, bytearray)):
+                                msg_str = msg_bytes.decode('utf-8', 'ignore')
+                            else:
+                                msg_str = str(msg_bytes)
+                            await debug_print(f"lora: RX txt={msg_str}", "LORA")
+                            try:
+                                payload = ujson.loads(msg_str)
+                            except Exception:
+                                payload = None
+                            if payload is None:
+                                # Try old string format
+                                if msg_str.startswith('TS:'):
+                                    parts = msg_str.split(',')
+                                    payload = {}
+                                    for part in parts:
+                                        if ':' in part:
+                                            key, value = part.split(':', 1)
+                                            payload[key.lower().strip()] = value.strip()
+                                else:
+                                    payload = {'raw': msg_str}
+
+                            if isinstance(payload, dict) and payload.get('chunked'):
                                 try:
-                                    settings.REMOTE_NODE_INFO[str(uid)]['last_rssi'] = lora.getRSSI()
-                                    settings.REMOTE_NODE_INFO[str(uid)]['last_snr'] = lora.getSNR()
-                                except Exception:
-                                    pass
-                                save_remote_node_info()
-                                if isinstance(payload, dict) and payload.get('settings'):
+                                    uid = str(payload.get('uid') or payload.get('unit_id') or 'unknown')
+                                    seq = int(payload.get('seq', 1))
+                                    total = int(payload.get('total', 1))
+                                    b64 = payload.get('b64', '') or ''
+                                    if not b64:
+                                        raise ValueError('empty_chunk')
+                                    raw_chunk = _ub.a2b_base64(b64)
+                                    entry = _lora_incoming_chunks.get(uid, {'total': total, 'parts': {}, 'ts': int(time.time())})
+                                    entry['total'] = total
+                                    entry['parts'][seq] = raw_chunk
+                                    entry['ts'] = int(time.time())
+                                    _lora_incoming_chunks[uid] = entry
+                                    await debug_print(f"lora: chunk {seq}/{total} for {uid}, parts: {len(entry['parts'])}", 'LORA')
+                                    if len(entry['parts']) == entry['total']:
+                                        assembled = b''.join(entry['parts'][i] for i in range(1, entry['total'] + 1))
+                                        try:
+                                            assembled_obj = ujson.loads(assembled.decode('utf-8', 'ignore'))
+                                        except Exception:
+                                            assembled_obj = {'raw': assembled.decode('utf-8', 'ignore')}
+                                        payload = assembled_obj
+                                        await debug_print(f"lora: assembled for {uid}", 'LORA')
+                                        del _lora_incoming_chunks[uid]
+                                    else:
+                                        await asyncio.sleep(0)
+                                        continue
+                                except Exception as e:
+                                    await debug_print(f"lora: chunk handling error: {e}", "ERROR")
+                                    await asyncio.sleep(0)
+                                    continue
+
+                            if 'enc' in payload and payload['enc'] == 1:
+                                try:
+                                    secret = getattr(settings, 'LORA_ENCRYPT_SECRET', '')
+                                    key = secret.encode()
+                                    if len(key) < 32:
+                                        key = (key + b'\x00'*32)[:32]
+                                    nonce_str = payload.get('nonce', '')
+                                    nonce = bytes(int(nonce_str[i:i+2], 16) for i in range(0, len(nonce_str), 2))
+                                    ct_str = payload.get('ct', '')
+                                    ct = bytes(int(ct_str[i:i+2], 16) for i in range(0, len(ct_str), 2))
+                                    pt = chacha20_decrypt(key, nonce, 1, ct)
+                                    inner = ujson.loads(pt.decode('utf-8', 'ignore'))
+                                    payload = inner
+                                except Exception as de:
+                                    await debug_print(f"lora: decrypt failed: {de}", "ERROR")
+                                    await asyncio.sleep(0)
+                                    continue
+
+                            if getattr(settings, 'LORA_HMAC_ENABLED', False):
+                                if 'sig' not in payload:
+                                    if getattr(settings, 'LORA_HMAC_REJECT_UNSIGNED', False):
+                                        await debug_print("lora: unsigned payload rejected", "WARN")
+                                        await asyncio.sleep(0)
+                                        continue
+                                else:
                                     try:
-                                        staged_path = settings.LOG_DIR.rstrip('/') + f'/device_settings-{uid}.json'
-                                        with open(staged_path, 'w') as sf:
-                                            ujson.dump(payload.get('settings'), sf)
-                                        write_lora_log(f"Base: persisted staged settings for {uid}", 'INFO')
+                                        secret = getattr(settings, 'LORA_HMAC_SECRET', '').encode()
+                                        ctr = payload.get('ctr', 0)
+                                        mac_src = b"|".join([
+                                            secret,
+                                            str(payload.get('uid', '')).encode(),
+                                            str(payload.get('ts', '')).encode(),
+                                            str(ctr).encode()
+                                        ])
+                                        import uhashlib
+                                        h = uhashlib.sha256(mac_src)
+                                        import ubinascii
+                                        expected = ubinascii.hexlify(h.digest())[:32].decode()
+                                        if expected != payload['sig']:
+                                            await debug_print("lora: invalid signature", "ERROR")
+                                            await asyncio.sleep(0)
+                                            continue
+                                        if getattr(settings, 'LORA_HMAC_REPLAY_PROTECT', False):
+                                            ctrs = _load_remote_counters()
+                                            uid = str(payload.get('uid', ''))
+                                            last = ctrs.get(uid, 0)
+                                            if ctr <= last:
+                                                await debug_print("lora: replay detected", "ERROR")
+                                                await asyncio.sleep(0)
+                                                continue
+                                            ctrs[uid] = ctr
+                                            _save_remote_counters(ctrs)
+                                        del payload['sig']
+                                        del payload['ctr']
+                                    except Exception as ve:
+                                        await debug_print(f"lora: hmac verify failed: {ve}", "ERROR")
+                                        await asyncio.sleep(0)
+                                        continue
+
+                            uid = payload.get('uid', '') or payload.get('unit_id', '')
+
+                            if 'data' in payload and isinstance(payload['data'], list):
+                                stage_remote_field_data(uid, payload['data'])
+                            elif 'files' in payload and isinstance(payload['files'], dict):
+                                stage_remote_files(uid, payload['files'])
+                            else:
+                                record = {'timestamp': int(time.time()),
+                                          'remote_timestamp': payload.get('ts'),
+                                          'cur_temp_f': payload.get('t_f') or payload.get('temp_f'),
+                                          'cur_temp_c': payload.get('t_c') or payload.get('temp_c'),
+                                          'cur_humid': payload.get('hum') or payload.get('humid'),
+                                          'cur_bar_pres': payload.get('bar'),
+                                          'sys_voltage': payload.get('v'),
+                                          'free_mem': payload.get('fm'),
+                                          'remote_unit_id': uid,
+                                          'node_type': 'remote',
+                                          'source': 'remote'
+                                          }
+                                try:
+                                    append_field_data_entry(record)
+                                    await debug_print("persisted remote data to field log", 'LORA')
+                                except Exception as e:
+                                    await debug_print(f"lora: failed to persist remote line: {e}", "ERROR")
+                                write_lora_log(f"Base received remote payload: {str(record)[:160]}", 'INFO')
+
+                            try:
+                                if uid:
+                                    settings.REMOTE_NODE_INFO = getattr(settings, 'REMOTE_NODE_INFO', {})
+                                    last_payload = record if 'record' in locals() else payload
+                                    settings.REMOTE_NODE_INFO[str(uid)] = {'last_seen': int(time.time()), 'last_payload': last_payload}
+                                    try:
+                                        settings.REMOTE_NODE_INFO[str(uid)]['last_rssi'] = lora.getRSSI()
+                                        settings.REMOTE_NODE_INFO[str(uid)]['last_snr'] = lora.getSNR()
                                     except Exception:
                                         pass
-                        except Exception:
-                            pass
-
-                        # === COMMAND QUEUING (from previous version) ===
-                        if uid:
-                            try:
-                                temp_f_val = float(payload.get('temp_f', 100.0))
-                                if temp_f_val < 80:   # example criteria from previous version
-                                    pending_commands[uid] = "toggle_relay(1,on,5)"
-                                    await debug_print(f"Queued command for {uid} (low temp)", "COMMAND")
-                            except Exception as e:
-                                await debug_print(f"Command queuing error: {e}", "ERROR")
-
-                        ack = {'ack': 'ok'}
-                        try:
-                            jobs = await poll_ota_jobs()
-                            for job in jobs:
-                                if job.get('target') == uid and job.get('type') == 'firmware_update':
-                                    from firmware_updater import download_and_apply_firmware
-                                    dl = download_and_apply_firmware(job.get('url'), job.get('version'), expected_sha=job.get('sha'), manifest_url=job.get('manifest_url'))
-                                    if dl['ok']:
-                                        ack['ota_pending'] = True
-                                        ack['ota_filename'] = os.path.basename(dl['path'])
-                                        ack['ota_sha'] = dl['sha256']
-                                        await send_ota_file_to_remote(uid, dl['path'], dl['sha256'])
-                                        break
-                        except Exception:
-                            pass
-
-                        next_in = getattr(settings, 'LORA_CHECK_IN_MINUTES', 5) * 60 + random.randint(-30, 30)
-                        if next_in < 60: next_in = 60
-                        ack['next_in'] = next_in
-                        if getattr(settings, 'GPS_BROADCAST_TO_REMOTES', False):
-                            try:
-                                ack['gps_lat'] = getattr(settings, 'GPS_LAT', None)
-                                ack['gps_lng'] = getattr(settings, 'GPS_LNG', None)
-                                ack['gps_alt_m'] = getattr(settings, 'GPS_ALT_M', None)
-                                ack['gps_accuracy_m'] = getattr(settings, 'GPS_ACCURACY_M', None)
+                                    save_remote_node_info()
+                                    if isinstance(payload, dict) and payload.get('settings'):
+                                        try:
+                                            staged_path = settings.LOG_DIR.rstrip('/') + f'/device_settings-{uid}.json'
+                                            with open(staged_path, 'w') as sf:
+                                                ujson.dump(payload.get('settings'), sf)
+                                            write_lora_log(f"Base: persisted staged settings for {uid}", 'INFO')
+                                        except Exception:
+                                            pass
                             except Exception:
                                 pass
-                        try:
-                            settings.REMOTE_SYNC_SCHEDULE[str(uid)] = {'next_expected': int(time.time() + next_in)}
-                            save_remote_sync_schedule()
-                        except Exception:
-                            pass
 
-                        # === SEND COMMAND IF QUEUED (from previous version) ===
-                        if uid in pending_commands:
-                            command = pending_commands.pop(uid)
-                            ack['cmd'] = command
-                            await debug_print(f"Sending command to {uid}: {command}", "COMMAND")
+                            # === COMMAND QUEUING (from previous version) ===
+                            if uid:
+                                try:
+                                    temp_f_val = float(payload.get('t_f', 100.0))
+                                    if temp_f_val < 80:   # example criteria from previous version
+                                        pending_commands[uid] = "toggle_relay(1,on,5)"
+                                        await debug_print(f"Queued command for {uid} (low temp)", "COMMAND")
+                                except Exception as e:
+                                    await debug_print(f"Command queuing error: {e}", "ERROR")
 
-                        try:
-                            busy_start = time.ticks_ms()
-                            while lora.gpio.value() and time.ticks_diff(time.ticks_ms(), busy_start) < 2000:
-                                await asyncio.sleep(0.01)
-                            lora.setOperatingMode(lora.MODE_TX)
-                            lora.send(ujson.dumps(ack).encode('utf-8'))
-                            ack_start = time.ticks_ms()
-                            while time.ticks_diff(time.ticks_ms(), ack_start) < 2000:
-                                ev = lora._events()
-                                if getattr(lora, 'TX_DONE', 0) and (ev & lora.TX_DONE):
-                                    break
-                                await asyncio.sleep(0.01)
-                            busy_start = time.ticks_ms()
-                            while lora.gpio.value() and time.ticks_diff(time.ticks_ms(), busy_start) < 2000:
-                                await asyncio.sleep(0.01)
-                            lora.setOperatingMode(lora.MODE_RX)
-                            sdata.lora_last_tx_ts = time.time()
-                        except Exception:
+                            ack = {'ack': 'ok'}
                             try:
+                                jobs = await poll_ota_jobs()
+                                for job in jobs:
+                                    if job.get('target') == uid and job.get('type') == 'firmware_update':
+                                        from firmware_updater import download_and_apply_firmware
+                                        dl = download_and_apply_firmware(job.get('url'), job.get('version'), expected_sha=job.get('sha'), manifest_url=job.get('manifest_url'))
+                                        if dl['ok']:
+                                            ack['ota_pending'] = True
+                                            ack['ota_filename'] = os.path.basename(dl['path'])
+                                            ack['ota_sha'] = dl['sha256']
+                                            await send_ota_file_to_remote(uid, dl['path'], dl['sha256'])
+                                            break
+                            except Exception:
+                                pass
+
+                            next_in = getattr(settings, 'LORA_CHECK_IN_MINUTES', 5) * 60 + random.randint(-30, 30)
+                            if next_in < 60: next_in = 60
+                            ack['next_in'] = next_in
+                            if getattr(settings, 'GPS_BROADCAST_TO_REMOTES', False):
+                                try:
+                                    ack['gps_lat'] = getattr(settings, 'GPS_LAT', None)
+                                    ack['gps_lng'] = getattr(settings, 'GPS_LNG', None)
+                                    ack['gps_alt_m'] = getattr(settings, 'GPS_ALT_M', None)
+                                    ack['gps_accuracy_m'] = getattr(settings, 'GPS_ACCURACY_M', None)
+                                except Exception:
+                                    pass
+                            try:
+                                settings.REMOTE_SYNC_SCHEDULE[str(uid)] = {'next_expected': int(time.time() + next_in)}
+                                save_remote_sync_schedule()
+                            except Exception:
+                                pass
+
+                            # === SEND COMMAND IF QUEUED (from previous version) ===
+                            if uid in pending_commands:
+                                command = pending_commands.pop(uid)
+                                ack['cmd'] = command
+                                await debug_print(f"Sending command to {uid}: {command}", "COMMAND")
+
+                            try:
+                                busy_start = time.ticks_ms()
+                                while lora.gpio.value() and time.ticks_diff(time.ticks_ms(), busy_start) < 2000:
+                                    await asyncio.sleep(0.01)
                                 lora.setOperatingMode(lora.MODE_TX)
                                 lora.send(ujson.dumps(ack).encode('utf-8'))
+                                ack_start = time.ticks_ms()
+                                while time.ticks_diff(time.ticks_ms(), ack_start) < 2000:
+                                    ev = lora._events()
+                                    if getattr(lora, 'TX_DONE', 0) and (ev & lora.TX_DONE):
+                                        break
+                                    await asyncio.sleep(0.01)
+                                busy_start = time.ticks_ms()
+                                while lora.gpio.value() and time.ticks_diff(time.ticks_ms(), busy_start) < 2000:
+                                    await asyncio.sleep(0.01)
                                 lora.setOperatingMode(lora.MODE_RX)
                                 sdata.lora_last_tx_ts = time.time()
                             except Exception:
-                                pass
-                    except Exception as e:
-                        await debug_print(f"lora: processing RX failed: {e}", "ERROR")
-            gc.collect()
-        except Exception as e:
-            await debug_print(f"lora: base RX loop exception: {e}", "ERROR")
+                                try:
+                                    lora.setOperatingMode(lora.MODE_TX)
+                                    lora.send(ujson.dumps(ack).encode('utf-8'))
+                                    lora.setOperatingMode(lora.MODE_RX)
+                                    sdata.lora_last_tx_ts = time.time()
+                                except Exception:
+                                    pass
+                except Exception as e:
+                    await debug_print(f"lora: processing RX failed: {e}", "ERROR")
+            await asyncio.sleep(0)  # Yield to event loop
             gc.collect()
 
     if role == 'remote':
