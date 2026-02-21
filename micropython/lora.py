@@ -5,11 +5,21 @@ def print_remote_nodes():
     for node_id, node_data in remote_info.items():
         print(f"[REMOTE NODE] {node_id}: {node_data}")
 
+# Async helper to log remote nodes without blocking LoRa init
+async def print_remote_nodes_async():
+    try:
+        print_remote_nodes()
+    except Exception:
+        pass
+
 # --- All imports at the top ---
+import gc
 import ujson
 import os
 import uasyncio as asyncio
 import select
+import random
+import ubinascii as _ub
 from sampling import sampleEnviroment, findLowestTemp, findHighestTemp, findLowestBar, findHighestBar, findLowestHumid, findHighestHumid
 try:
     import machine
@@ -38,8 +48,17 @@ except ImportError:
         import requests
     except ImportError:
         requests = None
-from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run
+from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run, led_status_flash, write_lora_log
 from relay import toggle_relay
+
+try:
+    from encryption import chacha20_encrypt, derive_nonce
+except Exception:
+    chacha20_encrypt = None
+    derive_nonce = None
+
+def chacha20_decrypt(key, nonce, aad, ciphertext):
+    return chacha20_encrypt(key, nonce, aad, ciphertext)
 
 try:
     import wprest as _wp
@@ -89,6 +108,8 @@ async def handle_user_command(cmd):
 # File to persist remote node info
 import settings
 REMOTE_NODE_INFO_FILE = settings.LOG_DIR + '/remote_node_info.json'
+REMOTE_SYNC_SCHEDULE_FILE = settings.LOG_DIR + '/remote_sync_schedule.json'
+GPS_STATE_FILE = settings.LOG_DIR + '/gps.json'
 
 # Load REMOTE_NODE_INFO from file at startup
 def load_remote_node_info():
@@ -97,6 +118,36 @@ def load_remote_node_info():
             settings.REMOTE_NODE_INFO = ujson.load(f)
     except Exception:
         settings.REMOTE_NODE_INFO = {}
+
+    try:
+        with open(REMOTE_SYNC_SCHEDULE_FILE, 'r') as f:
+            settings.REMOTE_SYNC_SCHEDULE = ujson.load(f)
+    except Exception:
+        settings.REMOTE_SYNC_SCHEDULE = {}
+
+    try:
+        with open(GPS_STATE_FILE, 'r') as f:
+            gps = ujson.load(f)
+            try:
+                import sdata as _s
+                _s.gps_lat = gps.get('gps_lat')
+                _s.gps_lng = gps.get('gps_lng')
+                _s.gps_alt_m = gps.get('gps_alt_m')
+                _s.gps_accuracy_m = gps.get('gps_accuracy_m')
+                _s.gps_last_fix_ts = gps.get('gps_last_fix_ts')
+            except Exception:
+                pass
+            try:
+                if getattr(settings, 'GPS_OVERRIDE_ALLOWED', True):
+                    if 'gps_lat' in gps: settings.GPS_LAT = gps.get('gps_lat')
+                    if 'gps_lng' in gps: settings.GPS_LNG = gps.get('gps_lng')
+                    if 'gps_alt_m' in gps: settings.GPS_ALT_M = gps.get('gps_alt_m')
+                    if 'gps_accuracy_m' in gps: settings.GPS_ACCURACY_M = gps.get('gps_accuracy_m')
+                    if 'gps_last_fix_ts' in gps: settings.GPS_LAST_FIX_TS = gps.get('gps_last_fix_ts')
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 # Ensure remote node info is loaded at startup (after settings import)
 load_remote_node_info()
@@ -109,6 +160,37 @@ def save_remote_node_info():
     except Exception:
         pass
 
+def save_remote_sync_schedule():
+    try:
+        with open(REMOTE_SYNC_SCHEDULE_FILE, 'w') as f:
+            ujson.dump(settings.REMOTE_SYNC_SCHEDULE, f)
+    except Exception:
+        pass
+
+def save_gps_state(lat=None, lng=None, alt=None, acc=None, ts=None):
+    try:
+        import sdata as _s
+        _s.gps_lat = lat
+        _s.gps_lng = lng
+        _s.gps_alt_m = alt
+        _s.gps_accuracy_m = acc
+        _s.gps_last_fix_ts = ts
+    except Exception:
+        pass
+    try:
+        if getattr(settings, 'GPS_OVERRIDE_ALLOWED', True):
+            if lat is not None: settings.GPS_LAT = lat
+            if lng is not None: settings.GPS_LNG = lng
+            if alt is not None: settings.GPS_ALT_M = alt
+            if acc is not None: settings.GPS_ACCURACY_M = acc
+            if ts is not None: settings.GPS_LAST_FIX_TS = ts
+    except Exception:
+        pass
+    try:
+        with open(GPS_STATE_FILE, 'w') as f:
+            ujson.dump({'gps_lat': lat, 'gps_lng': lng, 'gps_alt_m': alt, 'gps_accuracy_m': acc, 'gps_last_fix_ts': ts}, f)
+    except Exception:
+        pass
 
 # Periodic sync with WordPress (settings, data, OTA jobs)
 async def periodic_wp_sync():
@@ -154,42 +236,6 @@ async def check_suspend_remove():
 # Start periodic sync in main event loop (add to your main.py or boot.py)
 # asyncio.create_task(periodic_wp_sync())
 # asyncio.create_task(check_suspend_remove())
-
-
-
-# --- All imports at the very top ---
-try:
-    from sx1262 import SX1262
-except ImportError:
-    SX1262 = None
-try:
-    import uasyncio as asyncio
-except ImportError:
-    import asyncio
-try:
-    import sdata
-    import settings
-except ImportError:
-    sdata = None
-    settings = None
-try:
-    import machine
-except ImportError:
-    machine = None
-try:
-    import utime as time
-except ImportError:
-    import time
-import os
-try:
-    import urequests as requests
-except ImportError:
-    try:
-        import requests
-    except ImportError:
-        requests = None
-from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run
-from relay import toggle_relay
 
 WORDPRESS_API_URL = getattr(settings, 'WORDPRESS_API_URL', None)
 WORDPRESS_API_KEY = getattr(settings, 'WORDPRESS_API_KEY', None)
@@ -265,6 +311,20 @@ file_lock = asyncio.Lock()
 pin_lock = asyncio.Lock()
 lora = None
 
+_lora_incoming_chunks = {}
+
+async def cleanup_incoming_chunks():
+    while True:
+        current_time = time.time()
+        to_delete = []
+        for uid, entry in _lora_incoming_chunks.items():
+            if current_time - entry['ts'] > 3600:
+                to_delete.append(uid)
+        for uid in to_delete:
+            del _lora_incoming_chunks[uid]
+        gc.collect()
+        await asyncio.sleep(600)
+
 # Asynchronous function to log errors
 async def log_error(error_msg):
     ts = time.time()
@@ -282,10 +342,25 @@ command_handlers = {
     # Add more handlers as needed, e.g., "other_func": other_func,
 }
 
+pending_commands = {}  # {uid: "func(arg1,arg2,arg3)"}
+
 async def init_lora():
     global lora
     print('[DEBUG] init_lora: starting SX1262 init')
     try:
+        try:
+            _safe_pin_out(settings.CS_PIN, 1)
+        except Exception:
+            pass
+        try:
+            _safe_pin_input(settings.BUSY_PIN)
+            _safe_pin_input(settings.IRQ_PIN)
+        except Exception:
+            pass
+        try:
+            _pulse_reset(settings.RST_PIN, low_ms=50, post_high_ms=120)
+        except Exception:
+            pass
         print('[DEBUG] init_lora: BEFORE SX1262 instantiation')
         lora = SX1262(
             settings.SPI_BUS, settings.CLK_PIN, settings.MOSI_PIN, settings.MISO_PIN,
@@ -377,21 +452,23 @@ async def connectLora():
                 if state == STATE_IDLE:
                     await debug_print("Remote: Idle state - attempting to send/connect", "LORA")
                     ts = time.time()
-                    # Split string construction to reduce stack usage
-                    data_str = "TS:{}".format(ts)
-                    data_str += ",UID:{}".format(settings.UNIT_ID)
-                    data_str += ",COMPANY:{}".format(getattr(settings, 'COMPANY', ''))
-                    data_str += ",SITE:{}".format(getattr(settings, 'SITE', ''))
-                    data_str += ",ZONE:{}".format(getattr(settings, 'ZONE', ''))
-                    data_str += ",CLUSTER:{}".format(getattr(settings, 'CLUSTER', ''))
-                    data_str += ",RUNTIME:{}".format(sdata.loop_runtime)
-                    data_str += ",SCRIPT_RUNTIME:{}".format(sdata.script_runtime)
-                    data_str += ",TEMP_C:{}".format(sdata.cur_temp_c)
-                    data_str += ",TEMP_F:{}".format(sdata.cur_temp_f)
-                    data_str += ",BAR:{}".format(sdata.cur_bar_pres)
-                    data_str += ",HUMID:{}".format(sdata.cur_humid)
-                    data = data_str.encode()
-                    await debug_print(f"Sending data: {data_str}", "LORA")
+                    # Build payload dict instead of string
+                    payload = {
+                        "TS": ts,
+                        "UID": settings.UNIT_ID,
+                        "COMPANY": getattr(settings, 'COMPANY', ''),
+                        "SITE": getattr(settings, 'SITE', ''),
+                        "ZONE": getattr(settings, 'ZONE', ''),
+                        "CLUSTER": getattr(settings, 'CLUSTER', ''),
+                        "RUNTIME": sdata.loop_runtime,
+                        "SCRIPT_RUNTIME": sdata.script_runtime,
+                        "TEMP_C": sdata.cur_temp_c,
+                        "TEMP_F": sdata.cur_temp_f,
+                        "BAR": sdata.cur_bar_pres,
+                        "HUMID": sdata.cur_humid
+                    }
+                    data = ujson.dumps(payload).encode()
+                    await debug_print(f"Sending data: {ujson.dumps(payload)}", "LORA")
                     async with pin_lock:
                         global lora
                         if lora is None:
@@ -641,6 +718,7 @@ async def safe_loop(coro, context):
 async def main_loop():
     asyncio.create_task(safe_loop(periodic_wp_sync, 'periodic_wp_sync'))
     asyncio.create_task(safe_loop(heartbeat_ping_loop, 'heartbeat_ping_loop'))
+    asyncio.create_task(safe_loop(cleanup_incoming_chunks, 'cleanup_incoming_chunks'))
     # Add similar for any other infinite coros, e.g., ai_health_monitor()
     while True:
         await asyncio.sleep(60)  # Keep main_loop alive; adjust as needed
@@ -679,9 +757,4 @@ async def ai_input_listener():
             await asyncio.sleep(1)  # Debounce
         await asyncio.sleep(0.1)
 
-# In boot.py or main.py, launch these as background tasks:
-# asyncio.create_task(main_loop())
-# asyncio.create_task(ai_health_monitor())
-# asyncio.create_task(ai_dashboard_display())
-# asyncio.create_task(ai_input_listener())
-# asyncio.create_task(user_input_listener())
+
