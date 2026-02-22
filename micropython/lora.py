@@ -493,6 +493,28 @@ def _deinit_spi_if_any(lora_obj):
     except Exception:
         pass
 
+from machine import mem32
+
+def reset_rp2350_pin(pin_num):
+    try:
+        GPIOBASE = 0x40038000
+        if pin_num < 0 or pin_num > 47:
+            return
+        addr = GPIOBASE + 4 + (pin_num * 4)
+        a = mem32[addr]
+        a = a & ~0x40 | 0x100  # reset IE and set ISO
+        mem32[addr] = a
+    except Exception:
+        pass
+
+def is_rp2350():
+    try:
+        import os
+        uname = os.uname()
+        return 'rp2350' in uname.machine.lower()
+    except Exception:
+        return False
+
 def _attach_spi_shim():
     try:
         if not (machine and hasattr(machine, 'SPI') and getattr(settings, 'CLK_PIN', None) is not None):
@@ -604,6 +626,16 @@ async def init_lora():
     global lora
     print('[DEBUG] init_lora: starting SX1262 init')
     try:
+        # RP2350 workaround for GPIO latch bug
+        if is_rp2350():
+            pins_to_reset = [
+                settings.CLK_PIN, settings.MOSI_PIN, settings.MISO_PIN,
+                settings.CS_PIN, settings.IRQ_PIN, settings.RST_PIN, settings.BUSY_PIN
+            ]
+            for pin in pins_to_reset:
+                reset_rp2350_pin(pin)
+            await debug_print("Applied RP2350 GPIO reset workaround", "LORA")
+
         try:
             _safe_pin_out(settings.CS_PIN, 1)
         except Exception:
