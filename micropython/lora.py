@@ -1,4 +1,4 @@
-# TMON Verion 2.00.1f - LoRa communication, WordPress integration, OTA updates, and remote node management
+# TMON Verion 2.00.1g - LoRa communication, WordPress integration, OTA updates, and remote node management
 
 # Utility to print remote node info
 async def print_remote_nodes():
@@ -9,6 +9,16 @@ async def print_remote_nodes():
         return
     for node_id, node_data in remote_info.items():
         await debug_print(f"[REMOTE NODE] {node_id}: {node_data}", "REMOTE_NODE")
+
+def simple_checksum(path):
+    checksum = 0
+    with open(path, 'rb') as f:
+        chunk = f.read(128)
+        while chunk:
+            for b in chunk:
+                checksum = (checksum + b) % 65536
+            chunk = f.read(128)
+    return checksum
 
 import ujson
 import os
@@ -307,8 +317,8 @@ async def connectLora():
         STATE_RECEIVING = 3
 
         state = STATE_IDLE
-        send_interval = settings.nextLoraSync
-        response_timeout = 10
+        send_interval = 10
+        timeout_ms = 100  # Short timeout for non-blocking recv
         last_activity = time.time()
         idle_timeout = 60
         connected = False
@@ -341,107 +351,224 @@ async def connectLora():
                         await asyncio.sleep(10)
                         continue
 
+                lora.startReceive()
+
                 if settings.NODE_TYPE == 'remote':
                     if state == STATE_IDLE:
                         await debug_print("Remote: Idle state - attempting to send/connect", "REMOTE_NODE")
-                        await sampleEnviroment()
-                        payload_dict = sdata.__dict__.copy()
-                        payload_dict['node_id'] = settings.UNIT_ID
-                        payload_dict['timestamp'] = time.time()
-                        payload_dict['firmware_version'] = settings.FIRMWARE_VERSION
-                        if hasattr(settings, 'ota_in_progress') and settings.ota_in_progress:
-                            payload_dict['ota_ack'] = settings.last_chunk_ok
-                        payload = ujson.dumps(payload_dict)
-                        lora.send(payload)
-                        lora.startReceive()
+                        ts = time.time()
+                        data_str = "TS:{}".format(ts)
+                        data_str += ",UID:{}".format(settings.UNIT_ID)
+                        data_str += ",COMPANY:{}".format(getattr(settings, 'COMPANY', ''))
+                        data_str += ",SITE:{}".format(getattr(settings, 'SITE', ''))
+                        data_str += ",ZONE:{}".format(getattr(settings, 'ZONE', ''))
+                        data_str += ",CLUSTER:{}".format(getattr(settings, 'CLUSTER', ''))
+                        data_str += ",RUNTIME:{}".format(sdata.loop_runtime)
+                        data_str += ",SCRIPT_RUNTIME:{}".format(sdata.script_runtime)
+                        data_str += ",TEMP_C:{}".format(sdata.cur_temp_c)
+                        data_str += ",TEMP_F:{}".format(sdata.cur_temp_f)
+                        data_str += ",BAR:{}".format(sdata.cur_bar_pres)
+                        data_str += ",HUMID:{}".format(sdata.cur_humid)
+                        data = data_str.encode()
+                        await debug_print(f"Sending data: {data_str}", "REMOTE_NODE")
+                        lora.send(data)
                         state = STATE_WAIT_RESPONSE
-                        start_wait = time.time()
-                        last_activity = time.time()
-                        await debug_print("Remote: Sent data, waiting response", "REMOTE_NODE")
+                        start_wait = current_time
+                        last_activity = current_time
 
                     elif state == STATE_WAIT_RESPONSE:
-                        if lora.irq():
-                            received = lora.recv()
-                            if received:
-                                try:
-                                    response = ujson.loads(received)
-                                    if 'ack' in response:
-                                        await debug_print("Received ACK", "REMOTE_NODE")
+                        await debug_print("Remote: Waiting for response...", "REMOTE_NODE")
+                        msg, err = lora.recv(0, timeout_en=True, timeout_ms=timeout_ms)
+                        try:
+                            rssi = lora.getRSSI()
+                            sdata.lora_SigStr = rssi
+                            await debug_print(f"LoRa Signal Strength (RSSI): {rssi}", "REMOTE_NODE")
+                        except Exception as e:
+                            await debug_print(f"Failed to get RSSI: {e}", "ERROR")
+                        if err == 0 and msg:
+                            msg = msg.rstrip(b'\x00')
+                            try:
+                                msg_str = msg.decode()
+                                await debug_print(f"Raw response: {msg_str}", "REMOTE_NODE")
+                                if msg_str.startswith('ACK:'):
+                                    ack_ts = msg_str[4:]
+                                    await debug_print(f"Received ACK with base TS: {ack_ts}", "REMOTE_NODE")
+                                    if not connected:
+                                        await debug_print("Connected to base station", "REMOTE_NODE")
                                         connected = True
-                                        for cmd in response.get('commands', []):
-                                            if isinstance(cmd, str) and '(' in cmd and cmd.endswith(')'):
-                                                func_name, args_str = cmd.split('(', 1)
+                                elif msg_str.startswith('CMD:'):
+                                    # Parse CMD:target:function(arg1,arg2,arg3)
+                                    cmd_parts = msg_str.split(':', 2)
+                                    if len(cmd_parts) == 3:
+                                        target = cmd_parts[1]
+                                        command = cmd_parts[2]
+                                        if target == 'ALL' or target == settings.UNIT_ID:
+                                            # Parse function and args
+                                            if '(' in command and command.endswith(')'):
+                                                func_name, args_str = command.split('(', 1)
                                                 args_str = args_str.rstrip(')')
                                                 args = [arg.strip() for arg in args_str.split(',')] if args_str else []
                                                 if func_name in command_handlers:
                                                     command_handlers[func_name](*args)
-                                                    await debug_print(f"Executed command: {cmd}", "REMOTE_NODE")
+                                                    await debug_print(f"Executed command: {command}", "REMOTE_NODE")
                                                 else:
                                                     await debug_print(f"Unknown command: {func_name}", "ERROR")
-                                        if 'next_sync' in response:
-                                            settings.nextLoraSync = response['next_sync']
-                                        if 'file_update' in response:
-                                            handle_ota_chunk(response['file_update'])
-                                    state = STATE_IDLE
-                                    last_activity = time.time()
-                                    await debug_print("Remote: Processed response, closing connection", "REMOTE_NODE")
+                                            else:
+                                                await debug_print(f"Invalid command format: {command}", "ERROR")
+                                else:
+                                    await debug_print(f"Unknown response: {msg_str}", "WARN")
+                                state = STATE_IDLE
+                                last_activity = current_time
+                                await debug_print("Remote: Connection active - sleeping for interval", "REMOTE_NODE")
+                                await asyncio.sleep(send_interval)
+                            except Exception as e:
+                                error_msg = f"Invalid response: {str(e)}"
+                                await debug_print(error_msg, "ERROR")
+                                await log_error(error_msg)
+                                if connected:
+                                    await debug_print("Disconnected from base station", "WARN")
                                     connected = False
-                                except Exception as e:
-                                    await debug_print(f"Response parse error: {e}", "ERROR")
-                        if time.time() - start_wait > response_timeout:
+                                state = STATE_IDLE
+                                await asyncio.sleep(send_interval)
+                        if current_time - start_wait > response_timeout:
                             await debug_print("Response timeout", "WARN")
+                            if connected:
+                                await debug_print("Disconnected from base station", "WARN")
+                                connected = False
                             state = STATE_IDLE
-                            settings.nextLoraSync = time.time() + (settings.LORA_CHECK_IN_MINUTES * 60)
-                            connected = False
-                    await asyncio.sleep(0.1)
-
+                            await debug_print("Remote: No connection - retrying in interval", "REMOTE_NODE")
+                            await asyncio.sleep(send_interval)
                 elif settings.NODE_TYPE == 'base':
                     if state == STATE_IDLE:
-                        lora.startReceive()
+                        await debug_print("Base: Idle state - starting receive for connections", "BASE_NODE")
                         state = STATE_RECEIVING
-                        await debug_print("Base: Listening for remote nodes", "BASE_NODE")
 
                     if state == STATE_RECEIVING:
-                        if lora.irq():
-                            received = lora.recv()
-                            if received:
-                                try:
-                                    data = ujson.loads(received)
-                                    node_id = data['node_id']
-                                    connected_remotes[node_id] = time.time()
-                                    connected = True
-                                    settings.REMOTE_NODE_INFO[node_id] = {
-                                        'last_seen': time.time(),
-                                        'data': data,
-                                        'firmware_version': data['firmware_version'],
-                                        'last_ack_ts': time.time()
-                                    }
-                                    save_remote_node_info()
-                                    with open(settings.FIELD_DATA_LOG, 'a') as f:
-                                        f.write(ujson.dumps(data) + '\n')
-                                    response = {
-                                        'ack': True,
-                                        'commands': []  # From pending_commands
-                                    }
-                                    if node_id in pending_commands:
-                                        response['commands'] = [pending_commands.pop(node_id)]
-                                    response['next_sync'] = calculate_next_sync(node_id)
-                                    if 'ota' in settings.REMOTE_NODE_INFO.get(node_id, {}):
-                                        ota_info = get_next_ota_chunk(node_id)
-                                        if ota_info:
-                                            response['file_update'] = ota_info
-                                    if 'ota_ack' in data:
-                                        if data['ota_ack']:
-                                            advance_ota_chunk(node_id)
-                                    response_payload = ujson.dumps(response)
-                                    lora.send(response_payload)
-                                    await debug_print("Base: Sent response, closing connection", "BASE_NODE")
-                                    connected = False
-                                    lora.startReceive()
-                                    state = STATE_IDLE
-                                except Exception as e:
-                                    await debug_print(f"Receive parse error: {e}", "ERROR")
-                        await asyncio.sleep(0.1)
+                        await debug_print("Base: Listening for remote nodes...", "BASE_NODE")
+                        msg, err = lora.recv(0, timeout_en=True, timeout_ms=timeout_ms)
+                        try:
+                            rssi = lora.getRSSI()
+                            sdata.lora_SigStr = rssi
+                            await debug_print(f"LoRa Signal Strength (RSSI): {rssi}", "BASE_NODE")
+                        except Exception as e:
+                            await debug_print(f"Failed to get RSSI: {e}", "ERROR")
+                        last_activity = current_time
+                        if err == 0 and msg:
+                            msg = msg.rstrip(b'\x00')
+                            try:
+                                msg_str = msg.decode()
+                                if msg_str.startswith('TS:'):
+                                    parts = msg_str.split(',')
+                                    remote_ts = parts[0].split(':', 1)[1].strip()
+                                    remote_uid = remote_runtime = remote_script_runtime = temp_c = temp_f = bar = humid = None
+                                    remote_company = remote_site = remote_zone = remote_cluster = None
+                                    for part in parts[1:]:
+                                        if ':' not in part:
+                                            await debug_print(f"Invalid part in message: {part}", "ERROR")
+                                            continue
+                                        key, value = part.split(':', 1)
+                                        value = value.strip()
+                                        if key == 'UID':
+                                            remote_uid = value
+                                        elif key == 'COMPANY':
+                                            remote_company = value
+                                        elif key == 'SITE':
+                                            remote_site = value
+                                        elif key == 'ZONE':
+                                            remote_zone = value
+                                        elif key == 'CLUSTER':
+                                            remote_cluster = value
+                                        elif key == 'RUNTIME':
+                                            remote_runtime = value
+                                        elif key == 'SCRIPT_RUNTIME':
+                                            remote_script_runtime = value
+                                        elif key == 'TEMP_C':
+                                            temp_c = value
+                                        elif key == 'TEMP_F':
+                                            temp_f = value
+                                        elif key == 'BAR':
+                                            bar = value
+                                        elif key == 'HUMID':
+                                            humid = value
+                                    # Store company/site/zone/cluster for remote node
+                                    if remote_uid and remote_company is not None:
+                                        if not hasattr(settings, 'REMOTE_NODE_INFO'):
+                                            settings.REMOTE_NODE_INFO = {}
+                                        settings.REMOTE_NODE_INFO[remote_uid] = {
+                                            'COMPANY': remote_company,
+                                            'SITE': remote_site,
+                                            'ZONE': remote_zone,
+                                            'CLUSTER': remote_cluster
+                                        }
+                                        save_remote_node_info()
+                                    # Check for missing fields
+                                    if any(v is None for v in [remote_uid, remote_runtime, remote_script_runtime, temp_c, temp_f, bar, humid]):
+                                        error_msg = f"Missing fields in message: UID={remote_uid}, RUNTIME={remote_runtime}, SCRIPT_RUNTIME={remote_script_runtime}, TEMP_C={temp_c}, TEMP_F={temp_f}, BAR={bar}, HUMID={humid}"
+                                        await debug_print(error_msg, "ERROR")
+                                        await log_error(error_msg)
+                                    else:
+                                        base_ts = time.time()
+                                        log_line = f"{base_ts},{remote_uid},{remote_ts},{remote_runtime},{remote_script_runtime},{temp_c},{temp_f},{bar},{humid}\n"
+                                        # Individual conversions with fallback
+                                        try:
+                                            temp_f_val = float(temp_f)
+                                        except ValueError as ve:
+                                            error_msg = f"Invalid number syntax for TEMP_F: {repr(temp_f)} | {ve}"
+                                            await debug_print(error_msg, "ERROR")
+                                            await log_error(error_msg)
+                                            temp_f_val = 0.0
+                                        try:
+                                            bar_val = float(bar)
+                                        except ValueError as ve:
+                                            error_msg = f"Invalid number syntax for BAR: {repr(bar)} | {ve}"
+                                            await debug_print(error_msg, "ERROR")
+                                            await log_error(error_msg)
+                                            bar_val = 0.0
+                                        try:
+                                            humid_val = float(humid)
+                                        except ValueError as ve:
+                                            error_msg = f"Invalid number syntax for HUMID: {repr(humid)} | {ve}"
+                                            await debug_print(error_msg, "ERROR")
+                                            await log_error(error_msg)
+                                            humid_val = 0.0
+                                        await findLowestTemp(temp_f_val)
+                                        await findLowestBar(bar_val)
+                                        await findLowestHumid(humid_val)
+                                        await findHighestTemp(temp_f_val)
+                                        await findHighestBar(bar_val)
+                                        await findHighestHumid(humid_val)
+                                        await debug_print(f"Received: {log_line.strip()}", "BASE_NODE")
+                                        async with file_lock:
+                                            with open(settings.LOG_FILE, 'a') as f:
+                                                f.write(log_line)
+                                        # Record all sdata/settings to field_data.log
+                                        from utils import record_field_data
+                                        record_field_data()
+                                        # Update connected remotes
+                                        connected_remotes[remote_uid] = base_ts
+                                        # Check criteria and queue command (example)
+                                        if temp_f_val < 80:  # Replace with actual criteria
+                                            pending_commands[remote_uid] = "toggle_relay(1,on,5)"
+                                        # Send ACK or CMD
+                                        if remote_uid in pending_commands:
+                                            command = pending_commands.pop(remote_uid)
+                                            ack_data = f"CMD:{remote_uid}:{command}".encode()
+                                            await debug_print(f"Sending command to {remote_uid}: {command}", "BASE_NODE")
+                                        else:
+                                            ack_data = f"ACK:{base_ts}".encode()
+                                        lora.send(ack_data)
+                                        await debug_print(f"Sent ACK/CMD to {remote_uid}", "BASE_NODE")
+                                        if not connected:
+                                            await debug_print("Base: New connection established", "BASE_NODE")
+                                            connected = True
+                                        state = STATE_IDLE
+                            except Exception as e:
+                                error_msg = f"Invalid message: {e}"
+                                await debug_print(error_msg, "ERROR")
+                                await log_error(error_msg)
+                        if err != 0:
+                            await debug_print(f"Receive error: {err}", "ERROR")
+                            await log_error(f"Receive error: {err}")
             except Exception as e:
                 await debug_print(f"LoRa loop error: {e}", "ERROR")
                 await asyncio.sleep(1)

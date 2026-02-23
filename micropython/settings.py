@@ -1,4 +1,4 @@
-# TMON Verion 2.00.1f - Centralized settings module for TMON MicroPython firmware. Defines all configurable parameters for device operation, including LoRa communication, WiFi connectivity, sensor sampling, OTA updates, and WordPress integration. Provides default values and allows overrides via staged settings mechanism. Also includes debug flags for granular control over logging and behavior during development and troubleshooting.
+# TMON Verion 2.00.1g - Centralized settings module for TMON MicroPython firmware. Defines all configurable parameters for device operation, including LoRa communication, WiFi connectivity, sensor sampling, OTA updates, and WordPress integration. Provides default values and allows overrides via staged settings mechanism. Also includes debug flags for granular control over logging and behavior during development and troubleshooting.
 
 try:
     FIELD_DATA_APP_PASS
