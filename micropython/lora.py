@@ -318,7 +318,7 @@ async def connectLora():
 
         state = STATE_IDLE
         send_interval = 10
-        timeout_ms = 100  # Short timeout for non-blocking recv
+        timeout_ms = 500  # Short timeout for non-blocking recv
         last_activity = time.time()
         idle_timeout = 60
         connected = False
