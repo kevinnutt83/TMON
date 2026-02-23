@@ -1,4 +1,5 @@
-from platform_compat import Pin, I2C, time, IS_ZERO  # CHANGED
+from machine import Pin, I2C
+import time
 import settings
 from time import sleep
 
@@ -10,11 +11,8 @@ digH = []
 
 t_fine = 0.0
 
-class BME280:
+class BME280: 
     def __init__(self, address=I2C_ADDR):
-        # On Zero, I2C is a stub unless you add a real SMBus backend; keep constructor safe.
-        if IS_ZERO or I2C is None or Pin is None:
-            raise RuntimeError("BME280: I2C backend not available on MCU_TYPE='zero' yet")
         self.i2c = I2C(0, scl=Pin(settings.I2C_A_SCL_PIN), sda=Pin(settings.I2C_A_SDA_PIN), freq=400000)
         self.address = address
         

@@ -1,263 +1,125 @@
 # Firmware Version: v2.00j
 
-from platform_compat import asyncio, time, machine, framebuf, IS_ZERO  # CHANGED
+import uasyncio as asyncio
+import time
 import settings
 import sdata
+import machine
+import framebuf
 from settings import I2C_B_SCL_PIN, I2C_B_SDA_PIN
 
-# CHANGED: robust runtime detection + framebuf resolution (MicroPython vs CPython/Zero)
-try:
-    import sys as _sys
-    _IS_CPYTHON = str(getattr(_sys.implementation, "name", "")).lower() != "micropython"
-except Exception:
-    _IS_CPYTHON = False
-
-try:
-    _MCU_TYPE = str(getattr(settings, "MCU_TYPE", "") or "").lower().strip()
-except Exception:
-    _MCU_TYPE = ""
-
-try:
-    IS_ZERO_RUNTIME = (_MCU_TYPE == "zero") or bool(IS_ZERO) or _IS_CPYTHON
-except Exception:
-    IS_ZERO_RUNTIME = (_MCU_TYPE == "zero") or _IS_CPYTHON
-
-# Prefer a usable framebuf module (native on MicroPython; shim on CPython/Zero)
-try:
-    if framebuf is None or not hasattr(framebuf, "FrameBuffer") or not hasattr(framebuf, "MONO_VLSB"):
-        raise ImportError("platform_compat.framebuf not usable")
-except Exception:
-    try:
-        import framebuf as _fb  # MicroPython built-in
-        framebuf = _fb
-    except Exception:
-        try:
-            import framebuf_compat as _fb  # repo shim for CPython/Zero
-            framebuf = _fb
-        except Exception:
-            framebuf = None
-
-# Simple SSD1309 driver (robust for 128x64)
-# CHANGED: allow SSD1309 on Zero too; rely on I2C init below to decide if it can actually run.
-if framebuf is not None:
-    class SSD1309_I2C(framebuf.FrameBuffer):
-        def __init__(self, width, height, i2c, addr=0x3C, external_vcc=False):
-            self.i2c = i2c
-            self.addr = addr
-            self.temp = bytearray(2)
-            self.write_list = [b'\x40', None]
-            self.external_vcc = external_vcc
-            self.width = width
-            self.height = height
-            self.pages = height // 8
-            self.buffer = bytearray(self.pages * self.width)
-            self.col_start = 0
-            self.col_end = self.col_start + self.width - 1
-            super().__init__(self.buffer, self.width, self.height, framebuf.MONO_VLSB)
-            self.init_display()
-
-        def write_cmd(self, cmd):
-            self.temp[0] = 0x00
-            self.temp[1] = cmd
-            self.i2c.writeto(self.addr, self.temp)
-
-        def write_data(self, buf):
-            self.write_list[1] = buf
-            try:
-                self.i2c.writevto(self.addr, self.write_list)
-            except Exception:
-                # Some ports may not implement writevto
-                self.i2c.writeto(self.addr, b'\x40' + buf)
-
-        def init_display(self):
-            for cmd in (
-                0xAE, 0xD5, 0x80, 0xA8, 0x3F, 0xD3, 0x00, 0x40,
-                0x8D, 0x14 if not self.external_vcc else 0x10,
-                0x20, 0x00, 0xA1, 0xC8, 0xDA, 0x12, 0x81, 0xCF,
-                0xD9, 0xF1 if not self.external_vcc else 0x22, 0xDB, 0x40,
-                0xA4, 0xA6, 0xAF
-            ):
-                try:
-                    self.write_cmd(cmd)
-                except Exception:
-                    pass
-            self.fill(0)
-            self.show()
-
-        def show(self):
-            try:
-                self.write_cmd(0x21)
-                self.write_cmd(self.col_start)
-                self.write_cmd(self.col_end)
-                self.write_cmd(0x22)
-                self.write_cmd(0)
-                self.write_cmd(self.pages - 1)
-                self.write_data(self.buffer)
-            except Exception:
-                pass
-
-        def poweroff(self):
-            try:
-                self.write_cmd(0xAE)
-            except Exception:
-                pass
-
-        def poweron(self):
-            try:
-                self.write_cmd(0xAF)
-            except Exception:
-                pass
-
-        def contrast(self, contrast):
-            try:
-                self.write_cmd(0x81)
-                self.write_cmd(contrast)
-            except Exception:
-                pass
-
-        def invert(self, invert):
-            try:
-                self.write_cmd(0xA6 | (invert & 1))
-            except Exception:
-                pass
-else:
-    SSD1309_I2C = None  # CHANGED: allow import on Zero
-
-# CHANGED: cross-platform I2C init for MicroPython + Zero/CPython.
-def _log_oled_init(msg):
-    try:
-        print(msg)
-    except Exception:
-        pass
-
-class _SmbusI2C:
-    """CPython fallback I2C wrapper that provides writeto/writevto used by SSD1309_I2C."""
-    def __init__(self, bus_num=1):
-        self._bus = None
-        self._bus_num = int(bus_num)
-        # Prefer smbus2 (supports i2c_rdwr); fallback to smbus if present.
-        try:
-            import smbus2  # type: ignore
-            self._smbus2 = smbus2
-            self._bus = smbus2.SMBus(self._bus_num)
-        except Exception:
-            self._smbus2 = None
-            try:
-                import smbus  # type: ignore
-                self._bus = smbus.SMBus(self._bus_num)
-            except Exception:
-                self._bus = None
-
-    def writeto(self, addr, buf):
-        if not self._bus:
-            raise OSError("smbus not available")
-        a = int(addr) & 0x7F
-        b = bytes(buf) if not isinstance(buf, (bytes, bytearray)) else buf
-        if self._smbus2:
-            msg = self._smbus2.i2c_msg.write(a, b)
-            self._bus.i2c_rdwr(msg)
-        else:
-            # Best-effort: write as a "block" with first byte as command; works for many adapters.
-            if not b:
-                return
-            cmd = b[0]
-            data = list(b[1:]) if len(b) > 1 else []
-            try:
-                self._bus.write_i2c_block_data(a, cmd, data)
-            except Exception:
-                # Last resort: byte-at-a-time
-                for bb in b:
-                    self._bus.write_byte(a, int(bb))
-
-    def writevto(self, addr, bufs):
-        out = b""
-        for part in bufs:
-            if part:
-                out += bytes(part) if not isinstance(part, (bytes, bytearray)) else part
-        self.writeto(addr, out)
-
-def _init_oled_i2c():
-    # 1) MicroPython boards: use machine I2C/SoftI2C with configured pins.
-    if _MCU_TYPE in ("esp32", "pico", "") and not IS_ZERO_RUNTIME:
-        try:
-            Pin = getattr(machine, "Pin", None)
-            I2C = getattr(machine, "I2C", None)
-            if Pin and I2C:
-                return I2C(1, scl=Pin(I2C_B_SCL_PIN), sda=Pin(I2C_B_SDA_PIN), freq=100000)
-        except Exception:
-            pass
-        try:
-            Pin = getattr(machine, "Pin", None)
-            SoftI2C = getattr(machine, "SoftI2C", None)
-            if Pin and SoftI2C:
-                return SoftI2C(scl=Pin(I2C_B_SCL_PIN), sda=Pin(I2C_B_SDA_PIN), freq=100000)
-        except Exception:
-            pass
-
-    # 2) Zero/CPython: use SMBus on configured bus number (default 1).
-    if _MCU_TYPE == "zero" or IS_ZERO_RUNTIME:
-        try:
-            bus_num = int(getattr(settings, "OLED_I2C_BUS", 1) or 1)
-        except Exception:
-            bus_num = 1
-        try:
-            return _SmbusI2C(bus_num)
-        except Exception:
-            return None
-
-    return None
-
-# Initialize OLED if enabled
-oled = None
-if getattr(settings, 'ENABLE_OLED', False) and SSD1309_I2C is not None:
-    try:
-        i2c = _init_oled_i2c()
-        if i2c:
-            oled = SSD1309_I2C(128, 64, i2c, addr=int(getattr(settings, "OLED_I2C_ADDR", 0x3C)))
-        else:
-            oled = None
-    except Exception as e:
-        _log_oled_init("[ERROR] OLED init failed: {}".format(e))
-        oled = None
-
-# NEW: restore constants/state used by render loop
-OLED_W = 128
-OLED_H = 64
-try:
-    HEADER_HEIGHT = int(getattr(settings, "OLED_HEADER_HEIGHT", 16) or 16)
-except Exception:
-    HEADER_HEIGHT = 16
-try:
-    FOOTER_HEIGHT = int(getattr(settings, "OLED_FOOTER_HEIGHT", 12) or 12)
-except Exception:
-    FOOTER_HEIGHT = 12
-
-BODY_TOP = HEADER_HEIGHT
-BODY_BOTTOM = OLED_H - FOOTER_HEIGHT
-BODY_HEIGHT = max(0, BODY_BOTTOM - BODY_TOP)
-
-MAX_TEXT_CHARS = 16
-try:
-    RENDER_INTERVAL_S = float(getattr(settings, "OLED_RENDER_INTERVAL_S", 1.0) or 1.0)
-except Exception:
-    RENDER_INTERVAL_S = 1.0
-try:
-    FLIP_INTERVAL_S = float(getattr(settings, "OLED_HEADER_FLIP_S", 4) or 4)
-except Exception:
-    FLIP_INTERVAL_S = 4.0
-
+# Globals / state
 _render_task = None
-_last_render_sig = None
-_show_voltage = True
-_last_flip_time = 0
-_display_on = True  # NEW: Flag to track if display is on (pause rendering when off)
-
 _status_banner_text = None
 _status_banner_until = 0
 _status_banner_persist = False
+_body_override_lines = None        # NEW: override for body content (list of lines)
+_body_override_until = 0           # NEW: timestamp until override active
+_last_render_sig = None
+_show_voltage = True
+_last_flip_time = 0
 
-_body_override_lines = None
-_body_override_until = 0
+# Constants derived from settings (fall back to sensible defaults)
+HEADER_HEIGHT = int(getattr(settings, 'OLED_HEADER_HEIGHT', 16))
+FOOTER_HEIGHT = int(getattr(settings, 'OLED_FOOTER_HEIGHT', 12))
+BODY_TOP = HEADER_HEIGHT
+BODY_BOTTOM = 64 - FOOTER_HEIGHT
+BODY_HEIGHT = BODY_BOTTOM - BODY_TOP
+FLIP_INTERVAL_S = int(getattr(settings, 'OLED_HEADER_FLIP_S', 4))
+RENDER_INTERVAL_S = 0.5
+MAX_TEXT_CHARS = 16
+
+# Simple SSD1309 driver (robust for 128x64)
+class SSD1309_I2C(framebuf.FrameBuffer):
+    def __init__(self, width, height, i2c, addr=0x3C, external_vcc=False):
+        self.i2c = i2c
+        self.addr = addr
+        self.temp = bytearray(2)
+        self.write_list = [b'\x40', None]
+        self.external_vcc = external_vcc
+        self.width = width
+        self.height = height
+        self.pages = height // 8
+        self.buffer = bytearray(self.pages * self.width)
+        self.col_start = 0
+        self.col_end = self.col_start + self.width - 1
+        super().__init__(self.buffer, self.width, self.height, framebuf.MONO_VLSB)
+        self.init_display()
+
+    def write_cmd(self, cmd):
+        self.temp[0] = 0x00
+        self.temp[1] = cmd
+        self.i2c.writeto(self.addr, self.temp)
+
+    def write_data(self, buf):
+        self.write_list[1] = buf
+        try:
+            self.i2c.writevto(self.addr, self.write_list)
+        except Exception:
+            # Some ports may not implement writevto
+            self.i2c.writeto(self.addr, b'\x40' + buf)
+
+    def init_display(self):
+        for cmd in (
+            0xAE, 0xD5, 0x80, 0xA8, 0x3F, 0xD3, 0x00, 0x40,
+            0x8D, 0x14 if not self.external_vcc else 0x10,
+            0x20, 0x00, 0xA1, 0xC8, 0xDA, 0x12, 0x81, 0xCF,
+            0xD9, 0xF1 if not self.external_vcc else 0x22, 0xDB, 0x40,
+            0xA4, 0xA6, 0xAF
+        ):
+            try:
+                self.write_cmd(cmd)
+            except Exception:
+                pass
+        self.fill(0)
+        self.show()
+
+    def show(self):
+        try:
+            self.write_cmd(0x21)
+            self.write_cmd(self.col_start)
+            self.write_cmd(self.col_end)
+            self.write_cmd(0x22)
+            self.write_cmd(0)
+            self.write_cmd(self.pages - 1)
+            self.write_data(self.buffer)
+        except Exception:
+            pass
+
+    def poweroff(self):
+        try:
+            self.write_cmd(0xAE)
+        except Exception:
+            pass
+
+    def poweron(self):
+        try:
+            self.write_cmd(0xAF)
+        except Exception:
+            pass
+
+    def contrast(self, contrast):
+        try:
+            self.write_cmd(0x81)
+            self.write_cmd(contrast)
+        except Exception:
+            pass
+
+    def invert(self, invert):
+        try:
+            self.write_cmd(0xA6 | (invert & 1))
+        except Exception:
+            pass
+
+# Initialize OLED if enabled
+oled = None
+if getattr(settings, 'ENABLE_OLED', False):
+    try:
+        i2c = machine.I2C(1, scl=machine.Pin(I2C_B_SCL_PIN), sda=machine.Pin(I2C_B_SDA_PIN), freq=100000)
+        oled = SSD1309_I2C(128, 64, i2c, addr=0x3C)
+    except Exception as e:
+        print(f"[ERROR] OLED init failed: {e}")
+        oled = None
 
 # Utils
 async def fade_display(on=True, steps=10, delay=0.03):
@@ -361,24 +223,6 @@ def _layout_header_right(vol_w, right_blocks):
     except Exception:
         return 128, [128] * len(right_blocks)
 
-def _display_net_bars_enabled():
-    try:
-        return bool(getattr(settings, 'DISPLAY_NET_BARS', False))
-    except Exception:
-        return False
-
-def _wifi_bars_enabled():
-    try:
-        return _display_net_bars_enabled() and bool(getattr(settings, 'ENABLE_WIFI', False))
-    except Exception:
-        return False
-
-def _lora_bars_enabled():
-    try:
-        return _display_net_bars_enabled() and bool(getattr(settings, 'ENABLE_LORA', False))
-    except Exception:
-        return False
-
 def _render_signature(page):
     try:
         return (
@@ -392,7 +236,7 @@ def _render_signature(page):
             _safe_attr(sdata, 'cur_temp_f', None),
             _safe_attr(sdata, 'wifi_rssi', None),
             _safe_attr(sdata, 'lora_SigStr', None),
-            _safe_attr(sdata, 'lora_snr', None),        
+            _safe_attr(sdata, 'lora_snr', None),          # NEW
             _safe_attr(sdata, 'lora_last_rx_ts', 0),
             _safe_attr(sdata, 'lora_last_tx_ts', 0),
             _safe_attr(sdata, 'LORA_CONNECTED', False),
@@ -413,10 +257,6 @@ async def _render_loop(page=0):
         await fade_display(on=True)
     while True:
         try:
-            if not _display_on:  # NEW: Skip rendering/show when display is off (avoids unnecessary draws/I2C)
-                await asyncio.sleep(RENDER_INTERVAL_S)
-                continue
-
             nowt = time.time()
             # Flip voltage/temperature periodically
             if nowt - _last_flip_time >= FLIP_INTERVAL_S:
@@ -445,77 +285,89 @@ async def _render_loop(page=0):
                 vol_w = 16
                 txt = ""
             # Optional adaptive net blocks on header (right-aligned, auto-compact if space tight)
-            if _display_net_bars_enabled():
+            if getattr(settings, 'DISPLAY_NET_BARS', False):
                 try:
+                    # Build block descriptors (wifi then lora) with measured widths
                     blocks = []
-
-                    # WiFi block: show only when WiFi feature is enabled.
-                    if _wifi_bars_enabled():
+                    # WiFi block
+                    if getattr(settings, 'ENABLE_WIFI', False):
                         wifi_icon_w = _measure_text_w('W')
-                        bars_w = 3 * 6
-                        wrssi = _safe_attr(sdata, 'wifi_rssi', None)
-                        wifi_connected = bool(_safe_attr(sdata, 'WIFI_CONNECTED', False))
-                        wb = _net_bars_from_rssi(wrssi, (-60, -80, -90)) if wifi_connected else 0
+                        bars_w = 3 * 6  # matches _draw_bars spacing
                         wifi_text = ''
+                        if getattr(sdata, 'WIFI_CONNECTED', False):
+                            wrssi = _safe_attr(sdata, 'wifi_rssi', None)
+                            wb = _net_bars_from_rssi(wrssi, (-60, -80, -90))
+                            # we'll draw bars and icon; no extra text when connected (keep compact)
+                            wifi_text = ''
+                        else:
+                            # Not connected: show label (may be compacted)
+                            wifi_text = 'No Con'
+                            wb = 0
                         text_w = _measure_text_w(wifi_text)
                         block_w = wifi_icon_w + 2 + bars_w + (4 if text_w else 0) + text_w
                         blocks.append({'type': 'wifi', 'w': block_w, 'icon': 'W', 'bars': wb, 'text': wifi_text})
-
-                    # LoRa block: show only when LoRa feature is enabled.
-                    if _lora_bars_enabled():
+                    # LoRa block
+                    if getattr(settings, 'ENABLE_LORA', False):
                         lora_icon_w = _measure_text_w('L')
                         bars_w = 3 * 6
+
+                        # NEW: determine "connected" based on recent activity
+                        now_epoch = time.time()
+                        stale_s = int(getattr(settings, 'OLED_LORA_STALE_S', 120))
+                        last_rx = int(_safe_attr(sdata, 'lora_last_rx_ts', 0) or 0)
+                        last_tx = int(_safe_attr(sdata, 'lora_last_tx_ts', 0) or 0)
+                        recent = (last_rx and (now_epoch - last_rx) <= stale_s) or (last_tx and (now_epoch - last_tx) <= stale_s)
+                        connected = bool(_safe_attr(sdata, 'LORA_CONNECTED', False)) or recent
+
                         lrssi = _safe_attr(sdata, 'lora_SigStr', None)
-                        lora_connected = bool(_safe_attr(sdata, 'LORA_CONNECTED', False))
-                        try:
-                            lb = _net_bars_from_rssi(int(lrssi), (-80, -100, -120)) if (lora_connected and lrssi is not None) else 0
-                        except Exception:
+
+                        if connected:
+                            # Connected: show bars when RSSI known, otherwise show empty bars but no "Search"
+                            try:
+                                lb = _net_bars_from_rssi(int(lrssi), (-80, -100, -120)) if lrssi is not None else 0
+                            except Exception:
+                                lb = 0
+                            ltext = ''
+                        else:
+                            node_role = str(getattr(settings, 'NODE_TYPE', '')).lower()
+                            ltext = 'Search' if node_role == 'remote' else 'No Con'
                             lb = 0
-                        ltext = ''
+
                         text_w = _measure_text_w(ltext)
                         block_w = lora_icon_w + 2 + bars_w + (4 if text_w else 0) + text_w
                         blocks.append({'type': 'lora', 'w': block_w, 'icon': 'L', 'bars': lb, 'text': ltext})
 
-                    # Clear the right area of the header to remove any persistent content (e.g., previous bars)
-                    clear_x = vol_w + 4  # Padding after voltage/temp
-                    clear_w = 128 - clear_x
-                    oled.fill_rect(clear_x, 0, clear_w, HEADER_HEIGHT, 0)
-
-                    # If there are blocks, proceed with layout and drawing
-                    if blocks:
-                        # Layout right-aligned, compute start_x; if overlapping with voltage area, try compacting texts
+                    # Layout right-aligned, compute start_x; if overlapping with voltage area, try compacting texts
+                    start_x, xs = _layout_header_right(vol_w, blocks)
+                    # If start_x would be <= vol_w + margin, we need to compact labels
+                    min_gap = 6
+                    if start_x <= (2 + vol_w + min_gap):
+                        # Attempt compacting text labels and recompute widths
+                        for b in blocks:
+                            if b.get('text'):
+                                # try progressively smaller max lengths
+                                for maxc in (6, 4, 2, 0):
+                                    short = _compact_label(b['text'], maxc)
+                                    b['text_compact'] = short
+                                    b['w'] = _measure_text_w(b['icon']) + 2 + 3 * 6 + (4 if _measure_text_w(short) else 0) + _measure_text_w(short)
+                                # if still overlapping, remove text entirely
+                                if start_x <= (2 + vol_w + min_gap):
+                                    b['text_compact'] = ''
+                                    b['w'] = _measure_text_w(b['icon']) + 2 + 3 * 6
+                        # recompute positions
                         start_x, xs = _layout_header_right(vol_w, blocks)
-                        # If start_x would be <= vol_w + margin, we need to compact labels
-                        min_gap = 6
-                        if start_x <= (2 + vol_w + min_gap):
-                            # Attempt compacting text labels and recompute widths
-                            for b in blocks:
-                                if b.get('text'):
-                                    # try progressively smaller max lengths
-                                    for maxc in (6, 4, 2, 0):
-                                        short = _compact_label(b['text'], maxc)
-                                        b['text_compact'] = short
-                                        b['w'] = _measure_text_w(b['icon']) + 2 + 3 * 6 + (4 if _measure_text_w(short) else 0) + _measure_text_w(short)
-                                    # if still overlapping, remove text entirely
-                                    if start_x <= (2 + vol_w + min_gap):
-                                        b['text_compact'] = ''
-                                        b['w'] = _measure_text_w(b['icon']) + 2 + 3 * 6
-                            # recompute positions
-                            start_x, xs = _layout_header_right(vol_w, blocks)
 
-                        # Finally render blocks at computed positions
-                        for b, x in zip(blocks, xs):
-                            try:
-                                icon_x = x
-                                oled.text(b.get('icon','?'), icon_x, 0)
-                                bars_x = icon_x + _measure_text_w(b.get('icon','')) + 2
-                                _draw_bars(oled, bars_x, 0, int(b.get('bars', 0)))
-                                t = b.get('text_compact', b.get('text',''))
-                                if t:
-                                    text_x = bars_x + (3 * 6) + 4
-                                    oled.text(t, text_x, 0)
-                            except Exception:
-                                pass
+                    # Finally render blocks at computed positions
+                    for b, x in zip(blocks, xs):
+                        try:
+                            icon_x = x
+                            oled.text(b.get('icon','?'), icon_x, 0)
+                            _draw_bars(oled, icon_x + _measure_text_w(b.get('icon','')) + 2, 0, int(b.get('bars', 0)))
+                            t = b.get('text_compact', b.get('text',''))
+                            if t:
+                                oled.text(t, icon_x + _measure_text_w(b.get('icon','')) + 2 + (3 * 6) + 4, 0)
+                        except Exception:
+                            pass
                 except Exception:
                     pass
 
@@ -534,6 +386,8 @@ async def _render_loop(page=0):
             # Body area (below header)
             oled.fill_rect(0, BODY_TOP, 128, BODY_HEIGHT, 0)
 
+            # Previously displayed unit/machine suffix here; intentionally omitted.
+
             # If a body override is active (e.g., display_message showing sampling), honor it
             try:
                 if _body_override_lines and time.time() < _body_override_until:
@@ -547,10 +401,12 @@ async def _render_loop(page=0):
                     # Default content: show sensor summary only while actively sampling
                     if page == 0:
                         if getattr(sdata, 'sampling_active', False):
+                            # Pulled up to utilize space after secondary label removal
                             oled.text(f"T {_safe_attr(sdata, 'cur_temp_f', 0):.1f}F", 0, BODY_TOP + 4)
                             oled.text(f"H {_safe_attr(sdata, 'cur_humid', 0):.1f}%", 0, BODY_TOP + 14)
                             oled.text(f"B {_safe_attr(sdata, 'cur_bar_pres', 0):.1f}", 0, BODY_TOP + 24)
                         else:
+                            # leave body blank when not sampling to avoid persistent "sampling" content
                             pass
                     else:
                         for i in range(8):
@@ -566,6 +422,7 @@ async def _render_loop(page=0):
             except Exception:
                 pass
 
+            # Last message bottom (moved up a little to account for footer/device name)
             try:
                 msg = str(_safe_attr(sdata, 'last_message', ''))[:MAX_TEXT_CHARS]
                 oled.text(msg, 0, 52)
@@ -575,6 +432,7 @@ async def _render_loop(page=0):
             # Footer band
             oled.fill_rect(0, BODY_BOTTOM, 128, FOOTER_HEIGHT, 0)
             try:
+                # Removed temperature display and moved device name to left footer
                 unit_name = str(_safe_attr(settings, 'UNIT_Name', ''))[:MAX_TEXT_CHARS]
                 oled.text(unit_name, 0, BODY_BOTTOM + 2)
             except Exception:
@@ -590,14 +448,10 @@ async def _render_loop(page=0):
 
 # Public APIs
 async def show_header():
-    global _render_task, _display_on
-    _display_on = True  # NEW: Ensure rendering resumes
-    try:
-        task_done = (_render_task is not None) and bool(getattr(_render_task, "done", lambda: False)())
-    except Exception:
-        task_done = False
-    if _render_task is None or task_done:
+    global _render_task
+    if _render_task is None or _render_task.done():
         _render_task = asyncio.create_task(_render_loop())
+    # footer loop not separate anymore; header start ensures full renderer runs
     return True
 
 async def display_message(message, display_time_s=0):
@@ -679,28 +533,14 @@ async def display_time(display_time_s=0):
             await screen_off()
 
 async def screen_off():
-    global _display_on
     if not oled or getattr(settings, 'DEBUG', False):
         return
-    _display_on = False  # Pause rendering loop first to prevent redraws during fade
-    try:
-        oled.fill_rect(0, 0, 128, HEADER_HEIGHT, 0)  # Clear header specifically before fade
-        oled.show()  # Update display with cleared header
-    except Exception:
-        pass
     await fade_display(on=False)
-    try:
-        oled.fill(0)  # Clear entire buffer after fade for good measure
-        oled.show()
-    except Exception:
-        pass
     oled.poweroff()
 
 async def screen_on():
-    global _display_on
     if not oled:
         return
-    _display_on = True  # NEW: Resume rendering
     await show_header()
     oled.poweron()
 
@@ -733,3 +573,4 @@ def clear_message_area():
 async def update_display(page=0):
     # Backwards compatibility: start unified render loop with given page
     await show_header()
+

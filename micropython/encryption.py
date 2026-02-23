@@ -50,10 +50,6 @@ def chacha20_encrypt(key, nonce, counter, data):
         off += len(chunk)
     return bytes(out)
 
-def chacha20_decrypt(key, nonce, counter, data):
-	# ChaCha20 is symmetric; decrypt == encrypt
-	return chacha20_encrypt(key, nonce, counter, data)
-
 def derive_nonce(ts, ctr):
     # 12-byte nonce from timestamp (4 bytes) + counter (4 bytes) + mixed XOR chunk (4 bytes)
     return ((ts & 0xffffffff).to_bytes(4,'little') + (ctr & 0xffffffff).to_bytes(4,'little') + ((ts ^ ctr) & 0xffffffff).to_bytes(4,'little'))

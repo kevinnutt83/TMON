@@ -2,12 +2,9 @@
 # Wraps utils.debug_print and centralizes category toggles.
 
 try:
-    from platform_compat import asyncio  # CHANGED: unified import for MicroPython + CPython (Zero)
-except Exception:  # fallback if platform_compat isn't available in some contexts
-    try:
-        import uasyncio as asyncio
-    except Exception:
-        import asyncio
+    import uasyncio as asyncio
+except Exception:  # desktop lint fallback
+    import asyncio
 
 import settings
 
@@ -83,27 +80,3 @@ async def warn(msg, category=None):
 
 async def error(msg, category=None):
     await log(msg, 'ERROR', category)
-
-"""
-Minimal debug helpers (compatible with MicroPython + CPython/Zero).
-"""
-
-def info(msg):
-	try:
-		print(f"[INFO] {msg}")
-	except Exception:
-		pass
-
-def warn(msg):
-	try:
-		print(f"[WARN] {msg}")
-	except Exception:
-		pass
-
-def error(msg):
-	try:
-		print(f"[ERROR] {msg}")
-	except Exception:
-		pass
-
-__all__ = ["info", "warn", "error"]

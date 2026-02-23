@@ -2,7 +2,10 @@
 # Actual flash/install must be implemented per-hardware in device-specific code.
 
 import os
-from platform_compat import requests  # CHANGED
+try:
+    import urequests as requests
+except Exception:
+    import requests
 
 # Import device settings robustly: prefer package import micropython.settings; fallback to local 'settings' if present
 device_settings = None
@@ -245,16 +248,3 @@ def download_and_apply_firmware(url, version_hint=None, target_path=None, chunk_
 
 # Export helper
 __all__ = ['download_and_apply_firmware']
-
-"""
-Optional firmware updater hook.
-
-Provisioning calls this if present; keep it as a no-op unless/until a real implementation is added.
-"""
-
-def download_and_apply_firmware(url, version_hint=None, chunk_size=1024):
-    try:
-        print("firmware_updater: no-op download_and_apply_firmware:", url, version_hint)
-    except Exception:
-        pass
-    return True

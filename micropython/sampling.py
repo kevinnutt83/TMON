@@ -3,15 +3,10 @@
 import sdata
 import settings
 from utils import free_pins_i2c
-from platform_compat import asyncio, time, gc  # CHANGED: replaces `import uasyncio as asyncio`
+import uasyncio as asyncio
 from utils import debug_print
 from tmon import frostwatchCheck, heatwatchCheck, beginFrostOperations, beginHeatOperations, endFrostOperations, endHeatOperations
-
-# CHANGED: don't hard-import sensor drivers at module import time (Zero/CPython-safe)
-try:
-    from lib.BME280 import BME280 as _BME280
-except Exception:
-    _BME280 = None
+from BME280 import BME280
 
 
 #Sampling Routine for sample all sensor types if they are enabled
@@ -26,21 +21,8 @@ async def sampleEnviroment():
         await frost_and_heat_watch()  # Call frost and heat watch after sampling
     finally:
         _s.sampling_active = False
-        try:
-            gc.collect()
-        except Exception:
-            pass
 
-async def _dbg(msg, tag="SAMPLING"):
-    try:
-        from utils import debug_print  # type: ignore
-        await debug_print(msg, tag)
-    except Exception:
-        try:
-            print(f"[{tag}] {msg}")
-        except Exception:
-            pass
-
+#Sample Temperatures from enabled sensors devices
 async def sampleTemp():
     if settings.SAMPLE_TEMP:
         if settings.ENABLE_sensorBME280:
@@ -50,12 +32,6 @@ async def sampleTemp():
 
 async def sampleBME280():
     if settings.ENABLE_sensorBME280:
-        # NEW: Zero/CPython does not have the MicroPython I2C/sensor stack by default.
-        if str(getattr(settings, "MCU_TYPE", "")).lower() == "zero":
-            if settings.DEBUG and settings.DEBUG_TEMP:
-                await debug_print("sample:BME280 skipped on MCU_TYPE=zero", "DEBUG TEMP")
-            return
-
         from utils import led_status_flash
         import sdata as _s
         _s.sampling_active = True
@@ -75,19 +51,8 @@ async def sampleBME280():
                         pass
                     lora_module.lora = None
             await free_pins_i2c()
-            # CHANGED: resolve driver via guarded import above; keep fallback for legacy layouts
-            BME = _BME280
-            if BME is None:
-                try:
-                    from BME280 import BME280 as BME  # legacy path on some builds
-                except Exception:
-                    BME = None
-            if BME is None:
-                if settings.DEBUG and settings.DEBUG_TEMP:
-                    await debug_print("sample:BME280 driver missing", "SAMPLE ERROR TEMP")
-                return
-
-            sensor = BME()
+            from BME280 import BME280
+            sensor = BME280()
             sensor.get_calib_param()
             try:
                 led_status_flash('SAMPLE_BME280')
@@ -197,25 +162,6 @@ async def findHighestHumid(compareHumid, source='local'):
             return
         if compareHumid > sdata.highest_humid:
             sdata.highest_humid = compareHumid
-    except Exception:
-        pass
-
-async def update_minmax_from_payload(payload, source='remote'):
-    try:
-        if not isinstance(payload, dict):
-            return
-        t_f = payload.get('t_f')
-        bar = payload.get('bar')
-        hum = payload.get('hum')
-        if t_f is not None:
-            await findLowestTemp(t_f, source=source)
-            await findHighestTemp(t_f, source=source)
-        if bar is not None:
-            await findLowestBar(bar, source=source)
-            await findHighestBar(bar, source=source)
-        if hum is not None:
-            await findLowestHumid(hum, source=source)
-            await findHighestHumid(hum, source=source)
     except Exception:
         pass
 

@@ -2,84 +2,10 @@
 
 import json
 import os
-from platform_compat import requests as _pc_requests  # CHANGED
-import sys
-
-# CHANGED: CPython/Zero fallback when platform_compat.requests is None
-requests = _pc_requests
-if requests is None:
-    try:
-        import requests as _py_requests  # type: ignore
-        requests = _py_requests  # type: ignore
-    except Exception:
-        requests = None  # type: ignore
-
-# NEW: urllib fallback for CPython/Zero when 'requests' isn't installed
-def _is_micropython() -> bool:
-    try:
-        return str(getattr(sys.implementation, "name", "")).lower() == "micropython"
-    except Exception:
-        return False
-
-_IS_MICROPYTHON = _is_micropython()
-if not _IS_MICROPYTHON:
-    try:
-        import urllib.request  # type: ignore
-        import urllib.error  # type: ignore
-        import urllib.parse  # type: ignore
-    except Exception:
-        urllib = None  # type: ignore
-else:
-    urllib = None  # type: ignore
-
-class _UrlLibResp:
-    def __init__(self, code=0, text="", content=None):
-        self.status_code = int(code or 0)
-        self.text = text or ""
-        self.content = content if content is not None else (
-            self.text.encode("utf-8", "ignore") if isinstance(self.text, str) else b""
-        )
-    def json(self):
-        try:
-            return json.loads(self.text or "{}")
-        except Exception:
-            return {}
-    def close(self):
-        return None
-
-def _urllib_request(method, url, payload=None, timeout_s=20):
-    if urllib is None:
-        return None
-    data = None
-    headers = {"Accept": "application/json"}
-    if payload is not None:
-        try:
-            data = json.dumps(payload or {}).encode("utf-8")
-        except Exception:
-            data = b"{}"
-        headers["Content-Type"] = "application/json"
-    try:
-        req = urllib.request.Request(url, data=data, headers=headers, method=str(method).upper())
-        with urllib.request.urlopen(req, timeout=timeout_s) as r:
-            raw = r.read() or b""
-            try:
-                txt = raw.decode("utf-8", "ignore")
-            except Exception:
-                txt = ""
-            return _UrlLibResp(getattr(r, "status", 200), txt, raw)
-    except urllib.error.HTTPError as e:
-        raw = b""
-        try:
-            raw = e.read() or b""
-        except Exception:
-            pass
-        try:
-            txt = raw.decode("utf-8", "ignore")
-        except Exception:
-            txt = ""
-        return _UrlLibResp(getattr(e, "code", 0), txt, raw)
-    except Exception:
-        return None
+try:
+    import urequests as requests
+except Exception:
+    import requests  # fallback for host testing
 
 # Import device settings robustly: prefer local settings module; fallback to micropython.settings
 device_settings = None
@@ -95,128 +21,36 @@ except Exception:
 
 # Resolve configuration from settings or sensible defaults
 DEFAULT_BASE = getattr(device_settings, 'TMON_ADMIN_API_URL', "https://tmonsystems.com") if device_settings else "https://tmonsystems.com"
-
-# CHANGED: default paths should include Admin provisioning endpoint(s) first
-_DEFAULT_PROVISION_PATHS = [
-    '/wp-json/tmon-admin/v1/device/provision',
-    '/wp-json/tmon-admin/v1/device/provision/',  # tolerate trailing slash
-    # legacy/alternate routes (keep as fallbacks)
-    '/wp-json/tmon/v1/device/provision',
-    '/wp-json/tmon/v1/provision',
-]
-API_PATHS = getattr(device_settings, 'PROVISION_PATHS', _DEFAULT_PROVISION_PATHS) if device_settings else _DEFAULT_PROVISION_PATHS
-
+API_PATHS = getattr(device_settings, 'PROVISION_PATHS', ['/wp-json/tmon/v1/device/provision', '/wp-json/tmon/v1/provision']) if device_settings else ['/wp-json/tmon/v1/device/provision', '/wp-json/tmon/v1/provision']
 REQUEST_TIMEOUT = getattr(device_settings, 'HTTP_TIMEOUT_S', 20) if device_settings else 20
 CHUNK_SIZE = getattr(device_settings, 'FIRMWARE_DOWNLOAD_CHUNK_SIZE', 1024) if device_settings else 1024
 
 def _attempt_endpoint(base_url, endpoint, params=None, json_body=None, timeout=REQUEST_TIMEOUT):
     url = base_url.rstrip("/") + endpoint
     try:
-        # CPython/Zero: if 'requests' isn't available, use urllib.
-        if requests is None and not _IS_MICROPYTHON:
-            if params:
-                try:
-                    qs = urllib.parse.urlencode(params) if urllib else ""
-                except Exception:
-                    qs = ""
-                if qs:
-                    url = url + ("&" if "?" in url else "?") + qs
-            resp = _urllib_request("POST", url, payload=json_body, timeout_s=timeout) if (json_body is not None) else _urllib_request("GET", url, payload=None, timeout_s=timeout)
-            if not resp:
-                return None, "no_response"
-            code = getattr(resp, "status_code", None)
-            parsed = None
-            try:
-                parsed = resp.json()
-            except Exception:
-                parsed = None
-            if code not in (200, 201):
-                return None, "http_error_%s" % code
-            if isinstance(parsed, (dict, list)):
-                return parsed, None
-            return None, "json_parse_failed"
-
-        if requests is None:
-            return None, "no_http_client"
-
         if json_body is not None:
-            # CHANGED: urequests often lacks json=/timeout=
-            try:
-                resp = requests.post(url, json=json_body, timeout=timeout)
-            except TypeError:
-                try:
-                    body = json.dumps(json_body or {})
-                except Exception:
-                    body = "{}"
-                try:
-                    resp = requests.post(url, data=body)
-                except TypeError:
-                    resp = requests.post(url, data=body)
+            resp = requests.post(url, json=json_body, timeout=timeout)
         else:
             if params:
                 qs = "&".join("{}={}".format(k, v) for k, v in params.items())
                 url = url + "?" + qs
-            try:
-                resp = requests.get(url, timeout=timeout)
-            except TypeError:
-                resp = requests.get(url)
-
+            resp = requests.get(url, timeout=timeout)
         if not resp:
-            return None, "no_response"
-
-        code = getattr(resp, "status_code", None)
-
-        # CHANGED: read/parse body BEFORE closing resp (works for both requests and urequests variants).
-        parsed = None
-        text = ""
-        try:
-            # Prefer response-provided json() when available
-            if hasattr(resp, "json") and callable(getattr(resp, "json")):
-                try:
-                    parsed = resp.json()
-                except Exception:
-                    parsed = None
-        except Exception:
-            parsed = None
-
-        if parsed is None:
-            # Try .text then .content (requests) then .content-like (urequests)
-            try:
-                text = getattr(resp, "text", "") or ""
-            except Exception:
-                text = ""
-            if not text:
-                raw = b""
-                try:
-                    raw = getattr(resp, "content", b"") or b""
-                except Exception:
-                    raw = b""
-                if raw:
-                    try:
-                        text = raw.decode("utf-8", "ignore")
-                    except Exception:
-                        text = ""
-            if text:
-                try:
-                    parsed = json.loads(text)
-                except Exception:
-                    parsed = None
-
-        try:
-            resp.close()
-        except Exception:
-            pass
-
+            return None, 'no_response'
+        code = getattr(resp, 'status_code', None)
         if code not in (200, 201):
-            return None, "http_error_%s" % code
-
-        if isinstance(parsed, (dict, list)):
-            return parsed, None
-        return None, "json_parse_failed"
-
+            return None, 'http_error_%s' % code
+        try:
+            return resp.json(), None
+        except Exception:
+            try:
+                return json.loads(getattr(resp, 'text', '{}')), None
+            except Exception as e:
+                return None, str(e)
     except Exception as e:
         return None, str(e)
     finally:
+        # NEW: GC after endpoint attempt
         try:
             import gc
             gc.collect()

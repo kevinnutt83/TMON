@@ -1,27 +1,18 @@
 # Firmware Version: v2.06.0
 # OTA scaffolding: version check and pending flag
-
 try:
-    from platform_compat import requests  # CHANGED: unified HTTP client
+    import urequests as requests
 except Exception:
-    try:
-        import urequests as requests
-    except Exception:
-        requests = None
+    requests = None
 
 # Ensure we can use asyncio.sleep in this async module
 try:
-    from platform_compat import asyncio  # CHANGED: unified asyncio
+    import uasyncio as asyncio
 except Exception:
     try:
-        import uasyncio as asyncio
+        import asyncio
     except Exception:
-        try:
-            import asyncio
-        except Exception:
-            asyncio = None
-
-from platform_compat import machine as _machine  # CHANGED
+        asyncio = None
 
 async def _sleep(seconds):
 	"""Robust async sleep: prefer event loop sleep, fall back to blocking sleep."""
@@ -59,11 +50,9 @@ async def _sleep(seconds):
 import settings
 from config_persist import write_text
 from utils import debug_print
+# NEW: GC helper
 from utils import maybe_gc
-try:
-    import ujson as json  # CHANGED: MicroPython fast-path
-except Exception:
-    import json  # CHANGED: CPython (Zero) fallback
+import ujson as json
 import os
 import binascii as _binascii
 import re as _re
@@ -114,6 +103,8 @@ async def check_for_update():
                 await debug_print(f'ota: update {remote_ver} available', 'OTA')
                 try:
                     from oled import display_message
+                    # concise user message
+                    import uasyncio
                     await display_message("OTA Available", 2)
                 except Exception:
                     pass
@@ -545,8 +536,8 @@ async def apply_pending_update():
         await debug_print('OTA: apply completed', 'OTA')
         # Reboot device after OTA files are downloaded and applied
         try:
-            if _machine and hasattr(_machine, "soft_reset"):
-                _machine.soft_reset()  # CHANGED
+            from machine import soft_reset
+            soft_reset()
         except Exception:
             pass
         # NEW: GC after OTA apply completes (before returning to loops)

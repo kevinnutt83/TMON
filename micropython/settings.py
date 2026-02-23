@@ -18,16 +18,6 @@ except NameError:
 # Move LOG_DIR and essential file paths near the top so other constants can reference them.
 LOG_DIR = '/logs'
 
-# NEW: On CPython/Zero, default LOG_DIR to a writable local path (or allow override via env).
-# This prevents endless "provisioned -> soft reset" loops caused by failing to write /logs/*.flag.
-try:
-    import sys as _sys
-    if str(getattr(_sys.implementation, "name", "")).lower() != "micropython":
-        import os as _os  # CPython only
-        LOG_DIR = _os.environ.get("TMON_LOG_DIR") or _os.path.join(_os.getcwd(), "logs")
-except Exception:
-    pass
-
 # Files used for persistence (UNIT_ID, staged/applied settings, provision flag)
 UNIT_ID_FILE = LOG_DIR + '/unit_id.txt'
 MACHINE_ID_FILE = LOG_DIR + '/machine_id.txt'
@@ -36,7 +26,7 @@ PROVISIONED_FLAG_FILE = LOG_DIR + '/provisioned.flag'
 REMOTE_SETTINGS_STAGED_FILE = LOG_DIR + '/remote_settings.staged.json'
 REMOTE_SETTINGS_APPLIED_FILE = LOG_DIR + '/remote_settings.applied.json'
 REMOTE_SETTINGS_PREV_FILE = LOG_DIR + '/remote_settings.prev.json'
-UNIT_NAME_FILE = LOG_DIR + '/unit_name.txt'   # Persisted human-friendly unit name (applied after provisioning)
+UNIT_NAME_FILE = '/logs/unit_name.txt'   # Persisted human-friendly unit name (applied after provisioning)
 
 # Generic logs
 LOG_FILE = LOG_DIR + '/lora.log'
@@ -55,10 +45,10 @@ FIELD_DATA_GZIP = True             # allow gzip payload when supported
 # Then other vars
 UNIT_ID = "None"              # 6-digit assigned by Admin after first check-in (persisted locally)
 UNIT_Name = "No Device Name"    # Human-friendly name (provisioned)
-NODE_TYPE = 'wifi'             # 'base','wifi', or 'remote'; base can host LoRa network & WiFi; remote uses LoRa primarily
+NODE_TYPE = 'base'             # 'base','wifi', or 'remote'; base can host LoRa network & WiFi; remote uses LoRa primarily
 #NODE_TYPE = 'remote'          # Uncomment for remote role during flashing
 
-FIRMWARE_VERSION = "v2.07.5k"   # Firmware version string
+FIRMWARE_VERSION = "v2.00.1a"   # Firmware version string
 
  # WordPress Unit Connector API integration
 WORDPRESS_API_URL = ""   # Customer Unit Connector site for provisioned devices
@@ -75,14 +65,14 @@ PROVISION_CHECK_INTERVAL_S = 30         # Seconds between registration attempts
 PROVISION_MAX_RETRIES = 60              # Max immediate retries before backoff escalation
 WIFI_ALWAYS_ON_WHEN_UNPROVISIONED = True  # Keep WiFi on until provisioning completes (remote needs Internet initially)
 WIFI_DISABLE_AFTER_PROVISION = True       # Remote nodes disable WiFi after provisioning (LoRa only thereafter)
-PROVISIONED_FLAG_FILE = LOG_DIR + '/provisioned.flag'  # Presence indicates initial hub registration completed
-REMOTE_SETTINGS_STAGED_FILE = LOG_DIR + '/remote_settings.staged.json'  # Admin or UC pushed settings awaiting apply
-REMOTE_SETTINGS_APPLIED_FILE = LOG_DIR + '/remote_settings.applied.json' # Snapshot of last applied settings
-REMOTE_SETTINGS_PREV_FILE = LOG_DIR + '/remote_settings.prev.json'       # Snapshot of previous settings before last apply
-UNIT_ID_FILE = LOG_DIR + '/unit_id.txt'       # Persisted UNIT_ID mapping
-MACHINE_ID_FILE = LOG_DIR + '/machine_id.txt' # Persisted MACHINE_ID after detection
-LAST_FIRMWARE_CHECK_FILE = LOG_DIR + '/fw_last_check.txt'
-OTA_PENDING_FILE = LOG_DIR + '/ota_pending.flag'
+PROVISIONED_FLAG_FILE = '/logs/provisioned.flag'  # Presence indicates initial hub registration completed
+REMOTE_SETTINGS_STAGED_FILE = '/logs/remote_settings.staged.json'  # Admin or UC pushed settings awaiting apply
+REMOTE_SETTINGS_APPLIED_FILE = '/logs/remote_settings.applied.json' # Snapshot of last applied settings
+REMOTE_SETTINGS_PREV_FILE = '/logs/remote_settings.prev.json'       # Snapshot of previous settings before last apply
+UNIT_ID_FILE = '/logs/unit_id.txt'       # Persisted UNIT_ID mapping
+MACHINE_ID_FILE = '/logs/machine_id.txt' # Persisted MACHINE_ID after detection
+LAST_FIRMWARE_CHECK_FILE = '/logs/fw_last_check.txt'
+OTA_PENDING_FILE = '/logs/ota_pending.flag'
 
 #Feature/device enables 
 ENABLE_WIFI = True
@@ -105,155 +95,47 @@ voc_i2c_address = 0x59
 ENABLE_sensorTSL2591 = False
 lux_i2c_address = 0x29
 
-# MCU type selection
-MCU_TYPE = "esp32"  # Set to "pico" or "esp32" or "zero"
-
-# CHANGED: If running on CPython (Pi Zero), force MCU_TYPE to "zero" so pin map selection is correct.
-# This preserves existing behavior on MicroPython boards (pico/esp32).
-try:
-    import sys as _sys
-    if str(getattr(_sys.implementation, "name", "")).lower() != "micropython":
-        MCU_TYPE = "zero"
-except Exception:
-    pass
-
-# Pin maps for each MCU type
-pico_pins = {
-    "SYS_VOLTAGE_PIN": 29,
-    "LED_PIN": 25,
-    "RELAY_PIN1": 6,
-    "RELAY_PIN2": 7,
-    "RELAY_PIN3": None,
-    "RELAY_PIN4": None,
-    "RELAY_PIN5": None,
-    "RELAY_PIN6": None,
-    "RELAY_PIN7": None,
-    "RELAY_PIN8": None,
-    "I2C_A_SCL_PIN": 8,
-    "I2C_A_SDA_PIN": 9,
-    "I2C_B_SCL_PIN": 13,
-    "I2C_B_SDA_PIN": 14,
-    "SPI_BUS": 1,
-    "CLK_PIN": 10,
-    "MOSI_PIN": 11,
-    "MISO_PIN": 12,
-    "CS_PIN": 3,
-    "IRQ_PIN": 20,
-    "RST_PIN": 15,
-    "BUSY_PIN": 2,
-    "CH1_TX_PIN": 20,
-    "CH1_RX_PIN": 21,
-    "CH2_TX_PIN": 22,
-    "CH2_RX_PIN": 26,
-}
-
-esp32_pins = {
-    "SYS_VOLTAGE_PIN": 3,
-    "LED_PIN": 21,
-    "RELAY_PIN1": 17,
-    "RELAY_PIN2": 18,
-    "RELAY_PIN3": None,
-    "RELAY_PIN4": None,
-    "RELAY_PIN5": None,
-    "RELAY_PIN6": None,
-    "RELAY_PIN7": None,
-    "RELAY_PIN8": None,
-    "I2C_A_SCL_PIN": 33,
-    "I2C_A_SDA_PIN": 34,
-    "I2C_B_SCL_PIN": 38,
-    "I2C_B_SDA_PIN": 39,
-    "SPI_BUS": 1,
-    "CLK_PIN": 35,
-    "MOSI_PIN": 36,
-    "MISO_PIN": 37,
-    "CS_PIN": 14,
-    "IRQ_PIN": 4,
-    "RST_PIN": 40,
-    "BUSY_PIN": 13,
-    "CH1_TX_PIN": 4,
-    "CH1_RX_PIN": 5,
-    "CH2_TX_PIN": 6,
-    "CH2_RX_PIN": 7,
-}
-
-zero_pins = {
-    "SYS_VOLTAGE_PIN": None,
-    "LED_PIN": 25,
-    "RELAY_PIN1": 4,
-    "RELAY_PIN2": 17,
-    "RELAY_PIN3": None,
-    "RELAY_PIN4": None,
-    "RELAY_PIN5": None,
-    "RELAY_PIN6": None,
-    "RELAY_PIN7": None,
-    "RELAY_PIN8": None,
-    "I2C_A_SCL_PIN": 9,
-    "I2C_A_SDA_PIN": 10,
-    "I2C_B_SCL_PIN": 5,
-    "I2C_B_SDA_PIN": 6,
-    "SPI_BUS": 0,
-    "CLK_PIN": 11,
-    "MOSI_PIN": 10,
-    "MISO_PIN": 9,
-    "CS_PIN": 8,
-    "IRQ_PIN": 16,
-    "RST_PIN": 20,
-    "BUSY_PIN": 21,
-    "CH1_TX_PIN": 14,
-    "CH1_RX_PIN": 15,
-    "CH2_TX_PIN": 22,
-    "CH2_RX_PIN": 23,
-}
-
-
-
-# Assign pins based on MCU_TYPE
-if MCU_TYPE == "pico":
-    pins = pico_pins
-elif MCU_TYPE == "zero":
-    pins = zero_pins
-elif MCU_TYPE == "esp32":
-    pins = esp32_pins
-else:
-    raise ValueError("Invalid MCU_TYPE")
-
-
-
-SYS_VOLTAGE_PIN = pins["SYS_VOLTAGE_PIN"]
-LED_PIN = pins["LED_PIN"]
-RELAY_PIN1 = pins["RELAY_PIN1"]
-RELAY_PIN2 = pins["RELAY_PIN2"]
-RELAY_PIN3 = pins["RELAY_PIN3"]
-RELAY_PIN4 = pins["RELAY_PIN4"]
-RELAY_PIN5 = pins["RELAY_PIN5"]
-RELAY_PIN6 = pins["RELAY_PIN6"]
-RELAY_PIN7 = pins["RELAY_PIN7"]
-RELAY_PIN8 = pins["RELAY_PIN8"]
-I2C_A_SCL_PIN = pins["I2C_A_SCL_PIN"]
-I2C_A_SDA_PIN = pins["I2C_A_SDA_PIN"]
-I2C_B_SCL_PIN = pins["I2C_B_SCL_PIN"]
-I2C_B_SDA_PIN = pins["I2C_B_SDA_PIN"]
-SPI_BUS = pins["SPI_BUS"]
-CLK_PIN = pins["CLK_PIN"]
-MOSI_PIN = pins["MOSI_PIN"]
-MISO_PIN = pins["MISO_PIN"]
-CS_PIN = pins["CS_PIN"]
-IRQ_PIN = pins["IRQ_PIN"]
-RST_PIN = pins["RST_PIN"]
-BUSY_PIN = pins["BUSY_PIN"]
-CH1_TX_PIN = pins["CH1_TX_PIN"]
-CH1_RX_PIN = pins["CH1_RX_PIN"]
-CH2_TX_PIN = pins["CH2_TX_PIN"]
-CH2_RX_PIN = pins["CH2_RX_PIN"]
+# Pin definitions
+SYS_VOLTAGE_PIN = 3                # ADC pin used for voltage divider (adjust as needed)
+# LED Light control pin
+LED_PIN = 21
+# Relay control pins
+RELAY_PIN1 = 17
+RELAY_PIN2 = 18
+RELAY_PIN3 = None
+RELAY_PIN4 = None
+RELAY_PIN5 = None
+RELAY_PIN6 = None
+RELAY_PIN7 = None
+RELAY_PIN8 = None
+# I2C pins
+I2C_A_SCL_PIN = 33
+I2C_A_SDA_PIN = 34
+I2C_B_SCL_PIN = 38
+I2C_B_SDA_PIN = 39
+# LoRa Radio pins
+SPI_BUS = 1
+CLK_PIN = 35
+MOSI_PIN = 36
+MISO_PIN = 37
+CS_PIN = 14
+IRQ_PIN = 4
+RST_PIN = 40
+BUSY_PIN = 13
+# RS485 / Engine controller pins
+CH1_TX_PIN = 4
+CH1_RX_PIN = 5
+CH2_TX_PIN = 6
+CH2_RX_PIN = 7
 
 #Debug toggles flags
-DEBUG = True
-DEBUG_SAMPLING = True
-DEBUG_BME280 = True
+DEBUG = False
+DEBUG_SAMPLING = False
+DEBUG_BME280 = False
 DEBUG_DHT11 = False
-DEBUG_TEMP = True
-DEBUG_BAR = True
-DEBUG_HUMID = True
+DEBUG_TEMP = False
+DEBUG_BAR = False
+DEBUG_HUMID = False
 DEBUG_LORA = True
 DEBUG_WIFI_CONNECT = False
 DEBUG_OTA = True
@@ -261,8 +143,8 @@ DEBUG_PROVISION = True
 DEBUG_DISPLAY = False
 DEBUG_BASE_NODE = True
 DEBUG_REMOTE_NODE = True
-DEBUG_WIFI_NODE = True
-DEBUG_WPREST = True
+DEBUG_WIFI_NODE = False
+DEBUG_WPREST = False
 DEBUG_FIELD_DATA = True
 DEBUG_RS485 = False
 
@@ -287,6 +169,7 @@ COMM_BAUD = 9600
 COMM_PARITY = None
 COMM_STOP_BITS = 1
 
+
 # Relay Settings
 ENABLE_RELAY1 = True
 ENABLE_RELAY2 = True
@@ -309,7 +192,6 @@ WIFI_BACKOFF_S = 15                       # Base backoff between retry bursts
 WIFI_SIGNAL_SAMPLE_INTERVAL_S = 30        # Interval to refresh RSSI for OLED
 
 # --- LoRa sync & recovery ---
-LORA_LOOP_INTERVAL_S = 5                    # Main loop interval (seconds)
 nextLoraSync = 100                      # Remote next absolute sync epoch (assigned by base)
 LORA_SYNC_WINDOW = 2                    # seconds of minimum spacing between remote sync slots
 LORA_SLOT_SPACING_S = LORA_SYNC_WINDOW  # alias for clarity
@@ -391,25 +273,21 @@ COMPARE_BAR = True
 SAMPLE_HUMID = True
 COMPARE_HUMID = True
 SAMPLE_LIGHT = False                    # Future light sensor enable
-SAMPLE_VOC = False                                         
+SAMPLE_VOC = False                      # VOC sensor enable
 SAMPLE_LUX = False                      # Lux sensor enable
 
 #Frost & Heat Monitoring
-ENABLE_FROSTWATCH = True
+ENABLE_FROSTWATCH = False
 FROSTWATCH_ACTIVE_TEMP = 70
 FROSTWATCH_ALERT_TEMP = 42
 FROSTWATCH_ACTION_TEMP = 38
 FROSTWATCH_STANDDOWN_TEMP = 40
-FROSTWATCH_LAST_TIME_ACTIVE = 0
 
-
-ENABLE_HEATWATCH = True
+ENABLE_HEATWATCH = False
 HEATWATCH_ACTIVE_TEMP = 90
 HEATWATCH_ALERT_TEMP = 100
 HEATWATCH_ACTION_TEMP = 110
 HEATWATCH_STANDDOWN_TEMP = 105
-HEATWATCH_LAST_TIME_ACTIVE = 0
-
 
 # System voltage measurement settings
 SYS_VOLTAGE_MAX = 5.0                      # Maximum measurable voltage (adjust for your divider)
@@ -677,10 +555,3 @@ LORA_SINGLE_FRAME_RETRIES = 2
 # NEW: explicit lists for handling chunk send errors
 LORA_CHUNK_SHRINK_CODES = [-4]            # codes that indicate "packet too long" and should trigger chunk size shrink
 LORA_CHUNK_TRANSIENT_CODES = [86, 87, 89] # codes considered transient — retry the chunk rather than shrink
-
-LORA_CHUNK_FATAL_CODES = [-2, -3]        # codes that indicate fatal errors — abort chunked transfer
-
-# --- LoRa legacy compatibility toggles ---
-# When True, remote transmits legacy "TS:...,UID:..." text payloads.
-# JSON/HMAC/chunk flow remains available when False.
-LORA_LEGACY_TEXT_MODE = False

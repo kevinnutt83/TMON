@@ -3,111 +3,13 @@
 # NOTE: This restores the previously working utils.py behavior (as provided),
 # and adds small compatibility aliases (free_pins_lora/free_pins_i2c) without changing logic.
 
+import ujson
+import uasyncio as asyncio
+import os
+import utime as time
 import settings
+import machine
 import gc
-
-try:
-    import sys
-except Exception:
-    sys = None
-
-# ujson
-try:
-    import ujson  # MicroPython
-except Exception:
-    import json as ujson  # CPython (Zero)
-
-# asyncio
-try:
-    import uasyncio as asyncio  # MicroPython
-except Exception:
-    try:
-        import asyncio  # CPython (Zero)
-    except Exception:
-        asyncio = None
-
-# os / time
-try:
-    import uos as os  # MicroPython
-except Exception:
-    import os  # CPython (Zero)
-
-try:
-    import utime as time  # MicroPython
-except Exception:
-    import time  # CPython (Zero)
-
-# machine
-try:
-    import machine  # MicroPython
-except Exception:
-    machine = None  # CPython (Zero)
-
-# Prefer platform_compat on Zero/CPython if available (keeps one consistent abstraction repo-wide)
-try:
-    _mcu = str(getattr(settings, "MCU_TYPE", "")).lower()
-except Exception:
-    _mcu = ""
-
-try:
-    _is_micropython = bool(sys and getattr(sys, "implementation", None) and sys.implementation.name == "micropython")
-except Exception:
-    _is_micropython = False
-
-if (_mcu == "zero") or (not _is_micropython):
-    try:
-        from platform_compat import asyncio as _pa, time as _pt, os as _po, machine as _pm  # type: ignore
-        if _pa is not None:
-            asyncio = _pa
-        if _pt is not None:
-            time = _pt
-        if _po is not None:
-            os = _po
-        if _pm is not None:
-            machine = _pm
-    except Exception:
-        pass
-
-# Fallback: provide ticks_ms/ticks_diff on CPython if missing (keeps existing logic unchanged)
-try:
-    if not hasattr(time, "ticks_ms"):
-        def _ticks_ms():
-            return int(time.time() * 1000)
-        def _ticks_diff(a, b):
-            return int(a) - int(b)
-        time.ticks_ms = _ticks_ms  # type: ignore[attr-defined]
-        time.ticks_diff = _ticks_diff  # type: ignore[attr-defined]
-except Exception:
-    pass
-
-# Fallback: minimal machine stub on Zero so legacy code paths don't crash on attribute access.
-if machine is None:
-    class _MachineStub:
-        class Pin:
-            IN = 0
-            OUT = 1
-            PULL_UP = 2
-            PULL_DOWN = 3
-            def __init__(self, *a, **kw): pass
-            def init(self, *a, **kw): return None
-            def value(self, *a, **kw): return 0
-            def on(self): return None
-            def off(self): return None
-
-        class ADC:
-            def __init__(self, *a, **kw): pass
-            def read_u16(self): return 0
-
-        def unique_id(self):  # best-effort; utils.get_machine_id() already tolerates failures
-            return b""
-
-        def soft_reset(self):
-            raise SystemExit("soft_reset requested")
-
-        def reset(self):
-            raise SystemExit("reset requested")
-
-    machine = _MachineStub()
 
 from config_persist import write_text, read_json, set_flag, is_flag_set, write_json, read_text
 
@@ -163,28 +65,17 @@ def enforce_log_caps(path: str):
 def checkLogDirectory():
     """Create log directory (idempotent)."""
     try:
-        d = str(getattr(settings, 'LOG_DIR', '/logs') or '/logs')
-        # Prefer shared helper when available
-        try:
-            from config_persist import ensure_dir
-            ensure_dir(d)
-            return
-        except Exception:
-            pass
-        # CPython-friendly: mkdir -p semantics
-        try:
-            if hasattr(os, "makedirs"):
-                os.makedirs(d, exist_ok=True)  # type: ignore[arg-type]
-                return
-        except Exception:
-            pass
-        # MicroPython fallback
-        try:
-            os.stat(d)
-        except Exception:
-            os.mkdir(d)
+        from config_persist import ensure_dir
+        ensure_dir(getattr(settings, 'LOG_DIR', '/logs'))
     except Exception:
-        pass
+        try:
+            d = getattr(settings, 'LOG_DIR', '/logs')
+            try:
+                os.stat(d)
+            except Exception:
+                os.mkdir(d)
+        except Exception:
+            pass
 
 def append_to_backlog(payload):
     checkLogDirectory()
@@ -350,58 +241,67 @@ def get_unix_time():
     except Exception:
         return int(time.time())
 
-async def debug_print(message, status="INFO"):
-    # CHANGED: ensure settings is available (or safely None) on CPython/Zero
-    try:
-        import settings  # type: ignore
-    except Exception:
-        settings = None  # type: ignore
-
-    # CHANGED: tolerate missing settings and unknown status tags.
-    try:
-        tag = str(status or "INFO").upper().strip()
-    except Exception:
-        tag = "INFO"
-
-    # Map tags/categories to debug flags (safe even if settings is None)
+async def debug_print(message, status):
     debug_flags = {
-        'TEMP': getattr(settings, 'DEBUG_TEMP', False) if settings else False,
-        'BAR': getattr(settings, 'DEBUG_BAR', False) if settings else False,
-        'HUMID': getattr(settings, 'DEBUG_HUMID', False) if settings else False,
-        'BME280': getattr(settings, 'DEBUG_BME280', False) if settings else False,
-        'DHT11': getattr(settings, 'DEBUG_DHT11', False) if settings else False,
-        'SAMPLING': getattr(settings, 'DEBUG_SAMPLING', False) if settings else False,
-        # CHANGED: fix broken line that combined two dict entries and caused parse/runtime issues
-        'SAMPLE_': getattr(settings, 'DEBUG_SAMPLING', False) if settings else False,
-        'LORA': getattr(settings, 'DEBUG_LORA', False) if settings else False,
+        # sensors/telemetry
+        'TEMP': getattr(settings, 'DEBUG_TEMP', False),
+        'BAR': getattr(settings, 'DEBUG_BAR', False),
+        'HUMID': getattr(settings, 'DEBUG_HUMID', False),
+        'BME280': getattr(settings, 'DEBUG_BME280', False),
+        'DHT11': getattr(settings, 'DEBUG_DHT11', False),
+        'SAMPLING': getattr(settings, 'DEBUG_SAMPLING', False),
+        'SAMPLE_': getattr(settings, 'DEBUG_SAMPLING', False),  # matches SAMPLE_TEMP/HUMID/BAR...
 
-        'LORA_RX': getattr(settings, 'DEBUG_LORA', False) if settings else False,
-        'LORA_TX': getattr(settings, 'DEBUG_LORA', False) if settings else False,
-        'WIFI': getattr(settings, 'DEBUG_WIFI_CONNECT', False) if settings else False,
-        'WIFI_CONNECT': getattr(settings, 'DEBUG_WIFI_CONNECT', False) if settings else False,
-        'OTA': getattr(settings, 'DEBUG_OTA', False) if settings else False,
-        'PROVISION': getattr(settings, 'DEBUG_PROVISION', False) if settings else False,
-        'DISPLAY': getattr(settings, 'DEBUG_DISPLAY', False) if settings else False,
-        'WPREST': getattr(settings, 'DEBUG_WPREST', False) if settings else False,
-        'FIELD_DATA': getattr(settings, 'DEBUG_FIELD_DATA', False) if settings else False,
-        'RS485': getattr(settings, 'DEBUG_RS485', False) if settings else False,
-        'BASE_NODE': getattr(settings, 'DEBUG_BASE_NODE', False) if settings else False,
-        'REMOTE_NODE': getattr(settings, 'DEBUG_REMOTE_NODE', False) if settings else False,
-        'WIFI_NODE': getattr(settings, 'DEBUG_WIFI_NODE', False) if settings else False,
-        'INFO': getattr(settings, 'DEBUG', False) if settings else False,
-        'WARN': getattr(settings, 'DEBUG', False) if settings else False,
-        'ERROR': getattr(settings, 'DEBUG', False) if settings else False,
+        # connectivity / radio
+        'LORA': getattr(settings, 'DEBUG_LORA', False),
+        'LORA_RX': getattr(settings, 'DEBUG_LORA', False),
+        'LORA_TX': getattr(settings, 'DEBUG_LORA', False),
+        'WIFI': getattr(settings, 'DEBUG_WIFI_CONNECT', False),
+        'WIFI_CONNECT': getattr(settings, 'DEBUG_WIFI_CONNECT', False),
+
+        # system subsystems
+        'OTA': getattr(settings, 'DEBUG_OTA', False),
+        'PROVISION': getattr(settings, 'DEBUG_PROVISION', False),
+        'DISPLAY': getattr(settings, 'DEBUG_DISPLAY', False),
+        'WPREST': getattr(settings, 'DEBUG_WPREST', False),
+        'FIELD_DATA': getattr(settings, 'DEBUG_FIELD_DATA', False),
+        'RS485': getattr(settings, 'DEBUG_RS485', False),
+
+        # node roles
+        'BASE_NODE': getattr(settings, 'DEBUG_BASE_NODE', False),
+        'REMOTE_NODE': getattr(settings, 'DEBUG_REMOTE_NODE', False),
+        'WIFI_NODE': getattr(settings, 'DEBUG_WIFI_NODE', False),
+        
+        # Info, Error, and Warning
+        'INFO': getattr(settings, 'DEBUG', False),
+        'WARN': getattr(settings, 'DEBUG', False),
+        'ERROR': getattr(settings, 'DEBUG', False),
     }
+    should_print = bool(getattr(settings, 'DEBUG', False))
+    for key, enabled in debug_flags.items():
+        if key in str(status) and enabled:
+            should_print = True
+    if should_print:
+        try:
+            safe_msg = message
+            if isinstance(safe_msg, bytes):
+                safe_msg = safe_msg.decode('utf-8', 'ignore')
+            safe_msg = ''.join(ch if 32 <= ord(ch) <= 126 else ' ' for ch in str(safe_msg))
+        except Exception:
+            safe_msg = '<unprintable>'
+        try:
+            unixt = get_unix_time()
+            ts = time.localtime(unixt) if hasattr(time, 'localtime') else None
+            if ts:
+                timestamp = f"{ts[0]:04}-{ts[1]:02}-{ts[2]:02} {ts[3]:02}:{ts[4]:02}:{ts[5]:02}"
+            else:
+                timestamp = str(unixt)
+        except Exception:
+            timestamp = '0'
+        print(f"[{timestamp}] [{status}] {safe_msg}")
+    await asyncio.sleep(0)
 
-    enabled = bool(debug_flags.get(tag, bool(getattr(settings, "DEBUG", False)) if settings else False))
-    if not enabled:
-        return
-
-    try:
-        print("[{}] {}".format(tag, message))
-    except Exception:
-        pass
-
+    
 # --- LED support (restored) ---
 color_to_duty = {
     'white': (255, 255, 255),
@@ -470,11 +370,8 @@ def set_color(rgb_led, color):
         pass
 
 async def flash_led(num_flashes, interval, lightColor, pattern):
-    # CHANGED: use platform_compat so Zero/CPython can run (and MicroPython keeps real neopixel)
-    from platform_compat import NeoPixel, machine
-    Pin = getattr(machine, "Pin", None)
-    if NeoPixel is None or Pin is None:
-        return
+    from neopixel import NeoPixel
+    from machine import Pin
     duty_cycle = color_to_duty.get(str(lightColor).lower())
     if duty_cycle is None:
         return
@@ -513,8 +410,7 @@ async def flash_led(num_flashes, interval, lightColor, pattern):
                 pass
 
 def led_status_flash(status):
-    # CHANGED: use the module-selected asyncio (uasyncio on MicroPython, asyncio on CPython/Zero)
-    _a = asyncio
+    import uasyncio as _a
     color_map = {
         'BOOT': 'mint',
         'INFO': 'light_green',
@@ -555,8 +451,7 @@ def led_status_flash(status):
     }
     color = color_map.get(status, 'white')
     try:
-        if _a:
-            _a.create_task(flash_led(1, 0.2, color, 'short'))
+        _a.create_task(flash_led(1, 0.2, color, 'short'))
     except Exception:
         pass
     
@@ -1375,12 +1270,6 @@ async def periodic_provision_check():
 
     while True:
         try:
-            # NEW: ensure LOG_DIR exists before any flag/guard writes (prevents endless soft-reset loops on Zero)
-            try:
-                checkLogDirectory()
-            except Exception:
-                pass
-
             try:
                 flag_exists = False
                 try:
@@ -1411,10 +1300,7 @@ async def periodic_provision_check():
                 resp = None
                 if _r:
                     try:
-                        try:
-                            import socket as _sock
-                        except ImportError:
-                            import usocket as _sock
+                        import usocket as _sock
                         _sock.setdefaulttimeout(timeout_s)
                     except Exception:
                         pass
@@ -1532,8 +1418,6 @@ async def periodic_provision_check():
                 pass
 
         await _a.sleep(interval)
-
-
 
 def compute_bars(rssi, cuts=None):
     try:

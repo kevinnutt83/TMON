@@ -3,112 +3,26 @@
 # Handles WordPress REST API communication for TMON MicroPython device
 
 import gc
-from platform_compat import requests as _pc_requests, time as _pc_time, asyncio as _pc_asyncio  # CHANGED
-import sys  # NEW
+try:
+    import urequests as requests
+except Exception:
+    try:
+        import requests
+    except Exception:
+        requests = None
 
 try:
     import ujson as json
 except Exception:
     import json
 
+from utils import debug_print, get_machine_id, persist_unit_id, persist_unit_name, append_to_backlog, read_backlog, clear_backlog
 import settings
 import os
-
-# CHANGED: determine runtime early so we can safely import CPython-only libs conditionally
-def _is_micropython() -> bool:
-    try:
-        return str(getattr(sys.implementation, "name", "")).lower() == "micropython"
-    except Exception:
-        return False
-
-_IS_MICROPYTHON = _is_micropython()
-
-# CHANGED: CPython-only urllib imports must not run on MicroPython
-if not _IS_MICROPYTHON:
-    import urllib.request  # type: ignore
-    import urllib.error  # type: ignore
-    import urllib.parse  # type: ignore
-else:
-    urllib = None  # type: ignore
-
-# CHANGED: Guard utils import so Zero can still check-in/provision even if other code paths
-# (e.g., neopixel usage inside utils.flash_led) are problematic at runtime.
-try:
-    from utils import (
-        debug_print,
-        get_machine_id,
-        persist_unit_id,
-        persist_unit_name,
-        append_to_backlog,
-        read_backlog,
-        clear_backlog,
-    )
-except Exception:
-    async def debug_print(msg, tag="DEBUG"):
-        try:
-            print(f"[{tag}] {msg}")
-        except Exception:
-            pass
-
-    def get_machine_id():
-        try:
-            return getattr(settings, "MACHINE_ID", "") or ""
-        except Exception:
-            return ""
-
-    def persist_unit_id(_uid):
-        return None
-
-    def persist_unit_name(_name):
-        return None
-
-    def append_to_backlog(_entry):
-        return False
-
-    def read_backlog():
-        return []
-
-    def clear_backlog():
-        return True
 
 WORDPRESS_API_URL = getattr(settings, 'WORDPRESS_API_URL', '')
 WORDPRESS_USERNAME = getattr(settings, 'WORDPRESS_USERNAME', None)
 WORDPRESS_PASSWORD = getattr(settings, 'WORDPRESS_PASSWORD', None)
-
-# CHANGED: CPython/Zero fallback for HTTP + time when platform_compat provides None
-requests = _pc_requests
-time = _pc_time
-if requests is None:
-    try:
-        import requests as _py_requests  # type: ignore
-        requests = _py_requests  # type: ignore
-    except Exception:
-        requests = None  # type: ignore
-if time is None:
-    try:
-        import time as _py_time  # type: ignore
-        time = _py_time  # type: ignore
-    except Exception:
-        time = None  # type: ignore
-
-# CHANGED: prefer a to_thread-capable asyncio on CPython even if platform_compat shims are minimal
-try:
-    import asyncio as _py_asyncio  # type: ignore
-except Exception:
-    _py_asyncio = None  # type: ignore
-
-def _to_thread_asyncio():
-    try:
-        if (not _IS_MICROPYTHON) and _pc_asyncio and hasattr(_pc_asyncio, "to_thread"):
-            return _pc_asyncio
-    except Exception:
-        pass
-    try:
-        if (not _IS_MICROPYTHON) and _py_asyncio and hasattr(_py_asyncio, "to_thread"):
-            return _py_asyncio
-    except Exception:
-        pass
-    return None
 
 # Minimal async HTTP client wrappers are not necessary when using urequests synchronously,
 # but we wrap calls with try/except and timeouts where possible for safety.
@@ -134,18 +48,15 @@ def _auth_headers(mode=None):
             pwd  = getattr(settings, 'FIELD_DATA_APP_PASS', '') or getattr(settings, 'WORDPRESS_PASSWORD', '') or ''
             if user and pwd:
                 try:
+                    import ubinascii as _ub
                     creds = (str(user) + ':' + str(pwd)).encode('utf-8')
-                    try:
-                        import ubinascii as _ub  # MicroPython
-                        b64 = _ub.b2a_base64(creds).decode('ascii').strip()
-                    except Exception:
-                        import base64 as _b64  # CPython (Zero)
-                        b64 = _b64.b64encode(creds).decode('ascii').strip()
+                    b64 = _ub.b2a_base64(creds).decode('ascii').strip()
                     h = dict(headers)
                     h['Authorization'] = 'Basic ' + b64
                     return h
                 except Exception:
                     pass
+            # if mode explicitly 'basic' and no creds, fall back to no auth
             if mode == 'basic':
                 return headers
         # Hub shared key header
@@ -181,170 +92,19 @@ def _auth_headers(mode=None):
     # default: return headers w/o auth
     return headers
 
-# NEW: unify node-type HTTP gating (this name is referenced throughout the module)
-def _http_allowed_for_node() -> bool:
-    try:
-        from utils import is_http_allowed_for_node  # type: ignore
-        return bool(is_http_allowed_for_node())
-    except Exception:
-        return True
-
-# CHANGED: minimal urllib-based response shim to preserve current call sites
-class _UrlLibResp:
-    def __init__(self, code=0, text="", content=None):
-        self.status_code = int(code or 0)
-        self.text = text or ""
-        self.content = content if content is not None else (self.text.encode("utf-8", "ignore") if isinstance(self.text, str) else b"")
-
-    def json(self):
-        return json.loads(self.text or "{}")
-
-    def close(self):
-        return None
-
-def _urllib_post(url, payload=None, headers=None, timeout_s=8):
-    # CHANGED: defensive no-op on MicroPython (urllib not available there)
-    if _IS_MICROPYTHON:
-        return _UrlLibResp(0, "urllib_unavailable", None)
-    try:
-        body = json.dumps(payload or {}).encode("utf-8")
-    except Exception:
-        body = b"{}"
-    hdrs = dict(headers or {})
-    try:
-        if "Content-Type" not in hdrs:
-            hdrs["Content-Type"] = "application/json"
-        req = urllib.request.Request(url, data=body, headers=hdrs, method="POST")
-        with urllib.request.urlopen(req, timeout=timeout_s) as r:
-            raw = r.read()
-            txt = ""
-            try:
-                txt = raw.decode("utf-8", "ignore")
-            except Exception:
-                txt = ""
-            return _UrlLibResp(getattr(r, "status", 200), txt, raw)
-    except urllib.error.HTTPError as e:
-        raw = b""
-        try:
-            raw = e.read()
-        except Exception:
-            pass
-        txt = ""
-        try:
-            txt = raw.decode("utf-8", "ignore")
-        except Exception:
-            txt = ""
-        return _UrlLibResp(getattr(e, "code", 0), txt, raw)
-    except Exception as e:
-        return _UrlLibResp(0, str(e), None)
-
-def _urllib_get(url, headers=None, timeout_s=8):
-    # CHANGED: defensive no-op on MicroPython (urllib not available there)
-    if _IS_MICROPYTHON:
-        return _UrlLibResp(0, "urllib_unavailable", None)
-    hdrs = dict(headers or {})
-    try:
-        req = urllib.request.Request(url, headers=hdrs, method="GET")
-        with urllib.request.urlopen(req, timeout=timeout_s) as r:
-            raw = r.read()
-            txt = ""
-            try:
-                txt = raw.decode("utf-8", "ignore")
-            except Exception:
-                txt = ""
-            return _UrlLibResp(getattr(r, "status", 200), txt, raw)
-    except urllib.error.HTTPError as e:
-        raw = b""
-        try:
-            raw = e.read()
-        except Exception:
-            pass
-        txt = ""
-        try:
-            txt = raw.decode("utf-8", "ignore")
-        except Exception:
-            txt = ""
-        return _UrlLibResp(getattr(e, "code", 0), txt, raw)
-    except Exception as e:
-        return _UrlLibResp(0, str(e), None)
-
-async def _http_post(url, payload=None, headers=None, timeout_s=8):
-    """
-    CPython: run requests.post in a thread to avoid freezing the event loop.
-    MicroPython/urequests: fall back to data=json.dumps(payload) and omit timeout when unsupported.
-    """
-    # CHANGED: if 'requests' is unavailable on CPython, fall back to urllib (only on CPython)
-    if requests is None and not _IS_MICROPYTHON:
-        a = _to_thread_asyncio()
-        try:
-            if a and hasattr(a, "to_thread"):
-                return await a.to_thread(_urllib_post, url, payload, headers, timeout_s)
-        except Exception:
-            pass
-        return _urllib_post(url, payload, headers, timeout_s)
-
-    if requests is None:
-        return None
-
-    def _do_post():
-        if not _IS_MICROPYTHON:
-            return requests.post(url, json=payload, headers=headers, timeout=timeout_s)
-        try:
-            return requests.post(url, json=payload, headers=headers)  # type: ignore[arg-type]
-        except TypeError:
-            try:
-                body = json.dumps(payload or {})
-            except Exception:
-                body = "{}"
-            return requests.post(url, data=body, headers=headers)
-
-    a = _to_thread_asyncio()
-    try:
-        if (not _IS_MICROPYTHON) and a and hasattr(a, "to_thread"):
-            return await a.to_thread(_do_post)
-    except Exception:
-        pass
-    return _do_post()
-
-async def _http_get(url, headers=None, timeout_s=8):
-    # CHANGED: if 'requests' is unavailable on CPython, fall back to urllib (only on CPython)
-    if requests is None and not _IS_MICROPYTHON:
-        a = _to_thread_asyncio()
-        try:
-            if a and hasattr(a, "to_thread"):
-                return await a.to_thread(_urllib_get, url, headers, timeout_s)
-        except Exception:
-            pass
-        return _urllib_get(url, headers, timeout_s)
-
-    if requests is None:
-        return None
-
-    def _do_get():
-        if not _IS_MICROPYTHON:
-            return requests.get(url, headers=headers, timeout=timeout_s)
-        try:
-            return requests.get(url, headers=headers)  # urequests
-        except TypeError:
-            return requests.get(url, headers=headers)
-
-    a = _to_thread_asyncio()
-    try:
-        if (not _IS_MICROPYTHON) and a and hasattr(a, "to_thread"):
-            return await a.to_thread(_do_get)
-    except Exception:
-        pass
-    return _do_get()
-
 async def register_with_wp():
     """Register/check-in device with the configured WordPress/TMON Admin hub (best-effort).
     Tries multiple known admin endpoints to work around differing hub API routes.
     """
     try:
-        # CHANGED: do not hard-depend on utils.is_http_allowed_for_node()
-        if not _http_allowed_for_node():
-            await debug_print('wprest: http disabled for remote node (provisioned)', 'WARN')
-            return False
+        # REMOTE nodes: once provisioned, must not perform HTTP calls
+        try:
+            from utils import is_http_allowed_for_node
+            if not is_http_allowed_for_node():
+                await debug_print('wprest: http disabled for remote node (provisioned)', 'WARN')
+                return False
+        except Exception:
+            pass
 
         base = getattr(settings, 'TMON_ADMIN_API_URL', '') or getattr(settings, 'WORDPRESS_API_URL', '')
         if not base:
@@ -361,60 +121,64 @@ async def register_with_wp():
         candidates = []
         try:
             candidates.append('/wp-json/tmon-admin/v1/device/check-in')
-            candidates.append('/wp-json/tmon-admin/v1/device/checkin')  # CHANGED: common variant (no dash)
             candidates.append(getattr(settings, 'ADMIN_REGISTER_PATH', '/wp-json/tmon-admin/v1/device/register'))
-            candidates.append('/wp-json/tmon-admin/v1/device/check-in/')  # CHANGED: tolerate trailing slash
             candidates.append(getattr(settings, 'ADMIN_V2_CHECKIN_PATH', '/wp-json/tmon-admin/v2/device/checkin'))
         except Exception:
-            candidates = [
-                '/wp-json/tmon-admin/v1/device/check-in',
-                '/wp-json/tmon-admin/v1/device/checkin',
-                '/wp-json/tmon-admin/v1/device/register',
-                '/wp-json/tmon-admin/v2/device/checkin',
-            ]
+            candidates = ['/wp-json/tmon-admin/v1/device/check-in', '/wp-json/tmon-admin/v1/device/register', '/wp-json/tmon-admin/v2/device/checkin']
 
-        # CHANGED: try multiple auth modes; many hubs allow unauth register/check-in
-        auth_modes = [None, 'none', 'basic', 'hub', 'admin', 'read', 'api_key']
-
-        last = None
+        hdrs = _auth_headers() if callable(_auth_headers) else {}
         for path in candidates:
-            for mode in auth_modes:
+            try:
+                url = base.rstrip('/') + path
                 try:
-                    url = base.rstrip('/') + path
-                    try:
-                        hdrs = _auth_headers(mode)
-                    except Exception:
-                        hdrs = {}
-
-                    resp = await _http_post(url, payload=payload, headers=hdrs, timeout_s=8)
-                    status = getattr(resp, 'status_code', 0) if resp else 0
+                    resp = requests.post(url, json=payload, headers=hdrs, timeout=8)
+                except TypeError:
+                    resp = requests.post(url, json=payload, headers=hdrs)
+                status = getattr(resp, 'status_code', 0)
+                body_snip = ''
+                try:
+                    body_snip = (getattr(resp, 'text', '') or '')[:400]
+                except Exception:
                     body_snip = ''
+                # Parse and persist name if present
+                try:
+                    if status in (200, 201):
+                        try:
+                            j = resp.json()
+                        except Exception:
+                            j = {}
+                        unit_name = (j.get('unit_name') or '').strip()
+                        if unit_name:
+                            try:
+                                from utils import persist_unit_name
+                                persist_unit_name(unit_name)
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+                try:
+                    if resp:
+                        resp.close()
+                except Exception:
+                    pass
+                if status in (200, 201):
+                    await debug_print(f'wprest: register ok via {path}', 'INFO')
                     try:
-                        body_snip = (getattr(resp, 'text', '') or '')[:400] if resp else ''
-                    except Exception:
-                        body_snip = ''
-
-                    try:
-                        if resp:
-                            resp.close()
+                        from oled import display_message
+                        await display_message("Registered", 2)
                     except Exception:
                         pass
-
-                    last = (path, mode, status, body_snip[:200])
-
-                    if status in (200, 201):
-                        await debug_print(f'wprest: register ok via {path} auth={mode}', 'INFO')
-                        try:
-                            from oled import display_message
-                            await display_message("Registered", 2)
-                        except Exception:
-                            pass
-                        return True
-                except Exception as e:
-                    last = (path, mode, 'exc', str(e)[:200])
-
-        # CHANGED: include last attempt details on ERROR so it shows even with DEBUG=False
-        await debug_print(f'wprest: register_all_attempts_failed last={last}', 'ERROR')
+                    return True
+                # Log diagnostic per-candidate
+                if status == 404:
+                    await debug_print(f'wprest: register endpoint {path} not found (404)', 'WARN')
+                elif status == 401:
+                    await debug_print(f'wprest: register endpoint {path} returned 401 Unauthorized. Check FIELD_DATA_APP_PASS / credentials.', 'WARN')
+                else:
+                    await debug_print(f'wprest: register failed {status} for {path} ({body_snip})', 'WARN')
+            except Exception as e:
+                await debug_print(f'wprest: register attempt {path} exception: {e}', 'ERROR')
+        await debug_print('wprest: register_all_attempts_failed', 'ERROR')
         try:
             from oled import display_message
             await display_message("Register Failed", 2)
@@ -430,8 +194,8 @@ async def send_data_to_wp():
        This implementation uses same semantics as utils.send_field_data_log but is a lightweight wrapper.
     """
     try:
-        # CHANGED
-        if not _http_allowed_for_node():
+        from utils import is_http_allowed_for_node
+        if not is_http_allowed_for_node():
             await debug_print('wprest: skip send_data (remote node http disabled)', 'WARN')
             return False
     except Exception:
@@ -481,8 +245,8 @@ async def send_settings_to_wp():
        On repeated failure, append payload to backlog for later retry.
     """
     try:
-        # CHANGED
-        if not _http_allowed_for_node():
+        from utils import is_http_allowed_for_node
+        if not is_http_allowed_for_node():
             await debug_print('wprest: skip send_settings (remote node http disabled)', 'WARN')
             return False
     except Exception:
@@ -653,8 +417,8 @@ async def fetch_staged_settings():
 async def fetch_settings_from_wp():
     """GET applied device settings from WP (best-effort). Returns dict or None."""
     try:
-        # CHANGED
-        if not _http_allowed_for_node():
+        from utils import is_http_allowed_for_node
+        if not is_http_allowed_for_node():
             await debug_print('wprest: skip fetch_settings (remote node http disabled)', 'WARN')
             return None
     except Exception:
@@ -698,8 +462,8 @@ async def poll_device_commands():
        On simple success, call handle_device_command for each command if available.
     """
     try:
-        # CHANGED
-        if not _http_allowed_for_node():
+        from utils import is_http_allowed_for_node
+        if not is_http_allowed_for_node():
             await debug_print('wprest: skip poll_device_commands (remote node http disabled)', 'WARN')
             return []
     except Exception:
@@ -791,19 +555,17 @@ async def poll_device_commands():
             # handle them best-effort
             for c in (commands or []):
                 try:
+                    # Try to call local handler (if implemented elsewhere)
                     from commands import handle_command as _hc
                     try:
                         await _hc(c)
                     except Exception:
                         pass
                 except Exception:
+                    # No local handler; queue confirm attempt as pending
                     try:
-                        # CHANGED: _queue_command_confirm is sync; do not await it
-                        _queue_command_confirm({
-                            'job_id': c.get('id') if isinstance(c, dict) else None,
-                            'ok': True,
-                            'result': 'handled_locally_not_implemented'
-                        })
+                        # best-effort confirm as received
+                        await _queue_command_confirm({'job_id': c.get('id') if isinstance(c, dict) else None, 'ok': True, 'result': 'handled_locally_not_implemented'})
                     except Exception:
                         pass
             return commands
@@ -990,15 +752,14 @@ async def _post_command_confirm(payload):
 __all__ = [
     'register_with_wp', 'send_data_to_wp', 'send_settings_to_wp',
     'fetch_staged_settings', 'fetch_settings_from_wp', 'poll_device_commands', 'poll_ota_jobs',
-    'send_file_to_wp', 'request_file_from_wp', 'heartbeat_ping',
-    '_auth_headers'
+    'send_file_to_wp', 'request_file_from_wp', 'heartbeat_ping'
 ]
 
 async def heartbeat_ping():
     """Best-effort heartbeat POST to the server's heartbeat endpoint."""
     try:
-        # CHANGED
-        if not _http_allowed_for_node():
+        from utils import is_http_allowed_for_node
+        if not is_http_allowed_for_node():
             await debug_print('wprest: skip heartbeat (remote node http disabled)', 'WARN')
             return False
     except Exception:

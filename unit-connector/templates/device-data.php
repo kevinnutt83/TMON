@@ -41,14 +41,7 @@ $nonce = wp_create_nonce('tmon_uc_device_data');
         (function(){
             var p = document.getElementById('tmon-unit-picker');
             if (!p) return;
-
-            // Keep default selection only. Initial change dispatch is handled in the later settings script.
-            if (!p.value && p.options && p.options.length) {
-                for (var i = 0; i < p.options.length; i++) {
-                    if (p.options[i].value) { p.value = p.options[i].value; break; }
-                }
-            }
-
+            // Fire change to trigger guarded listeners (fetchSettings/loadUnit/etc.)
             try { p.dispatchEvent(new Event('change')); } catch(e) { try { $(p).trigger('change'); } catch(_){} }
         })();
     </script>
@@ -117,21 +110,11 @@ $nonce = wp_create_nonce('tmon_uc_device_data');
     	const btn = document.getElementById('tmon_update_unit_name_btn');
     	const input = document.getElementById('tmon_unit_name_input');
     	const status = document.getElementById('tmon_unit_name_status');
-    	const picker = document.getElementById('tmon-unit-picker');
+    	const unit = '<?php echo esc_js($unit); ?>';
     	const nonce = '<?php echo wp_create_nonce('tmon_uc_nonce'); ?>';
-    	if (!btn || !input || !status || !picker) return;
-
-    	function syncFromPicker(){
-    		var opt = picker.options && picker.selectedIndex >= 0 ? picker.options[picker.selectedIndex] : null;
-    		input.value = opt ? (opt.getAttribute('data-unit-name') || '') : '';
-    		status.textContent = '';
-    	}
-    	picker.addEventListener('change', syncFromPicker);
-    	syncFromPicker();
 
     	btn.addEventListener('click', function(e){
     		e.preventDefault();
-    		const unit = picker.value || '';
     		if (!unit) { alert('No unit selected'); return; }
     		const name = input.value || '';
     		status.textContent = 'Saving...';
@@ -147,16 +130,7 @@ $nonce = wp_create_nonce('tmon_uc_device_data');
     		}).then(function(resp){
     			return resp.json().catch(function(){ return resp.text(); });
     		}).then(function(j){
-    			if (j && j.success) {
-    				status.textContent = 'Saved';
-    				var opt = picker.options[picker.selectedIndex];
-    				if (opt) {
-    					opt.setAttribute('data-unit-name', name);
-    					opt.textContent = name ? (name + ' (' + unit + ')') : unit;
-    				}
-    			} else {
-    				status.textContent = 'Update failed';
-    			}
+    			status.textContent = 'Settings AJAX response: ' + (j && j.data ? JSON.stringify(j.data) : JSON.stringify(j));
     		}).catch(function(err){
     			status.textContent = 'Update failed';
     			console.error(err);
@@ -167,24 +141,50 @@ $nonce = wp_create_nonce('tmon_uc_device_data');
 </div>
 <script>
 (function(){
+    // --- Editable unit name logic ---
     var picker = document.getElementById('tmon-unit-picker');
-    if (!picker) return;
+    var nameEdit = document.getElementById('tmon-unit-name-edit');
+    var nameSave = document.getElementById('tmon-unit-name-save');
+    var nameStatus = document.getElementById('tmon-unit-name-status');
+    function updateNameInput() {
+        var opt = picker.options[picker.selectedIndex];
+        nameEdit.value = opt ? (opt.getAttribute('data-unit-name') || '') : '';
+        nameStatus.textContent = '';
+    }
+    picker.addEventListener('change', updateNameInput);
+    updateNameInput();
+    nameSave.addEventListener('click', function(){
+        var unit = picker.value;
+        var newName = nameEdit.value.trim();
+        nameStatus.textContent = 'Saving...';
+        fetch(ajaxurl + '?action=tmon_uc_update_unit_name', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: 'unit_id=' + encodeURIComponent(unit) + '&unit_name=' + encodeURIComponent(newName) + '&_wpnonce=<?php echo esc_js($nonce); ?>'
+        }).then(r=>r.json()).then(function(res){
+            if(res && res.success){
+                nameStatus.textContent = 'Saved!';
+                // Update dropdown label
+                var opt = picker.options[picker.selectedIndex];
+                if(opt) {
+                    opt.setAttribute('data-unit-name', newName);
+                    opt.textContent = newName ? (newName + ' (' + unit + ')') : unit;
+                }
+            } else {
+                nameStatus.textContent = 'Error saving';
+            }
+        }).catch(function(){ nameStatus.textContent = 'Error'; });
+    });
 
+    // --- Settings panels logic ---
     var settingsApplied = document.getElementById('tmon-settings-applied');
     var settingsStaged = document.getElementById('tmon-settings-staged');
     var settingsEditor = document.getElementById('tmon-settings-editor');
     var settingsLoad = document.getElementById('tmon-settings-load');
     var settingsPush = document.getElementById('tmon-settings-push');
     var settingsStatus = document.getElementById('tmon-settings-status');
-
+    var card = document.getElementById('tmon-settings-card');
     function fetchSettings(unit) {
-        if (!unit) {
-            if (settingsApplied) settingsApplied.textContent = 'Select a unit';
-            if (settingsStaged) settingsStaged.textContent = 'Select a unit';
-            if (settingsEditor) settingsEditor.value = '';
-            if (settingsStatus) settingsStatus.textContent = '';
-            return;
-        }
         settingsApplied.textContent = 'Loading...';
         settingsStaged.textContent = 'Loading...';
         settingsEditor.value = '';
@@ -207,16 +207,75 @@ $nonce = wp_create_nonce('tmon_uc_device_data');
             settingsEditor.value = '';
         });
     }
-
-    if (settingsLoad) settingsLoad.addEventListener('click', function(){ fetchSettings(picker.value); });
     picker.addEventListener('change', function(){ fetchSettings(picker.value); });
+    settingsLoad.addEventListener('click', function(){ fetchSettings(picker.value); });
+    // Initial load
+    fetchSettings(picker.value);
 
-    // Initial picker default + initial load after listeners are attached
-    if (!picker.value && picker.options && picker.options.length) {
-        for (var i = 0; i < picker.options.length; i++) {
-            if (picker.options[i].value) { picker.value = picker.options[i].value; break; }
-        }
-    }
-    try { picker.dispatchEvent(new Event('change')); } catch(e) {}
+    settingsPush.addEventListener('click', function(){
+        var unit = picker.value;
+        var json;
+        try { json = JSON.parse(settingsEditor.value); }
+        catch(e){ settingsStatus.textContent = 'Invalid JSON'; return; }
+        settingsStatus.textContent = 'Staging...';
+        fetch(ajaxurl + '?action=tmon_uc_stage_settings', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+            body: 'unit_id=' + encodeURIComponent(unit) + '&settings=' + encodeURIComponent(JSON.stringify(json)) + '&_wpnonce=<?php echo esc_js($nonce); ?>'
+        }).then(r=>r.json()).then(function(res){
+            if(res && res.success){
+                settingsStatus.textContent = 'Staged!';
+                fetchSettings(unit);
+            } else {
+                settingsStatus.textContent = 'Error staging';
+            }
+        }).catch(function(){ settingsStatus.textContent = 'Error'; });
+    });
+})();
+</script>
+
+<!-- Ensure a stable global picker reference early so other inline scripts won't throw -->
+<script>
+(function(){
+	// If a page-level picker exists in DOM, expose it as window.picker immediately.
+	try { if (!window.picker) window.picker = document.getElementById('tmon-unit-picker') || null; } catch(e) {}
+})();
+</script>
+
+<script>
+(function(){
+	// Make the primary top picker drive the device settings panel (guarded).
+	// Use a local lookup so this block doesn't depend on a bare `picker` variable being defined elsewhere.
+	var pickerEl = (typeof picker !== 'undefined' && picker) ? picker : (document.getElementById ? document.getElementById('tmon-unit-picker') : null);
+
+	if (pickerEl) {
+		// when user changes the global picker, keep UI in sync and refresh data
+		pickerEl.addEventListener('change', function(){
+			try {
+				var v = pickerEl.value;
+				var uidInput = document.getElementById('tmon_unit_id');
+				if (uidInput) uidInput.value = v;
+				if (typeof fetchSettings === 'function') fetchSettings(v);
+				if (typeof loadUnit === 'function') loadUnit(v);
+			} catch (e) { console.warn('tmon: picker change handler error', e); }
+		});
+
+		// run updates on initial page load (single-source update)
+		(function(){
+			try {
+				var initial = pickerEl.value || (pickerEl.options && pickerEl.options.length ? pickerEl.options[0].value : '');
+				if (initial) {
+					if (typeof fetchSettings === 'function') fetchSettings(initial);
+				 if (typeof loadUnit === 'function') loadUnit(initial);
+				}
+			} catch (e) { console.warn('tmon: initial picker load error', e); }
+		})();
+	} else {
+		// No global picker present: disable settings controls to avoid confusion
+		var statusEl = document.getElementById('tmon_ds_status');
+		if (statusEl) statusEl.textContent = 'Page-level Unit selector (id="tmon-unit-picker") not found; add it to use this panel.';
+		var btns = document.querySelectorAll('#tmon_ds_load, #tmon_ds_save');
+		Array.prototype.forEach.call(btns, function(b){ if (b) b.disabled = true; });
+	}
 })();
 </script>

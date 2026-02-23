@@ -35,17 +35,8 @@ cur_temp_c = 0
 cur_temp_f = 0
 cur_bar_pres = 0
 cur_humid = 0
-
-# Legacy compatibility: some LoRa paths read REMOTE_NODE_INFO from sdata.
-REMOTE_NODE_INFO = {}
-
-# Indicate sampling in progress so OLED can render sampling-only content
-import settings
-sampling_active = bool(
-    getattr(settings, "SAMPLE_TEMP", False)
-    or getattr(settings, "SAMPLE_BAR", False)
-    or getattr(settings, "SAMPLE_HUMID", False)
-)
+# NEW: indicate sampling in progress so OLED can render sampling-only content
+sampling_active = False
 
 # Base Station Data Variables
 lowest_temp_f = 0

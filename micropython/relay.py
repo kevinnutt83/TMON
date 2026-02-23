@@ -1,19 +1,8 @@
 """Relay control with safety caps and runtime telemetry.
 Firmware Version: v2.06.0
 """
-try:
-    from platform_compat import asyncio, machine  # CHANGED: unified import for MicroPython + CPython (Zero)
-except Exception:
-    # Keep import-safe on CPython: no 'machine' module exists.
-    try:
-        import uasyncio as asyncio  # type: ignore
-    except Exception:
-        import asyncio  # type: ignore
-    try:
-        import machine  # MicroPython only
-    except Exception:
-        machine = None  # CHANGED: allow Zero/CPython to import module
-
+import uasyncio as asyncio
+import machine
 import sdata
 import settings
 from utils import debug_print
@@ -30,8 +19,6 @@ def _relay_enabled(n: int) -> bool:
 
 def _relay_pin(n: int):
     try:
-        if machine is None or not hasattr(machine, 'Pin'):
-            return None
         pin_num = getattr(settings, f'RELAY_PIN{n}')
         return machine.Pin(pin_num, machine.Pin.OUT)
     except Exception:
@@ -75,11 +62,6 @@ async def _runtime_tracker(n: int):
 
 async def toggle_relay(relay_num, state, runtime):
     try:
-        # Zero/CPython: no hardware backend -> preserve logic by no-op with a clear log.
-        if machine is None or not hasattr(machine, 'Pin'):
-            await debug_print("Relay control unavailable: no machine.Pin backend (MCU_TYPE='zero'?)", "WARN")
-            return
-
         # Validate relay_num (1-8)
         if not relay_num.isdigit() or not (1 <= int(relay_num) <= 8):
             await debug_print(f"Invalid relay number: {relay_num} (must be 1-8)", "ERROR")
