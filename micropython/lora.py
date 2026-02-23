@@ -318,9 +318,9 @@ async def connectLora():
 
         state = STATE_IDLE
         send_interval = 10
-        timeout_ms = 500  # Short timeout for non-blocking recv
+        timeout_ms = 15000  # Short timeout for non-blocking recv
         last_activity = time.time()
-        idle_timeout = 60
+        idle_timeout = 60000
         connected = False
 
         # For base: Track connected remote nodes {uid: last_ts}
@@ -722,3 +722,6 @@ async def ai_input_listener():
 # asyncio.create_task(ai_dashboard_display())
 # asyncio.create_task(ai_input_listener())
 # asyncio.create_task(user_input_listener())
+
+
+
