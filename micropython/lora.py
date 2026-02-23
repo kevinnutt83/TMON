@@ -1,4 +1,14 @@
 # Utility to print remote node info
+async def print_remote_nodes():
+    import sdata
+    remote_info = getattr(sdata, 'REMOTE_NODE_INFO', {})
+    if not remote_info:
+        print("No remote nodes")
+        return
+    for node_id, node_data in remote_info.items():
+        print(f"[REMOTE NODE] {node_id}: {node_data}")
+
+# Utility to print remote node info
 def print_remote_nodes():
     import sdata
     remote_info = getattr(sdata, 'REMOTE_NODE_INFO', {})
@@ -305,104 +315,110 @@ async def connectLora():
         state = STATE_IDLE
         last_activity = time.time()
         while True:
-            if state == STATE_IDLE:
-                if settings.NODE_TYPE == 'base':
-                    lora.startReceive()
-                    await debug_print("Base: Listening for remotes", "LORA")
-                else:
-                    # Remote: sample and send data
-                    await sampleEnviroment()
-                    payload_dict = sdata.__dict__.copy()
-                    payload_dict['node_id'] = settings.UNIT_ID
-                    payload_dict['timestamp'] = time.time()
-                    payload_dict['firmware_version'] = settings.FIRMWARE_VERSION
-                    if hasattr(settings, 'ota_in_progress') and settings.ota_in_progress:
-                        payload_dict['ota_ack'] = settings.last_chunk_ok
-                    payload = ujson.dumps(payload_dict)
-                    lora.send(payload)
-                    state = STATE_WAIT_RESPONSE
-                    await debug_print("Remote: Sent data, waiting response", "LORA")
-            elif state == STATE_SENDING:
-                pass  # Not used currently
-            elif state == STATE_WAIT_RESPONSE:
-                # Wait for response (remote only)
-                start_wait = time.time()
-                while time.time() - start_wait < 10:  # 10s timeout
+            try:
+                if state == STATE_IDLE:
+                    if settings.NODE_TYPE == 'base':
+                        lora.startReceive()
+                        await debug_print("Base: Listening for remotes", "LORA")
+                    else:
+                        # Remote: sample and send data
+                        await sampleEnviroment()
+                        payload_dict = sdata.__dict__.copy()
+                        payload_dict['node_id'] = settings.UNIT_ID
+                        payload_dict['timestamp'] = time.time()
+                        payload_dict['firmware_version'] = settings.FIRMWARE_VERSION
+                        if hasattr(settings, 'ota_in_progress') and settings.ota_in_progress:
+                            payload_dict['ota_ack'] = settings.last_chunk_ok
+                        payload = ujson.dumps(payload_dict)
+                        lora.send(payload)
+                        state = STATE_WAIT_RESPONSE
+                        await debug_print("Remote: Sent data, waiting response", "LORA")
+                elif state == STATE_SENDING:
+                    pass  # Not used currently
+                elif state == STATE_WAIT_RESPONSE:
+                    # Wait for response (remote only)
+                    start_wait = time.time()
+                    while time.time() - start_wait < 10:  # 10s timeout
+                        if lora.irq():
+                            received = lora.recv()
+                            if received:
+                                try:
+                                    response = ujson.loads(received)
+                                    if 'ack' in response:
+                                        for cmd in response.get('commands', []):
+                                            handler = command_handlers.get(cmd['type'])
+                                            if handler:
+                                                handler(cmd.get('args', {}))
+                                    if 'next_sync' in response:
+                                        settings.nextLoraSync = response['next_sync']
+                                    if 'file_update' in response:
+                                        handle_ota_chunk(response['file_update'])
+                                    state = STATE_IDLE
+                                    break
+                                except Exception as e:
+                                    await debug_print(f"Response parse error: {e}", "ERROR")
+                        await asyncio.sleep(0.1)
+                    if state != STATE_IDLE:
+                        await debug_print("Response timeout", "WARN")
+                        state = STATE_IDLE
+                        if settings.NODE_TYPE != 'base':
+                            settings.nextLoraSync = time.time() + (settings.LORA_CHECK_IN_MINUTES * 60)  # Retry after interval
+
+                # For base: check for received data while in IDLE
+                if settings.NODE_TYPE == 'base' and state == STATE_IDLE:
                     if lora.irq():
                         received = lora.recv()
                         if received:
                             try:
-                                response = ujson.loads(received)
-                                if 'ack' in response:
-                                    for cmd in response.get('commands', []):
-                                        handler = command_handlers.get(cmd['type'])
-                                        if handler:
-                                            handler(cmd.get('args', {}))
-                                if 'next_sync' in response:
-                                    settings.nextLoraSync = response['next_sync']
-                                if 'file_update' in response:
-                                    handle_ota_chunk(response['file_update'])
+                                data = ujson.loads(received)
+                                node_id = data['node_id']
+                                settings.REMOTE_NODE_INFO[node_id] = {
+                                    'last_seen': time.time(),
+                                    'data': data,
+                                    'firmware_version': data['firmware_version'],
+                                    'last_ack_ts': time.time()
+                                }
+                                save_remote_node_info()
+                                # Log received data to field_data.log in same format
+                                with open(settings.FIELD_DATA_LOG, 'a') as f:
+                                    f.write(ujson.dumps(data) + '\n')
+                                # Generate response
+                                response = {
+                                    'ack': True,
+                                    'commands': []  # From WP or local
+                                }
+                                response['next_sync'] = calculate_next_sync(node_id)
+                                if 'ota' in settings.REMOTE_NODE_INFO.get(node_id, {}):
+                                    ota_info = get_next_ota_chunk(node_id)
+                                    if ota_info:
+                                        response['file_update'] = ota_info
+                                if 'ota_ack' in data:
+                                    if data['ota_ack']:
+                                        advance_ota_chunk(node_id)
+                                response_payload = ujson.dumps(response)
+                                lora.send(response_payload)
+                                await debug_print("Base: Sent response", "LORA")
                                 state = STATE_IDLE
-                                break
+                                lora.startReceive()
                             except Exception as e:
-                                await debug_print(f"Response parse error: {e}", "ERROR")
-                    await asyncio.sleep(0.1)
-                if state != STATE_IDLE:
-                    await debug_print("Response timeout", "WARN")
+                                await debug_print(f"Receive parse error: {e}", "ERROR")
+
+                # Timeout reset
+                if time.time() - last_activity > 30:
                     state = STATE_IDLE
+                    if settings.NODE_TYPE == 'base':
+                        lora.startReceive()
+                last_activity = time.time()
 
-            # For base: check for received data while in IDLE
-            if settings.NODE_TYPE == 'base' and state == STATE_IDLE:
-                if lora.irq():
-                    received = lora.recv()
-                    if received:
-                        try:
-                            data = ujson.loads(received)
-                            node_id = data['node_id']
-                            settings.REMOTE_NODE_INFO[node_id] = {
-                                'last_seen': time.time(),
-                                'data': data,
-                                'firmware_version': data['firmware_version'],
-                                'last_ack_ts': time.time()
-                            }
-                            save_remote_node_info()
-                            # Log received data to field_data.log in same format
-                            with open(settings.FIELD_DATA_LOG, 'a') as f:
-                                f.write(ujson.dumps(data) + '\n')
-                            # Generate response
-                            response = {
-                                'ack': True,
-                                'commands': []  # From WP or local
-                            }
-                            response['next_sync'] = calculate_next_sync(node_id)
-                            if 'ota' in settings.REMOTE_NODE_INFO.get(node_id, {}):
-                                ota_info = get_next_ota_chunk(node_id)
-                                if ota_info:
-                                    response['file_update'] = ota_info
-                            if 'ota_ack' in data:
-                                if data['ota_ack']:
-                                    advance_ota_chunk(node_id)
-                            response_payload = ujson.dumps(response)
-                            lora.send(response_payload)
-                            await debug_print("Base: Sent response", "LORA")
-                            state = STATE_IDLE
-                            lora.startReceive()
-                        except Exception as e:
-                            await debug_print(f"Receive parse error: {e}", "ERROR")
+                await asyncio.sleep(0.1)
 
-            # Timeout reset
-            if time.time() - last_activity > 30:
-                state = STATE_IDLE
-                if settings.NODE_TYPE == 'base':
-                    lora.startReceive()
-            last_activity = time.time()
-
-            await asyncio.sleep(0.1)
-
-            # For remote: sleep until next sync after cycle
-            if settings.NODE_TYPE != 'base' and state == STATE_IDLE:
-                sleep_time = max(0, settings.nextLoraSync - time.time())
-                await asyncio.sleep(sleep_time)
+                # For remote: sleep until next sync after cycle
+                if settings.NODE_TYPE != 'base' and state == STATE_IDLE:
+                    sleep_time = max(0, settings.nextLoraSync - time.time())
+                    await asyncio.sleep(sleep_time)
+            except Exception as e:
+                await debug_print(f"LoRa loop error: {e}", "ERROR")
+                await asyncio.sleep(1)  # Continue loop after error
 
 # Sync time functions
 def calculate_next_sync(node_id):
