@@ -1,4 +1,4 @@
-# Firmware Version: v2.06.0
+# TMON Verion 2.00.1d - Main entry point for TMON firmware: initializes settings, manages tasks for sampling, LoRa communication, field data uploads, command polling, OTA updates, and display updates. Implements a simple TaskManager to run periodic async tasks with error handling and GC management. Also includes a first-boot provisioning check-in to TMON Admin hub.
 
 # --- Single-threaded asyncio event loop ---
 import uasyncio as asyncio

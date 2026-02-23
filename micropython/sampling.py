@@ -1,4 +1,4 @@
-# Firmware Version: v2.06.0
+# TMON Verion 2.00.1d - Sampling module for TMON MicroPython firmware: defines async functions for sampling environmental data from sensors (currently BME280) and evaluating it against frostwatch and heatwatch thresholds. This module is responsible for reading sensor data, updating current conditions, and maintaining historical min/max values for temperature, barometric pressure, and humidity. It also includes logic to trigger frostwatch and heatwatch operations based on the sampled data. The sampling routines are designed to be called periodically by the main task manager, with error handling and GC management to ensure stable operation on resource-constrained hardware.
 
 import sdata
 import settings

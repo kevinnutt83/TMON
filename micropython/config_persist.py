@@ -1,3 +1,5 @@
+# TMON Verion 2.00.1d - Simple persistence helpers for MicroPython firmware settings/state. This module provides utility functions to read and write text and JSON files, as well as to manage simple flag files that can be used to track state across reboots. The functions include error handling to ensure that failures do not raise exceptions, which is important for stability on resource-constrained hardware. The ensure_dir function creates necessary directories for a given path, while the read/write functions handle file operations with optional defaults. The set_flag and is_flag_set functions provide a simple interface for managing boolean flags using the filesystem.
+
 # Simple persistence helpers for MicroPython firmware settings/state
 try:
     import ujson as json

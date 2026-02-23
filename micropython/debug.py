@@ -1,3 +1,5 @@
+# TMON Verion 2.00.1d - Lightweight debug/logging module. Wraps utils.debug_print and centralizes category toggles. This module defines a unified async debug logger that respects global and category-specific debug flags defined in settings.py. It provides convenience helper functions for different log levels (info, warn, error) and ensures that debug messages are only printed when the corresponding flags are enabled. The log function delegates rendering to utils.debug_print, which handles console output and optional OLED display updates. The module includes best-effort error handling to avoid raising exceptions during logging operations, ensuring stability on resource-constrained hardware.
+
 # Lightweight debug/logging module
 # Wraps utils.debug_print and centralizes category toggles.
 

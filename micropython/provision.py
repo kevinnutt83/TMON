@@ -1,3 +1,5 @@
+# TMON Verion 2.00.1d - Minimal MicroPython provisioning client that uses the canonical micropython/settings.py values. This module defines a function to fetch provisioning settings from the TMON Admin hub using either GET or POST requests, with support for multiple endpoint paths and robust error handling. It also includes a function to apply the fetched settings, which can trigger firmware updates and persist important configuration values. The module is designed to be called during the device's first boot sequence to ensure it is properly registered and configured with the server before normal operation begins. GC management is included to maintain stability on resource-constrained hardware.
+
 # Minimal MicroPython provisioning client that uses the canonical micropython/settings.py values.
 
 import json

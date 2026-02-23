@@ -1,4 +1,4 @@
-# Firmware Version: v2.00j
+# TMON Verion 2.00.1d - OLED display module for TMON MicroPython firmware: defines an SSD1309 driver and a unified render loop that updates the display based on the current device state, sensor readings, and communication status. The OLED header displays voltage or temperature (flipping periodically), along with optional WiFi and LoRa signal strength indicators. A status banner can show temporary messages, and the body area can be overridden for custom content. The render loop is designed to be efficient by only updating when relevant data changes, and includes error handling to ensure stability on resource-constrained hardware. GC management is included to maintain performance during rendering operations.
 
 import uasyncio as asyncio
 import time

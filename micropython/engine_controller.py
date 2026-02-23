@@ -1,3 +1,5 @@
+# TMON Verion 2.00.1d - Engine controller module for TMON MicroPython firmware: defines functions to poll engine data over RS485 using Modbus RTU, and to control pumps via coil writes. The module includes CRC calculation for Modbus messages, UART initialization with settings-defined pins and parameters, and async functions to read holding registers for engine speed and battery voltage, as well as to start and stop pumps by writing coils. An async loop function continuously polls the engine data at a configured interval, updating the centralized sdata variables with the latest readings. The module also includes a reset function to reinitialize the UARTs in case of communication issues. GC management is included to ensure stability during potentially heavy operations on resource-constrained hardware.
+
 import uasyncio as asyncio
 from machine import Pin, UART
 import struct

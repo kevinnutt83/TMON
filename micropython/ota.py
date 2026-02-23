@@ -1,4 +1,6 @@
-# Firmware Version: v2.06.0
+# TMON Verion 2.00.1d - OTA update module for TMON MicroPython firmware. This module defines functions to check for available firmware updates from a configured endpoint, and to apply pending updates by fetching files listed in a manifest, verifying their integrity, and replacing existing files on the device. The OTA process includes robust error handling, retry logic, and diagnostic artifact generation to facilitate troubleshooting. It also includes GC management to ensure stability during potentially heavy operations on resource-constrained hardware. The check_for_update function can be called periodically to detect new firmware versions, while apply_pending_update can be called at startup to apply any updates that have been flagged as pending.
+
+
 # OTA scaffolding: version check and pending flag
 try:
     import urequests as requests

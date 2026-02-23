@@ -1,4 +1,5 @@
-# Firmware Version: 2.0.0h
+# TMON Verion 2.00.1d - Centralized data store for TMON MicroPython firmware. This module defines all global variables used across the firmware to track device state, sensor readings, LoRa communication status, relay states, and other relevant information. By centralizing these variables in a single module, we can ensure consistent access and updates across different tasks and modules while maintaining a clear structure for the device's internal state. This also allows for easier debugging and potential future enhancements like state persistence or remote state reporting.
+
 # Performance/health metrics for reporting
 loop_runtime = 0
 script_runtime = 0

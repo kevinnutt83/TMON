@@ -1,6 +1,4 @@
-# Firmware Version: v2.06.0
-# wprest.py
-# Handles WordPress REST API communication for TMON MicroPython device
+# TMON Verion 2.00.1d - WordPress REST API integration for device registration, field data upload, and settings sync. Implements multiple auth modes (Basic, Hub token, Read token, Admin token) and endpoint fallbacks for compatibility with different server configurations. Includes error handling and backlogging of failed attempts for later retry.
 
 import gc
 try:

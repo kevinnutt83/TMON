@@ -1,4 +1,6 @@
-# Firmware Version: v2.00j
+# TMON Verion 2.00.1d - Boot sequence for TMON MicroPython firmware: defines the initial boot logic that runs on every startup, including displaying firmware version on the OLED, loading persisted state for remote nodes, and conditionally connecting to WiFi based on settings and provisioning status. The boot function is designed to be resilient with robust error handling to ensure that the device can start successfully even if certain operations fail (e.g., WiFi connection issues). It also includes an early provisioning fetch attempt if internet connectivity is available, allowing the device to retrieve its configuration from the server before proceeding with normal operation. GC management is included to maintain stability during potentially heavy operations on resource-constrained hardware.
+
+
 # This file is executed on every boot (including wake-boot from deepsleep)
 # import esp
 # esp.osdebug(None)

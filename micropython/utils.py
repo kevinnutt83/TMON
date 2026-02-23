@@ -1,4 +1,4 @@
-# Firmware Version: v2.06.0
+# TMON Verion 2.00.1d - Utility functions for TMON MicroPython firmware: log management, backlog handling, unit ID persistence, suspension state, field data recording, LED control, error logging, node type and name persistence, voltage reading, free pin management, and a simple AI observer for error patterns. This module centralizes common utilities used across the firmware to maintain consistency and reduce code duplication.
 
 # NOTE: This restores the previously working utils.py behavior (as provided),
 # and adds small compatibility aliases (free_pins_lora/free_pins_i2c) without changing logic.

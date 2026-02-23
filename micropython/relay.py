@@ -1,3 +1,5 @@
+# TMON Verion 2.00.1d - Relay control with safety caps and runtime telemetry. This module defines the logic for controlling up to 8 relays based on settings, with optional runtime limits that are enforced for safety. It updates the centralized sdata variables to track relay states and runtime counters, allowing for monitoring and reporting of relay usage. The toggle_relay function can be called from command handlers or other parts of the firmware to control the relays while ensuring that safety limits are respected. Runtime tracking is implemented as an async task that increments a counter in sdata every second while the relay is on, and is cancelled when the relay is turned off or when the runtime limit is reached.
+
 """Relay control with safety caps and runtime telemetry.
 Firmware Version: v2.06.0
 """

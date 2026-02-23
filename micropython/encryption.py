@@ -1,3 +1,5 @@
+#	 TMON Verion 2.00.1d - Encryption module for TMON MicroPython firmware: defines a minimal ChaCha20 stream cipher and optional AEAD (ChaCha20-Poly1305) functions for encrypting and authenticating data. This module is designed for small payloads and includes nonce derivation from timestamps and counters. It is not constant time and should not be used for high-security contexts without review.
+
 """Minimal ChaCha20 stream cipher (insecure nonce reuse caution) for MicroPython.
 Usage:
     keystream = chacha20(key32, nonce12, counter)

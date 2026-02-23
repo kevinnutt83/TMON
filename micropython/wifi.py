@@ -1,4 +1,4 @@
-# Firmware Version: v2.06.0
+# TMON Verion 2.00.1d - WiFi management module for TMON MicroPython firmware. Handles WiFi connectivity, scanning, signal strength monitoring, and internet connectivity checks. Implements retry logic with backoff for connections and provides feedback via debug prints and OLED display messages. Also includes safeguards for remote node configurations and graceful handling of missing settings or hardware capabilities.
 
 import utime as time
 import network

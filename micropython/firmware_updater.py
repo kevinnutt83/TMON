@@ -1,3 +1,5 @@
+# TMON Verion 2.00.1d - Firmware updater module for TMON MicroPython firmware: defines a helper function to download firmware files from a given URL, with support for expected SHA256 verification and manifest-based hash lookup. The download_and_apply_firmware function handles the entire process of fetching the file, writing it to the OTA backup directory, computing its hash, and comparing it against an expected value or a manifest entry. It returns a detailed result dict that includes success status, file path, size, computed hash, expected hash, and any error messages. This module is designed to be used by device-specific code that implements the actual flashing of the firmware after download and verification. GC management is included to ensure stability during potentially heavy operations on resource-constrained hardware.
+
 # Firmware download helper for MicroPython clients; writes file to OTA_BACKUP_DIR.
 # Actual flash/install must be implemented per-hardware in device-specific code.
 

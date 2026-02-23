@@ -1,3 +1,5 @@
+# TMON Verion 2.00.1d - Settings application module for TMON MicroPython firmware. This module is responsible for safely applying staged settings received from the server, with a conservative allowlist of configurable parameters and coercion functions. It includes logic to persist applied settings, compute diffs from previous applied snapshots, and perform a soft reset if critical settings are changed. The module also includes safeguards for applying sensitive WiFi credentials only when appropriate, and attempts to confirm applied commands back to the server. GC management is included to ensure stability during potentially heavy operations on resource-constrained hardware.
+
 # Apply staged settings safely and persist applied snapshot
 try:
     import ujson as json

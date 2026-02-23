@@ -1,4 +1,4 @@
-# Firmware Version: v2.06.4
+# TMON Verion 2.00.1d - Centralized settings module for TMON MicroPython firmware. Defines all configurable parameters for device operation, including LoRa communication, WiFi connectivity, sensor sampling, OTA updates, and WordPress integration. Provides default values and allows overrides via staged settings mechanism. Also includes debug flags for granular control over logging and behavior during development and troubleshooting.
 
 try:
     FIELD_DATA_APP_PASS
@@ -39,7 +39,7 @@ FIELD_DATA_GZIP = True
 UNIT_ID = "None"
 UNIT_Name = "No Device Name"
 NODE_TYPE = 'base'
-FIRMWARE_VERSION = "v2.00.1c"
+FIRMWARE_VERSION = "v2.00.1d"
 
 WORDPRESS_API_URL = ""
 WORDPRESS_USERNAME = "agadmin"

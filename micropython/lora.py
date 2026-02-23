@@ -1,3 +1,5 @@
+# TMON Verion 2.00.1d - LoRa communication, WordPress integration, OTA updates, and remote node management
+
 # Utility to print remote node info
 async def print_remote_nodes():
     import sdata
