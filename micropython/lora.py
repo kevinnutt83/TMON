@@ -1,21 +1,14 @@
-# TMON Verion 2.00.1d - LoRa communication, WordPress integration, OTA updates, and remote node management
-
-# Utility to print remote node info
-async def print_remote_nodes():
-    import sdata
-    remote_info = getattr(sdata, 'REMOTE_NODE_INFO', {})
-    if not remote_info:
-        print("No remote nodes")
-        return
-    for node_id, node_data in remote_info.items():
-        print(f"[REMOTE NODE] {node_id}: {node_data}")
+# TMON Verion 2.00.1e - LoRa communication, WordPress integration, OTA updates, and remote node management
 
 # Utility to print remote node info
 def print_remote_nodes():
     import sdata
     remote_info = getattr(sdata, 'REMOTE_NODE_INFO', {})
+    if not remote_info:
+        debug_print("No remote nodes", "REMOTE_NODE")
+        return
     for node_id, node_data in remote_info.items():
-        print(f"[REMOTE NODE] {node_id}: {node_data}")
+        debug_print(f"[REMOTE NODE] {node_id}: {node_data}", "REMOTE_NODE")
 
 import ujson
 import os
@@ -243,7 +236,7 @@ async def log_error(error_msg):
             with open(settings.ERROR_LOG_FILE, 'a') as f:
                 f.write(log_line)
     except Exception as e:
-        print(f"[FATAL] Failed to log error: {e}")
+        debug_print(f"[FATAL] Failed to log error: {e}", "ERROR")
     await asyncio.sleep(0)
 
 command_handlers = {
@@ -253,14 +246,14 @@ command_handlers = {
 
 async def init_lora():
     global lora
-    print('[DEBUG] init_lora: starting SX1262 init')
+    await debug_print('init_lora: starting SX1262 init', 'LORA')
     try:
-        print('[DEBUG] init_lora: BEFORE SX1262 instantiation')
+        await debug_print('init_lora: BEFORE SX1262 instantiation', 'LORA')
         lora = SX1262(
             settings.SPI_BUS, settings.CLK_PIN, settings.MOSI_PIN, settings.MISO_PIN,
             settings.CS_PIN, settings.IRQ_PIN, settings.RST_PIN, settings.BUSY_PIN
         )
-        print('[DEBUG] init_lora: SX1262 object created')
+        await debug_print('init_lora: SX1262 object created', 'LORA')
         status = lora.begin(
             freq=settings.FREQ, bw=settings.BW, sf=settings.SF, cr=settings.CR,
             syncWord=settings.SYNC_WORD, power=settings.POWER,
@@ -268,7 +261,7 @@ async def init_lora():
             implicit=False, implicitLen=0xFF, crcOn=settings.CRC_ON, txIq=False, rxIq=False,
             tcxoVoltage=settings.TCXO_VOLTAGE, useRegulatorLDO=settings.USE_LDO
         )
-        print(f'[DEBUG] init_lora: lora.begin() returned {status}')
+        await debug_print(f'init_lora: lora.begin() returned {status}', 'LORA')
         if status != 0:
             error_msg = f"LoRa initialization failed with status: {status}"
             await debug_print(error_msg, "ERROR")
@@ -278,11 +271,10 @@ async def init_lora():
             return False
         await debug_print("LoRa initialized successfully", "LORA")
         print_remote_nodes()
-        print('[DEBUG] init_lora: completed successfully')
+        await debug_print('init_lora: completed successfully', 'LORA')
         return True
     except Exception as e:
         error_msg = f"Exception in init_lora: {e}"
-        print(error_msg)
         await debug_print(error_msg, "ERROR")
         await log_error(error_msg)
         await free_pins()
@@ -296,34 +288,34 @@ async def connectLora():
     if settings.ENABLE_LORA:
         await debug_print("Attempting LoRa initialization...", "LORA")
         async with pin_lock:
-            print('[DEBUG] connectLora: calling init_lora')
+            await debug_print('connectLora: calling init_lora', 'LORA')
             while lora_init_failures < MAX_LORA_INIT_FAILS:
                 if await init_lora():
-                    print('[DEBUG] connectLora: init_lora succeeded')
+                    await debug_print('connectLora: init_lora succeeded', 'LORA')
                     break
                 else:
                     lora_init_failures += 1
-                    print(f'[DEBUG] connectLora: init_lora failed ({lora_init_failures}/{MAX_LORA_INIT_FAILS})')
+                    await debug_print(f'connectLora: init_lora failed ({lora_init_failures}/{MAX_LORA_INIT_FAILS})', 'LORA')
                     await asyncio.sleep(10)
             if lora_init_failures >= MAX_LORA_INIT_FAILS:
-                print('[FATAL] LoRa initialization failed too many times. Halting further attempts.')
                 await debug_print('LoRa initialization failed too many times. Halting.', 'FATAL')
                 return False
 
         STATE_IDLE = 0
         STATE_SENDING = 1
         STATE_WAIT_RESPONSE = 2
+        STATE_CONNECTED = 3
 
         state = STATE_IDLE
         last_activity = time.time()
+        current_remote_id = None
         while True:
             try:
                 if state == STATE_IDLE:
                     if settings.NODE_TYPE == 'base':
                         lora.startReceive()
-                        await debug_print("Base: Listening for remotes", "LORA")
+                        await debug_print("Base: Listening for remotes", "BASE_NODE")
                     else:
-                        # Remote: sample and send data
                         await sampleEnviroment()
                         payload_dict = sdata.__dict__.copy()
                         payload_dict['node_id'] = settings.UNIT_ID
@@ -333,14 +325,12 @@ async def connectLora():
                             payload_dict['ota_ack'] = settings.last_chunk_ok
                         payload = ujson.dumps(payload_dict)
                         lora.send(payload)
+                        lora.startReceive()
                         state = STATE_WAIT_RESPONSE
-                        await debug_print("Remote: Sent data, waiting response", "LORA")
-                elif state == STATE_SENDING:
-                    pass  # Not used currently
+                        await debug_print("Remote: Sent data, waiting response", "REMOTE_NODE")
                 elif state == STATE_WAIT_RESPONSE:
-                    # Wait for response (remote only)
                     start_wait = time.time()
-                    while time.time() - start_wait < 10:  # 10s timeout
+                    while time.time() - start_wait < 10:
                         if lora.irq():
                             received = lora.recv()
                             if received:
@@ -351,21 +341,20 @@ async def connectLora():
                                             handler = command_handlers.get(cmd['type'])
                                             if handler:
                                                 handler(cmd.get('args', {}))
-                                    if 'next_sync' in response:
-                                        settings.nextLoraSync = response['next_sync']
-                                    if 'file_update' in response:
-                                        handle_ota_chunk(response['file_update'])
-                                    state = STATE_IDLE
-                                    break
+                                        if 'next_sync' in response:
+                                            settings.nextLoraSync = response['next_sync']
+                                        if 'file_update' in response:
+                                            handle_ota_chunk(response['file_update'])
+                                        state = STATE_IDLE
+                                        await debug_print("Remote: Processed response, closing connection", "REMOTE_NODE")
+                                        break
                                 except Exception as e:
                                     await debug_print(f"Response parse error: {e}", "ERROR")
                         await asyncio.sleep(0.1)
                     if state != STATE_IDLE:
                         await debug_print("Response timeout", "WARN")
                         state = STATE_IDLE
-                        if settings.NODE_TYPE != 'base':
-                            settings.nextLoraSync = time.time() + (settings.LORA_CHECK_IN_MINUTES * 60)  # Retry after interval
-
+                        settings.nextLoraSync = time.time() + (settings.LORA_CHECK_IN_MINUTES * 60)
                 # For base: check for received data while in IDLE
                 if settings.NODE_TYPE == 'base' and state == STATE_IDLE:
                     if lora.irq():
@@ -374,6 +363,7 @@ async def connectLora():
                             try:
                                 data = ujson.loads(received)
                                 node_id = data['node_id']
+                                current_remote_id = node_id
                                 settings.REMOTE_NODE_INFO[node_id] = {
                                     'last_seen': time.time(),
                                     'data': data,
@@ -381,13 +371,11 @@ async def connectLora():
                                     'last_ack_ts': time.time()
                                 }
                                 save_remote_node_info()
-                                # Log received data to field_data.log in same format
                                 with open(settings.FIELD_DATA_LOG, 'a') as f:
                                     f.write(ujson.dumps(data) + '\n')
-                                # Generate response
                                 response = {
                                     'ack': True,
-                                    'commands': []  # From WP or local
+                                    'commands': []
                                 }
                                 response['next_sync'] = calculate_next_sync(node_id)
                                 if 'ota' in settings.REMOTE_NODE_INFO.get(node_id, {}):
@@ -399,13 +387,13 @@ async def connectLora():
                                         advance_ota_chunk(node_id)
                                 response_payload = ujson.dumps(response)
                                 lora.send(response_payload)
-                                await debug_print("Base: Sent response", "LORA")
+                                await debug_print("Base: Sent response, closing connection", "BASE_NODE")
                                 state = STATE_IDLE
                                 lora.startReceive()
+                                current_remote_id = None
                             except Exception as e:
                                 await debug_print(f"Receive parse error: {e}", "ERROR")
 
-                # Timeout reset
                 if time.time() - last_activity > 30:
                     state = STATE_IDLE
                     if settings.NODE_TYPE == 'base':
@@ -414,13 +402,12 @@ async def connectLora():
 
                 await asyncio.sleep(0.1)
 
-                # For remote: sleep until next sync after cycle
                 if settings.NODE_TYPE != 'base' and state == STATE_IDLE:
                     sleep_time = max(0, settings.nextLoraSync - time.time())
                     await asyncio.sleep(sleep_time)
             except Exception as e:
                 await debug_print(f"LoRa loop error: {e}", "ERROR")
-                await asyncio.sleep(1)  # Continue loop after error
+                await asyncio.sleep(1)
 
 # Sync time functions
 def calculate_next_sync(node_id):
