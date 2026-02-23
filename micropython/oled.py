@@ -324,7 +324,7 @@ async def _render_loop(page=0):
                         if connected:
                             # Connected: show bars when RSSI known, otherwise show empty bars but no "Search"
                             try:
-                                lb = _net_bars_from_rssi(int(lrssi), (-80, -100, -120)) if lrssi is not None else 0
+                                lb = _net_bars_from_rssi(int(lrssi), (-60, -90, -120)) if lrssi is not None else 0
                             except Exception:
                                 lb = 0
                             ltext = ''
