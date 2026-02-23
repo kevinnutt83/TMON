@@ -40,7 +40,7 @@ UNIT_ID = "None"
 UNIT_Name = "No Device Name"
 NODE_TYPE = 'base'
 FIRMWARE_VERSION = "v2.00.1e"
-
+ 
 WORDPRESS_API_URL = ""
 WORDPRESS_USERNAME = "agadmin"
 WORDPRESS_PASSWORD = "Pepper-1"
