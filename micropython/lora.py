@@ -18,9 +18,12 @@ except ImportError:
     machine = None
     sys = None
 try:
-    from sx1262 import SX1262
+    from sx1262 import SX1262, ERR_RX_TIMEOUT, ERR_UNKNOWN, ERR_CRC_MISMATCH  # Added library constants for error handling
 except ImportError:
     SX1262 = None
+    ERR_RX_TIMEOUT = -1  # Fallback assumptions
+    ERR_UNKNOWN = -2
+    ERR_CRC_MISMATCH = -3
 try:
     import sdata
     import settings
@@ -55,7 +58,8 @@ try:
 except Exception:
     register_with_wp = send_data_to_wp = send_settings_to_wp = fetch_settings_from_wp = None
     send_file_to_wp = request_file_from_wp = heartbeat_ping = poll_ota_jobs = handle_ota_job = _auth_headers = None
-
+import random  # Added for random backoff
+import gc  # Added for memory optimization
 
 async def user_input_listener():
     """Non-blocking input for user commands via UART/serial."""
@@ -97,232 +101,12 @@ def load_remote_node_info():
     except Exception:
         settings.REMOTE_NODE_INFO = {}
 
-# Ensure remote node info is loaded at startup (after settings import)
-load_remote_node_info()
-
-# Save REMOTE_NODE_INFO to file
-def save_remote_node_info():
-    try:
-        with open(REMOTE_NODE_INFO_FILE, 'w') as f:
-            ujson.dump(settings.REMOTE_NODE_INFO, f)
-    except Exception:
-        pass
-
-
-# Periodic sync with WordPress (settings, data, OTA jobs)
-async def periodic_wp_sync():
-    if settings.NODE_TYPE != 'base':
-        return  # Only base station handles WordPress communication
-    while True:
-        await register_with_wp()
-        await send_settings_to_wp()
-        await fetch_settings_from_wp()
-        await send_data_to_wp()
-        await poll_ota_jobs()
-        await asyncio.sleep(300)  # Sync every 5 minutes
-
-# Heartbeat loop
-async def heartbeat_ping_loop():
-    if settings.NODE_TYPE != 'base':
-        return  # Only base station sends heartbeats to WordPress
-    while True:
-        await heartbeat_ping()
-        await asyncio.sleep(60)
-
-# Check for suspend/remove/remote access state (unchanged)
-async def check_suspend_remove():
-    if settings.NODE_TYPE != 'base':
-        return  # Only base station checks suspend status from WordPress
-    from wprest import WORDPRESS_API_URL
-    if not WORDPRESS_API_URL:
-        return
-    try:
-        import settings
-        import urequests as requests
-        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/settings/{settings.UNIT_ID}')
-        if resp.status_code == 200:
-            settings_data = resp.json().get('settings', {})
-            if settings_data.get('suspended'):
-                from utils import debug_print
-                await debug_print('Device is suspended by admin', 'WARN')
-                while True:
-                    await asyncio.sleep(60)
-    except Exception:
-        pass
-
-# Start periodic sync in main event loop (add to your main.py or boot.py)
-# asyncio.create_task(periodic_wp_sync())
-# asyncio.create_task(check_suspend_remove())
-
-
-
-# --- All imports at the very top ---
-try:
-    from sx1262 import SX1262
-except ImportError:
-    SX1262 = None
-try:
-    import uasyncio as asyncio
-except ImportError:
-    import asyncio
-try:
-    import sdata
-    import settings
-except ImportError:
-    sdata = None
-    settings = None
-try:
-    import machine
-except ImportError:
-    machine = None
-try:
-    import utime as time
-except ImportError:
-    import time
-import os
-try:
-    import urequests as requests
-except ImportError:
-    try:
-        import requests
-    except ImportError:
-        requests = None
-from utils import free_pins, checkLogDirectory, debug_print, TMON_AI, safe_run
-from relay import toggle_relay
-
-WORDPRESS_API_URL = getattr(settings, 'WORDPRESS_API_URL', None)
-WORDPRESS_API_KEY = getattr(settings, 'WORDPRESS_API_KEY', None)
-
-async def send_settings_to_wp():
-    if not WORDPRESS_API_URL:
-        await debug_print('No WordPress API URL set', 'ERROR')
-        return
-    data = {
-        'unit_id': settings.UNIT_ID,
-        'unit_name': settings.UNIT_Name,
-        'company': getattr(settings, 'COMPANY', ''),
-        'site': getattr(settings, 'SITE', ''),
-        'zone': getattr(settings, 'ZONE', ''),
-        'cluster': getattr(settings, 'CLUSTER', ''),
-        'settings': {k: getattr(settings, k) for k in dir(settings) if not k.startswith('__') and not callable(getattr(settings, k))}
-    }
-    try:
-        resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/settings', headers={'Authorization': f'Bearer {WORDPRESS_API_KEY}'}, json=data)
-        await debug_print(f'Sent settings to WP: {resp.status_code}', 'HTTP')
-    except Exception as e:
-        await debug_print(f'Failed to send settings to WP: {e}', 'ERROR')
-
-async def fetch_settings_from_wp():
-    if not WORDPRESS_API_URL:
-        await debug_print('No WordPress API URL set', 'ERROR')
-        return
-    try:
-        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/settings/{settings.UNIT_ID}', headers={'Authorization': f'Bearer {WORDPRESS_API_KEY}'})
-        if resp.status_code == 200:
-            new_settings = resp.json().get('settings', {})
-            # Also update company, site, zone, cluster if present
-            for k in ['COMPANY', 'SITE', 'ZONE', 'CLUSTER']:
-                if k in new_settings:
-                    setattr(settings, k, new_settings[k])
-            for k, v in new_settings.items():
-                if hasattr(settings, k):
-                    setattr(settings, k, v)
-            await debug_print('Settings updated from WP', 'HTTP')
-        else:
-            await debug_print(f'Failed to fetch settings: {resp.status_code}', 'ERROR')
-    except Exception as e:
-        await debug_print(f'Failed to fetch settings from WP: {e}', 'ERROR')
-
-async def send_file_to_wp(filepath):
-    if not WORDPRESS_API_URL:
-        await debug_print('No WordPress API URL set', 'ERROR')
-        return
-    try:
-        with open(filepath, 'rb') as f:
-            files = {'file': (os.path.basename(filepath), f.read())}
-            resp = requests.post(WORDPRESS_API_URL + '/wp-json/tmon/v1/device/file', headers={'Authorization': f'Bearer {WORDPRESS_API_KEY}'}, files=files)
-            await debug_print(f'Sent file to WP: {resp.status_code}', 'HTTP')
-    except Exception as e:
-        await debug_print(f'Failed to send file to WP: {e}', 'ERROR')
-
-async def request_file_from_wp(filename):
-    if not WORDPRESS_API_URL:
-        await debug_print('No WordPress API URL set', 'ERROR')
-        return
-    try:
-        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/file/{settings.UNIT_ID}/{filename}', headers={'Authorization': f'Bearer {WORDPRESS_API_KEY}'})
-        if resp.status_code == 200:
-            with open(filename, 'wb') as f:
-                f.write(resp.content)
-            await debug_print(f'Received file from WP: {filename}', 'HTTP')
-        else:
-            await debug_print(f'Failed to fetch file: {resp.status_code}', 'ERROR')
-    except Exception as e:
-        await debug_print(f'Failed to fetch file from WP: {e}', 'ERROR')
-
-file_lock = asyncio.Lock()
-pin_lock = asyncio.Lock()
-lora = None
-
-# Asynchronous function to log errors
-async def log_error(error_msg):
-    ts = time.time()
-    log_line = f"{ts}: {error_msg}\n"
-    try:
-        async with file_lock:
-            with open(settings.ERROR_LOG_FILE, 'a') as f:
-                f.write(log_line)
-    except Exception as e:
-        print(f"[FATAL] Failed to log error: {e}")
-    await asyncio.sleep(0)
-
-command_handlers = {
-    "toggle_relay": toggle_relay,
-    # Add more handlers as needed, e.g., "other_func": other_func,
-}
-
-async def init_lora():
-    global lora
-    print('[DEBUG] init_lora: starting SX1262 init')
-    try:
-        print('[DEBUG] init_lora: BEFORE SX1262 instantiation')
-        lora = SX1262(
-            settings.SPI_BUS, settings.CLK_PIN, settings.MOSI_PIN, settings.MISO_PIN,
-            settings.CS_PIN, settings.IRQ_PIN, settings.RST_PIN, settings.BUSY_PIN
-        )
-        print('[DEBUG] init_lora: SX1262 object created')
-        status = lora.begin(
-            freq=settings.FREQ, bw=settings.BW, sf=settings.SF, cr=settings.CR,
-            syncWord=settings.SYNC_WORD, power=settings.POWER,
-            currentLimit=settings.CURRENT_LIMIT, preambleLength=settings.PREAMBLE_LEN,
-            implicit=False, implicitLen=0xFF, crcOn=settings.CRC_ON, txIq=False, rxIq=False,
-            tcxoVoltage=settings.TCXO_VOLTAGE, useRegulatorLDO=settings.USE_LDO
-        )
-        print(f'[DEBUG] init_lora: lora.begin() returned {status}')
-        if status != 0:
-            error_msg = f"LoRa initialization failed with status: {status}"
-            await debug_print(error_msg, "ERROR")
-            await log_error(error_msg)
-            await free_pins()
-            lora = None
-            return False
-        await debug_print("LoRa initialized successfully", "LORA")
-        print_remote_nodes()
-        print('[DEBUG] init_lora: completed successfully')
-        return True
-    except Exception as e:
-        error_msg = f"Exception in init_lora: {e}"
-        print(error_msg)
-        await debug_print(error_msg, "ERROR")
-        await log_error(error_msg)
-        await free_pins()
-        lora = None
-        return False
-
 async def connectLora():
     global lora
     lora_init_failures = 0
     MAX_LORA_INIT_FAILS = 3
+    consecutive_failures = 0  # Added for failure tracking
+    MAX_CONSECUTIVE_FAILS = 5  # Threshold for reset
     if settings.ENABLE_LORA:
         await debug_print("Attempting LoRa initialization...", "LORA")
         async with pin_lock:
@@ -356,8 +140,13 @@ async def connectLora():
         connected_remotes = {}
 
         # For base: Pending commands {uid: "func(arg1,arg2,arg3)"}
-        # Populate this dict externally or based on criteria
         pending_commands = {}
+
+        # Command handlers (added for completeness; adjust as needed)
+        command_handlers = {
+            'toggle_relay': toggle_relay,
+            # Add other handlers if needed
+        }
 
         while True:
             current_time = time.ticks_ms()
@@ -395,8 +184,20 @@ async def connectLora():
                         global lora
                         if lora is None:
                             if not await init_lora():
+                                consecutive_failures += 1
+                                if consecutive_failures > MAX_CONSECUTIVE_FAILS:
+                                    await debug_print("Too many failures, resetting module", "ERROR")
+                                    machine.reset()
                                 continue
-                        lora.send(data)
+                        # Added CAD check with backoff
+                        cad_result = lora.scanChannel()
+                        if cad_result == CHANNEL_FREE:
+                            lora.send(data)
+                            consecutive_failures = 0  # Reset on success
+                        else:
+                            await debug_print(f"CAD: channel busy or error ({cad_result}), backoff", "LORA")
+                            await asyncio.sleep(random.uniform(0.5, 2.0))
+                            continue
                     state = STATE_WAIT_RESPONSE
                     start_wait = time.ticks_ms()
                     last_activity = time.ticks_ms()
@@ -416,7 +217,28 @@ async def connectLora():
                             await debug_print(f"LoRa Signal Strength (RSSI): {rssi}", "LORA")
                         except Exception as e:
                             await debug_print(f"Failed to get RSSI: {e}", "ERROR")
-                    if err == 0 and msg:
+                    # Enhanced error handling
+                    if err != 0:
+                        consecutive_failures += 1
+                        if err == ERR_RX_TIMEOUT:
+                            await debug_print("Receive timeout", "WARN")
+                        elif err == ERR_CRC_MISMATCH:
+                            await debug_print("CRC mismatch", "ERROR")
+                        elif err == ERR_UNKNOWN:
+                            await debug_print("Unknown receive error", "ERROR")
+                        else:
+                            await debug_print(f"Receive error: {err}", "ERROR")
+                        if consecutive_failures > MAX_CONSECUTIVE_FAILS:
+                            await debug_print("Too many failures, resetting module", "ERROR")
+                            machine.reset()
+                        if connected:
+                            await debug_print("Disconnected from base station", "WARN")
+                            connected = False
+                        state = STATE_IDLE
+                        await asyncio.sleep(send_interval)
+                        continue
+                    if msg:
+                        consecutive_failures = 0  # Reset on success
                         msg = msg.rstrip(b'\x00')
                         try:
                             msg_str = msg.decode()
@@ -462,12 +284,8 @@ async def connectLora():
                             state = STATE_IDLE
                             await asyncio.sleep(send_interval)
                     else:
-                        await debug_print(f"Timeout or error: {err}", "WARN")
-                        if connected:
-                            await debug_print("Disconnected from base station", "WARN")
-                            connected = False
+                        await debug_print("No message received despite no error", "WARN")
                         state = STATE_IDLE
-                        await debug_print("Remote: No connection - retrying in interval", "LORA")
                         await asyncio.sleep(send_interval)
 
                 else:
@@ -497,14 +315,31 @@ async def connectLora():
                     except Exception as e:
                         await debug_print(f"Failed to get RSSI: {e}", "ERROR")
                     last_activity = time.ticks_ms()
-                    if err == 0 and msg:
+                    # Enhanced error handling
+                    if err != 0:
+                        consecutive_failures += 1
+                        if err == ERR_RX_TIMEOUT:
+                            await debug_print("Receive timeout", "WARN")
+                        elif err == ERR_CRC_MISMATCH:
+                            await debug_print("CRC mismatch", "ERROR")
+                        elif err == ERR_UNKNOWN:
+                            await debug_print("Unknown receive error", "ERROR")
+                        else:
+                            await debug_print(f"Receive error: {err}", "ERROR")
+                        if consecutive_failures > MAX_CONSECUTIVE_FAILS:
+                            await debug_print("Too many failures, resetting module", "ERROR")
+                            machine.reset()
+                        state = STATE_IDLE
+                        await asyncio.sleep(0)
+                        continue
+                    if msg:
+                        consecutive_failures = 0  # Reset on success
                         msg = msg.rstrip(b'\x00')
                         try:
                             msg_str = msg.decode()
                             if msg_str.startswith('TS:'):
                                 parts = msg_str.split(',')
-                                remote_ts = parts[0].split(':', 1)[1].strip()
-                                remote_uid = remote_runtime = remote_script_runtime = temp_c = temp_f = bar = humid = None
+                                remote_ts = remote_uid = remote_runtime = remote_script_runtime = temp_c = temp_f = bar = humid = None
                                 remote_company = remote_site = remote_zone = remote_cluster = None
                                 for part in parts[1:]:
                                     if ':' not in part:
@@ -585,7 +420,6 @@ async def connectLora():
                                     async with file_lock:
                                         with open(settings.LOG_FILE, 'a') as f:
                                             f.write(log_line)
-                                    # Record all sdata/settings to field_data.log
                                     from utils import record_field_data
                                     record_field_data()
                                     # Update connected remotes
@@ -605,8 +439,18 @@ async def connectLora():
                                         if lora is None:
                                             if not await init_lora():
                                                 continue
-                                        lora.send(ack_data)
-                                        await debug_print(f"Sent ACK/CMD to {remote_uid}", "LORA")
+                                        # Added CAD check with backoff for base send
+                                        cad_result = lora.scanChannel()
+                                        if cad_result == CHANNEL_FREE:
+                                            lora.send(ack_data)
+                                            await debug_print(f"Sent ACK/CMD to {remote_uid}", "LORA")
+                                        else:
+                                            await debug_print(f"CAD: channel busy or error ({cad_result}), backoff", "LORA")
+                                            await asyncio.sleep(random.uniform(0.5, 2.0))
+                                            # Re-queue the command for next attempt
+                                            if 'command' in locals():
+                                                pending_commands[remote_uid] = command
+                                            continue
                                     if not connected:
                                         await debug_print("Base: New connection established", "LORA")
                                         connected = True
@@ -615,18 +459,15 @@ async def connectLora():
                             error_msg = f"Invalid message: {str(e)}"
                             await debug_print(error_msg, "ERROR")
                             await log_error(error_msg)
-                    elif err == -81:  # Replace with actual timeout err code from library
-                        await debug_print("Receive timeout - retrying...", "LORA")
-                        state = STATE_IDLE
-                        await asyncio.sleep(0)  # Yield to event loop
                     else:
-                        error_msg = f"Receive error: {err}"
-                        await debug_print(error_msg, "ERROR")
-                        await log_error(error_msg)
-                        state = STATE_IDLE
+                        await debug_print("No message received despite no error", "WARN")
+                    gc.collect()  # Added GC after receive/process
+
                 else:
                     state = STATE_IDLE
                     await asyncio.sleep(1)
+
+            gc.collect()  # Added GC after each loop iteration for memory stability
 
 # --- AI and main loop integration ---
 async def safe_loop(coro, context):
