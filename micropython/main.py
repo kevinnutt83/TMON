@@ -306,12 +306,14 @@ async def periodic_command_poll_task():
 # ========================== TASK SETUP ==========================
 tm = TaskManager()
 tm.add_task(first_boot_provision, 'first_boot_provision', 0)
-tm.add_task(sample_task, 'sample', 30)
+if settings.SAMPLE_TEMP or settings.SAMPLE_HUMIDITY or settings.SAMPLE_PRESSURE or settings.SAMPLE_GAS:
+    tm.add_task(sample_task, 'sample', 30)
 tm.add_task(periodic_field_data_task, 'field_data', settings.FIELD_DATA_SEND_INTERVAL)
 tm.add_task(periodic_command_poll_task, 'command_poll', 10)
 tm.add_task(check_for_update, 'ota_check', 3600)
 tm.add_task(apply_pending_update, 'ota_apply', settings.OTA_APPLY_INTERVAL_S)
-tm.add_task(update_display, 'display', settings.OLED_UPDATE_INTERVAL_S)
+if settings.ENABLE_OLED:
+    tm.add_task(update_display, 'display', settings.OLED_UPDATE_INTERVAL_S)
 tm.add_task(settings_apply_loop, 'settings_apply', 60)
 if engine_loop:
     tm.add_task(engine_loop, 'engine', settings.ENGINE_POLL_INTERVAL_S)
