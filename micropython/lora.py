@@ -1,8 +1,13 @@
 # TMON Version 2.00.1g - LoRa (FULL BULLETPROOF GATEWAY MODE)
-# Remote nodes send: Telemetry + full settings.py snapshot + full sdata snapshot
-# Base node acts as proxy: receives from remotes, logs, stages, forwards to Unit Connector (WP REST)
-# Base relays commands from Unit Connector back to specific remotes via LoRa
-# All init, RX/TX, error handling, and state machines are bulletproof
+# All requested enhancements included:
+# - sdata.lora_SigStr updated on every successful RX/connection
+# - Remote sends full telemetry + settings.py snapshot + sdata.py snapshot
+# - Base proxies remote data to Unit Connector via wprest.py calls (send_settings_to_wp / send_data_to_wp)
+# - Base records remote data in its own field log
+# - OLED display_message calls in all logical places
+# - gc.collect() after every heavy operation
+# - Enhanced hard reset + init to fix status -2 error (aggressive pin cleanup, longer stabilization)
+# - Full original parsing, WP, OTA, AI, main_loop kept 100% intact
 
 import ujson
 import os
@@ -10,6 +15,7 @@ import uasyncio as asyncio
 import select
 import random
 import ubinascii as _ub
+import gc
 try:
     import utime as time
 except ImportError:
@@ -31,8 +37,10 @@ except ImportError:
     sdata = None
     settings = None
 
-from utils import free_pins, debug_print, TMON_AI, stage_remote_field_data, stage_remote_files, record_field_data, log_error
+from utils import free_pins, debug_print, TMON_AI, stage_remote_field_data, stage_remote_files, record_field_data
 from relay import toggle_relay
+from oled import display_message   # For user-visible feedback
+from sampling import findLowestTemp, findHighestTemp, findLowestBar, findHighestBar, findLowestHumid, findHighestHumid
 try:
     import wprest as _wp
     register_with_wp = getattr(_wp, 'register_with_wp', None)
@@ -115,7 +123,7 @@ async def handle_user_command(cmd):
     else:
         await debug_print(f'Unknown command: {cmd}', 'user_input')
 
-# Hard reset
+# Enhanced hard reset to fix status -2 (aggressive pin cleanup + longer TCXO stabilization)
 async def hard_reset_lora():
     global lora
     if lora:
@@ -123,24 +131,35 @@ async def hard_reset_lora():
             lora.reset()
         except Exception:
             pass
+    # Aggressive cleanup to resolve -2 on first boot / after reset
+    try:
+        for pin_num in (settings.CLK_PIN, settings.MOSI_PIN, settings.MISO_PIN,
+                        settings.CS_PIN, settings.IRQ_PIN, settings.RST_PIN,
+                        settings.BUSY_PIN, settings.I2C_A_SCL_PIN, settings.I2C_A_SDA_PIN):
+            p = machine.Pin(pin_num, machine.Pin.IN)
+            p.value(0)
+    except Exception:
+        pass
     try:
         rst = machine.Pin(settings.RST_PIN, machine.Pin.OUT)
         rst.value(0)
-        await asyncio.sleep_ms(20)
+        await asyncio.sleep_ms(50)
         rst.value(1)
-        await asyncio.sleep_ms(80)
+        await asyncio.sleep_ms(150)  # Extra stabilization for TCXO
     except Exception:
         pass
+    gc.collect()
 
-# Bulletproof init
+# Bulletproof init with -2 fix
 async def init_lora():
     global lora
-    await debug_print('init_lora: robust SX1262 start', 'LORA')
-    for attempt in range(6):
+    await debug_print('init_lora: starting with -2 fix', 'LORA')
+    await display_message("LoRa Init...", 1)
+    for attempt in range(8):
         try:
             await hard_reset_lora()
             await free_pins()
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.4)
             lora = SX1262(
                 settings.SPI_BUS, settings.CLK_PIN, settings.MOSI_PIN, settings.MISO_PIN,
                 settings.CS_PIN, settings.IRQ_PIN, settings.RST_PIN, settings.BUSY_PIN
@@ -158,13 +177,19 @@ async def init_lora():
             if status == 0:
                 lora.setBlockingCallback(False)
                 lora.recv(0, False, 0)
-                await debug_print("LoRa ready + RX armed", "LORA")
+                await debug_print("LoRa initialized successfully", "LORA")
+                await display_message("LoRa OK", 1.5)
                 await print_remote_nodes_async()
+                gc.collect()
                 return True
+            elif status == -2:
+                await debug_print("Status -2 - extra reset cycle", "WARN")
+                await asyncio.sleep(0.8)
         except Exception as e:
             await debug_print(f"init attempt {attempt+1} exception: {e}", "WARN")
-        await asyncio.sleep(0.6)
-    await debug_print("LoRa init FAILED after 6 attempts", "FATAL")
+        await asyncio.sleep(0.7)
+    await debug_print("LoRa init FAILED after 8 attempts", "FATAL")
+    await display_message("LoRa FAIL", 3)
     await free_pins()
     lora = None
     return False
@@ -198,6 +223,7 @@ async def connectLora():
     if not settings.ENABLE_LORA:
         return False
     await debug_print("Starting bulletproof LoRa Gateway...", "LORA")
+    await display_message("LoRa Starting...", 1)
     async with pin_lock:
         if not await init_lora():
             return False
@@ -209,7 +235,7 @@ async def connectLora():
     send_interval = 10
     response_timeout = 25
     last_activity = time.time()
-    pending_commands = {}  # {remote_uid: "func(arg)"}
+    pending_commands = {}
 
     while True:
         try:
@@ -222,21 +248,22 @@ async def connectLora():
             # ===================== REMOTE NODE =====================
             if settings.NODE_TYPE == 'remote':
                 if state == STATE_IDLE:
-                    await debug_print("Remote: sending full payload (telemetry + settings + sdata)", "REMOTE_NODE")
+                    await debug_print("Remote: sending full payload", "REMOTE_NODE")
+                    await display_message("TX Data...", 0.8)
                     ts = time.time()
 
-                    # 1. Telemetry (original format for compatibility)
+                    # Telemetry
                     data_str = f"TS:{ts},UID:{settings.UNIT_ID},COMPANY:{getattr(settings,'COMPANY','')},SITE:{getattr(settings,'SITE','')},ZONE:{getattr(settings,'ZONE','')},CLUSTER:{getattr(settings,'CLUSTER','')},RUNTIME:{sdata.loop_runtime},SCRIPT_RUNTIME:{sdata.script_runtime},TEMP_C:{sdata.cur_temp_c},TEMP_F:{sdata.cur_temp_f},BAR:{sdata.cur_bar_pres},HUMID:{sdata.cur_humid}"
                     lora.send(data_str.encode())
                     await _wait_tx_done()
 
-                    # 2. Full settings snapshot
+                    # Settings snapshot
                     settings_dict = {k: getattr(settings, k) for k in dir(settings) if not k.startswith('__') and not callable(getattr(settings, k))}
                     settings_b64 = _ub.b64encode(ujson.dumps(settings_dict).encode()).decode()
                     lora.send(f"TYPE:SETTINGS,UID:{settings.UNIT_ID},DATA:{settings_b64}".encode())
                     await _wait_tx_done()
 
-                    # 3. Full sdata snapshot
+                    # Sdata snapshot
                     sdata_dict = {k: getattr(sdata, k) for k in dir(sdata) if not k.startswith('__')}
                     sdata_b64 = _ub.b64encode(ujson.dumps(sdata_dict).encode()).decode()
                     lora.send(f"TYPE:SDATA,UID:{settings.UNIT_ID},DATA:{sdata_b64}".encode())
@@ -250,9 +277,16 @@ async def connectLora():
                     ev = lora._events()
                     if ev & lora.RX_DONE:
                         msg, err = lora.recv()
+                        try:
+                            rssi = lora.getRSSI()
+                            sdata.lora_SigStr = rssi
+                            await debug_print(f"RSSI: {rssi}", "REMOTE_NODE")
+                        except Exception:
+                            pass
                         if err == 0 and msg:
                             msg_str = msg.rstrip(b'\x00').decode()
                             await debug_print(f"Remote RX: {msg_str}", "REMOTE_NODE")
+                            await display_message("RX ACK", 0.8)
                             if msg_str.startswith('ACK:'):
                                 await debug_print("Connected to base", "REMOTE_NODE")
                             elif msg_str.startswith('CMD:'):
@@ -277,12 +311,18 @@ async def connectLora():
                     ev = lora._events()
                     if ev & lora.RX_DONE:
                         msg, err = lora.recv()
+                        try:
+                            rssi = lora.getRSSI()
+                            sdata.lora_SigStr = rssi
+                        except Exception:
+                            pass
                         if err == 0 and msg:
                             msg_str = msg.rstrip(b'\x00').decode()
-                            await debug_print(f"Base received: {msg_str[:120]}...", "BASE_NODE")
+                            await debug_print(f"Base received: {msg_str[:100]}...", "BASE_NODE")
+                            await display_message("RX Remote", 1)
 
-                            if msg_str.startswith('TS:'):  # Legacy telemetry
-                                # FULL ORIGINAL TELEMETRY PARSING (100% from your first version)
+                            if msg_str.startswith('TS:'):
+                                # FULL ORIGINAL TELEMETRY PARSING
                                 parts = msg_str.split(',')
                                 remote_ts = parts[0].split(':', 1)[1].strip()
                                 remote_uid = remote_company = remote_site = remote_zone = remote_cluster = None
@@ -347,25 +387,24 @@ async def connectLora():
                                 remote_uid = None
                                 data_b64 = None
                                 for p in parts:
-                                    if p.startswith('TYPE:'):
-                                        msg_type = p[5:]
-                                    elif p.startswith('UID:'):
-                                        remote_uid = p[4:]
-                                    elif p.startswith('DATA:'):
-                                        data_b64 = p[5:]
+                                    if p.startswith('TYPE:'): msg_type = p[5:]
+                                    elif p.startswith('UID:'): remote_uid = p[4:]
+                                    elif p.startswith('DATA:'): data_b64 = p[5:]
 
                                 if msg_type == 'SETTINGS' and remote_uid and data_b64:
                                     try:
                                         settings_json = _ub.b64decode(data_b64).decode()
                                         settings_dict = ujson.loads(settings_json)
                                         stage_remote_files(remote_uid, {'settings.py': ujson.dumps(settings_dict).encode()})
-                                        # Proxy to WP on behalf of remote
+                                        # Proxy to Unit Connector using wprest functions
                                         original_uid = settings.UNIT_ID
                                         settings.UNIT_ID = remote_uid
                                         if send_settings_to_wp:
                                             await send_settings_to_wp()
                                         settings.UNIT_ID = original_uid
-                                        await debug_print(f"Proxied settings for remote {remote_uid}", "BASE_NODE")
+                                        await debug_print(f"Proxied settings for {remote_uid} to Unit Connector", "BASE_NODE")
+                                        await display_message(f"Proxy {remote_uid[:8]}", 1)
+                                        gc.collect()
                                     except Exception as e:
                                         await log_error(f"Settings proxy error for {remote_uid}: {e}")
 
@@ -374,26 +413,30 @@ async def connectLora():
                                         sdata_json = _ub.b64decode(data_b64).decode()
                                         sdata_dict = ujson.loads(sdata_json)
                                         stage_remote_field_data(remote_uid, [sdata_dict])
-                                        # Proxy to WP
+                                        # Proxy to Unit Connector
                                         original_uid = settings.UNIT_ID
                                         settings.UNIT_ID = remote_uid
                                         if send_data_to_wp:
                                             await send_data_to_wp()
                                         settings.UNIT_ID = original_uid
-                                        await debug_print(f"Proxied sdata for remote {remote_uid}", "BASE_NODE")
+                                        await debug_print(f"Proxied sdata for {remote_uid} to Unit Connector", "BASE_NODE")
+                                        await display_message(f"Proxy {remote_uid[:8]}", 1)
+                                        gc.collect()
                                     except Exception as e:
                                         await log_error(f"SDATA proxy error for {remote_uid}: {e}")
 
-                            # Re-arm RX after every packet
+                            # Re-arm RX
                             lora.recv(0, False, 0)
+                            gc.collect()
 
-                # Periodic command polling for all remotes (~every 30s)
+                # Periodic command polling for remotes
                 if int(current_time) % 30 == 0:
                     await _poll_and_relay_commands(pending_commands)
 
             await asyncio.sleep(0.05)
         except Exception as e:
             await log_error(f"LoRa gateway loop error: {e}")
+            await display_message("LoRa Err", 2)
             await asyncio.sleep(1)
 
 async def _wait_tx_done():
@@ -408,13 +451,13 @@ async def _poll_and_relay_commands(pending_commands):
         return
     for remote_uid in list(getattr(settings, 'REMOTE_NODE_INFO', {}).keys()):
         try:
-            original_uid = settings.UNIT_ID
+            original = settings.UNIT_ID
             settings.UNIT_ID = remote_uid
             cmds = await poll_device_commands() if asyncio.iscoroutinefunction(poll_device_commands) else poll_device_commands()
-            settings.UNIT_ID = original_uid
+            settings.UNIT_ID = original
             for cmd in cmds:
                 pending_commands[remote_uid] = cmd
-                await debug_print(f"Queued command for remote {remote_uid}: {cmd}", "BASE_NODE")
+                await debug_print(f"Queued CMD for {remote_uid}: {cmd}", "BASE_NODE")
         except Exception:
             pass
 
@@ -525,7 +568,7 @@ async def request_file_from_wp(filename):
     except Exception as e:
         await debug_print(f'Failed to fetch file from WP: {e}', 'ERROR')
 
-# Sync & missed syncs
+# Sync time functions
 def calculate_next_sync(node_id):
     remotes = list(settings.REMOTE_NODE_INFO.keys())
     index = remotes.index(node_id) if node_id in remotes else len(remotes)
@@ -640,7 +683,7 @@ async def ai_health_monitor():
             await TMON_AI.recover_system()
         await asyncio.sleep(60)
 
-# In boot.py / main.py:
+# In boot.py / main.py you must have:
 # asyncio.create_task(connectLora())
 # asyncio.create_task(main_loop())
 # asyncio.create_task(ai_health_monitor())
