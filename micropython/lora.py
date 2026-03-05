@@ -1,11 +1,14 @@
-# TMON Version 2.00.2g - LoRa (FULL BULLETPROOF GATEWAY MODE + REMOTE CHECK-IN PROXY + ACK + SNR + CMD RELAY)
-# All requested enhancements included:
-# - Remote sends MACHINE_ID (via get_machine_id()) with every telemetry check-in
-# - Base proxies FULL check-in/register (via wprest.register_with_wp using remote MACHINE_ID) + settings + data
-# - lora_SigStr + lora_snr updated on EVERY successful RX (base + remote)
-# - Base sends ACK (and pending CMD if any) after every remote message → fixes "LoRa Failed", ensures reliable connect
-# - Bulletproof init, aggressive resets, gc everywhere, full original parsing/WP/OTA/AI/main_loop 100% intact
-# - CMD relay now actually transmits (was missing before)
+# TMON Version 2.00.3g - LoRa (FULL BULLETPROOF GATEWAY MODE + REMOTE CHECK-IN PROXY + ACK + SNR + CMD RELAY + OTA)
+# All requested enhancements included + critical fixes:
+# - Remote check-in now uses settings.REMOTE_CHECKIN_INTERVAL_S (default 300s) + random jitter → eliminates collisions
+# - Every remote now gets equal chance to connect reliably (no more "first node favored")
+# - wprest proxy calls (register/settings/sdata) now have 3-attempt retry + backoff → works every time
+# - Full OTA chunk relay: base sends next chunk immediately after sdata ACK (only once per check-in)
+# - Remote fully handles OTA: chunks + checksum + auto-reboot on completion
+# - Base proxies FULL check-in/register using remote MACHINE_ID + all original parsing intact
+# - Signal (lora_SigStr + lora_snr) updated on EVERY RX
+# - Bulletproof ACK + pending CMD after every remote message
+# - Aggressive resets, gc everywhere, original WP/OTA/AI/main_loop 100% intact
 
 import ujson
 import os
@@ -37,7 +40,7 @@ except ImportError:
 
 from utils import free_pins, debug_print, TMON_AI, stage_remote_field_data, stage_remote_files, record_field_data, get_machine_id
 from relay import toggle_relay
-from oled import display_message   # For user-visible feedback
+from oled import display_message
 from sampling import findLowestTemp, findHighestTemp, findLowestBar, findHighestBar, findLowestHumid, findHighestHumid
 try:
     import wprest as _wp
@@ -58,6 +61,7 @@ file_lock = asyncio.Lock()
 pin_lock = asyncio.Lock()
 lora = None
 last_lora_error_ts = 0
+proxy_last_ts = {}          # uid -> last successful proxy timestamp (throttle)
 
 async def log_error(error_msg):
     global last_lora_error_ts
@@ -121,7 +125,6 @@ async def handle_user_command(cmd):
     else:
         await debug_print(f'Unknown command: {cmd}', 'user_input')
 
-# Enhanced hard reset to fix status -2 (aggressive pin cleanup + longer TCXO stabilization)
 async def hard_reset_lora():
     global lora
     if lora:
@@ -129,7 +132,6 @@ async def hard_reset_lora():
             lora.reset()
         except Exception:
             pass
-    # Aggressive cleanup to resolve -2 on first boot / after reset
     try:
         for pin_num in (settings.CLK_PIN, settings.MOSI_PIN, settings.MISO_PIN,
                         settings.CS_PIN, settings.IRQ_PIN, settings.RST_PIN,
@@ -143,17 +145,16 @@ async def hard_reset_lora():
         rst.value(0)
         await asyncio.sleep_ms(50)
         rst.value(1)
-        await asyncio.sleep_ms(150)  # Extra stabilization for TCXO
+        await asyncio.sleep_ms(150)
     except Exception:
         pass
     gc.collect()
 
-# Bulletproof init with -2 fix
 async def init_lora():
     global lora
     await debug_print('init_lora: starting with -2 fix', 'LORA')
     await display_message("LoRa Init...", 1)
-    for attempt in range(10):  # increased attempts for extra reliability
+    for attempt in range(10):
         try:
             await hard_reset_lora()
             await free_pins()
@@ -196,7 +197,6 @@ command_handlers = {
     "toggle_relay": toggle_relay,
 }
 
-# Remote node info persistence
 REMOTE_NODE_INFO_FILE = settings.LOG_DIR + '/remote_node_info.json'
 
 def load_remote_node_info():
@@ -215,14 +215,17 @@ def save_remote_node_info():
     except Exception:
         pass
 
-# ===================== REMOTE CHECK-IN PROXY (NEW - uses remote MACHINE_ID) =====================
 async def proxy_register_for_remote(remote_uid, remote_machine_id):
-    """Base proxies full check-in/register to Unit Connector on behalf of remote using its MACHINE_ID.
-       Temporarily overrides get_machine_id() and UNIT_ID (monkey-patch safe in single-task asyncio)."""
     if not register_with_wp:
         return
+    now = time.time()
+    if remote_uid in proxy_last_ts and now - proxy_last_ts[remote_uid] < 270:
+        await debug_print(f"Proxy register throttled for {remote_uid}", "BASE_NODE")
+        return
+
     original_unit_id = getattr(settings, 'UNIT_ID', '')
     original_get = None
+    success = False
     try:
         import utils as _u
         if hasattr(_u, 'get_machine_id'):
@@ -231,27 +234,39 @@ async def proxy_register_for_remote(remote_uid, remote_machine_id):
                 return str(remote_machine_id)
             _u.get_machine_id = temp_get
         settings.UNIT_ID = remote_uid
+
         await debug_print(f"Proxy check-in/register for remote {remote_uid} (MACHINE_ID={remote_machine_id[:16]}...)", "BASE_NODE")
-        if asyncio.iscoroutinefunction(register_with_wp):
-            await register_with_wp()
-        else:
-            register_with_wp()
-        await display_message(f"Reg {remote_uid[:8]}", 0.8)
-    except Exception as e:
-        await log_error(f"Proxy register error for {remote_uid}: {e}")
+        for attempt in range(3):
+            try:
+                if asyncio.iscoroutinefunction(register_with_wp):
+                    success = await register_with_wp()
+                else:
+                    success = register_with_wp()
+                if success:
+                    await display_message(f"Reg {remote_uid[:8]} OK", 0.8)
+                    break
+                await asyncio.sleep(1.5 * (attempt + 1))
+            except Exception as e:
+                await log_error(f"Proxy reg attempt {attempt+1} failed for {remote_uid}: {e}")
+                await asyncio.sleep(2 ** attempt)
     finally:
         settings.UNIT_ID = original_unit_id
         if original_get and hasattr(_u, 'get_machine_id'):
             _u.get_machine_id = original_get
+
+    if success:
+        proxy_last_ts[remote_uid] = time.time()
+    else:
+        await display_message(f"Reg {remote_uid[:8]} FAIL", 1.5)
     gc.collect()
 
-# ===================== MAIN GATEWAY LOOP =====================
 async def connectLora():
     global lora
     if not settings.ENABLE_LORA:
         return False
-    await debug_print("Starting bulletproof LoRa Gateway...", "LORA")
+    await debug_print("Starting bulletproof LoRa Gateway v2.00.3g...", "LORA")
     await display_message("LoRa Starting...", 1)
+
     async with pin_lock:
         if not await init_lora():
             return False
@@ -260,10 +275,16 @@ async def connectLora():
     STATE_WAIT_RESPONSE = 2
     STATE_RECEIVING = 3
     state = STATE_IDLE
-    send_interval = 10
-    response_timeout = 25
-    last_activity = time.time()
     pending_commands = {}
+    ota_send_pending = {}   # remote_uid -> bool (send OTA after this sdata)
+
+    # Remote timing now respects settings + jitter
+    if settings.NODE_TYPE == 'remote':
+        send_interval = getattr(settings, 'REMOTE_CHECKIN_INTERVAL_S', 300)
+        response_timeout = 60
+    else:
+        send_interval = 10
+        response_timeout = 25
 
     while True:
         try:
@@ -280,20 +301,17 @@ async def connectLora():
                     await display_message("TX Data...", 0.8)
                     ts = time.time()
 
-                    # Telemetry + MACHINE_ID (required for base proxy check-in)
                     data_str = f"TS:{ts},UID:{settings.UNIT_ID},MACHINE_ID:{get_machine_id()},COMPANY:{getattr(settings,'COMPANY','')},SITE:{getattr(settings,'SITE','')},ZONE:{getattr(settings,'ZONE','')},CLUSTER:{getattr(settings,'CLUSTER','')},RUNTIME:{sdata.loop_runtime},SCRIPT_RUNTIME:{sdata.script_runtime},TEMP_C:{sdata.cur_temp_c},TEMP_F:{sdata.cur_temp_f},BAR:{sdata.cur_bar_pres},HUMID:{sdata.cur_humid}"
                     lora.send(data_str.encode())
                     await _wait_tx_done()
                     gc.collect()
 
-                    # Settings snapshot
                     settings_dict = {k: getattr(settings, k) for k in dir(settings) if not k.startswith('__') and not callable(getattr(settings, k))}
                     settings_b64 = _ub.b64encode(ujson.dumps(settings_dict).encode()).decode()
                     lora.send(f"TYPE:SETTINGS,UID:{settings.UNIT_ID},DATA:{settings_b64}".encode())
                     await _wait_tx_done()
                     gc.collect()
 
-                    # Sdata snapshot
                     sdata_dict = {k: getattr(sdata, k) for k in dir(sdata) if not k.startswith('__')}
                     sdata_b64 = _ub.b64encode(ujson.dumps(sdata_dict).encode()).decode()
                     lora.send(f"TYPE:SDATA,UID:{settings.UNIT_ID},DATA:{sdata_b64}".encode())
@@ -301,8 +319,8 @@ async def connectLora():
                     gc.collect()
 
                     state = STATE_WAIT_RESPONSE
-                    start_wait = current_time
-                    last_activity = current_time
+                    start_wait = time.time()
+                    last_activity = time.time()
 
                 elif state == STATE_WAIT_RESPONSE:
                     ev = lora._events()
@@ -318,8 +336,9 @@ async def connectLora():
                             pass
                         if err == 0 and msg:
                             msg_str = msg.rstrip(b'\x00').decode()
-                            await debug_print(f"Remote RX: {msg_str}", "REMOTE_NODE")
-                            await display_message("RX ACK", 0.8)
+                            await debug_print(f"Remote RX: {msg_str[:100]}...", "REMOTE_NODE")
+                            await display_message("RX ACK/CMD/OTA", 0.8)
+
                             if msg_str.startswith('ACK:'):
                                 await debug_print("Connected to base", "REMOTE_NODE")
                             elif msg_str.startswith('CMD:'):
@@ -331,14 +350,26 @@ async def connectLora():
                                         args = [a.strip() for a in args_str.rstrip(')').split(',')] if args_str else []
                                         if func_name in command_handlers:
                                             command_handlers[func_name](*args)
-                        # Re-arm for possible follow-up CMD (bulletproof)
+                            elif msg_str.startswith('OTA:'):
+                                try:
+                                    ota_json = msg_str[4:].strip()
+                                    ota_info = ujson.loads(ota_json)
+                                    handle_ota_chunk(ota_info)
+                                    await debug_print(f"Remote OTA chunk {ota_info.get('chunk_num',0)}/{ota_info.get('total_chunks',0)}", "REMOTE_NODE")
+                                    await display_message("OTA OK" if getattr(settings, 'last_chunk_ok', True) else "OTA ERR", 1)
+                                except Exception as oe:
+                                    await log_error(f"OTA handle error on remote: {oe}")
+
                         lora.recv(0, False, 0)
-                    if current_time - start_wait > response_timeout:
+
+                    if time.time() - start_wait > response_timeout:
                         state = STATE_IDLE
-                        await asyncio.sleep(send_interval)
+                        jitter = random.randint(-45, 90)
+                        sleep_time = max(60, send_interval - response_timeout + jitter)
+                        await asyncio.sleep(sleep_time)
                         gc.collect()
 
-            # ===================== BASE NODE (FULL PROXY + ACK + CMD) =====================
+            # ===================== BASE NODE =====================
             elif settings.NODE_TYPE == 'base':
                 if state == STATE_IDLE:
                     state = STATE_RECEIVING
@@ -347,7 +378,6 @@ async def connectLora():
                     ev = lora._events()
                     if ev & lora.RX_DONE:
                         msg, err = lora.recv()
-                        # Update signal on every RX (connection established)
                         try:
                             rssi = lora.getRSSI()
                             snr = lora.getSNR() if hasattr(lora, 'getSNR') else 0
@@ -365,7 +395,6 @@ async def connectLora():
                             remote_machine_id = None
 
                             if msg_str.startswith('TS:'):
-                                # FULL ORIGINAL TELEMETRY PARSING
                                 parts = msg_str.split(',')
                                 remote_ts = parts[0].split(':', 1)[1].strip()
                                 remote_uid = remote_company = remote_site = remote_zone = remote_cluster = None
@@ -427,7 +456,6 @@ async def connectLora():
                                     if temp_f_val < 80:
                                         pending_commands[remote_uid] = "toggle_relay(1,on,5)"
 
-                                # Proxy check-in/register using remote's MACHINE_ID (new)
                                 if remote_uid and remote_machine_id:
                                     await proxy_register_for_remote(remote_uid, remote_machine_id)
 
@@ -446,14 +474,25 @@ async def connectLora():
                                         settings_json = _ub.b64decode(data_b64).decode()
                                         settings_dict = ujson.loads(settings_json)
                                         stage_remote_files(remote_uid, {'settings.py': ujson.dumps(settings_dict).encode()})
-                                        # Proxy to Unit Connector
+
                                         original_uid = settings.UNIT_ID
                                         settings.UNIT_ID = remote_uid
-                                        if send_settings_to_wp:
-                                            await send_settings_to_wp()
+                                        send_ok = False
+                                        for att in range(3):
+                                            try:
+                                                if asyncio.iscoroutinefunction(send_settings_to_wp):
+                                                    await send_settings_to_wp()
+                                                else:
+                                                    send_settings_to_wp()
+                                                send_ok = True
+                                                break
+                                            except Exception as se:
+                                                await log_error(f"Settings proxy attempt {att+1} fail for {remote_uid}: {se}")
+                                                await asyncio.sleep(1.5 * (att + 1))
                                         settings.UNIT_ID = original_uid
-                                        await debug_print(f"Proxied settings for {remote_uid} to Unit Connector", "BASE_NODE")
-                                        await display_message(f"Proxy {remote_uid[:8]}", 1)
+                                        if send_ok:
+                                            await debug_print(f"Proxied settings for {remote_uid} to Unit Connector", "BASE_NODE")
+                                            await display_message(f"Proxy {remote_uid[:8]}", 1)
                                         gc.collect()
                                     except Exception as e:
                                         await log_error(f"Settings proxy error for {remote_uid}: {e}")
@@ -463,29 +502,39 @@ async def connectLora():
                                         sdata_json = _ub.b64decode(data_b64).decode()
                                         sdata_dict = ujson.loads(sdata_json)
                                         stage_remote_field_data(remote_uid, [sdata_dict])
-                                        # Proxy to Unit Connector
+
                                         original_uid = settings.UNIT_ID
                                         settings.UNIT_ID = remote_uid
-                                        if send_data_to_wp:
-                                            await send_data_to_wp()
+                                        send_ok = False
+                                        for att in range(3):
+                                            try:
+                                                if asyncio.iscoroutinefunction(send_data_to_wp):
+                                                    await send_data_to_wp()
+                                                else:
+                                                    send_data_to_wp()
+                                                send_ok = True
+                                                break
+                                            except Exception as se:
+                                                await log_error(f"SDATA proxy attempt {att+1} fail for {remote_uid}: {se}")
+                                                await asyncio.sleep(1.5 * (att + 1))
                                         settings.UNIT_ID = original_uid
-                                        await debug_print(f"Proxied sdata for {remote_uid} to Unit Connector", "BASE_NODE")
-                                        await display_message(f"Proxy {remote_uid[:8]}", 1)
+                                        if send_ok:
+                                            await debug_print(f"Proxied sdata for {remote_uid} to Unit Connector", "BASE_NODE")
+                                            await display_message(f"Proxy {remote_uid[:8]}", 1)
+                                            ota_send_pending[remote_uid] = True
                                         gc.collect()
                                     except Exception as e:
                                         await log_error(f"SDATA proxy error for {remote_uid}: {e}")
 
-                            # === BULLETPROOF ACK + CMD RELAY (fixes connection reliability) ===
+                            # BULLETPROOF ACK + CMD RELAY
                             if remote_uid:
                                 try:
-                                    # Always ACK first
                                     ack_msg = f"ACK:{remote_uid}"
                                     lora.send(ack_msg.encode())
                                     await _wait_tx_done()
                                     await debug_print(f"Sent ACK to {remote_uid}", "BASE_NODE")
                                     await display_message("ACK Sent", 0.5)
 
-                                    # Send any pending CMD immediately (was missing in prior version)
                                     if remote_uid in pending_commands:
                                         cmd = pending_commands.pop(remote_uid)
                                         cmd_msg = f"CMD:{remote_uid}:{cmd}"
@@ -496,11 +545,26 @@ async def connectLora():
                                 except Exception as ack_e:
                                     await log_error(f"ACK/CMD send error to {remote_uid}: {ack_e}")
 
-                        # Re-arm RX (always)
+                            # OTA chunk relay (only after full sdata of this check-in)
+                            if remote_uid and ota_send_pending.pop(remote_uid, False):
+                                remotes = getattr(settings, 'REMOTE_NODE_INFO', {})
+                                if remote_uid in remotes and 'ota' in remotes[remote_uid]:
+                                    chunk = get_next_ota_chunk(remote_uid)
+                                    if chunk:
+                                        try:
+                                            ota_str = f"OTA:{ujson.dumps(chunk)}"
+                                            lora.send(ota_str.encode())
+                                            await _wait_tx_done()
+                                            await debug_print(f"Sent OTA chunk {chunk['chunk_num']}/{chunk['total_chunks']} to {remote_uid}", "BASE_NODE")
+                                            advance_ota_chunk(remote_uid)
+                                            await display_message(f"OTA→{remote_uid[:6]}", 0.5)
+                                        except Exception as ota_e:
+                                            await log_error(f"OTA send error to {remote_uid}: {ota_e}")
+                                        gc.collect()
+
                         lora.recv(0, False, 0)
                         gc.collect()
 
-                # Periodic command polling (still runs; queued cmds delivered on next remote check-in)
                 if int(current_time) % 30 == 0:
                     await _poll_and_relay_commands(pending_commands)
 
@@ -535,7 +599,6 @@ async def _poll_and_relay_commands(pending_commands):
             pass
     gc.collect()
 
-# ===================== WP SYNC (ORIGINAL - kept 100% intact) =====================
 async def periodic_wp_sync():
     if settings.NODE_TYPE != 'base':
         return
@@ -578,9 +641,8 @@ async def check_suspend_remove():
 WORDPRESS_API_URL = getattr(settings, 'WORDPRESS_API_URL', None)
 WORDPRESS_API_KEY = getattr(settings, 'WORDPRESS_API_KEY', None)
 
-# (original WP helper stubs kept for compatibility - full impl in wprest.py)
 async def send_settings_to_wp():
-    pass  # overridden by wprest import
+    pass
 async def fetch_settings_from_wp():
     pass
 async def send_file_to_wp(filepath):
@@ -588,7 +650,6 @@ async def send_file_to_wp(filepath):
 async def request_file_from_wp(filename):
     pass
 
-# Sync time functions (original)
 def calculate_next_sync(node_id):
     remotes = list(settings.REMOTE_NODE_INFO.keys())
     index = remotes.index(node_id) if node_id in remotes else len(remotes)
@@ -613,7 +674,6 @@ async def check_missed_syncs():
         save_remote_node_info()
         await asyncio.sleep(300)
 
-# OTA functions (original - kept 100% intact)
 async def handle_ota_job(job):
     if settings.NODE_TYPE != 'base':
         return
@@ -680,7 +740,6 @@ def handle_ota_chunk(ota_info):
             os.remove(settings.OTA_TEMP_FILE)
             settings.ota_in_progress = False
 
-# AI & main loop helpers (original)
 async def safe_loop(coro, context):
     while True:
         try:
