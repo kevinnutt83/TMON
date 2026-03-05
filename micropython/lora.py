@@ -1,4 +1,4 @@
-# TMON Version 2.00.5g - LoRa (FULL BULLETPROOF GATEWAY + TRUE MULTI-REMOTE + ACK + SNR + CMD + OTA)
+# TMON Version 2.00.5h - LoRa (FULL BULLETPROOF GATEWAY + TRUE MULTI-REMOTE + ACK + SNR + CMD + OTA)
 # FINAL BULLETPROOF FIXES (tested logic for 100% reliability):
 # - Deterministic boot stagger based on UID hash (0-299s) on every remote power-up to avoid initial collisions
 # - Exponential backoff on connection failures to prevent retry clustering
@@ -15,6 +15,8 @@
 # - Strengthened with sorted remote list for consistent staggering, extended burst window, and TX retries
 # - Updated stagger calculation to use hash-based for fairer distribution without sort favoritism
 # - Increased response_timeout to 120s for better reliability
+# - Updated stagger calculation to use sorted node list with even slot distribution and jitter for better collision avoidance
+# - Increased burst_window to 30s to handle longer bursts or slight overlaps
 
 import ujson
 import os
@@ -269,7 +271,7 @@ async def connectLora():
     global lora
     if not settings.ENABLE_LORA:
         return False
-    await debug_print("Starting bulletproof LoRa Gateway v2.00.5g...", "LORA")
+    await debug_print("Starting bulletproof LoRa Gateway v2.00.5h...", "LORA")
     await display_message("LoRa Starting...", 1)
 
     async with pin_lock:
@@ -299,7 +301,7 @@ async def connectLora():
     else:
         sync_rate = 10
         response_timeout = 25
-        burst_window = 15  # extended to 15s for more reliability
+        burst_window = 30  # extended to 30s for more reliability
 
     while True:
         try:
@@ -723,8 +725,24 @@ async def _poll_and_relay_commands(pending_commands):
 def calculate_next_delay(node_id):
     sync_window = getattr(settings, 'LORA_NEXT_SYNC', 100)
     sync_rate = getattr(settings, 'LORA_SYNC_RATE', 300)
-    hash_val = sum(ord(c) for c in node_id) % sync_window
-    stagger = hash_val + random.randint(0, sync_window - 1)
+    nodes = sorted(settings.REMOTE_NODE_INFO.keys())
+    num_nodes = len(nodes)
+    if num_nodes == 0:
+        return sync_rate
+    try:
+        index = nodes.index(node_id)
+    except ValueError:
+        index = num_nodes
+        nodes.append(node_id)
+        num_nodes += 1
+    slot_size = sync_window // num_nodes if num_nodes > 0 else sync_window
+    stagger = index * slot_size
+    if slot_size > 0:
+        jitter = random.randint(-slot_size // 2, slot_size // 2)
+    else:
+        jitter = 0
+    stagger += jitter
+    stagger = max(0, stagger)
     delay = sync_rate + stagger
     return delay
 
