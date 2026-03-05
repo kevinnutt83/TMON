@@ -8,6 +8,10 @@
 # - All previous fixes kept: 3-attempt proxy retries, OTA chunk relay after SDATA, signal update on every RX, full ACK/CMD
 # - Original parsing, WP proxy, OTA, AI, everything 100% intact
 # - If anything fails during TX, it still arms RX and retries cleanly (no more "stuck" state)
+# - Added synchronized next sync delay sent in ACK to stagger remote check-ins and prevent collisions
+# - Base calculates staggered delay based on node index for fair scheduling
+# - Remote uses received delay on success, falls back to jittered default on failure
+# - Strengthened with sorted remote list for consistent staggering, extended burst window, and TX retries
 
 import ujson
 import os
@@ -284,12 +288,12 @@ async def connectLora():
     remote_states = {}
 
     if settings.NODE_TYPE == 'remote':
-        send_interval = getattr(settings, 'REMOTE_CHECKIN_INTERVAL_S', 300)
+        sync_rate = getattr(settings, 'LORA_SYNC_RATE', 300)
         response_timeout = 60
     else:
-        send_interval = 10
+        sync_rate = 10
         response_timeout = 25
-        burst_window = 5  # seconds to consider burst end
+        burst_window = 10  # extended to 10s for more reliability
 
     while True:
         try:
@@ -308,16 +312,19 @@ async def connectLora():
 
                     # TS packet
                     data_str = f"TS:{ts},UID:{settings.UNIT_ID},MACHINE_ID:{get_machine_id()},COMPANY:{getattr(settings,'COMPANY','')},SITE:{getattr(settings,'SITE','')},ZONE:{getattr(settings,'ZONE','')},CLUSTER:{getattr(settings,'CLUSTER','')},RUNTIME:{sdata.loop_runtime},SCRIPT_RUNTIME:{sdata.script_runtime},TEMP_C:{sdata.cur_temp_c},TEMP_F:{sdata.cur_temp_f},BAR:{sdata.cur_bar_pres},HUMID:{sdata.cur_humid}"
-                    lora.send(data_str.encode())
-                    await _wait_tx_done()
+                    await _send_with_retry(data_str.encode())
                     gc.collect()
+
+                    # Small delay between packets to reduce collision risk
+                    await asyncio.sleep(random.uniform(0.5, 1.5))
 
                     # SETTINGS packet
                     settings_dict = {k: getattr(settings, k) for k in dir(settings) if not k.startswith('__') and not callable(getattr(settings, k))}
                     settings_b64 = _ub.b64encode(ujson.dumps(settings_dict).encode()).decode()
-                    lora.send(f"TYPE:SETTINGS,UID:{settings.UNIT_ID},DATA:{settings_b64}".encode())
-                    await _wait_tx_done()
+                    await _send_with_retry(f"TYPE:SETTINGS,UID:{settings.UNIT_ID},DATA:{settings_b64}".encode())
                     gc.collect()
+
+                    await asyncio.sleep(random.uniform(0.5, 1.5))
 
                     # SDATA packet - SAFE VERSION (never crashes the TX)
                     try:
@@ -338,8 +345,7 @@ async def connectLora():
                         }
                         sdata_b64 = _ub.b64encode(ujson.dumps(sdata_dict).encode()).decode()
 
-                    lora.send(f"TYPE:SDATA,UID:{settings.UNIT_ID},DATA:{sdata_b64}".encode())
-                    await _wait_tx_done()
+                    await _send_with_retry(f"TYPE:SDATA,UID:{settings.UNIT_ID},DATA:{sdata_b64}".encode())
                     gc.collect()
 
                     # CRITICAL: Arm RX right after last TX so we catch the ACK/CMD/OTA
@@ -352,6 +358,7 @@ async def connectLora():
                     state = STATE_WAIT_RESPONSE
                     start_wait = time.time()
                     received_response = False
+                    next_delay = None
 
                 elif state == STATE_WAIT_RESPONSE:
                     ev = lora._events()
@@ -373,6 +380,13 @@ async def connectLora():
                             if msg_str.startswith('ACK:'):
                                 await debug_print("✅ Remote successfully connected to base", "REMOTE_NODE")
                                 received_response = True
+                                parts = msg_str.split(':')
+                                if len(parts) >= 4 and parts[2] == 'NEXT':
+                                    try:
+                                        next_delay = int(parts[3])
+                                        await debug_print(f"Received next delay: {next_delay}s", "REMOTE_NODE")
+                                    except ValueError:
+                                        await log_error("Invalid next delay in ACK")
                             elif msg_str.startswith('CMD:'):
                                 received_response = True
                                 cmd_parts = msg_str.split(':', 2)
@@ -401,14 +415,17 @@ async def connectLora():
                         if received_response:
                             await debug_print("Remote: check-in successful - scheduling next", "REMOTE_NODE")
                             await display_message("Success", 1)
-                            jitter = random.randint(-120, 120)
-                            sleep_time = send_interval + jitter
+                            if next_delay is not None:
+                                sleep_time = next_delay
+                            else:
+                                jitter = random.randint(-120, 120)
+                                sleep_time = sync_rate + jitter
                         else:
                             await debug_print(f"Remote: no response after {response_timeout}s - retrying soon", "WARN")
                             await display_message("No Resp", 1.5)
                             sleep_time = random.randint(30, 120)
                         state = STATE_IDLE
-                        await asyncio.sleep(sleep_time)
+                        await asyncio.sleep(max(10, sleep_time))  # ensure at least 10s
                         gc.collect()
 
             # ===================== BASE NODE =====================
@@ -502,6 +519,8 @@ async def connectLora():
                         if current_time - st['last_rx'] > burst_window:
                             await debug_print(f"Processing burst for {uid}: types {st['types']}", "BASE_NODE")
 
+                            remote_machine_id = None
+
                             if 'TS' in st['types']:
                                 data = st['data']['TS']
                                 remote_ts = data['remote_ts']
@@ -517,7 +536,7 @@ async def connectLora():
                                 humid = data['humid']
                                 remote_machine_id = data['remote_machine_id']
 
-                                if remote_uid and remote_company is not None:
+                                if uid and remote_company is not None:
                                     if not hasattr(settings, 'REMOTE_NODE_INFO'):
                                         settings.REMOTE_NODE_INFO = {}
                                     settings.REMOTE_NODE_INFO[uid] = {
@@ -607,21 +626,24 @@ async def connectLora():
                                     ota_send_pending[uid] = True
                                 gc.collect()
 
+                            # Calculate next delay and set expected
+                            next_delay = calculate_next_delay(uid)
+                            now = time.time()
+                            settings.REMOTE_NODE_INFO[uid]['next_expected'] = now + next_delay
+                            settings.REMOTE_NODE_INFO[uid]['missed_syncs'] = 0
+                            save_remote_node_info()
+
                             # Send responses
                             try:
-                                ack_msg = f"ACK:{uid}"
-                                lora.send(ack_msg.encode())
-                                await _wait_tx_done()
-                                lora.recv(0, False, 0)
-                                await debug_print(f"Sent ACK to {uid}", "BASE_NODE")
+                                ack_msg = f"ACK:{uid}:NEXT:{next_delay}"
+                                await _send_with_retry(ack_msg.encode())
+                                await debug_print(f"Sent ACK with next delay {next_delay}s to {uid}", "BASE_NODE")
                                 await display_message("ACK Sent", 0.5)
 
                                 if uid in pending_commands:
                                     cmd = pending_commands.pop(uid)
                                     cmd_msg = f"CMD:{uid}:{cmd}"
-                                    lora.send(cmd_msg.encode())
-                                    await _wait_tx_done()
-                                    lora.recv(0, False, 0)
+                                    await _send_with_retry(cmd_msg.encode())
                                     await debug_print(f"Sent CMD to {uid}: {cmd}", "BASE_NODE")
                                     await display_message("CMD Sent", 0.5)
 
@@ -630,9 +652,7 @@ async def connectLora():
                                     chunk = get_next_ota_chunk(uid)
                                     if chunk:
                                         ota_str = f"OTA:{ujson.dumps(chunk)}"
-                                        lora.send(ota_str.encode())
-                                        await _wait_tx_done()
-                                        lora.recv(0, False, 0)
+                                        await _send_with_retry(ota_str.encode())
                                         await debug_print(f"Sent OTA chunk {chunk['chunk_num']}/{chunk['total_chunks']} to {uid}", "BASE_NODE")
                                         advance_ota_chunk(uid)
                                         await display_message(f"OTA→{uid[:6]}", 0.5)
@@ -654,13 +674,26 @@ async def connectLora():
             await asyncio.sleep(2)
             gc.collect()
 
-async def _wait_tx_done():
+async def _send_with_retry(data, retries=3):
+    for att in range(retries):
+        try:
+            lora.send(data)
+            await _wait_tx_done()
+            lora.recv(0, False, 0)  # re-arm RX after TX
+            return
+        except Exception as e:
+            await log_error(f"TX attempt {att+1} failed: {e}")
+            await asyncio.sleep(1)
+    await debug_print("TX failed after retries", "WARN")
+
+async def _wait_tx_done(timeout=10):
     tx_start = time.time()
-    while time.time() - tx_start < 10:
+    while time.time() - tx_start < timeout:
         if lora._events() & lora.TX_DONE:
-            break
+            return True
         await asyncio.sleep(0.01)
-    gc.collect()
+    await log_error("TX timeout")
+    return False
 
 async def _poll_and_relay_commands(pending_commands):
     if not poll_device_commands:
@@ -677,6 +710,18 @@ async def _poll_and_relay_commands(pending_commands):
         except Exception:
             pass
     gc.collect()
+
+def calculate_next_delay(node_id):
+    remotes = sorted(settings.REMOTE_NODE_INFO.keys())  # sorted for consistent order
+    if node_id not in remotes:
+        remotes.append(node_id)
+        remotes.sort()
+    index = remotes.index(node_id)
+    sync_window = getattr(settings, 'LORA_SYNC_WINDOW', 100)
+    stagger = index * sync_window + random.randint(0, sync_window - 1)
+    sync_rate = getattr(settings, 'LORA_SYNC_RATE', 300)
+    delay = sync_rate + stagger
+    return delay
 
 # ===================== ORIGINAL FUNCTIONS (100% unchanged) =====================
 async def periodic_wp_sync():
@@ -730,23 +775,13 @@ async def send_file_to_wp(filepath):
 async def request_file_from_wp(filename):
     pass
 
-def calculate_next_sync(node_id):
-    remotes = list(settings.REMOTE_NODE_INFO.keys())
-    index = remotes.index(node_id) if node_id in remotes else len(remotes)
-    stagger = index * settings.LORA_SYNC_WINDOW + random.randint(0, settings.LORA_SYNC_WINDOW - 1)
-    check_in_sec = settings.LORA_CHECK_IN_MINUTES * 60
-    next_sync = time.time() + check_in_sec + stagger
-    settings.REMOTE_NODE_INFO[node_id]['next_expected'] = next_sync
-    save_remote_node_info()
-    return next_sync
-
 async def check_missed_syncs():
     if settings.NODE_TYPE != 'base':
         return
     while True:
         now = time.time()
         for node_id, info in settings.REMOTE_NODE_INFO.items():
-            if 'next_expected' in info and now > info['next_expected'] + settings.LORA_SYNC_WINDOW * 2:
+            if 'next_expected' in info and now > info['next_expected'] + getattr(settings, 'LORA_SYNC_WINDOW', 100) * 2:
                 info['missed_syncs'] = info.get('missed_syncs', 0) + 1
                 await debug_print(f"Missed sync from {node_id}", "WARN")
                 if info['missed_syncs'] > 3:
