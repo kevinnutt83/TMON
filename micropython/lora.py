@@ -1,6 +1,7 @@
 # TMON Version 2.00.5g - LoRa (FULL BULLETPROOF GATEWAY + TRUE MULTI-REMOTE + ACK + SNR + CMD + OTA)
 # FINAL BULLETPROOF FIXES (tested logic for 100% reliability):
-# - Boot stagger (0-90s) on every remote power-up
+# - Deterministic boot stagger based on UID hash (0-299s) on every remote power-up to avoid initial collisions
+# - Exponential backoff on connection failures to prevent retry clustering
 # - RX armed IMMEDIATELY after the 3-packet TX burst on remote
 # - Safe sdata snapshot (full __dict__ with fallback to minimal fields if any non-JSON value)
 # - Large jitter (±120s) → remotes never collide, every node gets equal chance
@@ -273,10 +274,12 @@ async def connectLora():
         if not await init_lora():
             return False
 
-    # Boot stagger ONLY for remotes - prevents all nodes TX at the exact same second
+    # Deterministic boot stagger for remotes based on UID to prevent initial collisions
     if settings.NODE_TYPE == 'remote':
-        initial_stagger = random.randint(0, 90)
-        await debug_print(f"Remote boot stagger {initial_stagger}s", "REMOTE_NODE")
+        uid = settings.UNIT_ID
+        stagger_seed = sum(ord(c) for c in uid) % 1000
+        initial_stagger = stagger_seed % 300  # 0-299s
+        await debug_print(f"Remote deterministic boot stagger {initial_stagger}s based on UID", "REMOTE_NODE")
         await asyncio.sleep(initial_stagger)
 
     STATE_IDLE = 0
@@ -286,10 +289,11 @@ async def connectLora():
     pending_commands = {}
     ota_send_pending = {}
     remote_states = {}
+    failure_count = 0
 
     if settings.NODE_TYPE == 'remote':
         sync_rate = getattr(settings, 'LORA_SYNC_RATE', 300)
-        response_timeout = 60
+        response_timeout = 90  # increased to 90s for more reliability
     else:
         sync_rate = 10
         response_timeout = 25
@@ -415,15 +419,18 @@ async def connectLora():
                         if received_response:
                             await debug_print("Remote: check-in successful - scheduling next", "REMOTE_NODE")
                             await display_message("Success", 1)
+                            failure_count = 0
                             if next_delay is not None:
                                 sleep_time = next_delay
                             else:
                                 jitter = random.randint(-120, 120)
                                 sleep_time = sync_rate + jitter
                         else:
-                            await debug_print(f"Remote: no response after {response_timeout}s - retrying soon", "WARN")
+                            await debug_print(f"Remote: no response after {response_timeout}s - retrying with backoff", "WARN")
                             await display_message("No Resp", 1.5)
-                            sleep_time = random.randint(30, 120)
+                            failure_count += 1
+                            backoff = min(600, 60 * (2 ** failure_count) + random.randint(-60, 60))
+                            sleep_time = backoff
                         state = STATE_IDLE
                         await asyncio.sleep(max(10, sleep_time))  # ensure at least 10s
                         gc.collect()
@@ -717,7 +724,7 @@ def calculate_next_delay(node_id):
         remotes.append(node_id)
         remotes.sort()
     index = remotes.index(node_id)
-    sync_window = getattr(settings, 'LORA_SYNC_WINDOW', 100)
+    sync_window = getattr(settings, 'LORA_NEXT_SYNC', 100)
     stagger = index * sync_window + random.randint(0, sync_window - 1)
     sync_rate = getattr(settings, 'LORA_SYNC_RATE', 300)
     delay = sync_rate + stagger
@@ -781,7 +788,7 @@ async def check_missed_syncs():
     while True:
         now = time.time()
         for node_id, info in settings.REMOTE_NODE_INFO.items():
-            if 'next_expected' in info and now > info['next_expected'] + getattr(settings, 'LORA_SYNC_WINDOW', 100) * 2:
+            if 'next_expected' in info and now > info['next_expected'] + getattr(settings, 'LORA_NEXT_SYNC', 100) * 2:
                 info['missed_syncs'] = info.get('missed_syncs', 0) + 1
                 await debug_print(f"Missed sync from {node_id}", "WARN")
                 if info['missed_syncs'] > 3:
