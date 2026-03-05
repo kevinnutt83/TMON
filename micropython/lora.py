@@ -281,6 +281,7 @@ async def connectLora():
     state = STATE_IDLE
     pending_commands = {}
     ota_send_pending = {}
+    remote_states = {}
 
     if settings.NODE_TYPE == 'remote':
         send_interval = getattr(settings, 'REMOTE_CHECKIN_INTERVAL_S', 300)
@@ -288,6 +289,7 @@ async def connectLora():
     else:
         send_interval = 10
         response_timeout = 25
+        burst_window = 5  # seconds to consider burst end
 
     while True:
         try:
@@ -349,6 +351,7 @@ async def connectLora():
 
                     state = STATE_WAIT_RESPONSE
                     start_wait = time.time()
+                    received_response = False
 
                 elif state == STATE_WAIT_RESPONSE:
                     ev = lora._events()
@@ -369,7 +372,9 @@ async def connectLora():
 
                             if msg_str.startswith('ACK:'):
                                 await debug_print("✅ Remote successfully connected to base", "REMOTE_NODE")
+                                received_response = True
                             elif msg_str.startswith('CMD:'):
+                                received_response = True
                                 cmd_parts = msg_str.split(':', 2)
                                 if len(cmd_parts) == 3 and (cmd_parts[1] == 'ALL' or cmd_parts[1] == settings.UNIT_ID):
                                     command = cmd_parts[2]
@@ -379,6 +384,7 @@ async def connectLora():
                                         if func_name in command_handlers:
                                             command_handlers[func_name](*args)
                             elif msg_str.startswith('OTA:'):
+                                received_response = True
                                 try:
                                     ota_json = msg_str[4:].strip()
                                     ota_info = ujson.loads(ota_json)
@@ -392,11 +398,16 @@ async def connectLora():
 
                     # Timeout handling
                     if time.time() - start_wait > response_timeout:
-                        await debug_print(f"Remote: no ACK after {response_timeout}s - will retry", "WARN")
-                        await display_message("No ACK", 1.5)
+                        if received_response:
+                            await debug_print("Remote: check-in successful - scheduling next", "REMOTE_NODE")
+                            await display_message("Success", 1)
+                            jitter = random.randint(-120, 120)
+                            sleep_time = send_interval + jitter
+                        else:
+                            await debug_print(f"Remote: no response after {response_timeout}s - retrying soon", "WARN")
+                            await display_message("No Resp", 1.5)
+                            sleep_time = random.randint(30, 120)
                         state = STATE_IDLE
-                        jitter = random.randint(-120, 120)
-                        sleep_time = max(60, send_interval - response_timeout + jitter)
                         await asyncio.sleep(sleep_time)
                         gc.collect()
 
@@ -423,10 +434,11 @@ async def connectLora():
                             await display_message("RX Remote", 1)
 
                             remote_uid = None
-                            remote_machine_id = None
+                            packet_type = 'UNKNOWN'
+                            parsed_data = None
 
                             if msg_str.startswith('TS:'):
-                                # FULL ORIGINAL TELEMETRY PARSING (unchanged)
+                                packet_type = 'TS'
                                 parts = msg_str.split(',')
                                 remote_ts = parts[0].split(':', 1)[1].strip()
                                 remote_uid = remote_company = remote_site = remote_zone = remote_cluster = None
@@ -449,23 +461,78 @@ async def connectLora():
                                     elif key == 'TEMP_F': temp_f = value
                                     elif key == 'BAR': bar = value
                                     elif key == 'HUMID': humid = value
+                                parsed_data = {
+                                    'remote_ts': remote_ts, 'remote_company': remote_company, 'remote_site': remote_site,
+                                    'remote_zone': remote_zone, 'remote_cluster': remote_cluster, 'remote_runtime': remote_runtime,
+                                    'remote_script_runtime': remote_script_runtime, 'temp_c': temp_c, 'temp_f': temp_f,
+                                    'bar': bar, 'humid': humid, 'remote_machine_id': remote_machine_id
+                                }
+
+                            elif msg_str.startswith('TYPE:'):
+                                parts = msg_str.split(',')
+                                msg_type = None
+                                remote_uid = None
+                                data_b64 = None
+                                for p in parts:
+                                    if p.startswith('TYPE:'): msg_type = p[5:]
+                                    elif p.startswith('UID:'): remote_uid = p[4:]
+                                    elif p.startswith('DATA:'): data_b64 = p[5:]
+                                if msg_type in ('SETTINGS', 'SDATA') and remote_uid and data_b64:
+                                    packet_type = msg_type
+                                    try:
+                                        json_data = _ub.b64decode(data_b64).decode()
+                                        parsed_dict = ujson.loads(json_data)
+                                        parsed_data = parsed_dict
+                                    except Exception as e:
+                                        await log_error(f"Failed to parse {msg_type} for {remote_uid}: {e}")
+
+                            if remote_uid and packet_type != 'UNKNOWN':
+                                if remote_uid not in remote_states:
+                                    remote_states[remote_uid] = {'types': set(), 'last_rx': current_time, 'data': {}}
+                                remote_states[remote_uid]['types'].add(packet_type)
+                                remote_states[remote_uid]['data'][packet_type] = parsed_data
+                                remote_states[remote_uid]['last_rx'] = current_time
+
+                        lora.recv(0, False, 0)
+                        gc.collect()
+
+                    # Process completed bursts
+                    for uid in list(remote_states.keys()):
+                        st = remote_states[uid]
+                        if current_time - st['last_rx'] > burst_window:
+                            await debug_print(f"Processing burst for {uid}: types {st['types']}", "BASE_NODE")
+
+                            if 'TS' in st['types']:
+                                data = st['data']['TS']
+                                remote_ts = data['remote_ts']
+                                remote_company = data['remote_company']
+                                remote_site = data['remote_site']
+                                remote_zone = data['remote_zone']
+                                remote_cluster = data['remote_cluster']
+                                remote_runtime = data['remote_runtime']
+                                remote_script_runtime = data['remote_script_runtime']
+                                temp_c = data['temp_c']
+                                temp_f = data['temp_f']
+                                bar = data['bar']
+                                humid = data['humid']
+                                remote_machine_id = data['remote_machine_id']
 
                                 if remote_uid and remote_company is not None:
                                     if not hasattr(settings, 'REMOTE_NODE_INFO'):
                                         settings.REMOTE_NODE_INFO = {}
-                                    settings.REMOTE_NODE_INFO[remote_uid] = {
+                                    settings.REMOTE_NODE_INFO[uid] = {
                                         'COMPANY': remote_company, 'SITE': remote_site,
                                         'ZONE': remote_zone, 'CLUSTER': remote_cluster,
                                         'MACHINE_ID': remote_machine_id
                                     }
                                     save_remote_node_info()
 
-                                if None in (remote_uid, remote_runtime, remote_script_runtime, temp_c, temp_f, bar, humid):
-                                    await log_error(f"Missing fields from {remote_uid}")
+                                if None in (uid, remote_runtime, remote_script_runtime, temp_c, temp_f, bar, humid):
+                                    await log_error(f"Missing fields from {uid}")
                                 else:
                                     base_ts = time.time()
-                                    log_line = f"{base_ts},{remote_uid},{remote_ts},{remote_runtime},{remote_script_runtime},{temp_c},{temp_f},{bar},{humid}\n"
-                                    await debug_print(f"Received telemetry from {remote_uid}", "BASE_NODE")
+                                    log_line = f"{base_ts},{uid},{remote_ts},{remote_runtime},{remote_script_runtime},{temp_c},{temp_f},{bar},{humid}\n"
+                                    await debug_print(f"Received telemetry from {uid}", "BASE_NODE")
                                     async with file_lock:
                                         with open(settings.LOG_FILE, 'a') as f:
                                             f.write(log_line)
@@ -486,116 +553,94 @@ async def connectLora():
                                     await findHighestHumid(humid_val)
 
                                     if temp_f_val < 80:
-                                        pending_commands[remote_uid] = "toggle_relay(1,on,5)"
+                                        pending_commands[uid] = "toggle_relay(1,on,5)"
 
-                                if remote_uid and remote_machine_id:
-                                    await proxy_register_for_remote(remote_uid, remote_machine_id)
+                                if uid and remote_machine_id:
+                                    await proxy_register_for_remote(uid, remote_machine_id)
 
-                            elif msg_str.startswith('TYPE:'):
-                                parts = msg_str.split(',')
-                                msg_type = None
-                                remote_uid = None
-                                data_b64 = None
-                                for p in parts:
-                                    if p.startswith('TYPE:'): msg_type = p[5:]
-                                    elif p.startswith('UID:'): remote_uid = p[4:]
-                                    elif p.startswith('DATA:'): data_b64 = p[5:]
+                            if 'SETTINGS' in st['types']:
+                                settings_dict = st['data']['SETTINGS']
+                                stage_remote_files(uid, {'settings.py': ujson.dumps(settings_dict).encode()})
 
-                                if msg_type == 'SETTINGS' and remote_uid and data_b64:
+                                original_uid = settings.UNIT_ID
+                                settings.UNIT_ID = uid
+                                send_ok = False
+                                for att in range(3):
                                     try:
-                                        settings_json = _ub.b64decode(data_b64).decode()
-                                        settings_dict = ujson.loads(settings_json)
-                                        stage_remote_files(remote_uid, {'settings.py': ujson.dumps(settings_dict).encode()})
+                                        if asyncio.iscoroutinefunction(send_settings_to_wp):
+                                            await send_settings_to_wp()
+                                        else:
+                                            send_settings_to_wp()
+                                        send_ok = True
+                                        break
+                                    except Exception as se:
+                                        await log_error(f"Settings proxy attempt {att+1} fail for {uid}: {se}")
+                                        await asyncio.sleep(1.5 * (att + 1))
+                                settings.UNIT_ID = original_uid
+                                if send_ok:
+                                    await debug_print(f"Proxied settings for {uid} to Unit Connector", "BASE_NODE")
+                                    await display_message(f"Proxy {uid[:8]}", 1)
+                                gc.collect()
 
-                                        original_uid = settings.UNIT_ID
-                                        settings.UNIT_ID = remote_uid
-                                        send_ok = False
-                                        for att in range(3):
-                                            try:
-                                                if asyncio.iscoroutinefunction(send_settings_to_wp):
-                                                    await send_settings_to_wp()
-                                                else:
-                                                    send_settings_to_wp()
-                                                send_ok = True
-                                                break
-                                            except Exception as se:
-                                                await log_error(f"Settings proxy attempt {att+1} fail for {remote_uid}: {se}")
-                                                await asyncio.sleep(1.5 * (att + 1))
-                                        settings.UNIT_ID = original_uid
-                                        if send_ok:
-                                            await debug_print(f"Proxied settings for {remote_uid} to Unit Connector", "BASE_NODE")
-                                            await display_message(f"Proxy {remote_uid[:8]}", 1)
-                                        gc.collect()
-                                    except Exception as e:
-                                        await log_error(f"Settings proxy error for {remote_uid}: {e}")
+                            if 'SDATA' in st['types']:
+                                sdata_dict = st['data']['SDATA']
+                                stage_remote_field_data(uid, [sdata_dict])
 
-                                elif msg_type == 'SDATA' and remote_uid and data_b64:
+                                original_uid = settings.UNIT_ID
+                                settings.UNIT_ID = uid
+                                send_ok = False
+                                for att in range(3):
                                     try:
-                                        sdata_json = _ub.b64decode(data_b64).decode()
-                                        sdata_dict = ujson.loads(sdata_json)
-                                        stage_remote_field_data(remote_uid, [sdata_dict])
+                                        if asyncio.iscoroutinefunction(send_data_to_wp):
+                                            await send_data_to_wp()
+                                        else:
+                                            send_data_to_wp()
+                                        send_ok = True
+                                        break
+                                    except Exception as se:
+                                        await log_error(f"SDATA proxy attempt {att+1} fail for {uid}: {se}")
+                                        await asyncio.sleep(1.5 * (att + 1))
+                                settings.UNIT_ID = original_uid
+                                if send_ok:
+                                    await debug_print(f"Proxied sdata for {uid} to Unit Connector", "BASE_NODE")
+                                    await display_message(f"Proxy {uid[:8]}", 1)
+                                    ota_send_pending[uid] = True
+                                gc.collect()
 
-                                        original_uid = settings.UNIT_ID
-                                        settings.UNIT_ID = remote_uid
-                                        send_ok = False
-                                        for att in range(3):
-                                            try:
-                                                if asyncio.iscoroutinefunction(send_data_to_wp):
-                                                    await send_data_to_wp()
-                                                else:
-                                                    send_data_to_wp()
-                                                send_ok = True
-                                                break
-                                            except Exception as se:
-                                                await log_error(f"SDATA proxy attempt {att+1} fail for {remote_uid}: {se}")
-                                                await asyncio.sleep(1.5 * (att + 1))
-                                        settings.UNIT_ID = original_uid
-                                        if send_ok:
-                                            await debug_print(f"Proxied sdata for {remote_uid} to Unit Connector", "BASE_NODE")
-                                            await display_message(f"Proxy {remote_uid[:8]}", 1)
-                                            ota_send_pending[remote_uid] = True
-                                        gc.collect()
-                                    except Exception as e:
-                                        await log_error(f"SDATA proxy error for {remote_uid}: {e}")
+                            # Send responses
+                            try:
+                                ack_msg = f"ACK:{uid}"
+                                lora.send(ack_msg.encode())
+                                await _wait_tx_done()
+                                lora.recv(0, False, 0)
+                                await debug_print(f"Sent ACK to {uid}", "BASE_NODE")
+                                await display_message("ACK Sent", 0.5)
 
-                            # BULLETPROOF ACK + CMD RELAY (sent after every message)
-                            if remote_uid:
-                                try:
-                                    ack_msg = f"ACK:{remote_uid}"
-                                    lora.send(ack_msg.encode())
+                                if uid in pending_commands:
+                                    cmd = pending_commands.pop(uid)
+                                    cmd_msg = f"CMD:{uid}:{cmd}"
+                                    lora.send(cmd_msg.encode())
                                     await _wait_tx_done()
-                                    await debug_print(f"Sent ACK to {remote_uid}", "BASE_NODE")
-                                    await display_message("ACK Sent", 0.5)
+                                    lora.recv(0, False, 0)
+                                    await debug_print(f"Sent CMD to {uid}: {cmd}", "BASE_NODE")
+                                    await display_message("CMD Sent", 0.5)
 
-                                    if remote_uid in pending_commands:
-                                        cmd = pending_commands.pop(remote_uid)
-                                        cmd_msg = f"CMD:{remote_uid}:{cmd}"
-                                        lora.send(cmd_msg.encode())
-                                        await _wait_tx_done()
-                                        await debug_print(f"Sent CMD to {remote_uid}: {cmd}", "BASE_NODE")
-                                        await display_message("CMD Sent", 0.5)
-                                except Exception as ack_e:
-                                    await log_error(f"ACK/CMD send error to {remote_uid}: {ack_e}")
-
-                            # OTA chunk relay (only after SDATA packet of this check-in)
-                            if remote_uid and ota_send_pending.pop(remote_uid, False):
-                                remotes = getattr(settings, 'REMOTE_NODE_INFO', {})
-                                if remote_uid in remotes and 'ota' in remotes[remote_uid]:
-                                    chunk = get_next_ota_chunk(remote_uid)
+                                ota_pending = ota_send_pending.pop(uid, False)
+                                if ota_pending:
+                                    chunk = get_next_ota_chunk(uid)
                                     if chunk:
-                                        try:
-                                            ota_str = f"OTA:{ujson.dumps(chunk)}"
-                                            lora.send(ota_str.encode())
-                                            await _wait_tx_done()
-                                            await debug_print(f"Sent OTA chunk {chunk['chunk_num']}/{chunk['total_chunks']} to {remote_uid}", "BASE_NODE")
-                                            advance_ota_chunk(remote_uid)
-                                            await display_message(f"OTA→{remote_uid[:6]}", 0.5)
-                                        except Exception as ota_e:
-                                            await log_error(f"OTA send error to {remote_uid}: {ota_e}")
-                                        gc.collect()
+                                        ota_str = f"OTA:{ujson.dumps(chunk)}"
+                                        lora.send(ota_str.encode())
+                                        await _wait_tx_done()
+                                        lora.recv(0, False, 0)
+                                        await debug_print(f"Sent OTA chunk {chunk['chunk_num']}/{chunk['total_chunks']} to {uid}", "BASE_NODE")
+                                        advance_ota_chunk(uid)
+                                        await display_message(f"OTA→{uid[:6]}", 0.5)
+                            except Exception as ack_e:
+                                await log_error(f"ACK/CMD/OTA send error to {uid}: {ack_e}")
 
-                        lora.recv(0, False, 0)
-                        gc.collect()
+                            del remote_states[uid]
+                            gc.collect()
 
                 if int(current_time) % 30 == 0:
                     await _poll_and_relay_commands(pending_commands)
