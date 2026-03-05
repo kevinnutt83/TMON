@@ -13,6 +13,8 @@
 # - Base calculates staggered delay based on node index for fair scheduling
 # - Remote uses received delay on success, falls back to jittered default on failure
 # - Strengthened with sorted remote list for consistent staggering, extended burst window, and TX retries
+# - Updated stagger calculation to use hash-based for fairer distribution without sort favoritism
+# - Increased response_timeout to 120s for better reliability
 
 import ujson
 import os
@@ -293,11 +295,11 @@ async def connectLora():
 
     if settings.NODE_TYPE == 'remote':
         sync_rate = getattr(settings, 'LORA_SYNC_RATE', 300)
-        response_timeout = 90  # increased to 90s for more reliability
+        response_timeout = 120  # increased to 120s for better reliability
     else:
         sync_rate = 10
         response_timeout = 25
-        burst_window = 10  # extended to 10s for more reliability
+        burst_window = 15  # extended to 15s for more reliability
 
     while True:
         try:
@@ -719,14 +721,10 @@ async def _poll_and_relay_commands(pending_commands):
     gc.collect()
 
 def calculate_next_delay(node_id):
-    remotes = sorted(settings.REMOTE_NODE_INFO.keys())  # sorted for consistent order
-    if node_id not in remotes:
-        remotes.append(node_id)
-        remotes.sort()
-    index = remotes.index(node_id)
     sync_window = getattr(settings, 'LORA_NEXT_SYNC', 100)
-    stagger = index * sync_window + random.randint(0, sync_window - 1)
     sync_rate = getattr(settings, 'LORA_SYNC_RATE', 300)
+    hash_val = sum(ord(c) for c in node_id) % sync_window
+    stagger = hash_val + random.randint(0, sync_window - 1)
     delay = sync_rate + stagger
     return delay
 
