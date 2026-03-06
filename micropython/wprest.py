@@ -331,18 +331,226 @@ async def send_settings_to_wp(unit_id=None, unit_name=None, settings_dict=None):
         await debug_print(f'wprest: send_settings exc {e}', 'ERROR')
         return False
 
-# Addition for OTA polling
-async def poll_ota_jobs():
-    if not WORDPRESS_API_URL:
-        await debug_print('No WordPress API URL set', 'ERROR')
-        return []
+async def fetch_settings_from_wp():
+    """Fetch staged settings from WP (best-effort).
+       Tries multiple endpoint paths and auth modes (auto/basic/hub/read/none).
+    """
     try:
-        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/ota_jobs/{settings.UNIT_ID}', headers=_auth_headers())
-        if resp.status_code == 200:
-            return resp.json().get('jobs', [])
-        else:
-            await debug_print(f'Failed to poll OTA jobs: {resp.status_code}', 'ERROR')
-            return []
+        from utils import is_http_allowed_for_node
+        if not is_http_allowed_for_node():
+            await debug_print('wprest: skip fetch_settings (remote node http disabled)', 'WARN')
+            return {}
+    except Exception:
+        pass
+
+    try:
+        wp = getattr(settings, 'WORDPRESS_API_URL', '') or ''
+        if not wp:
+            await debug_print('wprest: no WP url for fetch_settings', 'WARN')
+            return {}
+
+        payload = {
+            'unit_id': getattr(settings, 'UNIT_ID', ''),
+            'machine_id': get_machine_id(),
+        }
+
+        # Candidate endpoint variants
+        candidate_paths = []
+        try:
+            candidate_paths.append(getattr(settings, 'UC_SETTINGS_STAGED_PATH', '/wp-json/tmon/v1/device/settings-staged'))
+        except Exception:
+            candidate_paths.append('/wp-json/tmon/v1/device/settings-staged')
+
+        candidate_paths.extend([
+            '/wp-json/unit-connector/v1/device/settings-staged',
+            '/wp-json/tmon-unit-connector/v1/device/settings-staged',
+            '/wp-json/tmon-admin/v1/device/settings-staged',
+        ])
+
+        # Auth modes: try admin first (for staged settings access), then basic/hub/read/none
+        auth_modes = ['admin', 'basic', 'hub', 'read', None, 'none']
+
+        for p in candidate_paths:
+            target = wp.rstrip('/') + p
+            for mode in auth_modes:
+                try:
+                    hdrs = _auth_headers(mode)
+                except Exception:
+                    hdrs = {}
+                try:
+                    try:
+                        resp = requests.post(target, json=payload, headers=hdrs, timeout=8)
+                    except TypeError:
+                        resp = requests.post(target, json=payload, headers=hdrs)
+                    code = getattr(resp, 'status_code', 0)
+                    body = getattr(resp, 'text', '') or ''
+                    try:
+                        if resp: resp.close()
+                    except Exception:
+                        pass
+                    await debug_print(f'wprest: fetch_settings try {p} auth={mode} -> {code} len(body)={len(body)}', 'HTTP')
+                    if code in (200, 201):
+                        try:
+                            j = json.loads(body)
+                            if isinstance(j, dict) and 'settings' in j:
+                                await debug_print(f'wprest: fetch_settings ok via {p} auth={mode}', 'INFO')
+                                return j['settings']
+                        except Exception as pe:
+                            await debug_print(f'wprest: fetch_settings parse err {pe}', 'WARN')
+                except Exception as e:
+                    await debug_print(f'wprest: fetch_settings {p} auth={mode} exc: {e}', 'ERROR')
+        await debug_print('wprest: fetch_settings failed all attempts', 'WARN')
+        return {}
     except Exception as e:
-        await debug_print(f'Failed to poll OTA jobs: {e}', 'ERROR')
+        await debug_print(f'wprest: fetch_settings exc {e}', 'ERROR')
+        return {}
+
+async def poll_device_commands():
+    """Poll for staged device commands from WP (best-effort).
+       Returns list of command strings if any.
+    """
+    try:
+        from utils import is_http_allowed_for_node
+        if not is_http_allowed_for_node():
+            await debug_print('wprest: skip poll_commands (remote node http disabled)', 'WARN')
+            return []
+    except Exception:
+        pass
+
+    try:
+        if not getattr(settings, 'ALLOW_REMOTE_COMMANDS', True):
+            await debug_print('wprest: remote commands disabled', 'WARN')
+            return []
+
+        wp = getattr(settings, 'WORDPRESS_API_URL', '') or ''
+        if not wp:
+            await debug_print('wprest: no WP url for poll_commands', 'WARN')
+            return []
+
+        payload = {
+            'unit_id': getattr(settings, 'UNIT_ID', ''),
+            'machine_id': get_machine_id(),
+        }
+
+        # Candidate paths
+        candidate_paths = [getattr(settings, 'UC_DEVICE_COMMANDS_PATH', '/wp-json/tmon/v1/device/commands')]
+
+        auth_modes = ['basic', 'admin', 'hub', 'read', None]
+
+        for p in candidate_paths:
+            target = wp.rstrip('/') + p
+            for mode in auth_modes:
+                try:
+                    hdrs = _auth_headers(mode)
+                except Exception:
+                    hdrs = {}
+                try:
+                    resp = requests.post(target, json=payload, headers=hdrs, timeout=8)
+                    code = getattr(resp, 'status_code', 0)
+                    body = getattr(resp, 'text', '') or ''
+                    try:
+                        resp.close()
+                    except Exception:
+                        pass
+                    if code == 200:
+                        try:
+                            j = json.loads(body)
+                            if isinstance(j, list):
+                                return j
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
         return []
+    except Exception:
+        return []
+
+async def confirm_device_command(command_id):
+    """Confirm execution of a staged command to WP (best-effort)."""
+    try:
+        wp = getattr(settings, 'WORDPRESS_API_URL', '') or ''
+        if not wp:
+            return False
+
+        payload = {
+            'unit_id': getattr(settings, 'UNIT_ID', ''),
+            'machine_id': get_machine_id(),
+            'command_id': command_id,
+        }
+
+        path = getattr(settings, 'UC_DEVICE_COMMAND_CONFIRM_PATH', '/wp-json/tmon/v1/device/command/confirm')
+        target = wp.rstrip('/') + path
+        hdrs = _auth_headers('basic')
+        try:
+            resp = requests.post(target, json=payload, headers=hdrs, timeout=5)
+            code = getattr(resp, 'status_code', 0)
+            resp.close()
+            return code in (200, 201)
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+async def poll_ota_jobs():
+    """Poll for OTA jobs (file pushes) from WP. Returns list of file names if any."""
+    # Similar to poll_device_commands, but for OTA
+    try:
+        wp = getattr(settings, 'WORDPRESS_API_URL', '') or ''
+        if not wp or not getattr(settings, 'OTA_ENABLED', True):
+            return []
+
+        payload = {
+            'unit_id': getattr(settings, 'UNIT_ID', ''),
+            'machine_id': get_machine_id(),
+        }
+
+        path = '/wp-json/tmon/v1/device/ota-jobs'  # Assume endpoint
+        target = wp.rstrip('/') + path
+        hdrs = _auth_headers('basic')
+        try:
+            resp = requests.post(target, json=payload, headers=hdrs, timeout=8)
+            code = getattr(resp, 'status_code', 0)
+            body = getattr(resp, 'text', '') or ''
+            resp.close()
+            if code == 200:
+                try:
+                    j = json.loads(body)
+                    if isinstance(j, list):
+                        return j
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return []
+    except Exception:
+        return []
+
+async def request_file_from_wp(file_name):
+    """Request a specific file from WP OTA endpoint. Returns bytes or None."""
+    try:
+        wp = getattr(settings, 'WORDPRESS_API_URL', '') or ''
+        if not wp:
+            return None
+
+        payload = {
+            'unit_id': getattr(settings, 'UNIT_ID', ''),
+            'machine_id': get_machine_id(),
+            'file_name': file_name,
+        }
+
+        path = '/wp-json/tmon/v1/device/ota-file'  # Assume endpoint
+        target = wp.rstrip('/') + path
+        hdrs = _auth_headers('basic')
+        try:
+            resp = requests.post(target, json=payload, headers=hdrs, timeout=15)
+            code = getattr(resp, 'status_code', 0)
+            if code == 200:
+                content = resp.content if hasattr(resp, 'content') else resp.text.encode()
+                resp.close()
+                return content
+            resp.close()
+        except Exception:
+            pass
+        return None
+    except Exception:
+        return None

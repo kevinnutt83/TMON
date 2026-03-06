@@ -319,7 +319,7 @@ if engine_loop:
     tm.add_task(engine_loop, 'engine', settings.ENGINE_POLL_INTERVAL_S)
 tm.add_task(wifi_rssi_monitor, 'wifi_rssi', settings.WIFI_SIGNAL_SAMPLE_INTERVAL_S)
 tm.add_task(periodic_provision_check, 'provision_check', settings.PROVISION_CHECK_INTERVAL_S)
-tm.add_task(check_missed_syncs, 'missed_syncs', 60)
+
 
 # ========================== MAIN ENTRY POINT ==========================
 async def main():
