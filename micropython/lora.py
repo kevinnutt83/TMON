@@ -564,50 +564,82 @@ async def connectLora():
                                 settings_dict = st['data']['SETTINGS']
                                 stage_remote_files(uid, {'settings.py': ujson.dumps(settings_dict).encode()})
 
-                                original_uid = settings.UNIT_ID
-                                settings.UNIT_ID = uid
-                                send_ok = False
-                                for att in range(3):
+                                remote_machine_id = settings.REMOTE_NODE_INFO.get(uid, {}).get('MACHINE_ID', None)
+                                if remote_machine_id is None:
+                                    await log_error(f"No MACHINE_ID for {uid} during settings proxy")
+                                else:
+                                    original_uid = settings.UNIT_ID
+                                    original_get = None
+                                    send_ok = False
                                     try:
-                                        if asyncio.iscoroutinefunction(send_settings_to_wp):
-                                            await send_settings_to_wp()
-                                        else:
-                                            send_settings_to_wp()
-                                        send_ok = True
-                                        break
-                                    except Exception as se:
-                                        await log_error(f"Settings proxy attempt {att+1} fail for {uid}: {se}")
-                                        await asyncio.sleep(1.5 * (att + 1))
-                                settings.UNIT_ID = original_uid
-                                if send_ok:
-                                    await debug_print(f"Proxied settings for {uid} to Unit Connector", "BASE_NODE")
-                                    await display_message(f"Proxy {uid[:8]}", 1)
-                                gc.collect()
+                                        import utils as _u
+                                        if hasattr(_u, 'get_machine_id'):
+                                            original_get = _u.get_machine_id
+                                            def temp_get():
+                                                return str(remote_machine_id)
+                                            _u.get_machine_id = temp_get
+                                        settings.UNIT_ID = uid
+
+                                        for att in range(3):
+                                            try:
+                                                if asyncio.iscoroutinefunction(send_settings_to_wp):
+                                                    await send_settings_to_wp()
+                                                else:
+                                                    send_settings_to_wp()
+                                                send_ok = True
+                                                break
+                                            except Exception as se:
+                                                await log_error(f"Settings proxy attempt {att+1} fail for {uid}: {se}")
+                                                await asyncio.sleep(1.5 * (att + 1))
+                                    finally:
+                                        settings.UNIT_ID = original_uid
+                                        if original_get and hasattr(_u, 'get_machine_id'):
+                                            _u.get_machine_id = original_get
+                                    if send_ok:
+                                        await debug_print(f"Proxied settings for {uid} to Unit Connector", "BASE_NODE")
+                                        await display_message(f"Proxy {uid[:8]}", 1)
+                                    gc.collect()
 
                             if 'SDATA' in st['types']:
                                 sdata_dict = st['data']['SDATA']
                                 stage_remote_field_data(uid, [sdata_dict])
 
-                                original_uid = settings.UNIT_ID
-                                settings.UNIT_ID = uid
-                                send_ok = False
-                                for att in range(3):
+                                remote_machine_id = settings.REMOTE_NODE_INFO.get(uid, {}).get('MACHINE_ID', None)
+                                if remote_machine_id is None:
+                                    await log_error(f"No MACHINE_ID for {uid} during sdata proxy")
+                                else:
+                                    original_uid = settings.UNIT_ID
+                                    original_get = None
+                                    send_ok = False
                                     try:
-                                        if asyncio.iscoroutinefunction(send_data_to_wp):
-                                            await send_data_to_wp()
-                                        else:
-                                            send_data_to_wp()
-                                        send_ok = True
-                                        break
-                                    except Exception as se:
-                                        await log_error(f"SDATA proxy attempt {att+1} fail for {uid}: {se}")
-                                        await asyncio.sleep(1.5 * (att + 1))
-                                settings.UNIT_ID = original_uid
-                                if send_ok:
-                                    await debug_print(f"Proxied sdata for {uid} to Unit Connector", "BASE_NODE")
-                                    await display_message(f"Proxy {uid[:8]}", 1)
-                                    ota_send_pending[uid] = True
-                                gc.collect()
+                                        import utils as _u
+                                        if hasattr(_u, 'get_machine_id'):
+                                            original_get = _u.get_machine_id
+                                            def temp_get():
+                                                return str(remote_machine_id)
+                                            _u.get_machine_id = temp_get
+                                        settings.UNIT_ID = uid
+
+                                        for att in range(3):
+                                            try:
+                                                if asyncio.iscoroutinefunction(send_data_to_wp):
+                                                    await send_data_to_wp()
+                                                else:
+                                                    send_data_to_wp()
+                                                send_ok = True
+                                                break
+                                            except Exception as se:
+                                                await log_error(f"SDATA proxy attempt {att+1} fail for {uid}: {se}")
+                                                await asyncio.sleep(1.5 * (att + 1))
+                                    finally:
+                                        settings.UNIT_ID = original_uid
+                                        if original_get and hasattr(_u, 'get_machine_id'):
+                                            _u.get_machine_id = original_get
+                                    if send_ok:
+                                        await debug_print(f"Proxied sdata for {uid} to Unit Connector", "BASE_NODE")
+                                        await display_message(f"Proxy {uid[:8]}", 1)
+                                        ota_send_pending[uid] = True
+                                    gc.collect()
 
                             # Calculate next delay and set expected
                             next_delay = calculate_next_delay(uid)
@@ -682,11 +714,26 @@ async def _poll_and_relay_commands(pending_commands):
     if not poll_device_commands:
         return
     for remote_uid in list(getattr(settings, 'REMOTE_NODE_INFO', {}).keys()):
+        remote_machine_id = settings.REMOTE_NODE_INFO.get(remote_uid, {}).get('MACHINE_ID', None)
+        if remote_machine_id is None:
+            await log_error(f"No MACHINE_ID for {remote_uid} during command poll")
+            continue
         try:
             original = settings.UNIT_ID
-            settings.UNIT_ID = remote_uid
-            cmds = await poll_device_commands() if asyncio.iscoroutinefunction(poll_device_commands) else poll_device_commands()
-            settings.UNIT_ID = original
+            original_get = None
+            try:
+                import utils as _u
+                if hasattr(_u, 'get_machine_id'):
+                    original_get = _u.get_machine_id
+                    def temp_get():
+                        return str(remote_machine_id)
+                    _u.get_machine_id = temp_get
+                settings.UNIT_ID = remote_uid
+                cmds = await poll_device_commands() if asyncio.iscoroutinefunction(poll_device_commands) else poll_device_commands()
+            finally:
+                settings.UNIT_ID = original
+                if original_get and hasattr(_u, 'get_machine_id'):
+                    _u.get_machine_id = original_get
             for cmd in cmds:
                 pending_commands[remote_uid] = cmd
                 await debug_print(f"Queued CMD for {remote_uid}: {cmd}", "BASE_NODE")
@@ -695,23 +742,14 @@ async def _poll_and_relay_commands(pending_commands):
     gc.collect()
 
 def calculate_next_delay(node_id):
-    sync_window = getattr(settings, 'LORA_NEXT_SYNC', 600)  # Restored configurable with increased default
     sync_rate = getattr(settings, 'LORA_SYNC_RATE', 300)
-    nodes = sorted(settings.REMOTE_NODE_INFO.keys())
-    num_nodes = len(nodes)
-    if num_nodes == 0:
-        return sync_rate
-    try:
-        slot_index = nodes.index(node_id)
-    except ValueError:
-        slot_index = random.randint(0, num_nodes - 1)
-    slot_size = sync_window // num_nodes if num_nodes > 0 else sync_window
-    stagger = slot_index * slot_size
-    jitter = random.randint(-slot_size // 2, slot_size // 2) if slot_size > 0 else 0
-    stagger += jitter
-    stagger = max(0, min(stagger, sync_window - 1))
-    delay = sync_rate + stagger
-    return delay
+    sync_window = getattr(settings, 'LORA_NEXT_SYNC', 600)
+    stagger_seed = 0
+    for c in node_id:
+        stagger_seed = (stagger_seed * 31 + ord(c)) % sync_window
+    jitter = random.randint(-30, 30)  # small jitter to avoid exact collisions
+    delay = sync_rate + stagger_seed + jitter
+    return max(60, delay)  # ensure minimum delay
 
 # ===================== ORIGINAL FUNCTIONS (100% unchanged) =====================
 async def periodic_wp_sync():
