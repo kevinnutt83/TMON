@@ -1,4 +1,4 @@
-# TMON Version 2.00.5h - LoRa (FULL BULLETPROOF GATEWAY + TRUE MULTI-REMOTE + ACK + SNR + CMD + OTA)
+# TMON Version 2.00.5i - LoRa (FULL BULLETPROOF GATEWAY + TRUE MULTI-REMOTE + ACK + SNR + CMD + OTA)
 # FINAL BULLETPROOF FIXES (tested logic for 100% reliability):
 # - Deterministic boot stagger based on UID hash (0-299s) on every remote power-up to avoid initial collisions
 # - Exponential backoff on connection failures to prevent retry clustering
@@ -17,6 +17,9 @@
 # - Increased response_timeout to 120s for better reliability
 # - Updated stagger calculation to use sorted node list with even slot distribution and jitter for better collision avoidance
 # - Increased burst_window to 30s to handle longer bursts or slight overlaps
+# - Further refined stagger: use hash % num_nodes for slot index to reduce sort-order bias
+# - Increased sync_window to 300s for better separation with multiple nodes
+# - Added small yields during processing to allow better concurrency (though urequests remains sync-blocking)
 
 import ujson
 import os
@@ -271,7 +274,7 @@ async def connectLora():
     global lora
     if not settings.ENABLE_LORA:
         return False
-    await debug_print("Starting bulletproof LoRa Gateway v2.00.5h...", "LORA")
+    await debug_print("Starting bulletproof LoRa Gateway v2.00.5i...", "LORA")
     await display_message("LoRa Starting...", 1)
 
     async with pin_lock:
@@ -587,6 +590,7 @@ async def connectLora():
 
                                 if uid and remote_machine_id:
                                     await proxy_register_for_remote(uid, remote_machine_id)
+                                await asyncio.sleep(0)  # yield for concurrency
 
                             if 'SETTINGS' in st['types']:
                                 settings_dict = st['data']['SETTINGS']
@@ -611,6 +615,7 @@ async def connectLora():
                                     await debug_print(f"Proxied settings for {uid} to Unit Connector", "BASE_NODE")
                                     await display_message(f"Proxy {uid[:8]}", 1)
                                 gc.collect()
+                                await asyncio.sleep(0)  # yield
 
                             if 'SDATA' in st['types']:
                                 sdata_dict = st['data']['SDATA']
@@ -636,6 +641,7 @@ async def connectLora():
                                     await display_message(f"Proxy {uid[:8]}", 1)
                                     ota_send_pending[uid] = True
                                 gc.collect()
+                                await asyncio.sleep(0)  # yield
 
                             # Calculate next delay and set expected
                             next_delay = calculate_next_delay(uid)
@@ -723,26 +729,20 @@ async def _poll_and_relay_commands(pending_commands):
     gc.collect()
 
 def calculate_next_delay(node_id):
-    sync_window = getattr(settings, 'LORA_NEXT_SYNC', 100)
+    sync_window = getattr(settings, 'LORA_NEXT_SYNC', 300)  # increased to 300s
     sync_rate = getattr(settings, 'LORA_SYNC_RATE', 300)
     nodes = sorted(settings.REMOTE_NODE_INFO.keys())
     num_nodes = len(nodes)
     if num_nodes == 0:
         return sync_rate
-    try:
-        index = nodes.index(node_id)
-    except ValueError:
-        index = num_nodes
-        nodes.append(node_id)
-        num_nodes += 1
+    # Use hash for pseudo-random but consistent slot index
+    hash_val = sum(ord(c) for c in node_id)
+    slot_index = hash_val % num_nodes
     slot_size = sync_window // num_nodes if num_nodes > 0 else sync_window
-    stagger = index * slot_size
-    if slot_size > 0:
-        jitter = random.randint(-slot_size // 2, slot_size // 2)
-    else:
-        jitter = 0
+    stagger = slot_index * slot_size
+    jitter = random.randint(-slot_size // 2, slot_size // 2) if slot_size > 0 else 0
     stagger += jitter
-    stagger = max(0, stagger)
+    stagger = max(0, min(stagger, sync_window - 1))
     delay = sync_rate + stagger
     return delay
 

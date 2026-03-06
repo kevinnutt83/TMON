@@ -73,9 +73,9 @@
     "lib/urequests-0.8.0.dist-info/METADATA": "sha256:16de209a11095a53d245d475ee471b3e8ad197efce30ffcf8d6ae18018e07016",
     "lib/urequests-0.8.0.dist-info/RECORD": "sha256:03b7e2f4f5c2948e320a3e75f2454634b765c8c4413d7a7e6f2bdc94da3e2146",
     "lib/urequests.py": "sha256:2bee6a73926682d278a23c52d1c598290c82391372e40615b6075cda5583efcd",
-    "lora.py": "sha256:65fc0d22e2c6711a445886278f61556230517a1737fa7790f1cde4cc1bfc6b62",
+    "lora.py": "sha256:ccb632b9bff36ba46f4d768c22ecd01c84c8816487d0d334ad41898bff874258",
     "main.py": "sha256:e1f7af02eb7265a51c4170f59c47066232f4fa5b34cf2ef19decda67815a0387",
-    "manifest.json.bak": "sha256:ecab9c3242f57e8440d12cd2c2ba98b000e76923543a8b949ab4af4a81c00067",
+    "manifest.json.bak": "sha256:26b1ad5b60cdd2f1ff6bc62a777ddb5b2f5c6172f1d3d7b40755db4763edd502",
     "oled.py": "sha256:95dc102e147c208234badca4ed13d8b4a8a1378a87011e57c9a6c4a865bd80b8",
     "ota.py": "sha256:f9a55b6578ce58c693c4c71047ccc00962e16449f9a7c0c24c553db1dbb267ed",
     "provision.py": "sha256:0cbbf5a18154605573a580227ee29f4f4aaab0fbb277985dbb819e7fe32d8431",
@@ -83,7 +83,7 @@
     "relay.py": "sha256:ac80bed0519c5dbf9cd63e554547fd732143e16c548d29b230b5f884cdb15669",
     "sampling.py": "sha256:8e02e626ae18970902fc974c21797bbdf0e6843c487d677f35d7c1c39d36efc0",
     "sdata.py": "sha256:f39258a10b1a960751f34ac1f4036d627254c8dd8af917d90a3979150af2ebab",
-    "settings.py": "sha256:029c34d9037ff9c2f088caf0c1e915eb1b2819bfdb7a5c44a5f73fc390e06431",
+    "settings.py": "sha256:d595a7dba6727cd8ce410e5bbf27d8bcf8b3c3083b69784b9eb3a9bc0916c986",
     "settings_apply.py": "sha256:2a33c7b7be2559c7c0adaa54181f4e363ce86eb1c00c3455dfda31f6adf2c935",
     "tests/lora_selective_retransmit.py": "sha256:ab5a7a6df216b9a61e41fe40b2a3688530133eac89afb99ca82353fb294c4768",
     "tests/lora_sim.py": "sha256:5060f82cfca31fa7cb0f62729ef9607c36609afe4ea16735397fb746ece929a0",
@@ -91,10 +91,10 @@
     "tests/test_log_trim.py": "sha256:5933ec391a1cefcaeb401a461c1957744d4452987abb1d46f6c7ec74d3c0fc03",
     "tmon.py": "sha256:08031893271d427511126efedd8f930a678242f3e9f44f41f443842dd2999b27",
     "utils.py": "sha256:5be4d9bdfbb28dab4af34f04654f3cc60882277f4f946f1ea261715cfcf45cbb",
-    "version.txt": "sha256:8b611bb330f1dd035be03c6096b3f1b27a80b49f82628198a0af97edbfae4f41",
+    "version.txt": "sha256:450e246a3f64169b35ed1e325e313a7bef75dc74f201a596c19f2b1900f52c6d",
     "wifi.py": "sha256:61e4008defbc97bcb7d7ffa892e10f9629dc3f6efb690698333b95da08401f09",
     "wprest.py": "sha256:da73490f623a70f613236c7846cf9d44cd3d1fe0e5954df5ab3265bab12b4ed8"
   },
   "name": "tmon-micropython",
-  "version": "v2.00.1r"
+  "version": "v2.00.1s"
 }
