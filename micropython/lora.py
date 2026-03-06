@@ -1,25 +1,4 @@
 # TMON Version 2.00.5i - LoRa (FULL BULLETPROOF GATEWAY + TRUE MULTI-REMOTE + ACK + SNR + CMD + OTA)
-# FINAL BULLETPROOF FIXES (tested logic for 100% reliability):
-# - Deterministic boot stagger based on UID hash (0-299s) on every remote power-up to avoid initial collisions
-# - Exponential backoff on connection failures to prevent retry clustering
-# - RX armed IMMEDIATELY after the 3-packet TX burst on remote
-# - Safe sdata snapshot (full __dict__ with fallback to minimal fields if any non-JSON value)
-# - Large jitter (±120s) → remotes never collide, every node gets equal chance
-# - Extra debug prints so you can see exactly what each remote is doing
-# - All previous fixes kept: 3-attempt proxy retries, OTA chunk relay after SDATA, signal update on every RX, full ACK/CMD
-# - Original parsing, WP proxy, OTA, AI, everything 100% intact
-# - If anything fails during TX, it still arms RX and retries cleanly (no more "stuck" state)
-# - Added synchronized next sync delay sent in ACK to stagger remote check-ins and prevent collisions
-# - Base calculates staggered delay based on node index for fair scheduling
-# - Remote uses received delay on success, falls back to jittered default on failure
-# - Strengthened with sorted remote list for consistent staggering, extended burst window, and TX retries
-# - Updated stagger calculation to use hash-based for fairer distribution without sort favoritism
-# - Increased response_timeout to 120s for better reliability
-# - Updated stagger calculation to use sorted node list with even slot distribution and jitter for better collision avoidance
-# - Increased burst_window to 30s to handle longer bursts or slight overlaps
-# - Further refined stagger: use hash % num_nodes for slot index to reduce sort-order bias
-# - Increased sync_window to 300s for better separation with multiple nodes
-# - Added small yields during processing to allow better concurrency (though urequests remains sync-blocking)
 
 import ujson
 import os
@@ -89,17 +68,6 @@ async def log_error(error_msg):
         await debug_print(f"[FATAL] Failed to log error: {error_msg}", "ERROR")
     await asyncio.sleep(0)
 
-def print_remote_nodes():
-    remote_info = getattr(sdata, 'REMOTE_NODE_INFO', {})
-    for node_id, node_data in remote_info.items():
-        print(f"[REMOTE NODE] {node_id}: {node_data}")
-
-async def print_remote_nodes_async():
-    try:
-        print_remote_nodes()
-    except Exception:
-        pass
-
 def simple_checksum(path):
     checksum = 0
     with open(path, 'rb') as f:
@@ -164,7 +132,7 @@ async def init_lora():
     global lora
     await debug_print('init_lora: starting with -2 fix', 'LORA')
     await display_message("LoRa Init...", 1)
-    for attempt in range(10):
+    for attempt in range(5):
         try:
             await hard_reset_lora()
             await free_pins()
@@ -188,7 +156,6 @@ async def init_lora():
                 lora.recv(0, False, 0)
                 await debug_print("LoRa initialized successfully", "LORA")
                 await display_message("LoRa OK", 1.5)
-                await print_remote_nodes_async()
                 gc.collect()
                 return True
             elif status == -2:
@@ -197,7 +164,7 @@ async def init_lora():
         except Exception as e:
             await debug_print(f"init attempt {attempt+1} exception: {e}", "WARN")
         await asyncio.sleep(0.8)
-    await debug_print("LoRa init FAILED after 10 attempts", "FATAL")
+    await debug_print("LoRa init FAILED after 5 attempts", "FATAL")
     await display_message("LoRa FAIL", 3)
     await free_pins()
     lora = None
@@ -284,8 +251,10 @@ async def connectLora():
     # Deterministic boot stagger for remotes based on UID to prevent initial collisions
     if settings.NODE_TYPE == 'remote':
         uid = settings.UNIT_ID
-        stagger_seed = sum(ord(c) for c in uid) % 1000
-        initial_stagger = stagger_seed % 300  # 0-299s
+        stagger_seed = 0
+        for c in uid:
+            stagger_seed = (stagger_seed * 31 + ord(c)) % 1000000
+        initial_stagger = stagger_seed % 600  # Increased to 0-599s
         await debug_print(f"Remote deterministic boot stagger {initial_stagger}s based on UID", "REMOTE_NODE")
         await asyncio.sleep(initial_stagger)
 
@@ -300,11 +269,11 @@ async def connectLora():
 
     if settings.NODE_TYPE == 'remote':
         sync_rate = getattr(settings, 'LORA_SYNC_RATE', 300)
-        response_timeout = 120  # increased to 120s for better reliability
+        response_timeout = 120
     else:
         sync_rate = 10
         response_timeout = 25
-        burst_window = 30  # extended to 30s for more reliability
+        burst_window = 30
 
     while True:
         try:
@@ -324,7 +293,6 @@ async def connectLora():
                     # TS packet
                     data_str = f"TS:{ts},UID:{settings.UNIT_ID},MACHINE_ID:{get_machine_id()},COMPANY:{getattr(settings,'COMPANY','')},SITE:{getattr(settings,'SITE','')},ZONE:{getattr(settings,'ZONE','')},CLUSTER:{getattr(settings,'CLUSTER','')},RUNTIME:{sdata.loop_runtime},SCRIPT_RUNTIME:{sdata.script_runtime},TEMP_C:{sdata.cur_temp_c},TEMP_F:{sdata.cur_temp_f},BAR:{sdata.cur_bar_pres},HUMID:{sdata.cur_humid}"
                     await _send_with_retry(data_str.encode())
-                    gc.collect()
 
                     # Small delay between packets to reduce collision risk
                     await asyncio.sleep(random.uniform(0.5, 1.5))
@@ -333,7 +301,6 @@ async def connectLora():
                     settings_dict = {k: getattr(settings, k) for k in dir(settings) if not k.startswith('__') and not callable(getattr(settings, k))}
                     settings_b64 = _ub.b64encode(ujson.dumps(settings_dict).encode()).decode()
                     await _send_with_retry(f"TYPE:SETTINGS,UID:{settings.UNIT_ID},DATA:{settings_b64}".encode())
-                    gc.collect()
 
                     await asyncio.sleep(random.uniform(0.5, 1.5))
 
@@ -357,7 +324,6 @@ async def connectLora():
                         sdata_b64 = _ub.b64encode(ujson.dumps(sdata_dict).encode()).decode()
 
                     await _send_with_retry(f"TYPE:SDATA,UID:{settings.UNIT_ID},DATA:{sdata_b64}".encode())
-                    gc.collect()
 
                     # CRITICAL: Arm RX right after last TX so we catch the ACK/CMD/OTA
                     lora.recv(0, False, 0)
@@ -590,7 +556,6 @@ async def connectLora():
 
                                 if uid and remote_machine_id:
                                     await proxy_register_for_remote(uid, remote_machine_id)
-                                await asyncio.sleep(0)  # yield for concurrency
 
                             if 'SETTINGS' in st['types']:
                                 settings_dict = st['data']['SETTINGS']
@@ -615,7 +580,6 @@ async def connectLora():
                                     await debug_print(f"Proxied settings for {uid} to Unit Connector", "BASE_NODE")
                                     await display_message(f"Proxy {uid[:8]}", 1)
                                 gc.collect()
-                                await asyncio.sleep(0)  # yield
 
                             if 'SDATA' in st['types']:
                                 sdata_dict = st['data']['SDATA']
@@ -641,7 +605,6 @@ async def connectLora():
                                     await display_message(f"Proxy {uid[:8]}", 1)
                                     ota_send_pending[uid] = True
                                 gc.collect()
-                                await asyncio.sleep(0)  # yield
 
                             # Calculate next delay and set expected
                             next_delay = calculate_next_delay(uid)
@@ -729,14 +692,15 @@ async def _poll_and_relay_commands(pending_commands):
     gc.collect()
 
 def calculate_next_delay(node_id):
-    sync_window = getattr(settings, 'LORA_NEXT_SYNC', 300)  # increased to 300s
+    sync_window = 600  # Increased for better spread and reduced collisions
     sync_rate = getattr(settings, 'LORA_SYNC_RATE', 300)
-    nodes = sorted(settings.REMOTE_NODE_INFO.keys())
-    num_nodes = len(nodes)
+    num_nodes = len(settings.REMOTE_NODE_INFO)
     if num_nodes == 0:
         return sync_rate
-    # Use hash for pseudo-random but consistent slot index
-    hash_val = sum(ord(c) for c in node_id)
+    # Use better hash for pseudo-random but consistent slot index
+    hash_val = 0
+    for c in node_id:
+        hash_val = (hash_val * 31 + ord(c)) % 1000000
     slot_index = hash_val % num_nodes
     slot_size = sync_window // num_nodes if num_nodes > 0 else sync_window
     stagger = slot_index * slot_size
@@ -899,9 +863,3 @@ async def ai_health_monitor():
         if TMON_AI.error_count > 3:
             await TMON_AI.recover_system()
         await asyncio.sleep(60)
-
-# In boot.py / main.py you must have:
-# asyncio.create_task(connectLora())
-# asyncio.create_task(main_loop())
-# asyncio.create_task(ai_health_monitor())
-# asyncio.create_task(user_input_listener())
