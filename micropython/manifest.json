@@ -76,6 +76,7 @@
     "lora-NZXT-Desktop.py": "sha256:884c24ced515731085467239e1bcc1bb3305b2ace0fdc3428aecd8cff13f7313",
     "lora.py": "sha256:884c24ced515731085467239e1bcc1bb3305b2ace0fdc3428aecd8cff13f7313",
     "main.py": "sha256:e1f7af02eb7265a51c4170f59c47066232f4fa5b34cf2ef19decda67815a0387",
+    "manifest-NZXT-Desktop.json": "sha256:781cb84115fddb1b1d0a2994addd1c7f8b6af62e5b8f296df3a47ac020392d82",
     "manifest.json.bak": "sha256:f45eed8e202e63952666fc17abaa03dac53ec7e8f3c1ffe98a4b30830aabdf7d",
     "oled.py": "sha256:95dc102e147c208234badca4ed13d8b4a8a1378a87011e57c9a6c4a865bd80b8",
     "ota.py": "sha256:f9a55b6578ce58c693c4c71047ccc00962e16449f9a7c0c24c553db1dbb267ed",
