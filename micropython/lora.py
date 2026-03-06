@@ -174,7 +174,7 @@ command_handlers = {
     "toggle_relay": toggle_relay,
 }
 
-REMOTE_NODE_INFO_FILE = settings.LOG_DIR + '/remote_node_info.json'
+REMOTE_NODE_INFO_FILE = settings.LORA_REMOTE_INFO_LOG
 
 def load_remote_node_info():
     try:
@@ -192,7 +192,7 @@ def save_remote_node_info():
     except Exception:
         pass
 
-async def proxy_register_for_remote(remote_uid, remote_machine_id):
+async def proxy_register_for_remote(remote_uid, remote_machine_id, remote_firmware, remote_node_type):
     if not register_with_wp:
         return
     now = time.time()
@@ -200,25 +200,12 @@ async def proxy_register_for_remote(remote_uid, remote_machine_id):
         await debug_print(f"Proxy register throttled for {remote_uid}", "BASE_NODE")
         return
 
-    original_unit_id = getattr(settings, 'UNIT_ID', '')
-    original_get = None
     success = False
     try:
-        import utils as _u
-        if hasattr(_u, 'get_machine_id'):
-            original_get = _u.get_machine_id
-            def temp_get():
-                return str(remote_machine_id)
-            _u.get_machine_id = temp_get
-        settings.UNIT_ID = remote_uid
-
         await debug_print(f"Proxy check-in/register for remote {remote_uid} (MACHINE_ID={remote_machine_id[:16]}...)", "BASE_NODE")
         for attempt in range(3):
             try:
-                if asyncio.iscoroutinefunction(register_with_wp):
-                    success = await register_with_wp()
-                else:
-                    success = register_with_wp()
+                success = await register_with_wp(unit_id=remote_uid, machine_id=remote_machine_id, firmware_version=remote_firmware, node_type=remote_node_type)
                 if success:
                     await display_message(f"Reg {remote_uid[:8]} OK", 0.8)
                     break
@@ -227,15 +214,192 @@ async def proxy_register_for_remote(remote_uid, remote_machine_id):
                 await log_error(f"Proxy reg attempt {attempt+1} failed for {remote_uid}: {e}")
                 await asyncio.sleep(2 ** attempt)
     finally:
-        settings.UNIT_ID = original_unit_id
-        if original_get and hasattr(_u, 'get_machine_id'):
-            _u.get_machine_id = original_get
+        pass
 
     if success:
         proxy_last_ts[remote_uid] = time.time()
     else:
         await display_message(f"Reg {remote_uid[:8]} FAIL", 1.5)
     gc.collect()
+
+async def proxy_send_settings_for_remote(remote_uid, remote_unit_name, remote_settings_dict):
+    if not send_settings_to_wp:
+        return False
+    return await send_settings_to_wp(unit_id=remote_uid, unit_name=remote_unit_name, settings_dict=remote_settings_dict)
+
+async def proxy_fetch_settings_from_remote(remote_uid, remote_machine_id):
+    if not fetch_settings_from_wp:
+        return {}
+    original_unit_id = settings.UNIT_ID
+    original_get = utils.get_machine_id
+    utils.get_machine_id = lambda: remote_machine_id
+    settings.UNIT_ID = remote_uid
+    try:
+        return await fetch_settings_from_wp()
+    finally:
+        settings.UNIT_ID = original_unit_id
+        utils.get_machine_id = original_get
+
+async def proxy_poll_commands_for_remote(remote_uid, remote_machine_id):
+    if not poll_device_commands:
+        return []
+    original_unit_id = settings.UNIT_ID
+    original_get = utils.get_machine_id
+    utils.get_machine_id = lambda: remote_machine_id
+    settings.UNIT_ID = remote_uid
+    try:
+        return await poll_device_commands()
+    finally:
+        settings.UNIT_ID = original_unit_id
+        utils.get_machine_id = original_get
+
+async def proxy_poll_ota_for_remote(remote_uid, remote_machine_id):
+    if not poll_ota_jobs:
+        return []
+    original_unit_id = settings.UNIT_ID
+    original_get = utils.get_machine_id
+    utils.get_machine_id = lambda: remote_machine_id
+    settings.UNIT_ID = remote_uid
+    try:
+        return await poll_ota_jobs()
+    finally:
+        settings.UNIT_ID = original_unit_id
+        utils.get_machine_id = original_get
+
+async def proxy_request_file_for_remote(remote_uid, remote_machine_id, file_name):
+    if not request_file_from_wp:
+        return None
+    original_unit_id = settings.UNIT_ID
+    original_get = utils.get_machine_id
+    utils.get_machine_id = lambda: remote_machine_id
+    settings.UNIT_ID = remote_uid
+    try:
+        return await request_file_from_wp(file_name)
+    finally:
+        settings.UNIT_ID = original_unit_id
+        utils.get_machine_id = original_get
+
+async def proxy_confirm_command_for_remote(remote_uid, remote_machine_id, command_id):
+    if not _wp.confirm_device_command:
+        return
+    original_unit_id = settings.UNIT_ID
+    original_get = utils.get_machine_id
+    utils.get_machine_id = lambda: remote_machine_id
+    settings.UNIT_ID = remote_uid
+    try:
+        await _wp.confirm_device_command(command_id)
+    finally:
+        settings.UNIT_ID = original_unit_id
+        utils.get_machine_id = original_get
+
+def load_lora_next_sync():
+    try:
+        with open(settings.LORA_NEXT_SYNC_FILE, 'r') as f:
+            return int(f.read().strip())
+    except Exception:
+        return 0
+
+def save_lora_next_sync(value):
+    try:
+        with open(settings.LORA_NEXT_SYNC_FILE, 'w') as f:
+            f.write(str(value))
+    except Exception:
+        pass
+
+async def send_with_retry(data, retries=3):
+    for attempt in range(retries):
+        try:
+            lora.send(data)
+            return True
+        except Exception as e:
+            await debug_print(f"Send attempt {attempt+1} failed: {e}", "LORA")
+            await asyncio.sleep(1)
+    return False
+
+async def recv_with_timeout(timeout_s):
+    start = time.time()
+    while time.time() - start < timeout_s:
+        if lora.available():
+            data = lora.recv()
+            if data:
+                sdata.lora_SigStr = lora.packetRssi()
+                sdata.lora_snr = lora.packetSnr()
+                return data
+        await asyncio.sleep(0.1)
+    return None
+
+async def send_chunked(data_bytes, data_type, retries=3):
+    size = len(data_bytes)
+    chunk_size = 200
+    chunks = [data_bytes[i:i+chunk_size] for i in range(0, size, chunk_size)]
+    num_chunks = len(chunks)
+
+    start_msg = f"START:{data_type},SIZE:{size},CHUNKS:{num_chunks}".encode()
+    if not await send_with_retry(start_msg, retries):
+        return False
+
+    for i, chunk in enumerate(chunks):
+        chunk_msg = f"CHUNK:{i+1},".encode() + chunk
+        if not await send_with_retry(chunk_msg, retries):
+            return False
+        ack = await recv_with_timeout(5)
+        if not ack or not ack.decode().startswith(f"ACK:{i+1}"):
+            return False
+        # Update progress
+        percent = int(((i+1) / num_chunks) * 100)
+        await display_message(f"TX {data_type}: {percent}%", 0.5)
+
+    end_msg = f"END:{data_type}".encode()
+    if not await send_with_retry(end_msg, retries):
+        return False
+
+    ack = await recv_with_timeout(5)
+    if not ack or not ack.decode() == f"ACK:END":
+        return False
+
+    return True
+
+async def recv_chunked(data_type, timeout_s=30):
+    start = await recv_with_timeout(timeout_s)
+    if not start or not start.decode().startswith(f"START:{data_type}"):
+        return None
+
+    parts = start.decode().split(',')
+    size = int(parts[1].split(':')[1])
+    num_chunks = int(parts[2].split(':')[1])
+
+    received = b''
+    for i in range(num_chunks):
+        chunk = await recv_with_timeout(10)
+        if not chunk or not chunk.decode().startswith(f"CHUNK:{i+1},"):
+            return None
+        received += chunk[chunk.find(b',')+1:]
+        ack = f"ACK:{i+1}".encode()
+        await send_with_retry(ack)
+        # Update progress
+        percent = int(((i+1) / num_chunks) * 100)
+        await display_message(f"RX {data_type}: {percent}%", 0.5)
+
+    end = await recv_with_timeout(5)
+    if not end or not end.decode() == f"END:{data_type}":
+        return None
+
+    ack_end = b"ACK:END"
+    await send_with_retry(ack_end)
+
+    if len(received) != size:
+        return None
+
+    return received
+
+async def handle_received_command(cmd_str):
+    parts = cmd_str.split(',')
+    if parts[0] == "toggle_relay":
+        relay_num = int(parts[1])
+        state = parts[2] == "on"
+        toggle_relay(relay_num, state)
+        return True
+    return False
 
 async def connectLora():
     global lora
@@ -258,649 +422,163 @@ async def connectLora():
         await debug_print(f"Remote deterministic boot stagger {initial_stagger}s based on UID", "REMOTE_NODE")
         await asyncio.sleep(initial_stagger)
 
-    STATE_IDLE = 0
-    STATE_WAIT_RESPONSE = 2
-    STATE_RECEIVING = 3
-    state = STATE_IDLE
-    pending_commands = {}
-    ota_send_pending = {}
-    remote_states = {}
-    failure_count = 0
+    busy = False
+    if settings.NODE_TYPE == 'base':
+        while True:
+            if not busy:
+                broadcast_msg = f"BROADCAST:{settings.LORA_NETWORK_NAME}".encode()
+                await send_with_retry(broadcast_msg)
+                await asyncio.sleep(5)
 
-    if settings.NODE_TYPE == 'remote':
-        sync_rate = getattr(settings, 'LORA_SYNC_RATE', 300)
-        response_timeout = 180  # Increased for better reliability
-    else:
-        sync_rate = 10
-        response_timeout = 25
-        burst_window = 15  # Reduced to send ACK sooner
-
-    while True:
-        try:
-            current_time = time.time()
-            if lora is None:
-                if not await init_lora():
-                    await asyncio.sleep(10)
-                    continue
-
-            # ===================== REMOTE NODE (bulletproof TX + RX arm) =====================
-            if settings.NODE_TYPE == 'remote':
-                if state == STATE_IDLE:
-                    await debug_print("Remote: starting full check-in (TS + SETTINGS + SDATA)", "REMOTE_NODE")
-                    await display_message("TX Data...", 0.8)
-                    ts = time.time()
-
-                    # TS packet
-                    data_str = f"TS:{ts},UID:{settings.UNIT_ID},MACHINE_ID:{get_machine_id()},COMPANY:{getattr(settings,'COMPANY','')},SITE:{getattr(settings,'SITE','')},ZONE:{getattr(settings,'ZONE','')},CLUSTER:{getattr(settings,'CLUSTER','')},RUNTIME:{sdata.loop_runtime},SCRIPT_RUNTIME:{sdata.script_runtime},TEMP_C:{sdata.cur_temp_c},TEMP_F:{sdata.cur_temp_f},BAR:{sdata.cur_bar_pres},HUMID:{sdata.cur_humid}"
-                    await _send_with_retry(data_str.encode())
-
-                    # Small delay between packets to reduce collision risk
-                    await asyncio.sleep(random.uniform(0.5, 1.5))
-
-                    # SETTINGS packet
-                    settings_dict = {k: getattr(settings, k) for k in dir(settings) if not k.startswith('__') and not callable(getattr(settings, k))}
-                    settings_b64 = _ub.b64encode(ujson.dumps(settings_dict).encode()).decode()
-                    await _send_with_retry(f"TYPE:SETTINGS,UID:{settings.UNIT_ID},DATA:{settings_b64}".encode())
-
-                    await asyncio.sleep(random.uniform(0.5, 1.5))
-
-                    # SDATA packet - SAFE VERSION (never crashes the TX)
-                    try:
-                        sdata_dict = {k: v for k, v in getattr(sdata, '__dict__', {}).items() if not k.startswith('__') and not callable(v)}
-                        sdata_b64 = _ub.b64encode(ujson.dumps(sdata_dict).encode()).decode()
-                        await debug_print("Remote: full sdata snapshot sent", "REMOTE_NODE")
-                    except Exception as sd_e:
-                        await log_error(f"sdata snapshot failed (using minimal): {sd_e}")
-                        sdata_dict = {
-                            'loop_runtime': getattr(sdata, 'loop_runtime', 0),
-                            'script_runtime': getattr(sdata, 'script_runtime', 0),
-                            'cur_temp_c': getattr(sdata, 'cur_temp_c', 0),
-                            'cur_temp_f': getattr(sdata, 'cur_temp_f', 0),
-                            'cur_bar_pres': getattr(sdata, 'cur_bar_pres', 0),
-                            'cur_humid': getattr(sdata, 'cur_humid', 0),
-                            'lora_SigStr': getattr(sdata, 'lora_SigStr', 0),
-                            'lora_snr': getattr(sdata, 'lora_snr', 0),
-                        }
-                        sdata_b64 = _ub.b64encode(ujson.dumps(sdata_dict).encode()).decode()
-
-                    await _send_with_retry(f"TYPE:SDATA,UID:{settings.UNIT_ID},DATA:{sdata_b64}".encode())
-
-                    # CRITICAL: Arm RX right after last TX so we catch the ACK/CMD/OTA
-                    lora.recv(0, False, 0)
-                    await asyncio.sleep_ms(200)  # Increased delay for mode switch
-
-                    await debug_print("Remote: TX burst complete - armed RX, waiting for base response", "REMOTE_NODE")
-                    await display_message("Waiting ACK", 1)
-
-                    state = STATE_WAIT_RESPONSE
-                    start_wait = time.time()
-                    received_response = False
-                    next_delay = None
-
-                elif state == STATE_WAIT_RESPONSE:
-                    ev = lora._events()
-                    if ev & lora.RX_DONE:
-                        msg, err = lora.recv()
-                        try:
-                            rssi = lora.getRSSI()
-                            snr = lora.getSNR() if hasattr(lora, 'getSNR') else 0
-                            sdata.lora_SigStr = rssi
-                            sdata.lora_snr = snr
-                            await debug_print(f"Remote RX SigStr: {rssi} dBm, SNR: {snr} dB", "REMOTE_NODE")
-                        except Exception:
-                            pass
-                        if err == 0 and msg:
-                            msg_str = msg.rstrip(b'\x00').decode()
-                            await debug_print(f"Remote RX: {msg_str[:100]}...", "REMOTE_NODE")
-                            await display_message("RX OK", 0.8)
-
-                            if msg_str.startswith('ACK:'):
-                                await debug_print("✅ Remote successfully connected to base", "REMOTE_NODE")
-                                received_response = True
-                                parts = msg_str.split(':')
-                                if len(parts) >= 4 and parts[2] == 'NEXT':
-                                    try:
-                                        next_delay = int(parts[3])
-                                        await debug_print(f"Received next delay: {next_delay}s", "REMOTE_NODE")
-                                    except ValueError:
-                                        await log_error("Invalid next delay in ACK")
-                            elif msg_str.startswith('CMD:'):
-                                received_response = True
-                                cmd_parts = msg_str.split(':', 2)
-                                if len(cmd_parts) == 3 and (cmd_parts[1] == 'ALL' or cmd_parts[1] == settings.UNIT_ID):
-                                    command = cmd_parts[2]
-                                    if '(' in command and command.endswith(')'):
-                                        func_name, args_str = command.split('(', 1)
-                                        args = [a.strip() for a in args_str.rstrip(')').split(',')] if args_str else []
-                                        if func_name in command_handlers:
-                                            command_handlers[func_name](*args)
-                            elif msg_str.startswith('OTA:'):
-                                received_response = True
-                                try:
-                                    ota_json = msg_str[4:].strip()
-                                    ota_info = ujson.loads(ota_json)
-                                    handle_ota_chunk(ota_info)
-                                    await debug_print(f"Remote OTA chunk {ota_info.get('chunk_num',0)}/{ota_info.get('total_chunks',0)}", "REMOTE_NODE")
-                                    await display_message("OTA OK" if getattr(settings, 'last_chunk_ok', True) else "OTA ERR", 1)
-                                except Exception as oe:
-                                    await log_error(f"OTA handle error on remote: {oe}")
-                        else:
-                            if err != 0:
-                                await debug_print(f"Remote RX error: {err}", "WARN")
-
-                        lora.recv(0, False, 0)   # re-arm for more packets
-
-                    # Timeout handling
-                    if time.time() - start_wait > response_timeout:
-                        if received_response:
-                            await debug_print("Remote: check-in successful - scheduling next", "REMOTE_NODE")
-                            await display_message("Success", 1)
-                            failure_count = 0
-                            if next_delay is not None:
-                                sleep_time = next_delay
-                            else:
-                                jitter = random.randint(-120, 120)
-                                sleep_time = sync_rate + jitter
-                        else:
-                            await debug_print(f"Remote: no response after {response_timeout}s - retrying with backoff", "WARN")
-                            await display_message("No Resp", 1.5)
-                            failure_count += 1
-                            backoff = min(600, 60 * (2 ** failure_count) + random.randint(-60, 60))
-                            sleep_time = backoff
-                        state = STATE_IDLE
-                        await asyncio.sleep(max(10, sleep_time))  # ensure at least 10s
-                        gc.collect()
-
-            # ===================== BASE NODE =====================
-            elif settings.NODE_TYPE == 'base':
-                if state == STATE_IDLE:
-                    state = STATE_RECEIVING
-
-                if state == STATE_RECEIVING:
-                    ev = lora._events()
-                    if ev & lora.RX_DONE:
-                        msg, err = lora.recv()
-                        try:
-                            rssi = lora.getRSSI()
-                            snr = lora.getSNR() if hasattr(lora, 'getSNR') else 0
-                            sdata.lora_SigStr = rssi
-                            sdata.lora_snr = snr
-                            await debug_print(f"Base RX SigStr: {rssi} dBm, SNR: {snr} dB", "BASE_NODE")
-                        except Exception:
-                            pass
-                        if err == 0 and msg:
-                            msg_str = msg.rstrip(b'\x00').decode()
-                            await debug_print(f"Base received from remote: {msg_str[:120]}...", "BASE_NODE")
-                            await display_message("RX Remote", 1)
-
-                            remote_uid = None
-                            packet_type = 'UNKNOWN'
-                            parsed_data = None
-
-                            if msg_str.startswith('TS:'):
-                                packet_type = 'TS'
-                                parts = msg_str.split(',')
-                                remote_ts = parts[0].split(':', 1)[1].strip()
-                                remote_uid = remote_company = remote_site = remote_zone = remote_cluster = None
-                                remote_runtime = remote_script_runtime = temp_c = temp_f = bar = humid = None
-                                remote_machine_id = None
-                                for part in parts[1:]:
-                                    if ':' not in part:
-                                        continue
-                                    key, value = part.split(':', 1)
-                                    value = value.strip()
-                                    if key == 'UID': remote_uid = value
-                                    elif key == 'MACHINE_ID': remote_machine_id = value
-                                    elif key == 'COMPANY': remote_company = value
-                                    elif key == 'SITE': remote_site = value
-                                    elif key == 'ZONE': remote_zone = value
-                                    elif key == 'CLUSTER': remote_cluster = value
-                                    elif key == 'RUNTIME': remote_runtime = value
-                                    elif key == 'SCRIPT_RUNTIME': remote_script_runtime = value
-                                    elif key == 'TEMP_C': temp_c = value
-                                    elif key == 'TEMP_F': temp_f = value
-                                    elif key == 'BAR': bar = value
-                                    elif key == 'HUMID': humid = value
-                                parsed_data = {
-                                    'remote_ts': remote_ts, 'remote_company': remote_company, 'remote_site': remote_site,
-                                    'remote_zone': remote_zone, 'remote_cluster': remote_cluster, 'remote_runtime': remote_runtime,
-                                    'remote_script_runtime': remote_script_runtime, 'temp_c': temp_c, 'temp_f': temp_f,
-                                    'bar': bar, 'humid': humid, 'remote_machine_id': remote_machine_id
-                                }
-
-                            elif msg_str.startswith('TYPE:'):
-                                parts = msg_str.split(',')
-                                msg_type = None
-                                remote_uid = None
-                                data_b64 = None
-                                for p in parts:
-                                    if p.startswith('TYPE:'): msg_type = p[5:]
-                                    elif p.startswith('UID:'): remote_uid = p[4:]
-                                    elif p.startswith('DATA:'): data_b64 = p[5:]
-                                if msg_type in ('SETTINGS', 'SDATA') and remote_uid and data_b64:
-                                    packet_type = msg_type
-                                    try:
-                                        json_data = _ub.b64decode(data_b64).decode()
-                                        parsed_dict = ujson.loads(json_data)
-                                        parsed_data = parsed_dict
-                                    except Exception as e:
-                                        await log_error(f"Failed to parse {msg_type} for {remote_uid}: {e}")
-
-                            if remote_uid and packet_type != 'UNKNOWN':
-                                if remote_uid not in remote_states:
-                                    remote_states[remote_uid] = {'types': set(), 'last_rx': current_time, 'data': {}}
-                                remote_states[remote_uid]['types'].add(packet_type)
-                                remote_states[remote_uid]['data'][packet_type] = parsed_data
-                                remote_states[remote_uid]['last_rx'] = current_time
-
-                        lora.recv(0, False, 0)
-                        gc.collect()
-
-                    # Process completed bursts
-                    for uid in list(remote_states.keys()):
-                        st = remote_states[uid]
-                        if current_time - st['last_rx'] > burst_window:
-                            await debug_print(f"Processing burst for {uid}: types {st['types']}", "BASE_NODE")
-
-                            remote_machine_id = None
-
-                            if 'TS' in st['types']:
-                                data = st['data']['TS']
-                                remote_ts = data['remote_ts']
-                                remote_company = data['remote_company']
-                                remote_site = data['remote_site']
-                                remote_zone = data['remote_zone']
-                                remote_cluster = data['remote_cluster']
-                                remote_runtime = data['remote_runtime']
-                                remote_script_runtime = data['remote_script_runtime']
-                                temp_c = data['temp_c']
-                                temp_f = data['temp_f']
-                                bar = data['bar']
-                                humid = data['humid']
-                                remote_machine_id = data['remote_machine_id']
-
-                                if uid and remote_company is not None:
-                                    if not hasattr(settings, 'REMOTE_NODE_INFO'):
-                                        settings.REMOTE_NODE_INFO = {}
-                                    settings.REMOTE_NODE_INFO[uid] = {
-                                        'COMPANY': remote_company, 'SITE': remote_site,
-                                        'ZONE': remote_zone, 'CLUSTER': remote_cluster,
-                                        'MACHINE_ID': remote_machine_id
-                                    }
-                                    save_remote_node_info()
-
-                                if None in (uid, remote_runtime, remote_script_runtime, temp_c, temp_f, bar, humid):
-                                    await log_error(f"Missing fields from {uid}")
-                                else:
-                                    base_ts = time.time()
-                                    log_line = f"{base_ts},{uid},{remote_ts},{remote_runtime},{remote_script_runtime},{temp_c},{temp_f},{bar},{humid}\n"
-                                    await debug_print(f"Received telemetry from {uid}", "BASE_NODE")
-                                    async with file_lock:
-                                        with open(settings.LOG_FILE, 'a') as f:
-                                            f.write(log_line)
-                                    record_field_data()
-
-                                    try:
-                                        temp_f_val = float(temp_f)
-                                        bar_val = float(bar)
-                                        humid_val = float(humid)
-                                    except ValueError:
-                                        temp_f_val = bar_val = humid_val = 0.0
-
-                                    await findLowestTemp(temp_f_val)
-                                    await findHighestTemp(temp_f_val)
-                                    await findLowestBar(bar_val)
-                                    await findHighestBar(bar_val)
-                                    await findLowestHumid(humid_val)
-                                    await findHighestHumid(humid_val)
-
-                                    if temp_f_val < 80:
-                                        pending_commands[uid] = "toggle_relay(1,on,5)"
-
-                                if uid and remote_machine_id:
-                                    await proxy_register_for_remote(uid, remote_machine_id)
-
-                            if 'SETTINGS' in st['types']:
-                                settings_dict = st['data']['SETTINGS']
-                                stage_remote_files(uid, {'settings.py': ujson.dumps(settings_dict).encode()})
-
-                                remote_machine_id = settings.REMOTE_NODE_INFO.get(uid, {}).get('MACHINE_ID', None)
-                                if remote_machine_id is None:
-                                    await log_error(f"No MACHINE_ID for {uid} during settings proxy")
-                                else:
-                                    original_uid = settings.UNIT_ID
-                                    original_get = None
-                                    send_ok = False
-                                    try:
-                                        import utils as _u
-                                        if hasattr(_u, 'get_machine_id'):
-                                            original_get = _u.get_machine_id
-                                            def temp_get():
-                                                return str(remote_machine_id)
-                                            _u.get_machine_id = temp_get
-                                        settings.UNIT_ID = uid
-
-                                        for att in range(3):
-                                            try:
-                                                if asyncio.iscoroutinefunction(send_settings_to_wp):
-                                                    await send_settings_to_wp()
-                                                else:
-                                                    send_settings_to_wp()
-                                                send_ok = True
-                                                break
-                                            except Exception as se:
-                                                await log_error(f"Settings proxy attempt {att+1} fail for {uid}: {se}")
-                                                await asyncio.sleep(1.5 * (att + 1))
-                                    finally:
-                                        settings.UNIT_ID = original_uid
-                                        if original_get and hasattr(_u, 'get_machine_id'):
-                                            _u.get_machine_id = original_get
-                                    if send_ok:
-                                        await debug_print(f"Proxied settings for {uid} to Unit Connector", "BASE_NODE")
-                                        await display_message(f"Proxy {uid[:8]}", 1)
-                                    gc.collect()
-
-                            if 'SDATA' in st['types']:
-                                sdata_dict = st['data']['SDATA']
-                                stage_remote_field_data(uid, [sdata_dict])
-
-                                remote_machine_id = settings.REMOTE_NODE_INFO.get(uid, {}).get('MACHINE_ID', None)
-                                if remote_machine_id is None:
-                                    await log_error(f"No MACHINE_ID for {uid} during sdata proxy")
-                                else:
-                                    original_uid = settings.UNIT_ID
-                                    original_get = None
-                                    send_ok = False
-                                    try:
-                                        import utils as _u
-                                        if hasattr(_u, 'get_machine_id'):
-                                            original_get = _u.get_machine_id
-                                            def temp_get():
-                                                return str(remote_machine_id)
-                                            _u.get_machine_id = temp_get
-                                        settings.UNIT_ID = uid
-
-                                        for att in range(3):
-                                            try:
-                                                if asyncio.iscoroutinefunction(send_data_to_wp):
-                                                    await send_data_to_wp()
-                                                else:
-                                                    send_data_to_wp()
-                                                send_ok = True
-                                                break
-                                            except Exception as se:
-                                                await log_error(f"SDATA proxy attempt {att+1} fail for {uid}: {se}")
-                                                await asyncio.sleep(1.5 * (att + 1))
-                                    finally:
-                                        settings.UNIT_ID = original_uid
-                                        if original_get and hasattr(_u, 'get_machine_id'):
-                                            _u.get_machine_id = original_get
-                                    if send_ok:
-                                        await debug_print(f"Proxied sdata for {uid} to Unit Connector", "BASE_NODE")
-                                        await display_message(f"Proxy {uid[:8]}", 1)
-                                        ota_send_pending[uid] = True
-                                    gc.collect()
-
-                            # Calculate next delay and set expected
-                            next_delay = calculate_next_delay(uid)
-                            now = time.time()
-                            settings.REMOTE_NODE_INFO[uid]['next_expected'] = now + next_delay
-                            settings.REMOTE_NODE_INFO[uid]['missed_syncs'] = 0
+            data = await recv_with_timeout(1)
+            if data:
+                msg = data.decode()
+                if msg.startswith("PING:"):
+                    parts = msg[5:].split(',')
+                    if len(parts) == 4:
+                        unit_id, machine_id, name, password = parts
+                        if name == settings.LORA_NETWORK_NAME and password == settings.LORA_NETWORK_PASSWORD:
+                            busy = True
+                            ack = b"ACK:OK"
+                            await send_with_retry(ack)
+                            # Record
+                            settings.REMOTE_NODE_INFO[unit_id] = {'machine_id': machine_id, 'last_sync': time.time()}
                             save_remote_node_info()
 
-                            # Send responses
-                            try:
-                                ack_msg = f"ACK:{uid}:NEXT:{next_delay}"
-                                await _send_with_retry(ack_msg.encode())
-                                await debug_print(f"Sent ACK with next delay {next_delay}s to {uid}", "BASE_NODE")
-                                await display_message("ACK Sent", 0.5)
+                            # Receive data
+                            settings_bytes = await recv_chunked("SETTINGS")
+                            if not settings_bytes:
+                                busy = False
+                                continue
+                            settings_dict = ujson.loads(settings_bytes)
 
-                                if uid in pending_commands:
-                                    cmd = pending_commands.pop(uid)
-                                    cmd_msg = f"CMD:{uid}:{cmd}"
-                                    await _send_with_retry(cmd_msg.encode())
-                                    await debug_print(f"Sent CMD to {uid}: {cmd}", "BASE_NODE")
-                                    await display_message("CMD Sent", 0.5)
+                            sdata_bytes = await recv_chunked("SDATA")
+                            if not sdata_bytes:
+                                busy = False
+                                continue
+                            sdata_dict = ujson.loads(sdata_bytes)
 
-                                ota_pending = ota_send_pending.pop(uid, False)
-                                if ota_pending:
-                                    chunk = get_next_ota_chunk(uid)
-                                    if chunk:
-                                        ota_str = f"OTA:{ujson.dumps(chunk)}"
-                                        await _send_with_retry(ota_str.encode())
-                                        await debug_print(f"Sent OTA chunk {chunk['chunk_num']}/{chunk['total_chunks']} to {uid}", "BASE_NODE")
-                                        advance_ota_chunk(uid)
-                                        await display_message(f"OTA→{uid[:6]}", 0.5)
-                            except Exception as ack_e:
-                                await log_error(f"ACK/CMD/OTA send error to {uid}: {ack_e}")
+                            # Update log
+                            settings.REMOTE_NODE_INFO[unit_id]['unit_name'] = settings_dict.get('UNIT_Name', '')
+                            settings.REMOTE_NODE_INFO[unit_id]['firmware_version'] = settings_dict.get('FIRMWARE_VERSION', '')
+                            save_remote_node_info()
 
-                            del remote_states[uid]
-                            gc.collect()
+                            # Proxy to unit connector
+                            await proxy_register_for_remote(unit_id, machine_id, settings_dict['FIRMWARE_VERSION'], 'remote')
+                            await proxy_send_settings_for_remote(unit_id, settings_dict.get('UNIT_Name', ''), settings_dict)
+                            stage_remote_field_data(unit_id, sdata_dict)  # Assumes this handles sdata as field data
 
-                if int(current_time) % 30 == 0:
-                    await _poll_and_relay_commands(pending_commands)
+                            # Fetch updates
+                            new_settings = await proxy_fetch_settings_from_remote(unit_id, machine_id)
+                            commands = await proxy_poll_commands_for_remote(unit_id, machine_id)
+                            ota_jobs = await proxy_poll_ota_for_remote(unit_id, machine_id)
 
-            await asyncio.sleep(0.05)
-        except Exception as e:
-            await log_error(f"LoRa gateway loop error: {e}")
-            await display_message("LoRa Err", 2)
-            if settings.NODE_TYPE == 'remote':
-                state = STATE_IDLE   # force retry on remote
-            await asyncio.sleep(2)
-            gc.collect()
+                            # Fetch manifest if ota
+                            manifest = None
+                            files = {}
+                            if ota_jobs:
+                                manifest = await proxy_request_file_for_remote(unit_id, machine_id, 'manifest.json')
+                                for job in ota_jobs:
+                                    f_name = job  # assume job is file name
+                                    file_data = await proxy_request_file_for_remote(unit_id, machine_id, f_name)
+                                    if file_data:
+                                        files[f_name] = file_data
 
-async def _send_with_retry(data, retries=3):
-    for att in range(retries):
-        try:
-            lora.send(data)
-            await _wait_tx_done()
-            lora.recv(0, False, 0)  # re-arm RX after TX
-            return
-        except Exception as e:
-            await log_error(f"TX attempt {att+1} failed: {e}")
+                            # Send back
+                            if new_settings:
+                                await send_chunked(ujson.dumps(new_settings).encode(), "SETTINGS")
+
+                            for cmd in commands:
+                                cmd_msg = f"CMD:{cmd}".encode()
+                                await send_with_retry(cmd_msg)
+                                ack_cmd = await recv_with_timeout(10)
+                                if ack_cmd and ack_cmd.decode().startswith("CMD_OK:"):
+                                    cmd_id = ack_cmd.decode()[7:]
+                                    await proxy_confirm_command_for_remote(unit_id, machine_id, cmd_id)
+
+                            if manifest:
+                                await send_chunked(ujson.dumps(manifest).encode(), "MANIFEST")
+
+                            for f_name, f_data in files.items():
+                                await send_chunked(f_data, f"FILE:{f_name}")
+
+                            # Close
+                            next_sync = int(time.time() + settings.LORA_SYNC_RATE)
+                            close_msg = f"CLOSE:{next_sync}".encode()
+                            await send_with_retry(close_msg)
+                            ack_close = await recv_with_timeout(5)
+                            if ack_close and ack_close.decode() == "ACK:CLOSE":
+                                settings.REMOTE_NODE_INFO[unit_id]['lora_next_sync'] = next_sync
+                                save_remote_node_info()
+                            busy = False
+
+    elif settings.NODE_TYPE == 'remote':
+        next_sync = load_lora_next_sync()
+        if next_sync == 0:
+            next_sync = time.time() + random.randint(0, settings.LORA_SYNC_RATE)
+            save_lora_next_sync(next_sync)
+
+        while True:
+            if time.time() > next_sync:
+                connected = False
+                timeout = time.time() + 30
+                while time.time() < timeout and not connected:
+                    data = await recv_with_timeout(5)
+                    if data and data.decode().startswith(f"BROADCAST:{settings.LORA_NETWORK_NAME}"):
+                        ping_msg = f"PING:{settings.UNIT_ID},{get_machine_id()},{settings.LORA_NETWORK_NAME},{settings.LORA_NETWORK_PASSWORD}".encode()
+                        await send_with_retry(ping_msg)
+                        ack = await recv_with_timeout(10)
+                        if ack and ack.decode() == "ACK:OK":
+                            connected = True
+
+                            # Send data
+                            settings_dict = {k: getattr(settings, k) for k in dir(settings) if not k.startswith('__') and not callable(getattr(settings, k))}
+                            await send_chunked(ujson.dumps(settings_dict).encode(), "SETTINGS")
+
+                            sdata_dict = {k: getattr(sdata, k) for k in dir(sdata) if not k.startswith('__') and not callable(getattr(sdata, k))}
+                            await send_chunked(ujson.dumps(sdata_dict).encode(), "SDATA")
+
+                            # Receive updates
+                            while True:
+                                data = await recv_with_timeout(30)
+                                if not data:
+                                    break
+                                msg = data.decode()
+                                if msg.startswith("SETTINGS:"):
+                                    settings_json_bytes = await recv_chunked("SETTINGS")
+                                    if settings_json_bytes:
+                                        with open(settings.REMOTE_SETTINGS_STAGED_FILE, 'wb') as f:
+                                            f.write(settings_json_bytes)
+                                        await send_with_retry(b"ACK:SETTINGS")
+
+                                elif msg.startswith("CMD:"):
+                                    if await handle_received_command(msg[4:]):
+                                        cmd_id = ...  # parse id if needed
+                                        await send_with_retry(f"CMD_OK:{cmd_id}".encode())
+
+                                elif msg.startswith("MANIFEST:"):
+                                    manifest_bytes = await recv_chunked("MANIFEST")
+                                    if manifest_bytes:
+                                        with open('/logs/ota_manifest.json', 'wb') as f:
+                                            f.write(manifest_bytes)
+                                        await send_with_retry(b"ACK:MANIFEST")
+
+                                elif msg.startswith("FILE:"):
+                                    f_name = msg.split(':')[1]
+                                    file_bytes = await recv_chunked("FILE")
+                                    if file_bytes:
+                                        with open('/logs/' + f_name, 'wb') as f:
+                                            f.write(file_bytes)
+                                        await send_with_retry(f"ACK:FILE:{f_name}".encode())
+
+                                elif msg.startswith("CLOSE:"):
+                                    next_sync = int(msg[6:])
+                                    save_lora_next_sync(next_sync)
+                                    await send_with_retry(b"ACK:CLOSE")
+                                    # Apply OTA if manifest present
+                                    if os.stat('/logs/ota_manifest.json'):
+                                        from ota import apply_from_local
+                                        await apply_from_local()
+                                    break
+
             await asyncio.sleep(1)
-    await debug_print("TX failed after retries", "WARN")
-
-async def _wait_tx_done(timeout=10):
-    tx_start = time.time()
-    while time.time() - tx_start < timeout:
-        if lora._events() & lora.TX_DONE:
-            return True
-        await asyncio.sleep(0.01)
-    await log_error("TX timeout")
-    return False
-
-async def _poll_and_relay_commands(pending_commands):
-    if not poll_device_commands:
-        return
-    for remote_uid in list(getattr(settings, 'REMOTE_NODE_INFO', {}).keys()):
-        remote_machine_id = settings.REMOTE_NODE_INFO.get(remote_uid, {}).get('MACHINE_ID', None)
-        if remote_machine_id is None:
-            await log_error(f"No MACHINE_ID for {remote_uid} during command poll")
-            continue
-        try:
-            original = settings.UNIT_ID
-            original_get = None
-            try:
-                import utils as _u
-                if hasattr(_u, 'get_machine_id'):
-                    original_get = _u.get_machine_id
-                    def temp_get():
-                        return str(remote_machine_id)
-                    _u.get_machine_id = temp_get
-                settings.UNIT_ID = remote_uid
-                cmds = await poll_device_commands() if asyncio.iscoroutinefunction(poll_device_commands) else poll_device_commands()
-            finally:
-                settings.UNIT_ID = original
-                if original_get and hasattr(_u, 'get_machine_id'):
-                    _u.get_machine_id = original_get
-            for cmd in cmds:
-                pending_commands[remote_uid] = cmd
-                await debug_print(f"Queued CMD for {remote_uid}: {cmd}", "BASE_NODE")
-        except Exception:
-            pass
-    gc.collect()
-
-def calculate_next_delay(node_id):
-    sync_rate = getattr(settings, 'LORA_SYNC_RATE', 300)
-    sync_window = getattr(settings, 'LORA_NEXT_SYNC', 600)
-    stagger_seed = 0
-    for c in node_id:
-        stagger_seed = (stagger_seed * 31 + ord(c)) % sync_window
-    jitter = random.randint(-30, 30)  # small jitter to avoid exact collisions
-    delay = sync_rate + stagger_seed + jitter
-    return max(60, delay)  # ensure minimum delay
-
-# ===================== ORIGINAL FUNCTIONS (100% unchanged) =====================
-async def periodic_wp_sync():
-    if settings.NODE_TYPE != 'base':
-        return
-    while True:
-        await register_with_wp()
-        await send_settings_to_wp()
-        await fetch_settings_from_wp()
-        await send_data_to_wp()
-        jobs = await poll_ota_jobs()
-        for job in jobs:
-            await handle_ota_job(job)
-        await asyncio.sleep(300)
-
-async def heartbeat_ping_loop():
-    if settings.NODE_TYPE != 'base':
-        return
-    while True:
-        await heartbeat_ping()
-        await asyncio.sleep(60)
-
-async def check_suspend_remove():
-    if settings.NODE_TYPE != 'base':
-        return
-    from wprest import WORDPRESS_API_URL
-    if not WORDPRESS_API_URL:
-        return
-    try:
-        import settings
-        import urequests as requests
-        resp = requests.get(WORDPRESS_API_URL + f'/wp-json/tmon/v1/device/settings/{settings.UNIT_ID}')
-        if resp.status_code == 200:
-            settings_data = resp.json().get('settings', {})
-            if settings_data.get('suspended'):
-                await debug_print('Device is suspended by admin', 'WARN')
-                while True:
-                    await asyncio.sleep(60)
-    except Exception:
-        pass
-
-WORDPRESS_API_URL = getattr(settings, 'WORDPRESS_API_URL', None)
-WORDPRESS_API_KEY = getattr(settings, 'WORDPRESS_API_KEY', None)
-
-async def send_settings_to_wp():
-    pass
-async def fetch_settings_from_wp():
-    pass
-async def send_file_to_wp(filepath):
-    pass
-async def request_file_from_wp(filename):
-    pass
-
-async def check_missed_syncs():
-    if settings.NODE_TYPE != 'base':
-        return
-    while True:
-        now = time.time()
-        for node_id, info in settings.REMOTE_NODE_INFO.items():
-            if 'next_expected' in info and now > info['next_expected'] + getattr(settings, 'LORA_NEXT_SYNC', 100) * 2:
-                info['missed_syncs'] = info.get('missed_syncs', 0) + 1
-                await debug_print(f"Missed sync from {node_id}", "WARN")
-                if info['missed_syncs'] > 3:
-                    await debug_print(f"Excessive missed syncs from {node_id}", "WARN")
-        save_remote_node_info()
-        await asyncio.sleep(300)
-
-async def handle_ota_job(job):
-    if settings.NODE_TYPE != 'base':
-        return
-    if 'targets' in job and job['type'] == 'firmware':
-        filename = job['file']
-        await request_file_from_wp(filename)
-        file_size = os.stat(filename)[6]
-        total_chunks = (file_size // settings.LORA_CHUNK_SIZE) + 1
-        file_checksum = simple_checksum(filename)
-        targets = job['targets'] if job['targets'] != 'all' else settings.REMOTE_NODE_INFO.keys()
-        for node_id in targets:
-            if node_id in settings.REMOTE_NODE_INFO:
-                settings.REMOTE_NODE_INFO[node_id]['ota'] = {
-                    'file': filename,
-                    'total_chunks': total_chunks,
-                    'current_chunk': 0,
-                    'file_checksum': file_checksum
-                }
-        save_remote_node_info()
-
-def get_next_ota_chunk(node_id):
-    if 'ota' not in settings.REMOTE_NODE_INFO.get(node_id, {}):
-        return None
-    ota = settings.REMOTE_NODE_INFO[node_id]['ota']
-    chunk_num = ota['current_chunk']
-    with open(ota['file'], 'rb') as f:
-        f.seek(chunk_num * settings.LORA_CHUNK_SIZE)
-        data = f.read(settings.LORA_CHUNK_SIZE)
-    if not data:
-        return None
-    chunk_checksum = sum(data) % 65536
-    return {
-        'file': ota['file'],
-        'chunk_num': chunk_num,
-        'data': _ub.b64encode(data).decode(),
-        'chunk_checksum': chunk_checksum,
-        'total_chunks': ota['total_chunks'],
-        'file_checksum': ota['file_checksum']
-    }
-
-def advance_ota_chunk(node_id):
-    if 'ota' in settings.REMOTE_NODE_INFO.get(node_id, {}):
-        ota = settings.REMOTE_NODE_INFO[node_id]['ota']
-        ota['current_chunk'] += 1
-        if ota['current_chunk'] >= ota['total_chunks']:
-            del settings.REMOTE_NODE_INFO[node_id]['ota']
-        save_remote_node_info()
-
-def handle_ota_chunk(ota_info):
-    data = _ub.b64decode(ota_info['data'])
-    if sum(data) % 65536 != ota_info['chunk_checksum']:
-        settings.last_chunk_ok = False
-        return
-    mode = 'wb' if ota_info['chunk_num'] == 0 else 'ab'
-    with open(settings.OTA_TEMP_FILE, mode) as f:
-        f.write(data)
-    settings.ota_in_progress = True
-    settings.last_chunk_ok = True
-    if ota_info['chunk_num'] + 1 == ota_info['total_chunks']:
-        if simple_checksum(settings.OTA_TEMP_FILE) == ota_info['file_checksum']:
-            os.rename(settings.OTA_TEMP_FILE, ota_info['file'])
-            machine.reset()
-        else:
-            os.remove(settings.OTA_TEMP_FILE)
-            settings.ota_in_progress = False
-
-async def safe_loop(coro, context):
-    while True:
-        try:
-            await coro()
-        except Exception as e:
-            await log_error(f"{context} crashed: {str(e)}")
-            await asyncio.sleep(10)
-
-async def main_loop():
-    asyncio.create_task(safe_loop(periodic_wp_sync, 'periodic_wp_sync'))
-    asyncio.create_task(safe_loop(heartbeat_ping_loop, 'heartbeat_ping_loop'))
-    asyncio.create_task(safe_loop(check_suspend_remove, 'check_suspend_remove'))
-    asyncio.create_task(safe_loop(check_missed_syncs, 'missed_syncs'))
-    while True:
-        await asyncio.sleep(60)
-
-async def ai_health_monitor():
-    while True:
-        if TMON_AI.error_count > 3:
-            await TMON_AI.recover_system()
-        await asyncio.sleep(60)

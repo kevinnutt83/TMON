@@ -90,7 +90,7 @@ def _auth_headers(mode=None):
     # default: return headers w/o auth
     return headers
 
-async def register_with_wp():
+async def register_with_wp(unit_id=None, machine_id=None, firmware_version=None, node_type=None):
     """Register/check-in device with the configured WordPress/TMON Admin hub (best-effort).
     Tries multiple known admin endpoints to work around differing hub API routes.
     """
@@ -108,12 +108,15 @@ async def register_with_wp():
         if not base:
             await debug_print('wprest: no Admin hub URL configured', 'WARN')
             return False
+        u = unit_id if unit_id is not None else getattr(settings, 'UNIT_ID', '')
+        m = machine_id if machine_id is not None else get_machine_id()
+        f = firmware_version if firmware_version is not None else getattr(settings, 'FIRMWARE_VERSION', '')
+        n = node_type if node_type is not None else getattr(settings, 'NODE_TYPE', '')
         payload = {
-            'unit_id': getattr(settings, 'UNIT_ID', '') or '',
-            'unit_name': getattr(settings, 'UNIT_Name', '') or '',
-            'machine_id': get_machine_id() or '',
-            'firmware_version': getattr(settings, 'FIRMWARE_VERSION', '') or '',
-            'node_type': getattr(settings, 'NODE_TYPE', '') or '',
+            'unit_id': u,
+            'machine_id': m,
+            'firmware_version': f,
+            'node_type': n,
         }
         # Candidate register endpoints (order tuned for common server implementations)
         candidates = []
@@ -237,7 +240,7 @@ async def send_data_to_wp():
         await debug_print(f'wprest: send_data_to_wp exc {e}', 'ERROR')
         return False
 
-async def send_settings_to_wp():
+async def send_settings_to_wp(unit_id=None, unit_name=None, settings_dict=None):
     """POST a snapshot of persistent settings to WP (best-effort).
        Tries multiple endpoint paths and auth modes (auto/basic/hub/read/none).
        On repeated failure, append payload to backlog for later retry.
@@ -256,17 +259,16 @@ async def send_settings_to_wp():
             await debug_print('wprest: no WP url for settings', 'WARN')
             return False
 
+        u = unit_id if unit_id is not None else getattr(settings, 'UNIT_ID', '')
+        un = unit_name if unit_name is not None else getattr(settings, 'UNIT_Name', '')
+        if settings_dict is None:
+            settings_dict = {k: getattr(settings, k) for k in dir(settings) if not k.startswith('__') and not callable(getattr(settings, k))}
+
         payload = {
-            'unit_id': getattr(settings, 'UNIT_ID', ''),
-            'unit_name': getattr(settings, 'UNIT_Name', ''),
-            'settings': {}
+            'unit_id': u,
+            'unit_name': un,
+            'settings': settings_dict
         }
-        for k in dir(settings):
-            if not k.startswith('__') and k.isupper():
-                try:
-                    payload['settings'][k] = getattr(settings, k)
-                except Exception:
-                    pass
 
         # Candidate endpoint variants
         candidate_paths = []
@@ -317,22 +319,13 @@ async def send_settings_to_wp():
                     await debug_print(f'wprest: send_settings try {p} auth={mode} -> {code} ({body[:200]})', 'HTTP')
                     last_response = (code, body, mode, p)
                     if code in (200, 201):
-                        await debug_print(f'wprest: send_settings succeeded via {p} auth={mode}', 'INFO')
-                        try:
-                            from oled import display_message
-                            await display_message("Settings Sent", 2)
-                        except Exception:
-                            pass
+                        await debug_print(f'wprest: send_settings ok via {p} auth={mode}', 'INFO')
                         return True
                 except Exception as e:
-                    await debug_print(f'wprest: send_settings {p} auth={mode} exc {e}', 'ERROR')
-        # If all failed, append to backlog for retry
-        try:
-            append_to_backlog(payload)
-            await debug_print('wprest: send_settings failed all; backlogged', 'WARN')
-        except Exception:
-            pass
-        await debug_print(f'wprest: send_settings failed last {last_response}', 'ERROR')
+                    await debug_print(f'wprest: send_settings {p} auth={mode} exc: {e}', 'ERROR')
+        # On failure, backlog payload
+        append_to_backlog(payload)
+        await debug_print('wprest: send_settings failed all attempts; backlogged', 'WARN')
         return False
     except Exception as e:
         await debug_print(f'wprest: send_settings exc {e}', 'ERROR')
