@@ -254,7 +254,7 @@ async def connectLora():
         stagger_seed = 0
         for c in uid:
             stagger_seed = (stagger_seed * 31 + ord(c)) % 1000000
-        initial_stagger = stagger_seed % 600  # Increased to 0-599s
+        initial_stagger = stagger_seed % 600  # 0-599s
         await debug_print(f"Remote deterministic boot stagger {initial_stagger}s based on UID", "REMOTE_NODE")
         await asyncio.sleep(initial_stagger)
 
@@ -269,11 +269,11 @@ async def connectLora():
 
     if settings.NODE_TYPE == 'remote':
         sync_rate = getattr(settings, 'LORA_SYNC_RATE', 300)
-        response_timeout = 120
+        response_timeout = 180  # Increased for better reliability
     else:
         sync_rate = 10
         response_timeout = 25
-        burst_window = 30
+        burst_window = 15  # Reduced to send ACK sooner
 
     while True:
         try:
@@ -327,7 +327,7 @@ async def connectLora():
 
                     # CRITICAL: Arm RX right after last TX so we catch the ACK/CMD/OTA
                     lora.recv(0, False, 0)
-                    await asyncio.sleep_ms(80)   # give radio time to switch
+                    await asyncio.sleep_ms(200)  # Increased delay for mode switch
 
                     await debug_print("Remote: TX burst complete - armed RX, waiting for base response", "REMOTE_NODE")
                     await display_message("Waiting ACK", 1)
@@ -384,6 +384,9 @@ async def connectLora():
                                     await display_message("OTA OK" if getattr(settings, 'last_chunk_ok', True) else "OTA ERR", 1)
                                 except Exception as oe:
                                     await log_error(f"OTA handle error on remote: {oe}")
+                        else:
+                            if err != 0:
+                                await debug_print(f"Remote RX error: {err}", "WARN")
 
                         lora.recv(0, False, 0)   # re-arm for more packets
 
@@ -692,16 +695,16 @@ async def _poll_and_relay_commands(pending_commands):
     gc.collect()
 
 def calculate_next_delay(node_id):
-    sync_window = 600  # Increased for better spread and reduced collisions
+    sync_window = getattr(settings, 'LORA_NEXT_SYNC', 600)  # Restored configurable with increased default
     sync_rate = getattr(settings, 'LORA_SYNC_RATE', 300)
-    num_nodes = len(settings.REMOTE_NODE_INFO)
+    nodes = sorted(settings.REMOTE_NODE_INFO.keys())
+    num_nodes = len(nodes)
     if num_nodes == 0:
         return sync_rate
-    # Use better hash for pseudo-random but consistent slot index
-    hash_val = 0
-    for c in node_id:
-        hash_val = (hash_val * 31 + ord(c)) % 1000000
-    slot_index = hash_val % num_nodes
+    try:
+        slot_index = nodes.index(node_id)
+    except ValueError:
+        slot_index = random.randint(0, num_nodes - 1)
     slot_size = sync_window // num_nodes if num_nodes > 0 else sync_window
     stagger = slot_index * slot_size
     jitter = random.randint(-slot_size // 2, slot_size // 2) if slot_size > 0 else 0
