@@ -1,4 +1,4 @@
-# TMON Version 2.00.5i - LoRa (FULL BULLETPROOF GATEWAY + TRUE MULTI-REMOTE + ACK + SNR + CMD + OTA)
+# TMON v2.00.1y - LoRa (FULL BULLETPROOF GATEWAY + TRUE MULTI-REMOTE + ACK + SNR + CMD + OTA)
 
 import ujson
 import os
@@ -47,11 +47,37 @@ except Exception:
     register_with_wp = send_data_to_wp = send_settings_to_wp = fetch_settings_from_wp = None
     send_file_to_wp = request_file_from_wp = heartbeat_ping = poll_ota_jobs = poll_device_commands = None
 
+# Add for security
+import uhashlib
+try:
+    import hmac
+except ImportError:
+    def hmac_sha256(key, msg):
+        BLOCK_SIZE = 64
+        if len(key) > BLOCK_SIZE:
+            key = uhashlib.sha256(key).digest()
+        key += b'\x00' * (BLOCK_SIZE - len(key))
+        opad = bytes((x ^ 0x5C) for x in key)
+        ipad = bytes((x ^ 0x36) for x in key)
+        inner = uhashlib.sha256(ipad + msg).digest()
+        return uhashlib.sha256(opad + inner).digest()
+else:
+    def hmac_sha256(key, msg):
+        return hmac.new(key, msg, uhashlib.sha256).digest()
+
+from itertools import cycle
+def xor_bytes(a, b):
+    return bytes(x ^ y for x, y in zip(a, cycle(b)))
+
 file_lock = asyncio.Lock()
 pin_lock = asyncio.Lock()
 lora = None
 last_lora_error_ts = 0
 proxy_last_ts = {}
+
+tx_counter = 0
+rx_counter = 0
+remote_counters = {}
 
 async def log_error(error_msg):
     global last_lora_error_ts
@@ -130,9 +156,9 @@ async def hard_reset_lora():
 
 async def init_lora():
     global lora
-    await debug_print('init_lora: starting with -2 fix', 'LORA')
+    await debug_print('Init LoRa: Beginning LoRa Module Initialization', 'LORA')
     await display_message("LoRa Init...", 1)
-    for attempt in range(5):
+    for attempt in range(10):
         try:
             await hard_reset_lora()
             await free_pins()
@@ -164,7 +190,7 @@ async def init_lora():
         except Exception as e:
             await debug_print(f"init attempt {attempt+1} exception: {e}", "WARN")
         await asyncio.sleep(0.8)
-    await debug_print("LoRa init FAILED after 5 attempts", "FATAL")
+    await debug_print("LoRa init FAILED after 10 attempts", "FATAL")
     await display_message("LoRa FAIL", 3)
     await free_pins()
     lora = None
@@ -189,6 +215,46 @@ def save_remote_node_info():
     try:
         with open(REMOTE_NODE_INFO_FILE, 'w') as f:
             ujson.dump(settings.REMOTE_NODE_INFO, f)
+    except Exception:
+        pass
+
+def load_counters():
+    global tx_counter, rx_counter, remote_counters
+    if not getattr(settings, 'LORA_HMAC_ENABLED', False):
+        return
+    try:
+        with open(settings.LORA_HMAC_COUNTER_FILE, 'r') as f:
+            d = ujson.load(f)
+        if settings.NODE_TYPE == 'remote':
+            tx_counter = d.get('tx', random.randint(0, 100000))
+            rx_counter = d.get('rx', 0)
+        else:
+            remote_counters = d.get('remotes', {})
+            for u in remote_counters:
+                remote_counters[u] = {'tx': remote_counters[u].get('tx', 0), 'rx': remote_counters[u].get('rx', 0)}
+    except Exception:
+        if settings.NODE_TYPE == 'remote':
+            tx_counter = random.randint(0, 100000)
+            rx_counter = 0
+        else:
+            remote_counters = {}
+
+load_counters()
+
+def save_counters():
+    if not getattr(settings, 'LORA_HMAC_ENABLED', False):
+        return
+    try:
+        d = {}
+        if settings.NODE_TYPE == 'remote':
+            d['tx'] = tx_counter
+            d['rx'] = rx_counter
+        else:
+            d['remotes'] = {}
+            for u, c in remote_counters.items():
+                d['remotes'][u] = {'tx': c['tx'], 'rx': c['rx']}
+        with open(settings.LORA_HMAC_COUNTER_FILE, 'w') as f:
+            ujson.dump(d, f)
     except Exception:
         pass
 
@@ -241,7 +307,7 @@ async def connectLora():
     global lora
     if not settings.ENABLE_LORA:
         return False
-    await debug_print("Starting bulletproof LoRa Gateway v2.00.5i...", "LORA")
+    await debug_print(f"Enabling LoRa Module for TMON - {settings.FIRMWARE_VERSION}...", "LORA")
     await display_message("LoRa Starting...", 1)
 
     async with pin_lock:
@@ -292,6 +358,7 @@ async def connectLora():
 
                     # TS packet
                     data_str = f"TS:{ts},UID:{settings.UNIT_ID},MACHINE_ID:{get_machine_id()},COMPANY:{getattr(settings,'COMPANY','')},SITE:{getattr(settings,'SITE','')},ZONE:{getattr(settings,'ZONE','')},CLUSTER:{getattr(settings,'CLUSTER','')},RUNTIME:{sdata.loop_runtime},SCRIPT_RUNTIME:{sdata.script_runtime},TEMP_C:{sdata.cur_temp_c},TEMP_F:{sdata.cur_temp_f},BAR:{sdata.cur_bar_pres},HUMID:{sdata.cur_humid}"
+                    data_str = await _secure_message(data_str)
                     await _send_with_retry(data_str.encode())
 
                     # Small delay between packets to reduce collision risk
@@ -300,7 +367,9 @@ async def connectLora():
                     # SETTINGS packet
                     settings_dict = {k: getattr(settings, k) for k in dir(settings) if not k.startswith('__') and not callable(getattr(settings, k))}
                     settings_b64 = _ub.b64encode(ujson.dumps(settings_dict).encode()).decode()
-                    await _send_with_retry(f"TYPE:SETTINGS,UID:{settings.UNIT_ID},DATA:{settings_b64}".encode())
+                    data_str = f"TYPE:SETTINGS,UID:{settings.UNIT_ID},DATA:{settings_b64}"
+                    data_str = await _secure_message(data_str)
+                    await _send_with_retry(data_str.encode())
 
                     await asyncio.sleep(random.uniform(0.5, 1.5))
 
@@ -323,7 +392,9 @@ async def connectLora():
                         }
                         sdata_b64 = _ub.b64encode(ujson.dumps(sdata_dict).encode()).decode()
 
-                    await _send_with_retry(f"TYPE:SDATA,UID:{settings.UNIT_ID},DATA:{sdata_b64}".encode())
+                    data_str = f"TYPE:SDATA,UID:{settings.UNIT_ID},DATA:{sdata_b64}"
+                    data_str = await _secure_message(data_str)
+                    await _send_with_retry(data_str.encode())
 
                     # CRITICAL: Arm RX right after last TX so we catch the ACK/CMD/OTA
                     lora.recv(0, False, 0)
@@ -351,6 +422,11 @@ async def connectLora():
                             pass
                         if err == 0 and msg:
                             msg_str = msg.rstrip(b'\x00').decode()
+                            msg_str = await _unsecure_message(msg_str)
+                            if msg_str is None:
+                                await debug_print("Remote RX: invalid secure message", "WARN")
+                                lora.recv(0, False, 0)
+                                continue
                             await debug_print(f"Remote RX: {msg_str[:100]}...", "REMOTE_NODE")
                             await display_message("RX OK", 0.8)
 
@@ -396,11 +472,11 @@ async def connectLora():
                             await debug_print("Remote: check-in successful - scheduling next", "REMOTE_NODE")
                             await display_message("Success", 1)
                             failure_count = 0
-                            if next_delay is not None:
-                                sleep_time = next_delay
-                            else:
+                            if next_delay is None:
                                 jitter = random.randint(-120, 120)
                                 sleep_time = sync_rate + jitter
+                            else:
+                                sleep_time = next_delay
                         else:
                             await debug_print(f"Remote: no response after {response_timeout}s - retrying with backoff", "WARN")
                             await display_message("No Resp", 1.5)
@@ -430,6 +506,12 @@ async def connectLora():
                             pass
                         if err == 0 and msg:
                             msg_str = msg.rstrip(b'\x00').decode()
+                            msg_str = await _unsecure_message(msg_str)
+                            if msg_str is None:
+                                await debug_print("Base RX: invalid secure message", "WARN")
+                                lora.recv(0, False, 0)
+                                gc.collect()
+                                continue
                             await debug_print(f"Base received from remote: {msg_str[:120]}...", "BASE_NODE")
                             await display_message("RX Remote", 1)
 
@@ -651,6 +733,7 @@ async def connectLora():
                             # Send responses
                             try:
                                 ack_msg = f"ACK:{uid}:NEXT:{next_delay}"
+                                ack_msg = await _secure_message(ack_msg, remote_uid=uid)
                                 await _send_with_retry(ack_msg.encode())
                                 await debug_print(f"Sent ACK with next delay {next_delay}s to {uid}", "BASE_NODE")
                                 await display_message("ACK Sent", 0.5)
@@ -658,6 +741,7 @@ async def connectLora():
                                 if uid in pending_commands:
                                     cmd = pending_commands.pop(uid)
                                     cmd_msg = f"CMD:{uid}:{cmd}"
+                                    cmd_msg = await _secure_message(cmd_msg, remote_uid=uid)
                                     await _send_with_retry(cmd_msg.encode())
                                     await debug_print(f"Sent CMD to {uid}: {cmd}", "BASE_NODE")
                                     await display_message("CMD Sent", 0.5)
@@ -667,6 +751,7 @@ async def connectLora():
                                     chunk = get_next_ota_chunk(uid)
                                     if chunk:
                                         ota_str = f"OTA:{ujson.dumps(chunk)}"
+                                        ota_str = await _secure_message(ota_str, remote_uid=uid)
                                         await _send_with_retry(ota_str.encode())
                                         await debug_print(f"Sent OTA chunk {chunk['chunk_num']}/{chunk['total_chunks']} to {uid}", "BASE_NODE")
                                         advance_ota_chunk(uid)
@@ -689,19 +774,144 @@ async def connectLora():
             await asyncio.sleep(2)
             gc.collect()
 
-async def _send_with_retry(data, retries=3):
+async def _secure_message(msg_str, remote_uid=None):
+    if not settings.LORA_HMAC_ENABLED:
+        return msg_str
+    if settings.NODE_TYPE == 'remote':
+        counter = tx_counter + 1
+    else:
+        if remote_uid is None:
+            return msg_str
+        if remote_uid not in remote_counters:
+            remote_counters[remote_uid] = {'tx': 0, 'rx': 0}
+        counter = remote_counters[remote_uid]['tx'] + 1
+    counter_str = str(counter)
+    counter_bytes = counter.to_bytes(4, 'big')
+
+    if settings.LORA_ENCRYPT_ENABLED:
+        msg_bytes = msg_str.encode()
+        stream_key = settings.LORA_ENCRYPT_SECRET.encode() + counter_bytes
+        stream_hash = uhashlib.sha256(stream_key).digest()
+        encrypted = xor_bytes(msg_bytes, stream_hash)
+        enc_b64 = _ub.b64encode(encrypted).decode()
+        to_hmac = encrypted + counter_bytes
+        hmac_val = hmac_sha256(settings.LORA_HMAC_SECRET.encode(), to_hmac)
+        hmac_hex = _ub.hexlify(hmac_val).decode()[:settings.LORA_HMAC_TRUNCATE]
+        secure_msg = f"ENC:{enc_b64},CNT:{counter},HMAC:{hmac_hex}"
+    else:
+        to_hmac = msg_str.encode() + counter_str.encode()
+        hmac_val = hmac_sha256(settings.LORA_HMAC_SECRET.encode(), to_hmac)
+        hmac_hex = _ub.hexlify(hmac_val).decode()[:settings.LORA_HMAC_TRUNCATE]
+        secure_msg = msg_str + f",CNT:{counter},HMAC:{hmac_hex}"
+
+    # Update counter
+    if settings.NODE_TYPE == 'remote':
+        global tx_counter
+        tx_counter = counter
+    else:
+        remote_counters[remote_uid]['tx'] = counter
+    save_counters()
+    return secure_msg
+
+async def _unsecure_message(msg_str):
+    if not settings.LORA_HMAC_ENABLED:
+        return msg_str
+    parts = msg_str.split(',')
+    cnt_str = None
+    hmac_received = None
+    enc_b64 = None
+    base_idx = len(msg_str)
+    for i in range(len(parts)-1, -1, -1):
+        p = parts[i]
+        if p.startswith('HMAC:'):
+            hmac_received = p[5:]
+            base_idx = msg_str.rfind(',HMAC:')
+            msg_str = msg_str[:base_idx]
+            break
+        if p.startswith('CNT:'):
+            cnt_str = p[4:]
+        if p.startswith('ENC:'):
+            enc_b64 = p[4:]
+    if hmac_received is None and settings.LORA_HMAC_REJECT_UNSIGNED:
+        return None
+    if cnt_str is None:
+        return None
+    try:
+        cnt = int(cnt_str)
+    except:
+        return None
+    counter_bytes = cnt.to_bytes(4, 'big')
+    if enc_b64:
+        encrypted = _ub.b64decode(enc_b64)
+        to_hmac = encrypted + counter_bytes
+    else:
+        to_hmac = msg_str.encode() + cnt_str.encode()
+    computed_hex = _ub.hexlify(hmac_sha256(settings.LORA_HMAC_SECRET.encode(), to_hmac)).decode()[:settings.LORA_HMAC_TRUNCATE]
+    if not computed_hex == hmac_received:
+        return None
+    # Replay check
+    if settings.LORA_HMAC_REPLAY_PROTECT:
+        if settings.NODE_TYPE == 'remote':
+            last_rx = rx_counter
+        else:
+            # Extract UID
+            uid = None
+            for part in msg_str.split(','):
+                if part.startswith('UID:'):
+                    uid = part[4:]
+                    break
+            if uid is None:
+                return None
+            if uid not in remote_counters:
+                remote_counters[uid] = {'tx': 0, 'rx': 0}
+            last_rx = remote_counters[uid]['rx']
+        if cnt <= last_rx:
+            return None
+    # Decrypt
+    if enc_b64:
+        stream_key = settings.LORA_ENCRYPT_SECRET.encode() + counter_bytes
+        stream_hash = uhashlib.sha256(stream_key).digest()
+        encrypted = _ub.b64decode(enc_b64)
+        msg_bytes = xor_bytes(encrypted, stream_hash)
+        try:
+            msg_str = msg_bytes.decode()
+        except:
+            return None
+    # Update rx counter
+    if settings.NODE_TYPE == 'remote':
+        global rx_counter
+        rx_counter = cnt
+    else:
+        remote_counters[uid]['rx'] = cnt
+    save_counters()
+    return msg_str
+
+async def _send_with_retry(data, retries=5):
+    max_cad_attempts = 5
     for att in range(retries):
+        # CAD check
+        for cad_att in range(max_cad_attempts):
+            if lora.cad(settings.CAD_SYMBOLS):
+                backoff = random.uniform(0.5, settings.LORA_CAD_BACKOFF_S)
+                await asyncio.sleep(backoff)
+            else:
+                break
+        else:
+            await log_error("Channel busy after CAD attempts")
+            await asyncio.sleep(1)
+            continue
         try:
             lora.send(data)
             await _wait_tx_done()
             lora.recv(0, False, 0)  # re-arm RX after TX
+            save_counters()  # after successful send
             return
         except Exception as e:
             await log_error(f"TX attempt {att+1} failed: {e}")
-            await asyncio.sleep(1)
+            await asyncio.sleep(1 * (2 ** att))
     await debug_print("TX failed after retries", "WARN")
 
-async def _wait_tx_done(timeout=10):
+async def _wait_tx_done(timeout=15):
     tx_start = time.time()
     while time.time() - tx_start < timeout:
         if lora._events() & lora.TX_DONE:
@@ -749,7 +959,7 @@ def calculate_next_delay(node_id):
         stagger_seed = (stagger_seed * 31 + ord(c)) % sync_window
     jitter = random.randint(-30, 30)  # small jitter to avoid exact collisions
     delay = sync_rate + stagger_seed + jitter
-    return max(60, delay)  # ensure minimum delay
+    return max(60, delay)
 
 # ===================== ORIGINAL FUNCTIONS (100% unchanged) =====================
 async def periodic_wp_sync():
