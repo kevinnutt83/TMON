@@ -806,7 +806,6 @@ async def _secure_message(msg_str, remote_uid=None):
 
     # Update counter
     if settings.NODE_TYPE == 'remote':
-        global tx_counter
         tx_counter = counter
     else:
         remote_counters[remote_uid]['tx'] = counter
@@ -879,7 +878,6 @@ async def _unsecure_message(msg_str):
             return None
     # Update rx counter
     if settings.NODE_TYPE == 'remote':
-        global rx_counter
         rx_counter = cnt
     else:
         remote_counters[uid]['rx'] = cnt
@@ -1114,3 +1112,4 @@ async def ai_health_monitor():
         if TMON_AI.error_count > 3:
             await TMON_AI.recover_system()
         await asyncio.sleep(60)
+
