@@ -369,7 +369,7 @@ async def connectLora():
 
                     # SETTINGS packet
                     settings_dict = {k: getattr(settings, k) for k in dir(settings) if not k.startswith('__') and not callable(getattr(settings, k))}
-                    settings_b64 = _ub.b64encode(ujson.dumps(settings_dict).encode()).decode()
+                    settings_b64 = _ub.b2a_base64(ujson.dumps(settings_dict).encode()).rstrip(b'\n').decode()
                     data_str = f"TYPE:SETTINGS,UID:{settings.UNIT_ID},DATA:{settings_b64}"
                     data_str = await _secure_message(data_str)
                     await _send_with_retry(data_str.encode())
@@ -379,7 +379,7 @@ async def connectLora():
                     # SDATA packet - SAFE VERSION (never crashes the TX)
                     try:
                         sdata_dict = {k: v for k, v in getattr(sdata, '__dict__', {}).items() if not k.startswith('__') and not callable(v)}
-                        sdata_b64 = _ub.b64encode(ujson.dumps(sdata_dict).encode()).decode()
+                        sdata_b64 = _ub.b2a_base64(ujson.dumps(sdata_dict).encode()).rstrip(b'\n').decode()
                         await debug_print("Remote: full sdata snapshot sent", "REMOTE_NODE")
                     except Exception as sd_e:
                         await log_error(f"sdata snapshot failed (using minimal): {sd_e}")
@@ -393,7 +393,7 @@ async def connectLora():
                             'lora_SigStr': getattr(sdata, 'lora_SigStr', 0),
                             'lora_snr': getattr(sdata, 'lora_snr', 0),
                         }
-                        sdata_b64 = _ub.b64encode(ujson.dumps(sdata_dict).encode()).decode()
+                        sdata_b64 = _ub.b2a_base64(ujson.dumps(sdata_dict).encode()).rstrip(b'\n').decode()
 
                     data_str = f"TYPE:SDATA,UID:{settings.UNIT_ID},DATA:{sdata_b64}"
                     data_str = await _secure_message(data_str)
@@ -565,7 +565,7 @@ async def connectLora():
                                 if msg_type in ('SETTINGS', 'SDATA') and remote_uid and data_b64:
                                     packet_type = msg_type
                                     try:
-                                        json_data = _ub.b64decode(data_b64).decode()
+                                        json_data = _ub.a2b_base64(data_b64.encode()).decode()
                                         parsed_dict = ujson.loads(json_data)
                                         parsed_data = parsed_dict
                                     except Exception as e:
@@ -798,7 +798,7 @@ async def _secure_message(msg_str, remote_uid=None):
         stream_key = getattr(settings, 'LORA_ENCRYPT_SECRET', b'').encode() + counter_bytes
         stream_hash = uhashlib.sha256(stream_key).digest()
         encrypted = xor_bytes(msg_bytes, stream_hash)
-        enc_b64 = _ub.b64encode(encrypted).decode()
+        enc_b64 = _ub.b2a_base64(encrypted).rstrip(b'\n').decode()
         to_hmac = encrypted + counter_bytes
         hmac_val = hmac_sha256(getattr(settings, 'LORA_HMAC_SECRET', b'').encode(), to_hmac)
         hmac_hex = _ub.hexlify(hmac_val).decode()[:getattr(settings, 'LORA_HMAC_TRUNCATE', 16)]
@@ -847,7 +847,7 @@ async def _unsecure_message(msg_str):
         return None
     counter_bytes = cnt.to_bytes(4, 'big')
     if enc_b64:
-        encrypted = _ub.b64decode(enc_b64)
+        encrypted = _ub.a2b_base64(enc_b64.encode())
         to_hmac = encrypted + counter_bytes
     else:
         to_hmac = msg_str.encode() + cnt_str.encode()
@@ -876,7 +876,7 @@ async def _unsecure_message(msg_str):
     if enc_b64:
         stream_key = getattr(settings, 'LORA_ENCRYPT_SECRET', b'').encode() + counter_bytes
         stream_hash = uhashlib.sha256(stream_key).digest()
-        encrypted = _ub.b64decode(enc_b64)
+        encrypted = _ub.a2b_base64(enc_b64.encode())
         msg_bytes = xor_bytes(encrypted, stream_hash)
         try:
             msg_str = msg_bytes.decode()
@@ -1068,7 +1068,7 @@ def get_next_ota_chunk(node_id):
     return {
         'file': ota['file'],
         'chunk_num': chunk_num,
-        'data': _ub.b64encode(data).decode(),
+        'data': _ub.b2a_base64(data).rstrip(b'\n').decode(),
         'chunk_checksum': chunk_checksum,
         'total_chunks': ota['total_chunks'],
         'file_checksum': ota['file_checksum']
@@ -1083,7 +1083,7 @@ def advance_ota_chunk(node_id):
         save_remote_node_info()
 
 def handle_ota_chunk(ota_info):
-    data = _ub.b64decode(ota_info['data'])
+    data = _ub.a2b_base64(ota_info['data'].encode())
     if sum(data) % 65536 != ota_info['chunk_checksum']:
         settings.last_chunk_ok = False
         return
