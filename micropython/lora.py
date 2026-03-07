@@ -86,9 +86,10 @@ async def log_error(error_msg):
         return
     last_lora_error_ts = ts
     log_line = f"{ts}: {error_msg}\n"
+    error_log_file = getattr(settings, 'ERROR_LOG_FILE', '/errors.log')
     try:
         async with file_lock:
-            with open(settings.ERROR_LOG_FILE, 'a') as f:
+            with open(error_log_file, 'a') as f:
                 f.write(log_line)
     except Exception:
         await debug_print(f"[FATAL] Failed to log error: {error_msg}", "ERROR")
@@ -137,15 +138,15 @@ async def hard_reset_lora():
         except Exception:
             pass
     try:
-        for pin_num in (settings.CLK_PIN, settings.MOSI_PIN, settings.MISO_PIN,
-                        settings.CS_PIN, settings.IRQ_PIN, settings.RST_PIN,
-                        settings.BUSY_PIN, settings.I2C_A_SCL_PIN, settings.I2C_A_SDA_PIN):
+        for pin_num in (getattr(settings, 'CLK_PIN', 0), getattr(settings, 'MOSI_PIN', 0), getattr(settings, 'MISO_PIN', 0),
+                        getattr(settings, 'CS_PIN', 0), getattr(settings, 'IRQ_PIN', 0), getattr(settings, 'RST_PIN', 0),
+                        getattr(settings, 'BUSY_PIN', 0), getattr(settings, 'I2C_A_SCL_PIN', 0), getattr(settings, 'I2C_A_SDA_PIN', 0)):
             p = machine.Pin(pin_num, machine.Pin.IN)
             p.value(0)
     except Exception:
         pass
     try:
-        rst = machine.Pin(settings.RST_PIN, machine.Pin.OUT)
+        rst = machine.Pin(getattr(settings, 'RST_PIN', 0), machine.Pin.OUT)
         rst.value(0)
         await asyncio.sleep_ms(50)
         rst.value(1)
@@ -164,16 +165,16 @@ async def init_lora():
             await free_pins()
             await asyncio.sleep(0.5)
             lora = SX1262(
-                settings.SPI_BUS, settings.CLK_PIN, settings.MOSI_PIN, settings.MISO_PIN,
-                settings.CS_PIN, settings.IRQ_PIN, settings.RST_PIN, settings.BUSY_PIN
+                getattr(settings, 'SPI_BUS', 0), getattr(settings, 'CLK_PIN', 0), getattr(settings, 'MOSI_PIN', 0), getattr(settings, 'MISO_PIN', 0),
+                getattr(settings, 'CS_PIN', 0), getattr(settings, 'IRQ_PIN', 0), getattr(settings, 'RST_PIN', 0), getattr(settings, 'BUSY_PIN', 0)
             )
             status = lora.begin(
-                freq=settings.FREQ, bw=settings.BW, sf=settings.SF, cr=settings.CR,
-                syncWord=settings.SYNC_WORD, power=settings.POWER,
-                currentLimit=settings.CURRENT_LIMIT, preambleLength=settings.PREAMBLE_LEN,
-                implicit=False, implicitLen=0xFF, crcOn=settings.CRC_ON,
+                freq=getattr(settings, 'FREQ', 915.0), bw=getattr(settings, 'BW', 125), sf=getattr(settings, 'SF', 9), cr=getattr(settings, 'CR', 5),
+                syncWord=getattr(settings, 'SYNC_WORD', 0xF4), power=getattr(settings, 'POWER', 14),
+                currentLimit=getattr(settings, 'CURRENT_LIMIT', 60.0), preambleLength=getattr(settings, 'PREAMBLE_LEN', 8),
+                implicit=False, implicitLen=0xFF, crcOn=getattr(settings, 'CRC_ON', True),
                 txIq=False, rxIq=False,
-                tcxoVoltage=settings.TCXO_VOLTAGE, useRegulatorLDO=settings.USE_LDO,
+                tcxoVoltage=getattr(settings, 'TCXO_VOLTAGE', 1.7), useRegulatorLDO=getattr(settings, 'USE_LDO', False),
                 blocking=False
             )
             await debug_print(f'begin() attempt {attempt+1}: status {status}', 'LORA')
@@ -200,7 +201,7 @@ command_handlers = {
     "toggle_relay": toggle_relay,
 }
 
-REMOTE_NODE_INFO_FILE = settings.LOG_DIR + '/remote_node_info.json'
+REMOTE_NODE_INFO_FILE = getattr(settings, 'LOG_DIR', '/logs') + '/remote_node_info.json'
 
 def load_remote_node_info():
     try:
@@ -222,8 +223,9 @@ def load_counters():
     global tx_counter, rx_counter, remote_counters
     if not getattr(settings, 'LORA_HMAC_ENABLED', False):
         return
+    counter_file = getattr(settings, 'LORA_HMAC_COUNTER_FILE', '/lora_counters.json')
     try:
-        with open(settings.LORA_HMAC_COUNTER_FILE, 'r') as f:
+        with open(counter_file, 'r') as f:
             d = ujson.load(f)
         if settings.NODE_TYPE == 'remote':
             tx_counter = d.get('tx', random.randint(0, 100000))
@@ -244,6 +246,7 @@ load_counters()
 def save_counters():
     if not getattr(settings, 'LORA_HMAC_ENABLED', False):
         return
+    counter_file = getattr(settings, 'LORA_HMAC_COUNTER_FILE', '/lora_counters.json')
     try:
         d = {}
         if settings.NODE_TYPE == 'remote':
@@ -253,7 +256,7 @@ def save_counters():
             d['remotes'] = {}
             for u, c in remote_counters.items():
                 d['remotes'][u] = {'tx': c['tx'], 'rx': c['rx']}
-        with open(settings.LORA_HMAC_COUNTER_FILE, 'w') as f:
+        with open(counter_file, 'w') as f:
             ujson.dump(d, f)
     except Exception:
         pass
@@ -305,9 +308,9 @@ async def proxy_register_for_remote(remote_uid, remote_machine_id):
 
 async def connectLora():
     global lora
-    if not settings.ENABLE_LORA:
+    if not getattr(settings, 'ENABLE_LORA', True):
         return False
-    await debug_print(f"Enabling LoRa Module for TMON - {settings.FIRMWARE_VERSION}...", "LORA")
+    await debug_print(f"Enabling LoRa Module for TMON - {getattr(settings, 'FIRMWARE_VERSION', 'unknown')}...", "LORA")
     await display_message("LoRa Starting...", 1)
 
     async with pin_lock:
@@ -617,8 +620,9 @@ async def connectLora():
                                     base_ts = time.time()
                                     log_line = f"{base_ts},{uid},{remote_ts},{remote_runtime},{remote_script_runtime},{temp_c},{temp_f},{bar},{humid}\n"
                                     await debug_print(f"Received telemetry from {uid}", "BASE_NODE")
+                                    log_file = getattr(settings, 'LOG_FILE', '/logs/data.log')
                                     async with file_lock:
-                                        with open(settings.LOG_FILE, 'a') as f:
+                                        with open(log_file, 'a') as f:
                                             f.write(log_line)
                                     record_field_data()
 
@@ -775,7 +779,8 @@ async def connectLora():
             gc.collect()
 
 async def _secure_message(msg_str, remote_uid=None):
-    if not settings.LORA_HMAC_ENABLED:
+    global tx_counter
+    if not getattr(settings, 'LORA_HMAC_ENABLED', False):
         return msg_str
     if settings.NODE_TYPE == 'remote':
         counter = tx_counter + 1
@@ -788,20 +793,20 @@ async def _secure_message(msg_str, remote_uid=None):
     counter_str = str(counter)
     counter_bytes = counter.to_bytes(4, 'big')
 
-    if settings.LORA_ENCRYPT_ENABLED:
+    if getattr(settings, 'LORA_ENCRYPT_ENABLED', False):
         msg_bytes = msg_str.encode()
-        stream_key = settings.LORA_ENCRYPT_SECRET.encode() + counter_bytes
+        stream_key = getattr(settings, 'LORA_ENCRYPT_SECRET', b'').encode() + counter_bytes
         stream_hash = uhashlib.sha256(stream_key).digest()
         encrypted = xor_bytes(msg_bytes, stream_hash)
         enc_b64 = _ub.b64encode(encrypted).decode()
         to_hmac = encrypted + counter_bytes
-        hmac_val = hmac_sha256(settings.LORA_HMAC_SECRET.encode(), to_hmac)
-        hmac_hex = _ub.hexlify(hmac_val).decode()[:settings.LORA_HMAC_TRUNCATE]
+        hmac_val = hmac_sha256(getattr(settings, 'LORA_HMAC_SECRET', b'').encode(), to_hmac)
+        hmac_hex = _ub.hexlify(hmac_val).decode()[:getattr(settings, 'LORA_HMAC_TRUNCATE', 16)]
         secure_msg = f"ENC:{enc_b64},CNT:{counter},HMAC:{hmac_hex}"
     else:
         to_hmac = msg_str.encode() + counter_str.encode()
-        hmac_val = hmac_sha256(settings.LORA_HMAC_SECRET.encode(), to_hmac)
-        hmac_hex = _ub.hexlify(hmac_val).decode()[:settings.LORA_HMAC_TRUNCATE]
+        hmac_val = hmac_sha256(getattr(settings, 'LORA_HMAC_SECRET', b'').encode(), to_hmac)
+        hmac_hex = _ub.hexlify(hmac_val).decode()[:getattr(settings, 'LORA_HMAC_TRUNCATE', 16)]
         secure_msg = msg_str + f",CNT:{counter},HMAC:{hmac_hex}"
 
     # Update counter
@@ -813,7 +818,8 @@ async def _secure_message(msg_str, remote_uid=None):
     return secure_msg
 
 async def _unsecure_message(msg_str):
-    if not settings.LORA_HMAC_ENABLED:
+    global rx_counter
+    if not getattr(settings, 'LORA_HMAC_ENABLED', False):
         return msg_str
     parts = msg_str.split(',')
     cnt_str = None
@@ -831,7 +837,7 @@ async def _unsecure_message(msg_str):
             cnt_str = p[4:]
         if p.startswith('ENC:'):
             enc_b64 = p[4:]
-    if hmac_received is None and settings.LORA_HMAC_REJECT_UNSIGNED:
+    if hmac_received is None and getattr(settings, 'LORA_HMAC_REJECT_UNSIGNED', True):
         return None
     if cnt_str is None:
         return None
@@ -845,11 +851,11 @@ async def _unsecure_message(msg_str):
         to_hmac = encrypted + counter_bytes
     else:
         to_hmac = msg_str.encode() + cnt_str.encode()
-    computed_hex = _ub.hexlify(hmac_sha256(settings.LORA_HMAC_SECRET.encode(), to_hmac)).decode()[:settings.LORA_HMAC_TRUNCATE]
+    computed_hex = _ub.hexlify(hmac_sha256(getattr(settings, 'LORA_HMAC_SECRET', b'').encode(), to_hmac)).decode()[:getattr(settings, 'LORA_HMAC_TRUNCATE', 16)]
     if not computed_hex == hmac_received:
         return None
     # Replay check
-    if settings.LORA_HMAC_REPLAY_PROTECT:
+    if getattr(settings, 'LORA_HMAC_REPLAY_PROTECT', True):
         if settings.NODE_TYPE == 'remote':
             last_rx = rx_counter
         else:
@@ -868,7 +874,7 @@ async def _unsecure_message(msg_str):
             return None
     # Decrypt
     if enc_b64:
-        stream_key = settings.LORA_ENCRYPT_SECRET.encode() + counter_bytes
+        stream_key = getattr(settings, 'LORA_ENCRYPT_SECRET', b'').encode() + counter_bytes
         stream_hash = uhashlib.sha256(stream_key).digest()
         encrypted = _ub.b64decode(enc_b64)
         msg_bytes = xor_bytes(encrypted, stream_hash)
@@ -886,11 +892,13 @@ async def _unsecure_message(msg_str):
 
 async def _send_with_retry(data, retries=5):
     max_cad_attempts = 5
+    cad_symbols = getattr(settings, 'CAD_SYMBOLS', 3)
+    cad_backoff_s = getattr(settings, 'LORA_CAD_BACKOFF_S', 3.0)
     for att in range(retries):
         # CAD check
         for cad_att in range(max_cad_attempts):
-            if lora.cad(settings.CAD_SYMBOLS):
-                backoff = random.uniform(0.5, settings.LORA_CAD_BACKOFF_S)
+            if lora.cad(cad_symbols):
+                backoff = random.uniform(0.5, cad_backoff_s)
                 await asyncio.sleep(backoff)
             else:
                 break
@@ -1032,7 +1040,7 @@ async def handle_ota_job(job):
         filename = job['file']
         await request_file_from_wp(filename)
         file_size = os.stat(filename)[6]
-        total_chunks = (file_size // settings.LORA_CHUNK_SIZE) + 1
+        total_chunks = (file_size // getattr(settings, 'LORA_CHUNK_SIZE', 200)) + 1
         file_checksum = simple_checksum(filename)
         targets = job['targets'] if job['targets'] != 'all' else settings.REMOTE_NODE_INFO.keys()
         for node_id in targets:
@@ -1050,9 +1058,10 @@ def get_next_ota_chunk(node_id):
         return None
     ota = settings.REMOTE_NODE_INFO[node_id]['ota']
     chunk_num = ota['current_chunk']
+    chunk_size = getattr(settings, 'LORA_CHUNK_SIZE', 200)
     with open(ota['file'], 'rb') as f:
-        f.seek(chunk_num * settings.LORA_CHUNK_SIZE)
-        data = f.read(settings.LORA_CHUNK_SIZE)
+        f.seek(chunk_num * chunk_size)
+        data = f.read(chunk_size)
     if not data:
         return None
     chunk_checksum = sum(data) % 65536
@@ -1079,16 +1088,17 @@ def handle_ota_chunk(ota_info):
         settings.last_chunk_ok = False
         return
     mode = 'wb' if ota_info['chunk_num'] == 0 else 'ab'
-    with open(settings.OTA_TEMP_FILE, mode) as f:
+    ota_temp_file = getattr(settings, 'OTA_TEMP_FILE', '/ota_temp')
+    with open(ota_temp_file, mode) as f:
         f.write(data)
     settings.ota_in_progress = True
     settings.last_chunk_ok = True
     if ota_info['chunk_num'] + 1 == ota_info['total_chunks']:
-        if simple_checksum(settings.OTA_TEMP_FILE) == ota_info['file_checksum']:
-            os.rename(settings.OTA_TEMP_FILE, ota_info['file'])
+        if simple_checksum(ota_temp_file) == ota_info['file_checksum']:
+            os.rename(ota_temp_file, ota_info['file'])
             machine.reset()
         else:
-            os.remove(settings.OTA_TEMP_FILE)
+            os.remove(ota_temp_file)
             settings.ota_in_progress = False
 
 async def safe_loop(coro, context):
@@ -1112,4 +1122,3 @@ async def ai_health_monitor():
         if TMON_AI.error_count > 3:
             await TMON_AI.recover_system()
         await asyncio.sleep(60)
-
