@@ -320,7 +320,7 @@ async def _render_loop(page=0):
                         connected = bool(_safe_attr(sdata, 'LORA_CONNECTED', False)) or recent
 
                         lrssi = _safe_attr(sdata, 'lora_SigStr', None)
-
+                        
                         if connected:
                             # Connected: show bars when RSSI known, otherwise show empty bars but no "Search"
                             try:

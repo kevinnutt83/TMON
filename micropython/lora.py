@@ -1,4 +1,4 @@
-# TMON v2.00.1y - LoRa (FULL BULLETPROOF GATEWAY + TRUE MULTI-REMOTE + ACK + SNR + CMD + OTA)
+# TMON v2.00.2 - LoRa (FULL BULLETPROOF GATEWAY + TRUE MULTI-REMOTE + ACK + SNR + CMD + OTA)
 
 import ujson
 import os
@@ -403,7 +403,8 @@ async def connectLora():
                     await _send_with_retry(data_str.encode())
 
                     # CRITICAL: Arm RX right after last TX so we catch the ACK/CMD/OTA
-                    lora.recv(0, False, 0)
+                    if lora is not None:
+                        lora.recv(0, False, 0)
                     await asyncio.sleep_ms(200)  # Increased delay for mode switch
 
                     await debug_print("Remote: TX burst complete - armed RX, waiting for base response", "REMOTE_NODE")
@@ -415,8 +416,12 @@ async def connectLora():
                     next_delay = None
 
                 elif state == STATE_WAIT_RESPONSE:
+                    if lora is None:
+                        continue
                     ev = lora._events()
                     if ev & lora.RX_DONE:
+                        if lora is None:
+                            continue
                         msg, err = lora.recv()
                         try:
                             rssi = lora.getRSSI()
@@ -431,7 +436,8 @@ async def connectLora():
                             msg_str = await _unsecure_message(msg_str)
                             if msg_str is None:
                                 await debug_print("Remote RX: invalid secure message", "WARN")
-                                lora.recv(0, False, 0)
+                                if lora is not None:
+                                    lora.recv(0, False, 0)
                                 continue
                             await debug_print(f"Remote RX: {msg_str[:100]}...", "REMOTE_NODE")
                             await display_message("RX OK", 0.8)
@@ -470,7 +476,8 @@ async def connectLora():
                             if err != 0:
                                 await debug_print(f"Remote RX error: {err}", "WARN")
 
-                        lora.recv(0, False, 0)   # re-arm for more packets
+                        if lora is not None:
+                            lora.recv(0, False, 0)   # re-arm for more packets
 
                     # Timeout handling
                     if time.time() - start_wait > response_timeout:
@@ -501,8 +508,12 @@ async def connectLora():
                     state = STATE_RECEIVING
 
                 if state == STATE_RECEIVING:
+                    if lora is None:
+                        continue
                     ev = lora._events()
                     if ev & lora.RX_DONE:
+                        if lora is None:
+                            continue
                         msg, err = lora.recv()
                         try:
                             rssi = lora.getRSSI()
@@ -517,7 +528,8 @@ async def connectLora():
                             msg_str = await _unsecure_message(msg_str)
                             if msg_str is None:
                                 await debug_print("Base RX: invalid secure message", "WARN")
-                                lora.recv(0, False, 0)
+                                if lora is not None:
+                                    lora.recv(0, False, 0)
                                 gc.collect()
                                 continue
                             await debug_print(f"Base received from remote: {msg_str[:120]}...", "BASE_NODE")
@@ -583,7 +595,8 @@ async def connectLora():
                                 remote_states[remote_uid]['data'][packet_type] = parsed_data
                                 remote_states[remote_uid]['last_rx'] = current_time
 
-                        lora.recv(0, False, 0)
+                        if lora is not None:
+                            lora.recv(0, False, 0)
                         gc.collect()
 
                     # Process completed bursts
@@ -897,6 +910,7 @@ async def _unsecure_message(msg_str):
     return msg_str
 
 async def _send_with_retry(data, retries=5):
+    global lora
     if lora is None:
         return
     max_cad_attempts = 5
@@ -918,24 +932,46 @@ async def _send_with_retry(data, retries=5):
                 await log_error("Channel busy after CAD attempts")
                 await asyncio.sleep(1)
                 continue
+        if lora is None:
+            await log_error("LoRa is None after CAD")
+            return
         try:
+            if lora is None:
+                raise RuntimeError("LoRa None before send")
             lora.send(data)
-            await _wait_tx_done()
-            lora.recv(0, False, 0)  # re-arm RX after TX
+            if not await _wait_tx_done():
+                raise RuntimeError("TX done wait failed")
+            if lora is not None:
+                lora.recv(0, False, 0)  # re-arm RX after TX
             save_counters()  # after successful send
             return
         except Exception as e:
             await log_error(f"TX attempt {att+1} failed: {e}")
+            if "NoneType" in str(e):
+                lora = None
+                await hard_reset_lora()
+                await log_error("Force reinit LoRa due to NoneType error")
+                return  # Stop retries on critical error
             await asyncio.sleep(1 * (2 ** att))
     await debug_print("TX failed after retries", "WARN")
 
-async def _wait_tx_done(timeout=15):
+async def _wait_tx_done(timeout=30):  # Increased timeout
+    global lora
     if lora is None:
         return False
     tx_start = time.time()
     while time.time() - tx_start < timeout:
-        if lora._events() & lora.TX_DONE:
-            return True
+        try:
+            if lora is None:
+                return False
+            if lora._events() & lora.TX_DONE:
+                return True
+        except AttributeError as ae:
+            if 'NoneType' in str(ae):
+                lora = None
+                await hard_reset_lora()
+                await log_error("Force reinit LoRa due to NoneType in _events")
+                return False
         await asyncio.sleep(0.01)
     await log_error("TX timeout")
     return False
@@ -1071,17 +1107,16 @@ def get_next_ota_chunk(node_id):
     if 'ota' not in settings.REMOTE_NODE_INFO.get(node_id, {}):
         return None
     ota = settings.REMOTE_NODE_INFO[node_id]['ota']
-    chunk_num = ota['current_chunk']
     chunk_size = getattr(settings, 'LORA_CHUNK_SIZE', 200)
     with open(ota['file'], 'rb') as f:
-        f.seek(chunk_num * chunk_size)
+        f.seek(ota['current_chunk'] * chunk_size)
         data = f.read(chunk_size)
     if not data:
         return None
     chunk_checksum = sum(data) % 65536
     return {
         'file': ota['file'],
-        'chunk_num': chunk_num,
+        'chunk_num': ota['current_chunk'],
         'data': _ub.b2a_base64(data).rstrip(b'\n').decode(),
         'chunk_checksum': chunk_checksum,
         'total_chunks': ota['total_chunks'],
