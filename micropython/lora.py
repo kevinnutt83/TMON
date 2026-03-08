@@ -354,6 +354,9 @@ async def connectLora():
 
             # ===================== REMOTE NODE (bulletproof TX + RX arm) =====================
             if settings.NODE_TYPE == 'remote':
+                if lora is None:
+                    state = STATE_IDLE
+                    continue
                 if state == STATE_IDLE:
                     await debug_print("Remote: starting full check-in (TS + SETTINGS + SDATA)", "REMOTE_NODE")
                     await display_message("TX Data...", 0.8)
@@ -492,6 +495,8 @@ async def connectLora():
 
             # ===================== BASE NODE =====================
             elif settings.NODE_TYPE == 'base':
+                if lora is None:
+                    continue
                 if state == STATE_IDLE:
                     state = STATE_RECEIVING
 
@@ -773,6 +778,7 @@ async def connectLora():
         except Exception as e:
             await log_error(f"LoRa gateway loop error: {e}")
             await display_message("LoRa Err", 2)
+            lora = None  # Force re-initialization on next iteration
             if settings.NODE_TYPE == 'remote':
                 state = STATE_IDLE   # force retry on remote
             await asyncio.sleep(2)
@@ -924,6 +930,8 @@ async def _send_with_retry(data, retries=5):
     await debug_print("TX failed after retries", "WARN")
 
 async def _wait_tx_done(timeout=15):
+    if lora is None:
+        return False
     tx_start = time.time()
     while time.time() - tx_start < timeout:
         if lora._events() & lora.TX_DONE:

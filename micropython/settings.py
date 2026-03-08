@@ -39,7 +39,7 @@ FIELD_DATA_GZIP = True
 UNIT_ID = "None"
 UNIT_Name = "No Device Name"
 NODE_TYPE = 'base'
-FIRMWARE_VERSION = "v2.00.2b"
+FIRMWARE_VERSION = "v2.00.2c"
  
 WORDPRESS_API_URL = ""
 WORDPRESS_USERNAME = "agadmin"
