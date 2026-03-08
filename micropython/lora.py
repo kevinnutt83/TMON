@@ -891,21 +891,27 @@ async def _unsecure_message(msg_str):
     return msg_str
 
 async def _send_with_retry(data, retries=5):
+    if lora is None:
+        return
     max_cad_attempts = 5
     cad_symbols = getattr(settings, 'CAD_SYMBOLS', 3)
     cad_backoff_s = getattr(settings, 'LORA_CAD_BACKOFF_S', 3.0)
     for att in range(retries):
-        # CAD check
-        for cad_att in range(max_cad_attempts):
-            if lora.cad(cad_symbols):
-                backoff = random.uniform(0.5, cad_backoff_s)
-                await asyncio.sleep(backoff)
-            else:
-                break
-        else:
-            await log_error("Channel busy after CAD attempts")
-            await asyncio.sleep(1)
-            continue
+        # CAD check if supported
+        if hasattr(lora, 'cad'):
+            channel_busy = False
+            for cad_att in range(max_cad_attempts):
+                if lora.cad(cad_symbols):
+                    backoff = random.uniform(0.5, cad_backoff_s)
+                    await asyncio.sleep(backoff)
+                    channel_busy = True
+                else:
+                    channel_busy = False
+                    break
+            if channel_busy:
+                await log_error("Channel busy after CAD attempts")
+                await asyncio.sleep(1)
+                continue
         try:
             lora.send(data)
             await _wait_tx_done()
