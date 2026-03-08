@@ -368,8 +368,8 @@ async def connectLora():
                     await display_message("TX Data...", 0.8)
                     ts = time.time()
 
-                    # TS packet
-                    data_str = f"TS:{ts},UID:{settings.UNIT_ID},MACHINE_ID:{get_machine_id()},COMPANY:{getattr(settings,'COMPANY','')},SITE:{getattr(settings,'SITE','')},ZONE:{getattr(settings,'ZONE','')},CLUSTER:{getattr(settings,'CLUSTER','')},RUNTIME:{sdata.loop_runtime},SCRIPT_RUNTIME:{sdata.script_runtime},TEMP_C:{sdata.cur_temp_c},TEMP_F:{sdata.cur_temp_f},BAR:{sdata.cur_bar_pres},HUMID:{sdata.cur_humid}"
+                    # TS packet with shortened keys
+                    data_str = f"T:{ts},U:{settings.UNIT_ID},M:{get_machine_id()},C:{getattr(settings,'COMPANY','')},S:{getattr(settings,'SITE','')},Z:{getattr(settings,'ZONE','')},K:{getattr(settings,'CLUSTER','')},R:{sdata.loop_runtime},SR:{sdata.script_runtime},TC:{sdata.cur_temp_c},TF:{sdata.cur_temp_f},B:{sdata.cur_bar_pres},H:{sdata.cur_humid}"
                     data_str = await _secure_message(data_str)
                     await _send_with_retry(data_str.encode())
 
@@ -562,7 +562,7 @@ async def connectLora():
                             packet_type = 'UNKNOWN'
                             parsed_data = None
 
-                            if msg_str.startswith('TS:'):
+                            if msg_str.startswith('T:'):
                                 packet_type = 'TS'
                                 parts = msg_str.split(',')
                                 remote_ts = parts[0].split(':', 1)[1].strip()
@@ -574,18 +574,18 @@ async def connectLora():
                                         continue
                                     key, value = part.split(':', 1)
                                     value = value.strip()
-                                    if key == 'UID': remote_uid = value
-                                    elif key == 'MACHINE_ID': remote_machine_id = value
-                                    elif key == 'COMPANY': remote_company = value
-                                    elif key == 'SITE': remote_site = value
-                                    elif key == 'ZONE': remote_zone = value
-                                    elif key == 'CLUSTER': remote_cluster = value
-                                    elif key == 'RUNTIME': remote_runtime = value
-                                    elif key == 'SCRIPT_RUNTIME': remote_script_runtime = value
-                                    elif key == 'TEMP_C': temp_c = value
-                                    elif key == 'TEMP_F': temp_f = value
-                                    elif key == 'BAR': bar = value
-                                    elif key == 'HUMID': humid = value
+                                    if key == 'U': remote_uid = value
+                                    elif key == 'M': remote_machine_id = value
+                                    elif key == 'C': remote_company = value
+                                    elif key == 'S': remote_site = value
+                                    elif key == 'Z': remote_zone = value
+                                    elif key == 'K': remote_cluster = value
+                                    elif key == 'R': remote_runtime = value
+                                    elif key == 'SR': remote_script_runtime = value
+                                    elif key == 'TC': temp_c = value
+                                    elif key == 'TF': temp_f = value
+                                    elif key == 'B': bar = value
+                                    elif key == 'H': humid = value
                                 parsed_data = {
                                     'remote_ts': remote_ts, 'remote_company': remote_company, 'remote_site': remote_site,
                                     'remote_zone': remote_zone, 'remote_cluster': remote_cluster, 'remote_runtime': remote_runtime,
@@ -939,6 +939,9 @@ async def _unsecure_message(msg_str):
             for part in msg_str.split(','):
                 if part.startswith('UID:'):
                     uid = part[4:]
+                    break
+                if part.startswith('U:'):  # for TS
+                    uid = part[2:]
                     break
             if uid is None:
                 return None
