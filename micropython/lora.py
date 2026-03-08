@@ -343,11 +343,11 @@ async def connectLora():
 
     if settings.NODE_TYPE == 'remote':
         sync_rate = getattr(settings, 'LORA_SYNC_RATE', 300)
-        response_timeout = 180  # Increased for better reliability
+        response_timeout = 300  # Increased for better reliability
     else:
         sync_rate = 10
         response_timeout = 25
-        burst_window = 15  # Reduced to send ACK sooner
+        burst_window = 30  # Increased to handle potential chunking delays
 
     while True:
         try:
@@ -376,12 +376,11 @@ async def connectLora():
                     # Small delay between packets to reduce collision risk
                     await asyncio.sleep(random.uniform(1.0, 2.0))
 
-                    # SETTINGS packet
+                    # SETTINGS packet with chunking
                     settings_dict = {k: getattr(settings, k) for k in dir(settings) if not k.startswith('__') and not callable(getattr(settings, k))}
-                    settings_b64 = _ub.b2a_base64(ujson.dumps(settings_dict).encode()).rstrip(b'\n').decode()
-                    data_str = f"TYPE:SETTINGS,UID:{settings.UNIT_ID},DATA:{settings_b64}"
-                    data_str = await _secure_message(data_str)
-                    await _send_with_retry(data_str.encode())
+                    settings_json = ujson.dumps(settings_dict).encode()
+                    settings_b64 = _ub.b2a_base64(settings_json).rstrip(b'\n').decode()
+                    await _send_chunked("SETTINGS", settings_b64)
 
                     await asyncio.sleep(random.uniform(1.0, 2.0))
 
@@ -404,9 +403,7 @@ async def connectLora():
                         }
                         sdata_b64 = _ub.b2a_base64(ujson.dumps(sdata_dict).encode()).rstrip(b'\n').decode()
 
-                    data_str = f"TYPE:SDATA,UID:{settings.UNIT_ID},DATA:{sdata_b64}"
-                    data_str = await _secure_message(data_str)
-                    await _send_with_retry(data_str.encode())
+                    await _send_chunked("SDATA", sdata_b64)
 
                     # CRITICAL: Arm RX right after last TX so we catch the ACK/CMD/OTA
                     if lora is not None and hasattr(lora, 'recv'):
@@ -601,25 +598,58 @@ async def connectLora():
                                 msg_type = None
                                 remote_uid = None
                                 data_b64 = None
+                                chunk_str = None
                                 for p in parts:
                                     if p.startswith('TYPE:'): msg_type = p[5:]
                                     elif p.startswith('UID:'): remote_uid = p[4:]
                                     elif p.startswith('DATA:'): data_b64 = p[5:]
-                                if msg_type in ('SETTINGS', 'SDATA') and remote_uid and data_b64:
+                                    elif p.startswith('CHUNK:'): chunk_str = p[6:]
+                                if msg_type and remote_uid and data_b64 is not None:
                                     packet_type = msg_type
-                                    try:
-                                        json_data = _ub.a2b_base64(data_b64.encode()).decode()
-                                        parsed_dict = ujson.loads(json_data)
-                                        parsed_data = parsed_dict
-                                    except Exception as e:
-                                        await log_error(f"Failed to parse {msg_type} for {remote_uid}: {e}")
+                                    if msg_type.endswith('_CHUNK'):
+                                        orig_type = msg_type[:-6]
+                                        if chunk_str:
+                                            try:
+                                                cn, total = map(int, chunk_str.split('/'))
+                                                if remote_uid not in remote_states:
+                                                    remote_states[remote_uid] = {'types': set(), 'last_rx': current_time, 'data': {}, 'chunks': {}}
+                                                if 'chunks' not in remote_states[remote_uid]:
+                                                    remote_states[remote_uid]['chunks'] = {}
+                                                if orig_type not in remote_states[remote_uid]['chunks']:
+                                                    remote_states[remote_uid]['chunks'][orig_type] = {}
+                                                remote_states[remote_uid]['chunks'][orig_type][cn] = data_b64
+                                                # Check if all chunks collected
+                                                chunks_dict = remote_states[remote_uid]['chunks'][orig_type]
+                                                if len(chunks_dict) == total and all(k in chunks_dict for k in range(total)):
+                                                    assembled_b64 = ''.join(chunks_dict[j] for j in range(total))
+                                                    try:
+                                                        json_data = _ub.a2b_base64(assembled_b64.encode()).decode()
+                                                        parsed_dict = ujson.loads(json_data)
+                                                        remote_states[remote_uid]['data'][orig_type] = parsed_dict
+                                                        remote_states[remote_uid]['types'].add(orig_type)
+                                                        del remote_states[remote_uid]['chunks'][orig_type]
+                                                    except Exception as e:
+                                                        await log_error(f"Failed to assemble {orig_type} for {remote_uid}: {e}")
+                                            except Exception as e:
+                                                await log_error(f"Chunk parse error for {remote_uid}: {e}")
+                                    else:
+                                        try:
+                                            json_data = _ub.a2b_base64(data_b64.encode()).decode()
+                                            parsed_dict = ujson.loads(json_data)
+                                            parsed_data = parsed_dict
+                                        except Exception as e:
+                                            await log_error(f"Failed to parse {msg_type} for {remote_uid}: {e}")
 
                             if remote_uid and packet_type != 'UNKNOWN':
                                 if remote_uid not in remote_states:
-                                    remote_states[remote_uid] = {'types': set(), 'last_rx': current_time, 'data': {}}
-                                remote_states[remote_uid]['types'].add(packet_type)
-                                remote_states[remote_uid]['data'][packet_type] = parsed_data
-                                remote_states[remote_uid]['last_rx'] = current_time
+                                    remote_states[remote_uid] = {'types': set(), 'last_rx': current_time, 'data': {}, 'chunks': {}}
+                                if packet_type.endswith('_CHUNK'):
+                                    # Already handled above, but update last_rx
+                                    remote_states[remote_uid]['last_rx'] = current_time
+                                else:
+                                    remote_states[remote_uid]['types'].add(packet_type)
+                                    remote_states[remote_uid]['data'][packet_type] = parsed_data
+                                    remote_states[remote_uid]['last_rx'] = current_time
 
                         if lora is not None and hasattr(lora, 'recv'):
                             lora.recv(0, False, 0)
@@ -939,6 +969,9 @@ async def _send_with_retry(data, retries=5):
     global lora
     if lora is None or not hasattr(lora, 'send'):
         return
+    if len(data) > 255:
+        await log_error(f"Payload too large: {len(data)} bytes")
+        return
     max_cad_attempts = 5
     cad_symbols = getattr(settings, 'CAD_SYMBOLS', 3)
     cad_backoff_s = getattr(settings, 'LORA_CAD_BACKOFF_S', 3.0)
@@ -1197,3 +1230,22 @@ async def ai_health_monitor():
         if TMON_AI.error_count > 3:
             await TMON_AI.recover_system()
         await asyncio.sleep(60)
+
+async def _send_chunked(msg_type, full_b64):
+    encrypt_enabled = getattr(settings, 'LORA_ENCRYPT_ENABLED', False)
+    max_b64_chunk_len = 100 if encrypt_enabled else 160
+    b64_len = len(full_b64)
+    if b64_len <= max_b64_chunk_len:
+        data_str = f"TYPE:{msg_type},UID:{settings.UNIT_ID},DATA:{full_b64}"
+        data_str = await _secure_message(data_str)
+        await _send_with_retry(data_str.encode())
+    else:
+        num_chunks = (b64_len + max_b64_chunk_len - 1) // max_b64_chunk_len
+        for i in range(num_chunks):
+            chunk_start = i * max_b64_chunk_len
+            chunk_end = chunk_start + max_b64_chunk_len
+            chunk_b64 = full_b64[chunk_start:chunk_end]
+            data_str = f"TYPE:{msg_type}_CHUNK,UID:{settings.UNIT_ID},CHUNK:{i}/{num_chunks},DATA:{chunk_b64}"
+            data_str = await _secure_message(data_str)
+            await _send_with_retry(data_str.encode())
+            await asyncio.sleep(random.uniform(0.5, 1.5))
