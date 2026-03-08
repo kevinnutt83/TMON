@@ -1,4 +1,4 @@
-# TMON v2.00.2 - LoRa (FULL BULLETPROOF GATEWAY + TRUE MULTI-REMOTE + ACK + SNR + CMD + OTA)
+# TMON v2.00.3 - LoRa (FULL BULLETPROOF GATEWAY + TRUE MULTI-REMOTE + ACK + SNR + CMD + OTA)
 
 import ujson
 import os
@@ -153,6 +153,7 @@ async def hard_reset_lora():
         await asyncio.sleep_ms(150)
     except Exception:
         pass
+    lora = None  # Ensure cleared
     gc.collect()
 
 async def init_lora():
@@ -160,6 +161,7 @@ async def init_lora():
     await debug_print('Init LoRa: Beginning LoRa Module Initialization', 'LORA')
     await display_message("LoRa Init...", 1)
     for attempt in range(10):
+        lora = None  # Reset each attempt
         try:
             await hard_reset_lora()
             await free_pins()
@@ -185,10 +187,13 @@ async def init_lora():
                 await display_message("LoRa OK", 1.5)
                 gc.collect()
                 return True
-            elif status == -2:
-                await debug_print("Status -2 - extra reset cycle", "WARN")
-                await asyncio.sleep(1.0)
+            else:
+                lora = None
+                if status == -2:
+                    await debug_print("Status -2 - extra reset cycle", "WARN")
+                    await asyncio.sleep(1.0)
         except Exception as e:
+            lora = None
             await debug_print(f"init attempt {attempt+1} exception: {e}", "WARN")
         await asyncio.sleep(0.8)
     await debug_print("LoRa init FAILED after 10 attempts", "FATAL")
@@ -347,7 +352,8 @@ async def connectLora():
     while True:
         try:
             current_time = time.time()
-            if lora is None:
+            if lora is None or not hasattr(lora, '_events') or not hasattr(lora, 'send') or not hasattr(lora, 'recv'):
+                lora = None
                 if not await init_lora():
                     await asyncio.sleep(10)
                     continue
@@ -368,7 +374,7 @@ async def connectLora():
                     await _send_with_retry(data_str.encode())
 
                     # Small delay between packets to reduce collision risk
-                    await asyncio.sleep(random.uniform(0.5, 1.5))
+                    await asyncio.sleep(random.uniform(1.0, 2.0))
 
                     # SETTINGS packet
                     settings_dict = {k: getattr(settings, k) for k in dir(settings) if not k.startswith('__') and not callable(getattr(settings, k))}
@@ -377,7 +383,7 @@ async def connectLora():
                     data_str = await _secure_message(data_str)
                     await _send_with_retry(data_str.encode())
 
-                    await asyncio.sleep(random.uniform(0.5, 1.5))
+                    await asyncio.sleep(random.uniform(1.0, 2.0))
 
                     # SDATA packet - SAFE VERSION (never crashes the TX)
                     try:
@@ -403,7 +409,7 @@ async def connectLora():
                     await _send_with_retry(data_str.encode())
 
                     # CRITICAL: Arm RX right after last TX so we catch the ACK/CMD/OTA
-                    if lora is not None:
+                    if lora is not None and hasattr(lora, 'recv'):
                         lora.recv(0, False, 0)
                     await asyncio.sleep_ms(200)  # Increased delay for mode switch
 
@@ -416,13 +422,23 @@ async def connectLora():
                     next_delay = None
 
                 elif state == STATE_WAIT_RESPONSE:
-                    if lora is None:
+                    if lora is None or not hasattr(lora, '_events'):
                         continue
-                    ev = lora._events()
+                    try:
+                        ev = lora._events()
+                    except AttributeError as ae:
+                        await log_error(f"_events failed: {ae}")
+                        lora = None
+                        continue
                     if ev & lora.RX_DONE:
-                        if lora is None:
+                        if lora is None or not hasattr(lora, 'recv'):
                             continue
-                        msg, err = lora.recv()
+                        try:
+                            msg, err = lora.recv()
+                        except AttributeError as ae:
+                            await log_error(f"recv failed: {ae}")
+                            lora = None
+                            continue
                         try:
                             rssi = lora.getRSSI()
                             snr = lora.getSNR() if hasattr(lora, 'getSNR') else 0
@@ -436,7 +452,7 @@ async def connectLora():
                             msg_str = await _unsecure_message(msg_str)
                             if msg_str is None:
                                 await debug_print("Remote RX: invalid secure message", "WARN")
-                                if lora is not None:
+                                if lora is not None and hasattr(lora, 'recv'):
                                     lora.recv(0, False, 0)
                                 continue
                             await debug_print(f"Remote RX: {msg_str[:100]}...", "REMOTE_NODE")
@@ -476,7 +492,7 @@ async def connectLora():
                             if err != 0:
                                 await debug_print(f"Remote RX error: {err}", "WARN")
 
-                        if lora is not None:
+                        if lora is not None and hasattr(lora, 'recv'):
                             lora.recv(0, False, 0)   # re-arm for more packets
 
                     # Timeout handling
@@ -508,13 +524,23 @@ async def connectLora():
                     state = STATE_RECEIVING
 
                 if state == STATE_RECEIVING:
-                    if lora is None:
+                    if lora is None or not hasattr(lora, '_events'):
                         continue
-                    ev = lora._events()
+                    try:
+                        ev = lora._events()
+                    except AttributeError as ae:
+                        await log_error(f"_events failed: {ae}")
+                        lora = None
+                        continue
                     if ev & lora.RX_DONE:
-                        if lora is None:
+                        if lora is None or not hasattr(lora, 'recv'):
                             continue
-                        msg, err = lora.recv()
+                        try:
+                            msg, err = lora.recv()
+                        except AttributeError as ae:
+                            await log_error(f"recv failed: {ae}")
+                            lora = None
+                            continue
                         try:
                             rssi = lora.getRSSI()
                             snr = lora.getSNR() if hasattr(lora, 'getSNR') else 0
@@ -528,7 +554,7 @@ async def connectLora():
                             msg_str = await _unsecure_message(msg_str)
                             if msg_str is None:
                                 await debug_print("Base RX: invalid secure message", "WARN")
-                                if lora is not None:
+                                if lora is not None and hasattr(lora, 'recv'):
                                     lora.recv(0, False, 0)
                                 gc.collect()
                                 continue
@@ -595,7 +621,7 @@ async def connectLora():
                                 remote_states[remote_uid]['data'][packet_type] = parsed_data
                                 remote_states[remote_uid]['last_rx'] = current_time
 
-                        if lora is not None:
+                        if lora is not None and hasattr(lora, 'recv'):
                             lora.recv(0, False, 0)
                         gc.collect()
 
@@ -911,7 +937,7 @@ async def _unsecure_message(msg_str):
 
 async def _send_with_retry(data, retries=5):
     global lora
-    if lora is None:
+    if lora is None or not hasattr(lora, 'send'):
         return
     max_cad_attempts = 5
     cad_symbols = getattr(settings, 'CAD_SYMBOLS', 3)
@@ -932,25 +958,23 @@ async def _send_with_retry(data, retries=5):
                 await log_error("Channel busy after CAD attempts")
                 await asyncio.sleep(1)
                 continue
-        if lora is None:
-            await log_error("LoRa is None after CAD")
+        if lora is None or not hasattr(lora, 'send'):
+            await log_error("LoRa invalid before send")
             return
         try:
-            if lora is None:
-                raise RuntimeError("LoRa None before send")
             lora.send(data)
             if not await _wait_tx_done():
                 raise RuntimeError("TX done wait failed")
-            if lora is not None:
+            if lora is not None and hasattr(lora, 'recv'):
                 lora.recv(0, False, 0)  # re-arm RX after TX
             save_counters()  # after successful send
             return
         except Exception as e:
             await log_error(f"TX attempt {att+1} failed: {e}")
-            if "NoneType" in str(e):
+            if "NoneType" in str(e) or "TX done wait failed" in str(e):
                 lora = None
                 await hard_reset_lora()
-                await log_error("Force reinit LoRa due to NoneType error")
+                await log_error("Force reinit LoRa due to critical TX error")
                 return  # Stop retries on critical error
             await asyncio.sleep(1 * (2 ** att))
     await debug_print("TX failed after retries", "WARN")
@@ -962,7 +986,7 @@ async def _wait_tx_done(timeout=30):  # Increased timeout
     tx_start = time.time()
     while time.time() - tx_start < timeout:
         try:
-            if lora is None:
+            if lora is None or not hasattr(lora, '_events'):
                 return False
             if lora._events() & lora.TX_DONE:
                 return True
@@ -974,6 +998,8 @@ async def _wait_tx_done(timeout=30):  # Increased timeout
                 return False
         await asyncio.sleep(0.01)
     await log_error("TX timeout")
+    lora = None
+    await hard_reset_lora()
     return False
 
 async def _poll_and_relay_commands(pending_commands):
