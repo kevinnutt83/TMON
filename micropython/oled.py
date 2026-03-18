@@ -1,4 +1,4 @@
-# TMON Verion 2.00.1d - OLED display module for TMON MicroPython firmware: defines an SSD1309 driver and a unified render loop that updates the display based on the current device state, sensor readings, and communication status. The OLED header displays voltage or temperature (flipping periodically), along with optional WiFi and LoRa signal strength indicators. A status banner can show temporary messages, and the body area can be overridden for custom content. The render loop is designed to be efficient by only updating when relevant data changes, and includes error handling to ensure stability on resource-constrained hardware. GC management is included to maintain performance during rendering operations.
+# TMON Verion 2.00.1d - OLED display module for TMON MicroPython firmware...
 
 import uasyncio as asyncio
 import time
@@ -13,13 +13,13 @@ _render_task = None
 _status_banner_text = None
 _status_banner_until = 0
 _status_banner_persist = False
-_body_override_lines = None        # NEW: override for body content (list of lines)
-_body_override_until = 0           # NEW: timestamp until override active
+_body_override_lines = None
+_body_override_until = 0
 _last_render_sig = None
 _show_voltage = True
 _last_flip_time = 0
 
-# Constants derived from settings (fall back to sensible defaults)
+# Constants
 HEADER_HEIGHT = int(getattr(settings, 'OLED_HEADER_HEIGHT', 16))
 FOOTER_HEIGHT = int(getattr(settings, 'OLED_FOOTER_HEIGHT', 12))
 BODY_TOP = HEADER_HEIGHT
@@ -29,7 +29,6 @@ FLIP_INTERVAL_S = int(getattr(settings, 'OLED_HEADER_FLIP_S', 4))
 RENDER_INTERVAL_S = 0.5
 MAX_TEXT_CHARS = 16
 
-# Simple SSD1309 driver (robust for 128x64)
 class SSD1309_I2C(framebuf.FrameBuffer):
     def __init__(self, width, height, i2c, addr=0x3C, external_vcc=False):
         self.i2c = i2c
@@ -56,7 +55,6 @@ class SSD1309_I2C(framebuf.FrameBuffer):
         try:
             self.i2c.writevto(self.addr, self.write_list)
         except Exception:
-            # Some ports may not implement writevto
             self.i2c.writeto(self.addr, b'\x40' + buf)
 
     def init_display(self):
@@ -111,7 +109,6 @@ class SSD1309_I2C(framebuf.FrameBuffer):
         except Exception:
             pass
 
-# Initialize OLED if enabled
 oled = None
 if getattr(settings, 'ENABLE_OLED', False):
     try:
@@ -121,7 +118,6 @@ if getattr(settings, 'ENABLE_OLED', False):
         print(f"[ERROR] OLED init failed: {e}")
         oled = None
 
-# Utils
 async def fade_display(on=True, steps=10, delay=0.03):
     if not oled:
         return
@@ -158,54 +154,44 @@ def _net_bars_from_rssi(rssi, cuts):
 
 def _draw_bars(o, x, y, bars):
     try:
-        # Draw 3 vertical bar outlines and fill active ones so "no signal" is visible as empty bars.
         for i in range(3):
             h = 3 + i * 3
-            bx = x + i * 6  # slightly tighter spacing so text fits
+            bx = x + i * 6
             by = y + (3 * 3) - h
-            # outline
             try:
                 o.rect(bx, by, 4, h, 1)
             except Exception:
-                # Some framebuf variants may not have rect; fallback to small lines
                 for yy in range(by, by + h):
                     o.pixel(bx, yy, 1)
                     o.pixel(bx + 3, yy, 1)
                 for xx in range(bx, bx + 4):
                     o.pixel(xx, by, 1)
                     o.pixel(xx, by + h - 1, 1)
-            # fill active bars
             if i < bars:
                 o.fill_rect(bx + 1, by + 1, 2, h - 2, 1)
     except Exception:
         pass
 
 def _measure_text_w(text):
-    """Pixel width of text using 8px-per-char font used by oled.text()."""
     try:
         return max(0, len(str(text)) * 8)
     except Exception:
         return 0
 
 def _compact_label(txt, max_chars):
-    """Return a compacted label to fit within max_chars; fall back to truncation."""
     try:
         s = str(txt or '')
         if len(s) <= max_chars:
             return s
-        # common short forms
         short_map = {'No Con': 'No', 'Search': 'Srch', 'Searching': 'Srch'}
         for long, short in short_map.items():
             if s.startswith(long):
                 return short[:max_chars]
-        if max_chars <= 0:
-            return ''
-        return s[:max_chars]
+        return s[:max_chars] if max_chars > 0 else ''
     except Exception:
         return str(txt)[:max_chars] if max_chars > 0 else ''
 
 def _layout_header_right(vol_w, right_blocks):
-    """Compute right-aligned X positions for header blocks (returns start_x and list of x positions)."""
     try:
         gap = 4
         total = 0
@@ -232,11 +218,10 @@ def _render_signature(page):
             _status_banner_persist,
             _show_voltage,
             _safe_attr(sdata, 'sys_voltage', 0),
-            _safe_attr(sdata, 'r_temp_f', None),
             _safe_attr(sdata, 'cur_temp_f', None),
             _safe_attr(sdata, 'wifi_rssi', None),
             _safe_attr(sdata, 'lora_SigStr', None),
-            _safe_attr(sdata, 'lora_snr', None),          # NEW
+            _safe_attr(sdata, 'lora_snr', None),
             _safe_attr(sdata, 'lora_last_rx_ts', 0),
             _safe_attr(sdata, 'lora_last_tx_ts', 0),
             _safe_attr(sdata, 'LORA_CONNECTED', False),
@@ -248,7 +233,6 @@ def _render_signature(page):
     except Exception:
         return (page,)
 
-# Unified render loop
 async def _render_loop(page=0):
     global _last_render_sig, _show_voltage, _last_flip_time, _body_override_lines, _body_override_until
     if not oled:
@@ -258,7 +242,6 @@ async def _render_loop(page=0):
     while True:
         try:
             nowt = time.time()
-            # Flip voltage/temperature periodically
             if nowt - _last_flip_time >= FLIP_INTERVAL_S:
                 _show_voltage = not _show_voltage
                 _last_flip_time = nowt
@@ -269,60 +252,48 @@ async def _render_loop(page=0):
                 continue
             _last_render_sig = sig
 
-            # Header band
             oled.fill_rect(0, 0, 128, HEADER_HEIGHT, 0)
             try:
                 voltage = _safe_attr(sdata, 'sys_voltage', 0.0)
-                rtemp = _safe_attr(sdata, 'r_temp_f', _safe_attr(sdata, 'cur_temp_f', None))
+                rtemp = _safe_attr(sdata, 'cur_temp_f', None)
                 if _show_voltage:
                     txt = f"{voltage:.2f}V"
                 else:
                     txt = ("--.-F" if rtemp is None else f"{rtemp:.1f}F")
-                # Draw left-aligned voltage/temp
                 oled.text(txt, 2, 0)
-                vol_w = _measure_text_w(txt) + 4  # include padding to avoid tight contact
+                vol_w = _measure_text_w(txt) + 4
             except Exception:
                 vol_w = 16
-                txt = ""
-            # Optional adaptive net blocks on header (right-aligned, auto-compact if space tight)
+
             if getattr(settings, 'DISPLAY_NET_BARS', False):
                 try:
-                    # Build block descriptors (wifi then lora) with measured widths
                     blocks = []
-                    # WiFi block
                     if getattr(settings, 'ENABLE_WIFI', False):
                         wifi_icon_w = _measure_text_w('W')
-                        bars_w = 3 * 6  # matches _draw_bars spacing
+                        bars_w = 3 * 6
                         wifi_text = ''
                         if getattr(sdata, 'WIFI_CONNECTED', False):
                             wrssi = _safe_attr(sdata, 'wifi_rssi', None)
                             wb = _net_bars_from_rssi(wrssi, (-60, -80, -90))
-                            # we'll draw bars and icon; no extra text when connected (keep compact)
                             wifi_text = ''
                         else:
-                            # Not connected: show label (may be compacted)
                             wifi_text = 'No Con'
                             wb = 0
                         text_w = _measure_text_w(wifi_text)
                         block_w = wifi_icon_w + 2 + bars_w + (4 if text_w else 0) + text_w
                         blocks.append({'type': 'wifi', 'w': block_w, 'icon': 'W', 'bars': wb, 'text': wifi_text})
-                    # LoRa block
+
                     if getattr(settings, 'ENABLE_LORA', False):
                         lora_icon_w = _measure_text_w('L')
                         bars_w = 3 * 6
-
-                        # NEW: determine "connected" based on recent activity
                         now_epoch = time.time()
                         stale_s = int(getattr(settings, 'OLED_LORA_STALE_S', 120))
                         last_rx = int(_safe_attr(sdata, 'lora_last_rx_ts', 0) or 0)
                         last_tx = int(_safe_attr(sdata, 'lora_last_tx_ts', 0) or 0)
                         recent = (last_rx and (now_epoch - last_rx) <= stale_s) or (last_tx and (now_epoch - last_tx) <= stale_s)
                         connected = bool(_safe_attr(sdata, 'LORA_CONNECTED', False)) or recent
-
                         lrssi = _safe_attr(sdata, 'lora_SigStr', None)
-                        
                         if connected:
-                            # Connected: show bars when RSSI known, otherwise show empty bars but no "Search"
                             try:
                                 lb = _net_bars_from_rssi(int(lrssi), (-60, -90, -120)) if lrssi is not None else 0
                             except Exception:
@@ -332,32 +303,24 @@ async def _render_loop(page=0):
                             node_role = str(getattr(settings, 'NODE_TYPE', '')).lower()
                             ltext = 'Search' if node_role == 'remote' else 'No Con'
                             lb = 0
-
                         text_w = _measure_text_w(ltext)
                         block_w = lora_icon_w + 2 + bars_w + (4 if text_w else 0) + text_w
                         blocks.append({'type': 'lora', 'w': block_w, 'icon': 'L', 'bars': lb, 'text': ltext})
 
-                    # Layout right-aligned, compute start_x; if overlapping with voltage area, try compacting texts
                     start_x, xs = _layout_header_right(vol_w, blocks)
-                    # If start_x would be <= vol_w + margin, we need to compact labels
                     min_gap = 6
                     if start_x <= (2 + vol_w + min_gap):
-                        # Attempt compacting text labels and recompute widths
                         for b in blocks:
                             if b.get('text'):
-                                # try progressively smaller max lengths
                                 for maxc in (6, 4, 2, 0):
                                     short = _compact_label(b['text'], maxc)
                                     b['text_compact'] = short
                                     b['w'] = _measure_text_w(b['icon']) + 2 + 3 * 6 + (4 if _measure_text_w(short) else 0) + _measure_text_w(short)
-                                # if still overlapping, remove text entirely
                                 if start_x <= (2 + vol_w + min_gap):
                                     b['text_compact'] = ''
                                     b['w'] = _measure_text_w(b['icon']) + 2 + 3 * 6
-                        # recompute positions
                         start_x, xs = _layout_header_right(vol_w, blocks)
 
-                    # Finally render blocks at computed positions
                     for b, x in zip(blocks, xs):
                         try:
                             icon_x = x
@@ -371,7 +334,6 @@ async def _render_loop(page=0):
                 except Exception:
                     pass
 
-            # Status banner (centered lower in header band)
             try:
                 if _status_banner_text and (_status_banner_persist or time.time() < _status_banner_until):
                     txt = str(_status_banner_text)[:16]
@@ -383,12 +345,8 @@ async def _render_loop(page=0):
             except Exception:
                 pass
 
-            # Body area (below header)
             oled.fill_rect(0, BODY_TOP, 128, BODY_HEIGHT, 0)
 
-            # Previously displayed unit/machine suffix here; intentionally omitted.
-
-            # If a body override is active (e.g., display_message showing sampling), honor it
             try:
                 if _body_override_lines and time.time() < _body_override_until:
                     start_y = BODY_TOP + max(0, (BODY_HEIGHT - len(_body_override_lines) * 8) // 2)
@@ -396,43 +354,36 @@ async def _render_loop(page=0):
                         x = max(0, (128 - len(line) * 8) // 2)
                         oled.text(str(line)[:MAX_TEXT_CHARS], x, start_y + i * 8)
                 else:
-                    # Clear override when expired
-                    _body_override_lines = None
-                    # Default content: show sensor summary only while actively sampling
-                    if page == 0:
-                        if getattr(sdata, 'sampling_active', False):
-                            # Pulled up to utilize space after secondary label removal
-                            oled.text(f"T {_safe_attr(sdata, 'cur_temp_f', 0):.1f}F", 0, BODY_TOP + 4)
-                            oled.text(f"H {_safe_attr(sdata, 'cur_humid', 0):.1f}%", 0, BODY_TOP + 14)
-                            oled.text(f"B {_safe_attr(sdata, 'cur_bar_pres', 0):.1f}", 0, BODY_TOP + 24)
-                        else:
-                            # leave body blank when not sampling to avoid persistent "sampling" content
-                            pass
+                    if getattr(sdata, 'sampling_active', False):
+                        y = BODY_TOP + 2
+                        oled.text("Interior:", 0, y)
+                        oled.text(f"T{sdata.cur_device_temp_f:.1f}F", 80, y)
+                        y += 10
+                        oled.text("Probe:", 0, y)
+                        oled.text(f"T{sdata.cur_temp_f:.1f}F", 80, y)
+                        if getattr(settings, 'SAMPLE_PROBE_HUMID', False):
+                            oled.text(f"H{sdata.cur_humid:.1f}%", 0, y+10)
+                        if getattr(settings, 'SAMPLE_PROBE_BAR', False):
+                            oled.text(f"B{sdata.cur_bar_pres:.1f}", 64, y+10)
+                        y += 20
+                        if getattr(settings, 'SAMPLE_SOIL', False):
+                            oled.text("Soil:", 0, y)
+                            oled.text(f"M{sdata.cur_soil_moisture:.1f}%", 64, y)
+                            if sdata.cur_soil_temp_f is not None:
+                                oled.text(f"T{sdata.cur_soil_temp_f:.1f}F", 0, y+10)
                     else:
-                        for i in range(8):
-                            st = 'ON' if _safe_attr(sdata, f'relay{i+1}_on', False) else 'OFF'
-                            x = (i % 4) * 32
-                            y = BODY_TOP + 10 + (i // 4) * 10
-                            oled.text(f"R{i+1}:{st}", x, y)
-                        memkb = int(_safe_attr(sdata, 'free_mem', 0) // 1024)
-                        rt = _safe_attr(sdata, 'script_runtime', 0)
-                        err = _safe_attr(sdata, 'error_count', 0)
-                        oled.text(f"Mem {memkb}KB", 0, BODY_TOP + 30)
-                        oled.text(f"Run {rt}s Err {err}", 64, BODY_TOP + 30)
+                        pass
             except Exception:
                 pass
 
-            # Last message bottom (moved up a little to account for footer/device name)
             try:
                 msg = str(_safe_attr(sdata, 'last_message', ''))[:MAX_TEXT_CHARS]
                 oled.text(msg, 0, 52)
             except Exception:
                 pass
 
-            # Footer band
             oled.fill_rect(0, BODY_BOTTOM, 128, FOOTER_HEIGHT, 0)
             try:
-                # Removed temperature display and moved device name to left footer
                 unit_name = str(_safe_attr(settings, 'UNIT_Name', ''))[:MAX_TEXT_CHARS]
                 oled.text(unit_name, 0, BODY_BOTTOM + 2)
             except Exception:
@@ -440,18 +391,13 @@ async def _render_loop(page=0):
 
             oled.show()
         except Exception as e:
-            try:
-                print("[OLED] render error:", e)
-            except Exception:
-                pass
+            print("[OLED] render error:", e)
         await asyncio.sleep(RENDER_INTERVAL_S)
 
-# Public APIs
 async def show_header():
     global _render_task
     if _render_task is None or _render_task.done():
         _render_task = asyncio.create_task(_render_loop())
-    # footer loop not separate anymore; header start ensures full renderer runs
     return True
 
 async def display_message(message, display_time_s=0):
@@ -464,9 +410,7 @@ async def display_message(message, display_time_s=0):
     except Exception:
         pass
     msg = ' '.join(str(message).split())
-    # Compute lines based on body height
     max_lines = max(1, BODY_HEIGHT // 8)
-    # Build page lines across potentially multiple pages
     pages = []
     rem = msg
     while rem:
@@ -484,7 +428,6 @@ async def display_message(message, display_time_s=0):
             page_lines.append(rem[:idx].rstrip())
             rem = rem[idx:].lstrip()
         pages.append(page_lines)
-    # Display pages and set body override so background renderer doesn't clobber it
     for i, page_lines in enumerate(pages):
         global _body_override_lines, _body_override_until
         _body_override_lines = page_lines
@@ -500,14 +443,12 @@ async def display_message(message, display_time_s=0):
         else:
             if display_time_s and display_time_s > 0:
                 await asyncio.sleep(display_time_s)
-            # NEW: GC after message paging (helps after long strings / repeated UI updates)
             try:
                 from utils import maybe_gc
                 maybe_gc("oled_display_message", min_interval_ms=5000, mem_free_below=45 * 1024)
             except Exception:
                 pass
 
-    # When done, leave override in place for a short period for smooth handoff; renderer clears when expired
     if not getattr(settings, 'ENABLE_OLED', False):
         await screen_off()
 
@@ -571,6 +512,4 @@ def clear_message_area():
         return False
 
 async def update_display(page=0):
-    # Backwards compatibility: start unified render loop with given page
     await show_header()
-

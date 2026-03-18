@@ -38,7 +38,7 @@ cur_humid = 0
 # NEW: indicate sampling in progress so OLED can render sampling-only content
 sampling_active = False
 
-# === DEVICE ENCLOSURE INTERIOR BME280 (new interior sensor) ===
+# === DEVICE ENCLOSURE INTERIOR BME280 ===
 cur_device_temp_c = 0.0
 cur_device_temp_f = 0.0
 cur_device_bar_pres = 0.0
@@ -99,3 +99,4 @@ gps_last_fix_ts = None
 cur_soil_moisture = 0.0
 cur_soil_temp_c = None
 cur_soil_temp_f = None
+

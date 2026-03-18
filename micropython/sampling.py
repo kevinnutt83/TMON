@@ -4,7 +4,7 @@ import sdata
 import settings
 from utils import free_pins_i2c
 import uasyncio as asyncio
-from utils import debug_print
+from utils import debug_print, log_error
 from tmon import frostwatchCheck, heatwatchCheck, beginFrostOperations, beginHeatOperations, endFrostOperations, endHeatOperations
 import machine
 
@@ -18,29 +18,41 @@ async def sampleEnviroment():
         led_status_flash('SAMPLE_TEMP')
         await sampleTemp()
         
-        # === INTEGRATED SOIL PROBE SAMPLING ===
         if getattr(settings, 'SAMPLE_SOIL', False):
             led_status_flash('SAMPLE_SOIL')
             await sampleSoil()
         
         led_status_flash('SAMPLE_BAR')
-        await frost_and_heat_watch()  # Call frost and heat watch after sampling
+        await frost_and_heat_watch()
     finally:
         _s.sampling_active = False
 
-#Sample Temperatures from enabled sensors devices
+
 async def sampleTemp():
-    if settings.SAMPLE_TEMP:
-        if getattr(settings, 'ENABLE_sensorBME280', False):
-            await free_pins_i2c()
-            await sampleBME280Interior()      # interior enclosure
-            await free_pins_i2c()
-            await sampleBME280Probe()         # exterior probe (drives all frost/heat logic)
-            await free_pins_i2c()             # final cleanup
+    if not getattr(settings, 'SAMPLE_TEMP', True):
+        return
+
+    if not getattr(settings, 'ENABLE_sensorBME280', False):
+        return
+
+    # === INTERIOR DEVICE ENCLOSURE SENSOR ===
+    if (getattr(settings, 'SAMPLE_DEVICE_TEMP', False) or
+        getattr(settings, 'SAMPLE_DEVICE_BAR', False) or
+        getattr(settings, 'SAMPLE_DEVICE_HUMID', False)) and settings.ENABLE_DEVICE_BME280:
+        await free_pins_i2c()
+        await sampleBME280Interior()
+        await free_pins_i2c()
+
+    # === EXTERIOR PROBE SENSOR ===
+    if (getattr(settings, 'SAMPLE_PROBE_TEMP', False) or
+        getattr(settings, 'SAMPLE_PROBE_BAR', False) or
+        getattr(settings, 'SAMPLE_PROBE_HUMID', False)) and settings.ENABLE_PROBE_BME280:
+        await free_pins_i2c()
+        await sampleBME280Probe()
+        await free_pins_i2c()
 
 
 async def _read_bme280(i2c, target="probe"):
-    """Reusable helper – uses the SAME BME280 class for both sensors."""
     sensor = None
     try:
         from BME280 import BME280
@@ -53,24 +65,29 @@ async def _read_bme280(i2c, target="probe"):
         humid = data[2]
         bar = data[0]
 
-        if target == "probe":  # exterior probe = main data
-            sdata.cur_temp_c = temp_c
-            sdata.cur_temp_f = temp_f
-            sdata.cur_humid = humid
-            sdata.cur_bar_pres = bar
+        if target == "probe":
+            if getattr(settings, 'SAMPLE_PROBE_TEMP', False):
+                sdata.cur_temp_c = temp_c
+                sdata.cur_temp_f = temp_f
+                await findLowestTemp(temp_f)
+                await findHighestTemp(temp_f)
+            if getattr(settings, 'SAMPLE_PROBE_BAR', False):
+                sdata.cur_bar_pres = bar
+                await findLowestBar(bar)
+                await findHighestBar(bar)
+            if getattr(settings, 'SAMPLE_PROBE_HUMID', False):
+                sdata.cur_humid = humid
+                await findLowestHumid(humid)
+                await findHighestHumid(humid)
 
-            await findLowestTemp(temp_f)
-            await findHighestTemp(temp_f)
-            await findLowestBar(bar)
-            await findHighestBar(bar)
-            await findLowestHumid(humid)
-            await findHighestHumid(humid)
-
-        else:  # interior enclosure
-            sdata.cur_device_temp_c = temp_c
-            sdata.cur_device_temp_f = temp_f
-            sdata.cur_device_humid = humid
-            sdata.cur_device_bar_pres = bar
+        else:  # device
+            if getattr(settings, 'SAMPLE_DEVICE_TEMP', False):
+                sdata.cur_device_temp_c = temp_c
+                sdata.cur_device_temp_f = temp_f
+            if getattr(settings, 'SAMPLE_DEVICE_BAR', False):
+                sdata.cur_device_bar_pres = bar
+            if getattr(settings, 'SAMPLE_DEVICE_HUMID', False):
+                sdata.cur_device_humid = humid
 
         if settings.DEBUG and settings.DEBUG_TEMP:
             await debug_print(
@@ -80,7 +97,19 @@ async def _read_bme280(i2c, target="probe"):
         return data
 
     except Exception as e:
-        await debug_print(f"BME280 {target} error: {e}", "SAMPLE ERROR TEMP")
+        await log_error(f"BME280 {target} fatal error: {e}", "BME280")
+        await debug_print(f"BME280 {target} fatal error – disabling sensor", "ERROR")
+        
+        if target == "device":
+            settings.ENABLE_DEVICE_BME280 = False
+            settings.SAMPLE_DEVICE_TEMP = False
+            settings.SAMPLE_DEVICE_BAR = False
+            settings.SAMPLE_DEVICE_HUMID = False
+        else:
+            settings.ENABLE_PROBE_BME280 = False
+            settings.SAMPLE_PROBE_TEMP = False
+            settings.SAMPLE_PROBE_BAR = False
+            settings.SAMPLE_PROBE_HUMID = False
         return None
     finally:
         if sensor is not None:
@@ -93,7 +122,6 @@ async def _read_bme280(i2c, target="probe"):
 
 
 async def sampleBME280Interior():
-    """Interior enclosure sensor – pins 33/34"""
     from utils import led_status_flash
     await led_status_flash('SAMPLE_DEVICE_TEMP')
     try:
@@ -108,7 +136,6 @@ async def sampleBME280Interior():
 
 
 async def sampleBME280Probe():
-    """Exterior probe sensor – pins 6/2 (this is the main sensor used everywhere)"""
     from utils import led_status_flash
     await led_status_flash('SAMPLE_BME280')
     try:
@@ -117,7 +144,6 @@ async def sampleBME280Probe():
     except:
         pass
 
-    # Deinit LoRa before using this I2C bus (original behaviour)
     import lora as lora_module
     async with lora_module.pin_lock:
         if lora_module.lora is not None:
@@ -133,7 +159,6 @@ async def sampleBME280Probe():
 
 
 async def sampleSoil():
-    """Wrapper for soil probe sampling – unchanged"""
     if not getattr(settings, 'SAMPLE_SOIL', False):
         return
 
@@ -169,7 +194,6 @@ async def sampleSoil():
         _s.sampling_active = False
 
 
-# === ALL FIND MIN/MAX AND WATCH FUNCTIONS UNCHANGED ===
 async def findLowestTemp(compareTemp, source='local'):
     try:
         if compareTemp is None:
@@ -228,7 +252,6 @@ async def findHighestHumid(compareHumid, source='local'):
 
 async def frost_and_heat_watch():
     try:
-        # FROSTWATCH LOGIC
         if getattr(settings, 'ENABLE_FROSTWATCH', False):
             if sdata.cur_temp_f < getattr(settings, 'FROSTWATCH_ACTIVE_TEMP', 70):
                 sdata.frostwatch_active = True
@@ -246,7 +269,6 @@ async def frost_and_heat_watch():
                 if sdata.cur_temp_f > getattr(settings, 'FROSTWATCH_STANDDOWN_TEMP', 40):
                     sdata.frost_act = False
                     await endFrostOperations()
-        # HEATWATCH LOGIC
         if getattr(settings, 'ENABLE_HEATWATCH', False):
             if sdata.cur_temp_f > getattr(settings, 'HEATWATCH_ACTIVE_TEMP', 90):
                 sdata.heatwatch_active = True
@@ -268,12 +290,7 @@ async def frost_and_heat_watch():
         await debug_print(f"sample:frost/heat err: {e}", "FROSTHEATWATCH ERROR")
         
 
-#Soil Probe Sampling (unchanged)
 async def sample_soil_probe():
-    """
-    Async soil probe sampler using ALL settings variables.
-    ... (exact original code)
-    """
     if not getattr(settings, 'SAMPLE_SOIL', False):
         await debug_print("Soil sampling disabled (SAMPLE_SOIL=False)", "SOIL")
         return {"status": "disabled"}
@@ -281,7 +298,6 @@ async def sample_soil_probe():
     await debug_print("Starting soil probe sampling...", "SOIL")
 
     try:
-        # === MOISTURE (uses your SOIL_PROBE_PIN) ===
         adc_moist = machine.ADC(settings.SOIL_PROBE_PIN)
         adc_moist.atten(machine.ADC.ATTN_11DB)          
 
@@ -308,7 +324,6 @@ async def sample_soil_probe():
 
         await debug_print(f"Soil Moisture: {moisture_pct:.1f}%", "SOIL")
 
-        # === TEMPERATURE ===
         temperature_c = None
         temperature_f = None
         try:
