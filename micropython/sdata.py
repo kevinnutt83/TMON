@@ -1,4 +1,4 @@
-# TMON Verion 2.00.1d - Centralized data store for TMON MicroPython firmware. This module defines all global variables used across the firmware to track device state, sensor readings, LoRa communication status, relay states, and other relevant information. By centralizing these variables in a single module, we can ensure consistent access and updates across different tasks and modules while maintaining a clear structure for the device's internal state. This also allows for easier debugging and potential future enhancements like state persistence or remote state reporting.
+# TMON Verion 2.00.1d - Centralized data store for TMON MicroPython firmware. ...
 
 # Performance/health metrics for reporting
 loop_runtime = 0
@@ -15,7 +15,6 @@ sys_voltage = 0
 
 # Lora Information
 lora_SigStr = 0
-# Added SNR for better signal info
 lora_snr = 0
 
 # NEW: LoRa activity/connection flags used by OLED header refresh logic
@@ -31,13 +30,19 @@ engine1_batt_v = 0
 engine2_batt_v = 0
 engine_last_poll_ts = 0
 
-# Remote Node Data Variables
+# Remote Node Data Variables (EXTERIOR PROBE - main environmental data)
 cur_temp_c = 0
 cur_temp_f = 0
 cur_bar_pres = 0
 cur_humid = 0
 # NEW: indicate sampling in progress so OLED can render sampling-only content
 sampling_active = False
+
+# === DEVICE ENCLOSURE INTERIOR BME280 (new interior sensor) ===
+cur_device_temp_c = 0.0
+cur_device_temp_f = 0.0
+cur_device_bar_pres = 0.0
+cur_device_humid = 0.0
 
 # Base Station Data Variables
 lowest_temp_f = 0
@@ -78,11 +83,9 @@ heat_act = False
 # WiFi/Network State
 WIFI_CONNECTED = False
 WAN_CONNECTED = False
-# Added RSSI for WiFi strength display
 wifi_rssi = 0
 
 # Messages
-# Store last short message for UI overlay
 last_message = ''
 
 # GPS state (populated if settings.GPS_ENABLED)
@@ -91,3 +94,8 @@ gps_lng = None
 gps_alt_m = None
 gps_accuracy_m = None
 gps_last_fix_ts = None
+
+#Soil Probe Output Values
+cur_soil_moisture = 0.0
+cur_soil_temp_c = None
+cur_soil_temp_f = None

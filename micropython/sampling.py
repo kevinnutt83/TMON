@@ -1,4 +1,4 @@
-# TMON Verion 2.00.1d - Sampling module for TMON MicroPython firmware: defines async functions for sampling environmental data from sensors (currently BME280) and evaluating it against frostwatch and heatwatch thresholds. This module is responsible for reading sensor data, updating current conditions, and maintaining historical min/max values for temperature, barometric pressure, and humidity. It also includes logic to trigger frostwatch and heatwatch operations based on the sampled data. The sampling routines are designed to be called periodically by the main task manager, with error handling and GC management to ensure stable operation on resource-constrained hardware.
+# TMON Verion 2.00.1d - Sampling module for TMON MicroPython firmware...
 
 import sdata
 import settings
@@ -6,7 +6,7 @@ from utils import free_pins_i2c
 import uasyncio as asyncio
 from utils import debug_print
 from tmon import frostwatchCheck, heatwatchCheck, beginFrostOperations, beginHeatOperations, endFrostOperations, endHeatOperations
-from BME280 import BME280
+import machine
 
 
 #Sampling Routine for sample all sensor types if they are enabled
@@ -17,6 +17,12 @@ async def sampleEnviroment():
     try:
         led_status_flash('SAMPLE_TEMP')
         await sampleTemp()
+        
+        # === INTEGRATED SOIL PROBE SAMPLING ===
+        if getattr(settings, 'SAMPLE_SOIL', False):
+            led_status_flash('SAMPLE_SOIL')
+            await sampleSoil()
+        
         led_status_flash('SAMPLE_BAR')
         await frost_and_heat_watch()  # Call frost and heat watch after sampling
     finally:
@@ -25,90 +31,145 @@ async def sampleEnviroment():
 #Sample Temperatures from enabled sensors devices
 async def sampleTemp():
     if settings.SAMPLE_TEMP:
-        if settings.ENABLE_sensorBME280:
-            await free_pins_i2c()  # Ensure pins are free before BME280
-            await sampleBME280()
-            await free_pins_i2c()  # Free pins after BME280 for next device
-
-async def sampleBME280():
-    if settings.ENABLE_sensorBME280:
-        from utils import led_status_flash
-        import sdata as _s
-        _s.sampling_active = True
-        try:
-            try:
-                from oled import display_message
-                await display_message("Sampling BME280", 1)
-            except Exception:
-                pass
-            import lora as lora_module
-            # Deinit LoRa and free pins before using BME280
-            async with lora_module.pin_lock:
-                if lora_module.lora is not None:
-                    try:
-                        lora_module.lora.spi.deinit()
-                    except Exception:
-                        pass
-                    lora_module.lora = None
+        if getattr(settings, 'ENABLE_sensorBME280', False):
             await free_pins_i2c()
-            from BME280 import BME280
-            sensor = BME280()
-            sensor.get_calib_param()
-            try:
-                led_status_flash('SAMPLE_BME280')
-                data = []
-                data = sensor.readData()
-                sdata.cur_temp_c = data[1]
-                sdata.cur_temp_f = (sdata.cur_temp_c * 9/5) + 32
-                sdata.cur_humid = data[2]
-                sdata.cur_bar_pres = data[0]
+            await sampleBME280Interior()      # interior enclosure
+            await free_pins_i2c()
+            await sampleBME280Probe()         # exterior probe (drives all frost/heat logic)
+            await free_pins_i2c()             # final cleanup
 
-                # NEW: evaluate local sample against historical min/max for frost/heat logic
-                try:
-                    await findLowestTemp(sdata.cur_temp_f, source='local')
-                    await findHighestTemp(sdata.cur_temp_f, source='local')
-                    await findLowestBar(sdata.cur_bar_pres, source='local')
-                    await findHighestBar(sdata.cur_bar_pres, source='local')
-                    await findLowestHumid(sdata.cur_humid, source='local')
-                    await findHighestHumid(sdata.cur_humid, source='local')
-                except Exception:
-                    pass
 
-                if settings.DEBUG and settings.DEBUG_TEMP:
-                    await debug_print(
-                        "sample:BME p:%7.2f t:%-6.2f h:%6.2f" % (data[0], data[1], data[2]),
-                        "DEBUG TEMP"
-                    )
-                    try:
-                        from oled import display_message
-                        await display_message("BME280 Sample OK", 1.5)
-                    except Exception:
-                        pass
-            except Exception as e:
-                if settings.DEBUG and settings.DEBUG_TEMP:
-                    await debug_print(f"sample:BME280 err: {e}", "SAMPLE ERROR TEMP")
-            finally:
-                # Some MicroPython ports do not implement I2C.deinit(); guard accordingly
-                try:
-                    if getattr(sensor, "i2c", None):
-                        i2c_obj = sensor.i2c
-                        if hasattr(i2c_obj, "deinit"):
-                            i2c_obj.deinit()
-                except Exception as e:
-                    if settings.DEBUG and settings.DEBUG_TEMP:
-                        await debug_print(f"BME: deinit skipped: {e}", "DEBUG TEMP")
-                finally:
-                    # Help GC release the bus reference
-                    sensor.i2c = None
-            # NEW: GC after BME280 sampling and bus cleanup
+async def _read_bme280(i2c, target="probe"):
+    """Reusable helper – uses the SAME BME280 class for both sensors."""
+    sensor = None
+    try:
+        from BME280 import BME280
+        sensor = BME280(i2c=i2c)
+        sensor.get_calib_param()
+        data = sensor.readData()
+
+        temp_c = data[1]
+        temp_f = (temp_c * 9/5) + 32
+        humid = data[2]
+        bar = data[0]
+
+        if target == "probe":  # exterior probe = main data
+            sdata.cur_temp_c = temp_c
+            sdata.cur_temp_f = temp_f
+            sdata.cur_humid = humid
+            sdata.cur_bar_pres = bar
+
+            await findLowestTemp(temp_f)
+            await findHighestTemp(temp_f)
+            await findLowestBar(bar)
+            await findHighestBar(bar)
+            await findLowestHumid(humid)
+            await findHighestHumid(humid)
+
+        else:  # interior enclosure
+            sdata.cur_device_temp_c = temp_c
+            sdata.cur_device_temp_f = temp_f
+            sdata.cur_device_humid = humid
+            sdata.cur_device_bar_pres = bar
+
+        if settings.DEBUG and settings.DEBUG_TEMP:
+            await debug_print(
+                f"BME280 {target}: p:{bar:7.2f} t:{temp_c:6.2f} h:{humid:6.2f}",
+                "DEBUG TEMP"
+            )
+        return data
+
+    except Exception as e:
+        await debug_print(f"BME280 {target} error: {e}", "SAMPLE ERROR TEMP")
+        return None
+    finally:
+        if sensor is not None:
             try:
-                from utils import maybe_gc
-                maybe_gc("sample_bme280", min_interval_ms=3000, mem_free_below=50 * 1024)
-            except Exception:
+                if hasattr(sensor, "i2c") and hasattr(sensor.i2c, "deinit"):
+                    sensor.i2c.deinit()
+            except:
                 pass
-        finally:
-            _s.sampling_active = False
+            sensor.i2c = None
 
+
+async def sampleBME280Interior():
+    """Interior enclosure sensor – pins 33/34"""
+    from utils import led_status_flash
+    await led_status_flash('SAMPLE_DEVICE_TEMP')
+    try:
+        from oled import display_message
+        await display_message("Sampling Interior Temp", 1)
+    except:
+        pass
+
+    i2c = I2C(0, scl=Pin(settings.DEVICE_TEMP_SCL_PIN),
+              sda=Pin(settings.DEVICE_TEMP_SDA_PIN), freq=400000)
+    await _read_bme280(i2c, target="device")
+
+
+async def sampleBME280Probe():
+    """Exterior probe sensor – pins 6/2 (this is the main sensor used everywhere)"""
+    from utils import led_status_flash
+    await led_status_flash('SAMPLE_BME280')
+    try:
+        from oled import display_message
+        await display_message("Sampling Exterior Probe", 1)
+    except:
+        pass
+
+    # Deinit LoRa before using this I2C bus (original behaviour)
+    import lora as lora_module
+    async with lora_module.pin_lock:
+        if lora_module.lora is not None:
+            try:
+                lora_module.lora.spi.deinit()
+            except:
+                pass
+            lora_module.lora = None
+
+    i2c = I2C(1, scl=Pin(settings.BME280_PROBE_SCL_PIN),
+              sda=Pin(settings.BME280_PROBE_SDA_PIN), freq=400000)
+    await _read_bme280(i2c, target="probe")
+
+
+async def sampleSoil():
+    """Wrapper for soil probe sampling – unchanged"""
+    if not getattr(settings, 'SAMPLE_SOIL', False):
+        return
+
+    import sdata as _s
+    from utils import led_status_flash
+    _s.sampling_active = True
+
+    try:
+        try:
+            from oled import display_message
+            await display_message("Sampling Soil Probe", 1)
+        except Exception:
+            pass
+
+        result = await sample_soil_probe()
+
+        if result and result.get("status") == "success":
+            _s.cur_soil_moisture = result.get("moisture_percent", 0.0)
+            _s.cur_soil_temp_c = result.get("temperature_c")
+            _s.cur_soil_temp_f = result.get("temperature_f")
+
+            if getattr(settings, 'DEBUG_SOIL_PROBE', False):
+                await debug_print(
+                    f"Soil Moisture: {_s.cur_soil_moisture:.1f}% | SoilTemp: {_s.cur_soil_temp_f:.1f}°F",
+                    "SOIL"
+                )
+        else:
+            await debug_print("Soil probe returned no valid data", "SOIL")
+
+    except Exception as e:
+        await debug_print(f"sampleSoil wrapper error: {e}", "ERROR")
+    finally:
+        _s.sampling_active = False
+
+
+# === ALL FIND MIN/MAX AND WATCH FUNCTIONS UNCHANGED ===
 async def findLowestTemp(compareTemp, source='local'):
     try:
         if compareTemp is None:
@@ -165,12 +226,6 @@ async def findHighestHumid(compareHumid, source='local'):
     except Exception:
         pass
 
-async def beginFrostOperations():
-    # Implement frost operations (e.g., engage relays or notify)
-    await debug_print("beginFrostOperations: executing frost response", "FROSTWATCH")
-    # ...existing code or hardware actions...
-    pass
-
 async def frost_and_heat_watch():
     try:
         # FROSTWATCH LOGIC
@@ -211,3 +266,77 @@ async def frost_and_heat_watch():
                     await endHeatOperations()
     except Exception as e:
         await debug_print(f"sample:frost/heat err: {e}", "FROSTHEATWATCH ERROR")
+        
+
+#Soil Probe Sampling (unchanged)
+async def sample_soil_probe():
+    """
+    Async soil probe sampler using ALL settings variables.
+    ... (exact original code)
+    """
+    if not getattr(settings, 'SAMPLE_SOIL', False):
+        await debug_print("Soil sampling disabled (SAMPLE_SOIL=False)", "SOIL")
+        return {"status": "disabled"}
+
+    await debug_print("Starting soil probe sampling...", "SOIL")
+
+    try:
+        # === MOISTURE (uses your SOIL_PROBE_PIN) ===
+        adc_moist = machine.ADC(settings.SOIL_PROBE_PIN)
+        adc_moist.atten(machine.ADC.ATTN_11DB)          
+
+        readings = []
+        for _ in range(10):
+            readings.append(adc_moist.read_u16())
+            await asyncio.sleep_ms(10)                  
+
+        raw_moisture = sum(readings) // len(readings)
+
+        await debug_print(f"Raw moisture (u16 avg): {raw_moisture}", "SOIL")
+
+        min_raw = getattr(settings, 'MIN_SOIL_MOISTURE', 45)
+        max_raw = getattr(settings, 'MAX_SOIL_MOISTURE', 120)
+
+        if raw_moisture >= 65500:
+            await debug_print("Error: Sensor maxed out — check wiring/power", "SOIL")
+            moisture_pct = 0.0
+        elif max_raw > min_raw:
+            moisture_pct = (max_raw - raw_moisture) * 100.0 / (max_raw - min_raw)
+            moisture_pct = max(0.0, min(100.0, moisture_pct))
+        else:
+            moisture_pct = 50.0
+
+        await debug_print(f"Soil Moisture: {moisture_pct:.1f}%", "SOIL")
+
+        # === TEMPERATURE ===
+        temperature_c = None
+        temperature_f = None
+        try:
+            adc_temp = machine.ADC(9)                   
+            adc_temp.atten(machine.ADC.ATTN_11DB)
+
+            t_readings = [adc_temp.read_u16() for _ in range(8)]
+            raw_temp = sum(t_readings) // len(t_readings)
+
+            await debug_print(f"Raw temperature (u16 avg): {raw_temp}", "SOIL")
+
+            temperature_c = (raw_temp / 65535.0) * 100.0 - 50.0
+            temperature_c -= 16.666666666666668
+            temperature_f = (temperature_c * 9 / 5) + 32
+
+            await debug_print(f"Temperature: {temperature_c:.2f}°C ({temperature_f:.1f}°F)", "SOIL")
+        except Exception as temp_e:
+            await debug_print(f"Temperature sensor issue: {temp_e}", "ERROR")
+
+        return {
+            "status": "success",
+            "moisture_percent": round(moisture_pct, 1),
+            "raw_moisture": raw_moisture,
+            "temperature_c": round(temperature_c, 2) if temperature_c is not None else None,
+            "temperature_f": round(temperature_f, 1) if temperature_f is not None else None,
+            "raw_temperature": raw_temp if 'raw_temp' in locals() else None
+        }
+
+    except Exception as e:
+        await debug_print(f"Soil probe error: {e}", "ERROR")
+        return {"status": "error", "message": str(e)}

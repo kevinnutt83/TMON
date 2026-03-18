@@ -250,7 +250,8 @@ async def debug_print(message, status):
         'BME280': getattr(settings, 'DEBUG_BME280', False),
         'DHT11': getattr(settings, 'DEBUG_DHT11', False),
         'SAMPLING': getattr(settings, 'DEBUG_SAMPLING', False),
-        'SAMPLE_': getattr(settings, 'DEBUG_SAMPLING', False),  # matches SAMPLE_TEMP/HUMID/BAR...
+        'SAMPLE_': getattr(settings, 'DEBUG_SAMPLING', False), 
+        'SOIL': getattr(settings, 'DEBUG_SOIL_PROBE', False),
 
         # connectivity / radio
         'LORA': getattr(settings, 'DEBUG_LORA', False),

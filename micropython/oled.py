@@ -6,7 +6,7 @@ import settings
 import sdata
 import machine
 import framebuf
-from settings import I2C_B_SCL_PIN, I2C_B_SDA_PIN
+from settings import OLED_SCL_PIN, OLED_SDA_PIN
 
 # Globals / state
 _render_task = None
@@ -115,7 +115,7 @@ class SSD1309_I2C(framebuf.FrameBuffer):
 oled = None
 if getattr(settings, 'ENABLE_OLED', False):
     try:
-        i2c = machine.I2C(1, scl=machine.Pin(I2C_B_SCL_PIN), sda=machine.Pin(I2C_B_SDA_PIN), freq=100000)
+        i2c = machine.I2C(1, scl=machine.Pin(OLED_SCL_PIN), sda=machine.Pin(OLED_SDA_PIN), freq=100000)
         oled = SSD1309_I2C(128, 64, i2c, addr=0x3C)
     except Exception as e:
         print(f"[ERROR] OLED init failed: {e}")

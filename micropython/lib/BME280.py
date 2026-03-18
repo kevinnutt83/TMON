@@ -12,17 +12,28 @@ digH = []
 t_fine = 0.0
 
 class BME280: 
-    def __init__(self, address=I2C_ADDR):
-        self.i2c = I2C(0, scl=Pin(settings.I2C_A_SCL_PIN), sda=Pin(settings.I2C_A_SDA_PIN), freq=400000)
+    def __init__(self, i2c=None, address=I2C_ADDR):
+        """
+        Supports TWO separate BME280 sensors on different pins.
+        - i2c=None  → legacy / interior enclosure (DEVICE_TEMP pins)
+        - i2c=object → any custom I2C bus (used for exterior probe)
+        """
+        if i2c is None:
+            # Interior enclosure sensor (original pin set)
+            self.i2c = I2C(0, scl=Pin(settings.DEVICE_TEMP_SCL_PIN),
+                           sda=Pin(settings.DEVICE_TEMP_SDA_PIN), freq=400000)
+        else:
+            self.i2c = i2c
+            
         self.address = address
         
         self.calib = []
         self.osrs_t = 1 #Temperature oversampling x 1
         self.osrs_p = 1 #Pressure oversampling x 1
         self.osrs_h = 1 #Humidity oversampling x 1
-        self.mode   = 3 #Normal self.mode
+        self.mode   = 3 #Normal mode
         self.t_sb   = 5 #Tstandby 1000ms
-        self.filter = 0 #self.filter off
+        self.filter = 0 #filter off
         self.spi3w_en = 0   #3-wire SPI Disable
 
         ctrl_meas_reg = (self.osrs_t << 5) | (self.osrs_p << 2) | self.mode
@@ -89,9 +100,6 @@ class BME280:
         pressure = self.compensate_P(pres_raw)
         temperature = self.compensate_T(temp_raw)
         var_h = self.compensate_H(hum_raw)
-        # print "pressure : %7.2f hPa" % (pressure/100)
-        # print "temp : %-6.2f ℃" % (temperature) 
-        # print "hum : %6.2f ％" % (var_h)
         return [pressure, temperature, var_h]
 
     def compensate_P(self, adc_P):
@@ -116,7 +124,6 @@ class BME280:
         v2 = ((pressure / 4.0) * digP[7]) / 8192.0
         pressure = pressure + ((v1 + v2 + digP[6]) / 16.0)  
         return (pressure/100)
-        # print "pressure : %7.2f hPa" % (pressure/100)
 
     def compensate_T(self, adc_T):
         global t_fine
@@ -124,7 +131,6 @@ class BME280:
         v2 = (adc_T / 131072.0 - digT[0] / 8192.0) * (adc_T / 131072.0 - digT[0] / 8192.0) * digT[2]
         t_fine = v1 + v2
         temperature = t_fine / 5120.0
-        # print "temp : %-6.2f ℃" % (temperature) 
         return temperature
 
     def compensate_H(self, adc_H):
@@ -139,7 +145,6 @@ class BME280:
             var_h = 100.0
         elif var_h < 0.0:
             var_h = 0.0
-        # print "hum : %6.2f ％" % (var_h)
         return var_h
 
 
@@ -148,8 +153,6 @@ if __name__ == '__main__':
     sensor.get_calib_param()
     sleep(1)
     try:
-        # sensor.setup()
-        data = []
         data = sensor.readData()
         print("pressure : %7.2f hPa" %data[0])
         print("temp : %-6.2f ℃" %data[1])
