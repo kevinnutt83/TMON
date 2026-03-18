@@ -626,8 +626,19 @@ def update_sys_voltage():
             pass
         return 0
 
-# --- free pins + GC (restored) ---
+# --- free pins
 async def free_pins():
+    machine.Pin(settings.SYS_VOLTAGE_PIN, machine.Pin.IN)
+    machine.Pin(settings.LED_PIN, machine.Pin.IN)
+    machine.Pin(settings.RELAY_PIN1, machine.Pin.IN)
+    machine.Pin(settings.RELAY_PIN2, machine.Pin.IN)
+    # RELAY_PIN3 to RELAY_PIN8 are None, skipping initialization
+    machine.Pin(settings.DEVICE_TEMP_SCL_PIN, machine.Pin.IN)
+    machine.Pin(settings.DEVICE_TEMP_SDA_PIN, machine.Pin.IN)
+    machine.Pin(settings.BME280_PROBE_SCL_PIN, machine.Pin.IN)
+    machine.Pin(settings.BME280_PROBE_SDA_PIN, machine.Pin.IN)
+    machine.Pin(settings.OLED_SCL_PIN, machine.Pin.IN)
+    machine.Pin(settings.OLED_SDA_PIN, machine.Pin.IN)
     machine.Pin(settings.CLK_PIN, machine.Pin.IN)
     machine.Pin(settings.MOSI_PIN, machine.Pin.IN)
     machine.Pin(settings.MISO_PIN, machine.Pin.IN)
@@ -635,8 +646,11 @@ async def free_pins():
     machine.Pin(settings.IRQ_PIN, machine.Pin.IN)
     machine.Pin(settings.RST_PIN, machine.Pin.IN)
     machine.Pin(settings.BUSY_PIN, machine.Pin.IN)
-    machine.Pin(settings.I2C_A_SCL_PIN, machine.Pin.IN)
-    machine.Pin(settings.I2C_A_SDA_PIN, machine.Pin.IN)
+    machine.Pin(settings.CH1_TX_PIN, machine.Pin.IN)
+    machine.Pin(settings.CH1_RX_PIN, machine.Pin.IN)
+    machine.Pin(settings.CH2_TX_PIN, machine.Pin.IN)
+    machine.Pin(settings.CH2_RX_PIN, machine.Pin.IN)
+    machine.Pin(settings.SOIL_PROBE_PIN, machine.Pin.IN)
     await asyncio.sleep(0)
 
 # Compatibility aliases used elsewhere in the repo
