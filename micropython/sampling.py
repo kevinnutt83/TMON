@@ -6,7 +6,7 @@ from utils import free_pins_i2c
 import uasyncio as asyncio
 from utils import debug_print, log_error
 from tmon import frostwatchCheck, heatwatchCheck, beginFrostOperations, beginHeatOperations, endFrostOperations, endHeatOperations
-import machine
+from machine import I2C, Pin
 
 
 #Sampling Routine for sample all sensor types if they are enabled
@@ -123,7 +123,7 @@ async def _read_bme280(i2c, target="probe"):
 
 async def sampleBME280Interior():
     from utils import led_status_flash
-    await led_status_flash('SAMPLE_DEVICE_TEMP')
+    led_status_flash('SAMPLE_DEVICE_TEMP')
     try:
         from oled import display_message
         await display_message("Sampling Interior Temp", 1)
@@ -137,7 +137,7 @@ async def sampleBME280Interior():
 
 async def sampleBME280Probe():
     from utils import led_status_flash
-    await led_status_flash('SAMPLE_BME280')
+    led_status_flash('SAMPLE_BME280')
     try:
         from oled import display_message
         await display_message("Sampling Exterior Probe", 1)
