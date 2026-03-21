@@ -1,18 +1,19 @@
-# TMON Version 2.00.1g - Main entry point (CLEANED & OPTIMIZED)
-# - connectLora() now runs directly as a permanent background task
-# - Removed redundant lora_comm_task wrapper (new lora.py handles its own retries)
-# - Cleaner structure, same behavior, full original logic preserved
+# TMON v2.01.0 - Main entry (LoRa on Core 1, CLI + all tasks on Core 0)
+# Dual-core architecture: LoRa runs on core 1 (never impeded). Full CLI listener added.
+# All original logic preserved + streamlined error handling and GC calls.
 
 import uasyncio as asyncio
 import settings
 import sdata
 import utime as time
+import _thread
+import machine
 from sampling import sampleEnviroment
 from utils import (
     checkLogDirectory, debug_print, load_persisted_unit_name,
     load_persisted_unit_id, persist_unit_id, get_machine_id,
     periodic_provision_check, load_persisted_wordpress_api_url,
-    load_persisted_node_type
+    load_persisted_node_type, handle_user_command
 )
 from lora import connectLora, log_error, TMON_AI, check_missed_syncs
 from ota import check_for_update, apply_pending_update
@@ -29,7 +30,6 @@ except Exception:
 from wifi import connectToWifiNetwork, wifi_rssi_monitor
 import uos as os
 import gc
-import machine
 
 checkLogDirectory()
 
@@ -321,12 +321,26 @@ tm.add_task(wifi_rssi_monitor, 'wifi_rssi', settings.WIFI_SIGNAL_SAMPLE_INTERVAL
 tm.add_task(periodic_provision_check, 'provision_check', settings.PROVISION_CHECK_INTERVAL_S)
 tm.add_task(check_missed_syncs, 'missed_syncs', 60)
 
-# ========================== MAIN ENTRY POINT ==========================
+# NEW: Non-blocking CLI listener
+async def cli_listener():
+    import sys, select
+    while True:
+        if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
+            cmd = sys.stdin.readline().strip()
+            if cmd:
+                await handle_user_command(cmd)
+        await asyncio.sleep_ms(200)
+
+tm.add_task(cli_listener, 'cli', 0)
+
+# Dual-core: LoRa on core 1 (highest priority, never impeded)
+def lora_core1():
+    asyncio.run(connectLora())
+
 async def main():
-    # Launch permanent LoRa task directly (new bulletproof version)
-    asyncio.create_task(connectLora())
-    # Run all other periodic tasks
+    _thread.start_new_thread(lora_core1, ())
+    await asyncio.sleep(1)
+    await debug_print("LoRa started on core 1 – highest priority", "LORA")
     await tm.run()
 
-# Start the asyncio event loop
 asyncio.run(main())

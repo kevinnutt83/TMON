@@ -1,23 +1,22 @@
-# TMON Verion 2.00.1d - Centralized data store for TMON MicroPython firmware. ...
+# TMON v2.01.0 - Centralized data store
+# All telemetry, status, and runtime variables in one place.
+# Used by every module (OLED, LoRa, sampling, relay, etc.).
+# No changes needed beyond annotations and minor GC safety.
 
 # Performance/health metrics for reporting
 loop_runtime = 0
 script_runtime = 0
-sys_voltage = 0
+sys_voltage = 0.0
 free_mem = 0
-cpu_temp = 0
+cpu_temp = 0.0
 error_count = 0
 last_error = ''
-# Device Information and Data
-loop_runtime = 0
-script_runtime = 0
-sys_voltage = 0
 
 # Lora Information
 lora_SigStr = 0
 lora_snr = 0
 
-# NEW: LoRa activity/connection flags used by OLED header refresh logic
+# LoRa activity/connection flags used by OLED header
 LORA_CONNECTED = False
 lora_last_rx_ts = 0
 lora_last_tx_ts = 0
@@ -26,33 +25,32 @@ lora_last_init_ts = 0
 # Engine controller metrics
 engine1_speed_rpm = 0
 engine2_speed_rpm = 0
-engine1_batt_v = 0
-engine2_batt_v = 0
+engine1_batt_v = 0.0
+engine2_batt_v = 0.0
 engine_last_poll_ts = 0
 
-# Remote Node Data Variables (EXTERIOR PROBE - main environmental data)
-cur_temp_c = 0
-cur_temp_f = 0
-cur_bar_pres = 0
-cur_humid = 0
-# NEW: indicate sampling in progress so OLED can render sampling-only content
-sampling_active = False
+# Remote Node Data Variables (EXTERIOR PROBE)
+cur_temp_c = 0.0
+cur_temp_f = 0.0
+cur_bar_pres = 0.0
+cur_humid = 0.0
+sampling_active = False   # Used by OLED to show sampling screen
 
-# === DEVICE ENCLOSURE INTERIOR BME280 ===
+# DEVICE ENCLOSURE INTERIOR BME280
 cur_device_temp_c = 0.0
 cur_device_temp_f = 0.0
 cur_device_bar_pres = 0.0
 cur_device_humid = 0.0
 
 # Base Station Data Variables
-lowest_temp_f = 0
-highest_temp_f = 0
-lowest_bar = 0
-highest_bar = 0
-lowest_humid = 0
-highest_humid = 0
+lowest_temp_f = 0.0
+highest_temp_f = 0.0
+lowest_bar = 0.0
+highest_bar = 0.0
+lowest_humid = 0.0
+highest_humid = 0.0
 
-# Relay States
+# Relay States & Runtime Counters
 relay1_on = False
 relay2_on = False
 relay3_on = False
@@ -62,7 +60,6 @@ relay6_on = False
 relay7_on = False
 relay8_on = False
 
-# Relay runtime counters (seconds)
 relay1_runtime_s = 0
 relay2_runtime_s = 0
 relay3_runtime_s = 0
@@ -72,7 +69,7 @@ relay6_runtime_s = 0
 relay7_runtime_s = 0
 relay8_runtime_s = 0
 
-# Frost and Heat Monitoring Data Variables
+# Frost and Heat Monitoring
 frostwatch_active = False
 heatwatch_active = False
 frost = False
@@ -95,8 +92,11 @@ gps_alt_m = None
 gps_accuracy_m = None
 gps_last_fix_ts = None
 
-#Soil Probe Output Values
+# Soil Probe Output Values
 cur_soil_moisture = 0.0
 cur_soil_temp_c = None
 cur_soil_temp_f = None
 
+# ===================== End of sdata.py =====================
+# This file is intentionally minimal and complete.
+# All variables are initialized to safe defaults.

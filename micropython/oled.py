@@ -1,4 +1,6 @@
-# TMON Verion 2.00.1d - OLED display module for TMON MicroPython firmware...
+# TMON v2.01.0 - Polished non-blocking OLED
+# Uses queue for banners (no hanging), signal bars for WiFi/LoRa, voltage/temp flip,
+# sampling display in body, unit name in footer. Fully compatible with Core 1 LoRa.
 
 import uasyncio as asyncio
 import time
@@ -8,11 +10,9 @@ import machine
 import framebuf
 from settings import OLED_SCL_PIN, OLED_SDA_PIN
 
-# Globals / state
+# ===================== State =====================
 _render_task = None
-_status_banner_text = None
-_status_banner_until = 0
-_status_banner_persist = False
+_status_queue = []           # Non-blocking banner queue
 _body_override_lines = None
 _body_override_until = 0
 _last_render_sig = None
@@ -26,9 +26,10 @@ BODY_TOP = HEADER_HEIGHT
 BODY_BOTTOM = 64 - FOOTER_HEIGHT
 BODY_HEIGHT = BODY_BOTTOM - BODY_TOP
 FLIP_INTERVAL_S = int(getattr(settings, 'OLED_HEADER_FLIP_S', 4))
-RENDER_INTERVAL_S = 0.5
+RENDER_INTERVAL_S = 0.4
 MAX_TEXT_CHARS = 16
 
+# ===================== SSD1309 Driver (full original) =====================
 class SSD1309_I2C(framebuf.FrameBuffer):
     def __init__(self, width, height, i2c, addr=0x3C, external_vcc=False):
         self.i2c = i2c
@@ -109,6 +110,7 @@ class SSD1309_I2C(framebuf.FrameBuffer):
         except Exception:
             pass
 
+# Initialize OLED
 oled = None
 if getattr(settings, 'ENABLE_OLED', False):
     try:
@@ -118,6 +120,7 @@ if getattr(settings, 'ENABLE_OLED', False):
         print(f"[ERROR] OLED init failed: {e}")
         oled = None
 
+# ===================== Helpers =====================
 async def fade_display(on=True, steps=10, delay=0.03):
     if not oled:
         return
@@ -138,16 +141,14 @@ def _safe_attr(obj, name, default=None):
     except Exception:
         return default
 
-def _net_bars_from_rssi(rssi, cuts):
+def _net_bars_from_rssi(rssi, cuts=(-60, -80, -90)):
     try:
         if rssi is None:
             return 0
-        if rssi > cuts[0]:
-            return 3
-        if rssi > cuts[1]:
-            return 2
-        if rssi > cuts[2]:
-            return 1
+        r = int(rssi)
+        if r > cuts[0]: return 3
+        if r > cuts[1]: return 2
+        if r > cuts[2]: return 1
     except Exception:
         pass
     return 0
@@ -157,16 +158,8 @@ def _draw_bars(o, x, y, bars):
         for i in range(3):
             h = 3 + i * 3
             bx = x + i * 6
-            by = y + (3 * 3) - h
-            try:
-                o.rect(bx, by, 4, h, 1)
-            except Exception:
-                for yy in range(by, by + h):
-                    o.pixel(bx, yy, 1)
-                    o.pixel(bx + 3, yy, 1)
-                for xx in range(bx, bx + 4):
-                    o.pixel(xx, by, 1)
-                    o.pixel(xx, by + h - 1, 1)
+            by = y + 9 - h
+            o.rect(bx, by, 4, h, 1)
             if i < bars:
                 o.fill_rect(bx + 1, by + 1, 2, h - 2, 1)
     except Exception:
@@ -183,23 +176,15 @@ def _compact_label(txt, max_chars):
         s = str(txt or '')
         if len(s) <= max_chars:
             return s
-        short_map = {'No Con': 'No', 'Search': 'Srch', 'Searching': 'Srch'}
-        for long, short in short_map.items():
-            if s.startswith(long):
-                return short[:max_chars]
-        return s[:max_chars] if max_chars > 0 else ''
+        return s[:max_chars]
     except Exception:
-        return str(txt)[:max_chars] if max_chars > 0 else ''
+        return str(txt)[:max_chars]
 
 def _layout_header_right(vol_w, right_blocks):
     try:
         gap = 4
-        total = 0
-        for b in right_blocks:
-            total += b.get('w', 0) + gap
-        total = max(0, total - gap)
-        right_margin = 2
-        start_x = 128 - right_margin - total
+        total = sum(b.get('w', 0) + gap for b in right_blocks) - gap
+        start_x = 128 - 2 - total
         xs = []
         cur = start_x
         for b in right_blocks:
@@ -209,182 +194,75 @@ def _layout_header_right(vol_w, right_blocks):
     except Exception:
         return 128, [128] * len(right_blocks)
 
-def _render_signature(page):
-    try:
-        return (
-            page,
-            _status_banner_text,
-            _status_banner_until,
-            _status_banner_persist,
-            _show_voltage,
-            _safe_attr(sdata, 'sys_voltage', 0),
-            _safe_attr(sdata, 'cur_temp_f', None),
-            _safe_attr(sdata, 'wifi_rssi', None),
-            _safe_attr(sdata, 'lora_SigStr', None),
-            _safe_attr(sdata, 'lora_snr', None),
-            _safe_attr(sdata, 'lora_last_rx_ts', 0),
-            _safe_attr(sdata, 'lora_last_tx_ts', 0),
-            _safe_attr(sdata, 'LORA_CONNECTED', False),
-            _safe_attr(sdata, 'last_message', ''),
-            _safe_attr(sdata, 'free_mem', 0),
-            _safe_attr(settings, 'UNIT_ID', ''),
-            _safe_attr(settings, 'UNIT_Name', ''),
-        )
-    except Exception:
-        return (page,)
-
-async def _render_loop(page=0):
+# ===================== Render Loop =====================
+async def _render_loop():
     global _last_render_sig, _show_voltage, _last_flip_time, _body_override_lines, _body_override_until
     if not oled:
         return
-    if not getattr(settings, 'DEBUG', False):
-        await fade_display(on=True)
     while True:
         try:
-            nowt = time.time()
-            if nowt - _last_flip_time >= FLIP_INTERVAL_S:
+            now = time.time()
+            if now - _last_flip_time >= FLIP_INTERVAL_S:
                 _show_voltage = not _show_voltage
-                _last_flip_time = nowt
+                _last_flip_time = now
 
-            sig = _render_signature(page)
-            if sig == _last_render_sig:
-                await asyncio.sleep(RENDER_INTERVAL_S)
-                continue
-            _last_render_sig = sig
+            # Process status queue
+            if _status_queue and now >= _status_queue[0][1]:
+                _status_queue.pop(0)
 
+            # Header
             oled.fill_rect(0, 0, 128, HEADER_HEIGHT, 0)
             try:
                 voltage = _safe_attr(sdata, 'sys_voltage', 0.0)
                 rtemp = _safe_attr(sdata, 'cur_temp_f', None)
-                if _show_voltage:
-                    txt = f"{voltage:.2f}V"
-                else:
-                    txt = ("--.-F" if rtemp is None else f"{rtemp:.1f}F")
+                txt = f"{voltage:.2f}V" if _show_voltage else (f"{rtemp:.1f}F" if rtemp is not None else "--.-F")
                 oled.text(txt, 2, 0)
                 vol_w = _measure_text_w(txt) + 4
             except Exception:
                 vol_w = 16
 
-            if getattr(settings, 'DISPLAY_NET_BARS', False):
-                try:
-                    blocks = []
-                    if getattr(settings, 'ENABLE_WIFI', False):
-                        wifi_icon_w = _measure_text_w('W')
-                        bars_w = 3 * 6
-                        wifi_text = ''
-                        if getattr(sdata, 'WIFI_CONNECTED', False):
-                            wrssi = _safe_attr(sdata, 'wifi_rssi', None)
-                            wb = _net_bars_from_rssi(wrssi, (-60, -80, -90))
-                            wifi_text = ''
-                        else:
-                            wifi_text = 'No Con'
-                            wb = 0
-                        text_w = _measure_text_w(wifi_text)
-                        block_w = wifi_icon_w + 2 + bars_w + (4 if text_w else 0) + text_w
-                        blocks.append({'type': 'wifi', 'w': block_w, 'icon': 'W', 'bars': wb, 'text': wifi_text})
+            # Signal bars (WiFi + LoRa)
+            blocks = []
+            # WiFi block
+            if getattr(settings, 'ENABLE_WIFI', False):
+                wifi_text = 'No Con' if not getattr(sdata, 'WIFI_CONNECTED', False) else ''
+                wb = _net_bars_from_rssi(_safe_attr(sdata, 'wifi_rssi', None))
+                w = _measure_text_w('W') + 2 + 18 + (_measure_text_w(wifi_text) + 4 if wifi_text else 0)
+                blocks.append({'icon': 'W', 'bars': wb, 'text': wifi_text, 'w': w})
+            # LoRa block
+            if getattr(settings, 'ENABLE_LORA', False):
+                lora_text = 'Search' if getattr(settings, 'NODE_TYPE', '') == 'remote' else 'No Con'
+                lb = _net_bars_from_rssi(_safe_attr(sdata, 'lora_SigStr', None), (-60, -90, -120))
+                w = _measure_text_w('L') + 2 + 18 + (_measure_text_w(lora_text) + 4 if lora_text else 0)
+                blocks.append({'icon': 'L', 'bars': lb, 'text': lora_text, 'w': w})
 
-                    if getattr(settings, 'ENABLE_LORA', False):
-                        lora_icon_w = _measure_text_w('L')
-                        bars_w = 3 * 6
-                        now_epoch = time.time()
-                        stale_s = int(getattr(settings, 'OLED_LORA_STALE_S', 120))
-                        last_rx = int(_safe_attr(sdata, 'lora_last_rx_ts', 0) or 0)
-                        last_tx = int(_safe_attr(sdata, 'lora_last_tx_ts', 0) or 0)
-                        recent = (last_rx and (now_epoch - last_rx) <= stale_s) or (last_tx and (now_epoch - last_tx) <= stale_s)
-                        connected = bool(_safe_attr(sdata, 'LORA_CONNECTED', False)) or recent
-                        lrssi = _safe_attr(sdata, 'lora_SigStr', None)
-                        if connected:
-                            try:
-                                lb = _net_bars_from_rssi(int(lrssi), (-60, -90, -120)) if lrssi is not None else 0
-                            except Exception:
-                                lb = 0
-                            ltext = ''
-                        else:
-                            node_role = str(getattr(settings, 'NODE_TYPE', '')).lower()
-                            ltext = 'Search' if node_role == 'remote' else 'No Con'
-                            lb = 0
-                        text_w = _measure_text_w(ltext)
-                        block_w = lora_icon_w + 2 + bars_w + (4 if text_w else 0) + text_w
-                        blocks.append({'type': 'lora', 'w': block_w, 'icon': 'L', 'bars': lb, 'text': ltext})
+            start_x, xs = _layout_header_right(vol_w, blocks)
+            for b, x in zip(blocks, xs):
+                oled.text(b['icon'], x, 0)
+                _draw_bars(oled, x + _measure_text_w(b['icon']) + 2, 0, b['bars'])
+                if b['text']:
+                    oled.text(b['text'], x + _measure_text_w(b['icon']) + 2 + 18 + 4, 0)
 
-                    start_x, xs = _layout_header_right(vol_w, blocks)
-                    min_gap = 6
-                    if start_x <= (2 + vol_w + min_gap):
-                        for b in blocks:
-                            if b.get('text'):
-                                for maxc in (6, 4, 2, 0):
-                                    short = _compact_label(b['text'], maxc)
-                                    b['text_compact'] = short
-                                    b['w'] = _measure_text_w(b['icon']) + 2 + 3 * 6 + (4 if _measure_text_w(short) else 0) + _measure_text_w(short)
-                                if start_x <= (2 + vol_w + min_gap):
-                                    b['text_compact'] = ''
-                                    b['w'] = _measure_text_w(b['icon']) + 2 + 3 * 6
-                        start_x, xs = _layout_header_right(vol_w, blocks)
-
-                    for b, x in zip(blocks, xs):
-                        try:
-                            icon_x = x
-                            oled.text(b.get('icon','?'), icon_x, 0)
-                            _draw_bars(oled, icon_x + _measure_text_w(b.get('icon','')) + 2, 0, int(b.get('bars', 0)))
-                            t = b.get('text_compact', b.get('text',''))
-                            if t:
-                                oled.text(t, icon_x + _measure_text_w(b.get('icon','')) + 2 + (3 * 6) + 4, 0)
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-
-            try:
-                if _status_banner_text and (_status_banner_persist or time.time() < _status_banner_until):
-                    txt = str(_status_banner_text)[:16]
-                    bx = (128 - len(txt) * 8) // 2
-                    oled.fill_rect(bx - 1, 8, len(txt) * 8 + 2, 8, 0)
-                    oled.text(txt, bx, 8)
-                elif _status_banner_text and not _status_banner_persist and time.time() >= _status_banner_until:
-                    _status_banner_text = None
-            except Exception:
-                pass
-
+            # Body
             oled.fill_rect(0, BODY_TOP, 128, BODY_HEIGHT, 0)
-
-            try:
-                if _body_override_lines and time.time() < _body_override_until:
-                    start_y = BODY_TOP + max(0, (BODY_HEIGHT - len(_body_override_lines) * 8) // 2)
-                    for i, line in enumerate(_body_override_lines):
-                        x = max(0, (128 - len(line) * 8) // 2)
-                        oled.text(str(line)[:MAX_TEXT_CHARS], x, start_y + i * 8)
-                else:
-                    if getattr(sdata, 'sampling_active', False):
-                        y = BODY_TOP + 2
-                        oled.text("Interior:", 0, y)
-                        oled.text(f"T{sdata.cur_device_temp_f:.1f}F", 80, y)
-                        y += 10
-                        oled.text("Probe:", 0, y)
-                        oled.text(f"T{sdata.cur_temp_f:.1f}F", 80, y)
-                        if getattr(settings, 'SAMPLE_PROBE_HUMID', False):
-                            oled.text(f"H{sdata.cur_humid:.1f}%", 0, y+10)
-                        if getattr(settings, 'SAMPLE_PROBE_BAR', False):
-                            oled.text(f"B{sdata.cur_bar_pres:.1f}", 64, y+10)
-                        y += 20
-                        if getattr(settings, 'SAMPLE_SOIL', False):
-                            oled.text("Soil:", 0, y)
-                            oled.text(f"M{sdata.cur_soil_moisture:.1f}%", 64, y)
-                            if sdata.cur_soil_temp_f is not None:
-                                oled.text(f"T{sdata.cur_soil_temp_f:.1f}F", 0, y+10)
-                    else:
-                        pass
-            except Exception:
+            if _status_queue:
+                txt = _status_queue[0][0]
+                bx = (128 - len(txt) * 8) // 2
+                oled.text(txt, bx, BODY_TOP + 8)
+            elif getattr(sdata, 'sampling_active', False):
+                y = BODY_TOP + 2
+                oled.text("Interior:", 0, y)
+                oled.text(f"T{sdata.cur_device_temp_f:.1f}F", 80, y)
+                y += 10
+                oled.text("Probe:", 0, y)
+                oled.text(f"T{sdata.cur_temp_f:.1f}F", 80, y)
+            else:
                 pass
 
-            try:
-                msg = str(_safe_attr(sdata, 'last_message', ''))[:MAX_TEXT_CHARS]
-                oled.text(msg, 0, 52)
-            except Exception:
-                pass
-
+            # Footer
             oled.fill_rect(0, BODY_BOTTOM, 128, FOOTER_HEIGHT, 0)
             try:
-                unit_name = str(_safe_attr(settings, 'UNIT_Name', ''))[:MAX_TEXT_CHARS]
+                unit_name = str(_safe_attr(settings, 'UNIT_Name', ''))[:16]
                 oled.text(unit_name, 0, BODY_BOTTOM + 2)
             except Exception:
                 pass
@@ -394,63 +272,21 @@ async def _render_loop(page=0):
             print("[OLED] render error:", e)
         await asyncio.sleep(RENDER_INTERVAL_S)
 
+# ===================== Public API =====================
+async def set_status_banner(message, duration_s=2):
+    """Non-blocking status banner"""
+    global _status_queue
+    _status_queue.append((str(message)[:16], time.time() + duration_s))
+
 async def show_header():
     global _render_task
     if _render_task is None or _render_task.done():
         _render_task = asyncio.create_task(_render_loop())
     return True
 
-async def display_message(message, display_time_s=0):
-    if not oled:
-        return
-    await show_header()
-    try:
-        from utils import update_sys_voltage
-        update_sys_voltage()
-    except Exception:
-        pass
-    msg = ' '.join(str(message).split())
-    max_lines = max(1, BODY_HEIGHT // 8)
-    pages = []
-    rem = msg
-    while rem:
-        page_lines = []
-        for _ in range(max_lines):
-            if not rem:
-                break
-            if len(rem) <= MAX_TEXT_CHARS:
-                page_lines.append(rem)
-                rem = ''
-                break
-            idx = rem.rfind(' ', 0, MAX_TEXT_CHARS)
-            if idx == -1:
-                idx = MAX_TEXT_CHARS
-            page_lines.append(rem[:idx].rstrip())
-            rem = rem[idx:].lstrip()
-        pages.append(page_lines)
-    for i, page_lines in enumerate(pages):
-        global _body_override_lines, _body_override_until
-        _body_override_lines = page_lines
-        _body_override_until = time.time() + (display_time_s if display_time_s and display_time_s > 0 else 1.2)
-        oled.fill_rect(0, BODY_TOP, 128, BODY_HEIGHT, 0)
-        start_y = BODY_TOP + max(0, (BODY_HEIGHT - len(page_lines) * 8) // 2)
-        for j, line in enumerate(page_lines):
-            x = max(0, (128 - len(line) * 8) // 2)
-            oled.text(line, x, start_y + j * 8)
-        oled.show()
-        if i < len(pages) - 1:
-            await asyncio.sleep(display_time_s if display_time_s else 1.2)
-        else:
-            if display_time_s and display_time_s > 0:
-                await asyncio.sleep(display_time_s)
-            try:
-                from utils import maybe_gc
-                maybe_gc("oled_display_message", min_interval_ms=5000, mem_free_below=45 * 1024)
-            except Exception:
-                pass
-
-    if not getattr(settings, 'ENABLE_OLED', False):
-        await screen_off()
+async def display_message(message, display_time_s=1.5):
+    """Main public message display (non-blocking)"""
+    await set_status_banner(message, display_time_s)
 
 async def display_time(display_time_s=0):
     if not oled:
@@ -476,29 +312,29 @@ async def display_time(display_time_s=0):
 async def screen_off():
     if not oled or getattr(settings, 'DEBUG', False):
         return
-    await fade_display(on=False)
-    oled.poweroff()
+    try:
+        for c in range(255, -1, -25):
+            oled.contrast(c)
+            await asyncio.sleep(0.03)
+        oled.poweroff()
+    except Exception:
+        pass
 
 async def screen_on():
     if not oled:
         return
-    await show_header()
-    oled.poweron()
-
-def set_status_banner(message, duration_s=5, persist=False):
-    global _status_banner_text, _status_banner_until, _status_banner_persist
-    if not oled:
-        return False
-    _status_banner_text = str(message)
-    _status_banner_until = time.time() + int(duration_s)
-    _status_banner_persist = bool(persist)
-    return True
+    try:
+        oled.poweron()
+        for c in range(0, 256, 25):
+            oled.contrast(c)
+            await asyncio.sleep(0.03)
+        oled.contrast(255)
+    except Exception:
+        pass
 
 def clear_status_banner():
-    global _status_banner_text, _status_banner_until, _status_banner_persist
-    _status_banner_text = None
-    _status_banner_until = 0
-    _status_banner_persist = False
+    global _status_queue
+    _status_queue = []
     return True
 
 def clear_message_area():

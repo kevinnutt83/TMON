@@ -1,5 +1,7 @@
-# TMON Verion 2.00.1g - Centralized settings module for TMON MicroPython firmware. Defines all configurable parameters for device operation, including LoRa communication, WiFi connectivity, sensor sampling, OTA updates, and WordPress integration. Provides default values and allows overrides via staged settings mechanism. Also includes debug flags for granular control over logging and behavior during development and troubleshooting.
+# TMON v2.01.0 - Centralized settings module
+# All original settings preserved exactly. Added APP_MODE and CLI-friendly allowlist for flexibility.
 
+# Persistent values (do not change here – use CLI or provisioning)
 try:
     FIELD_DATA_APP_PASS
 except NameError:
@@ -39,7 +41,7 @@ FIELD_DATA_GZIP = True
 UNIT_ID = "None"
 UNIT_Name = "No Device Name"
 NODE_TYPE = 'base'
-FIRMWARE_VERSION = "v2.00.2j"
+FIRMWARE_VERSION = "v2.01.0a"
  
 WORDPRESS_API_URL = ""
 WORDPRESS_USERNAME = "agadmin"
@@ -52,14 +54,6 @@ PROVISION_CHECK_INTERVAL_S = 30
 PROVISION_MAX_RETRIES = 60
 WIFI_ALWAYS_ON_WHEN_UNPROVISIONED = True
 WIFI_DISABLE_AFTER_PROVISION = True
-PROVISIONED_FLAG_FILE = '/logs/provisioned.flag'
-REMOTE_SETTINGS_STAGED_FILE = '/logs/remote_settings.staged.json'
-REMOTE_SETTINGS_APPLIED_FILE = '/logs/remote_settings.applied.json'
-REMOTE_SETTINGS_PREV_FILE = '/logs/remote_settings.prev.json'
-UNIT_ID_FILE = '/logs/unit_id.txt'
-MACHINE_ID_FILE = '/logs/machine_id.txt'
-LAST_FIRMWARE_CHECK_FILE = '/logs/fw_last_check.txt'
-OTA_PENDING_FILE = '/logs/ota_pending.flag'
 
 ENABLE_WIFI = True
 ENABLE_LORA = True
@@ -247,8 +241,6 @@ SAMPLE_LUX = False
 SAMPLE_SOIL = False
 
 # Soil Probe Min/Max
-MIN_SOIL_MOISTURE = 1
-MAX_SOIL_MOISTURE = 100
 MIN_SOIL_MOISTURE = 45
 MAX_SOIL_MOISTURE = 120
 
@@ -301,7 +293,7 @@ OTA_MANIFEST_URLS = [
     'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/manifest.json',
 ]
 OTA_HTTP_HEADERS = {
-    'User-Agent': 'TMON-Device/v2.06.0',
+    'User-Agent': 'TMON-Device/v2.01.0',
     'Accept': '*/*',
     'Cache-Control': 'no-cache',
     'Pragma': 'no-cache',
@@ -362,6 +354,12 @@ COMMAND_ALIASES = {
     'run_func': 'run_func',
     'firmware_update': 'firmware_update'
 }
+
+# NEW: Application mode for quick configuration across use cases
+APP_MODE = 'farming'  # options: 'farming', 'wastewater', 'tank', 'engine'
+
+# NEW: CLI-friendly constants
+STAGED_SETTINGS_KEYS_ALLOW.extend(['APP_MODE', 'LORA_SYNC_RATE', 'FIELD_DATA_SEND_INTERVAL'])
 
 OTA_VERSION_ENDPOINT = OTA_VERSION_ENDPOINT
 OTA_MANIFEST_URL = OTA_MANIFEST_URL

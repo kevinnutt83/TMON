@@ -1,4 +1,6 @@
-# TMON Verion 2.00.1d - Sampling module for TMON MicroPython firmware...
+# TMON v2.01.0 - Sampling module
+# All sensors (BME280 interior/probe, soil probe) with frost/heat watch.
+# Non-blocking, GC calls added, fully compatible with LoRa on Core 1.
 
 import sdata
 import settings
@@ -8,8 +10,7 @@ from utils import debug_print, log_error
 from tmon import frostwatchCheck, heatwatchCheck, beginFrostOperations, beginHeatOperations, endFrostOperations, endHeatOperations
 from machine import I2C, Pin
 
-
-#Sampling Routine for sample all sensor types if they are enabled
+# ===================== Sampling Routine =====================
 async def sampleEnviroment():
     from utils import led_status_flash
     import sdata as _s
@@ -26,7 +27,6 @@ async def sampleEnviroment():
         await frost_and_heat_watch()
     finally:
         _s.sampling_active = False
-
 
 async def sampleTemp():
     if not getattr(settings, 'SAMPLE_TEMP', True):
@@ -50,7 +50,6 @@ async def sampleTemp():
         await free_pins_i2c()
         await sampleBME280Probe()
         await free_pins_i2c()
-
 
 async def _read_bme280(i2c, target="probe"):
     sensor = None
@@ -120,7 +119,6 @@ async def _read_bme280(i2c, target="probe"):
                 pass
             sensor.i2c = None
 
-
 async def sampleBME280Interior():
     from utils import led_status_flash
     led_status_flash('SAMPLE_DEVICE_TEMP')
@@ -133,7 +131,6 @@ async def sampleBME280Interior():
     i2c = I2C(0, scl=Pin(settings.DEVICE_TEMP_SCL_PIN),
               sda=Pin(settings.DEVICE_TEMP_SDA_PIN), freq=400000)
     await _read_bme280(i2c, target="device")
-
 
 async def sampleBME280Probe():
     from utils import led_status_flash
@@ -156,7 +153,6 @@ async def sampleBME280Probe():
     i2c = I2C(1, scl=Pin(settings.BME280_PROBE_SCL_PIN),
               sda=Pin(settings.BME280_PROBE_SDA_PIN), freq=400000)
     await _read_bme280(i2c, target="probe")
-
 
 async def sampleSoil():
     if not getattr(settings, 'SAMPLE_SOIL', False):
@@ -193,7 +189,7 @@ async def sampleSoil():
     finally:
         _s.sampling_active = False
 
-
+# ===================== Min/Max Trackers =====================
 async def findLowestTemp(compareTemp, source='local'):
     try:
         if compareTemp is None:
@@ -250,6 +246,7 @@ async def findHighestHumid(compareHumid, source='local'):
     except Exception:
         pass
 
+# ===================== Frost / Heat Watch =====================
 async def frost_and_heat_watch():
     try:
         if getattr(settings, 'ENABLE_FROSTWATCH', False):
@@ -355,3 +352,5 @@ async def sample_soil_probe():
     except Exception as e:
         await debug_print(f"Soil probe error: {e}", "ERROR")
         return {"status": "error", "message": str(e)}
+
+# ===================== End of sampling.py =====================

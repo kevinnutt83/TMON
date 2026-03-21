@@ -1,4 +1,7 @@
-# TMON v2.00.3 - LoRa (FULL BULLETPROOF GATEWAY + TRUE MULTI-REMOTE + ACK + SNR + CMD + OTA)
+# TMON v2.01.0 - Bulletproof LoRa (runs on Core 1 via main.py)
+# Remote nodes now connect reliably, send field data chunks through base to WordPress.
+# OLED uses non-blocking banners. CAD backoff + guaranteed RX re-arm. HMAC/encryption kept.
+# LoRa is highest priority task - never impeded.
 
 import ujson
 import os
@@ -28,9 +31,9 @@ except ImportError:
     sdata = None
     settings = None
 
-from utils import free_pins, debug_print, TMON_AI, stage_remote_field_data, stage_remote_files, record_field_data, get_machine_id
+from utils import free_pins, debug_print, TMON_AI, stage_remote_field_data, stage_remote_files, record_field_data, get_machine_id, log_error
 from relay import toggle_relay
-from oled import display_message
+from oled import set_status_banner
 from sampling import findLowestTemp, findHighestTemp, findLowestBar, findHighestBar, findLowestHumid, findHighestHumid
 try:
     import wprest as _wp
@@ -105,31 +108,6 @@ def simple_checksum(path):
             chunk = f.read(128)
     return checksum
 
-async def user_input_listener():
-    if not sys or not hasattr(sys, 'stdin'):
-        return
-    while True:
-        if sys.stdin in select.select([sys.stdin], [], [], 0)[0]:
-            cmd = sys.stdin.readline().strip()
-            if cmd:
-                await handle_user_command(cmd)
-        await asyncio.sleep(0.1)
-
-async def handle_user_command(cmd):
-    from utils import debug_print
-    if cmd.lower() == 'reset_ai':
-        TMON_AI.error_count = 0
-        await debug_print('AI error count reset by user', 'user_input')
-    elif cmd.lower().startswith('call '):
-        fn = cmd[5:].strip()
-        if hasattr(TMON_AI, fn):
-            await debug_print(f'Calling AI function: {fn}', 'user_input')
-            getattr(TMON_AI, fn)()
-        else:
-            await debug_print(f'No such AI function: {fn}', 'user_input')
-    else:
-        await debug_print(f'Unknown command: {cmd}', 'user_input')
-
 async def hard_reset_lora():
     global lora
     if lora:
@@ -140,7 +118,7 @@ async def hard_reset_lora():
     try:
         for pin_num in (getattr(settings, 'CLK_PIN', 0), getattr(settings, 'MOSI_PIN', 0), getattr(settings, 'MISO_PIN', 0),
                         getattr(settings, 'CS_PIN', 0), getattr(settings, 'IRQ_PIN', 0), getattr(settings, 'RST_PIN', 0),
-                        getattr(settings, 'BUSY_PIN', 0), getattr(settings, 'I2C_A_SCL_PIN', 0), getattr(settings, 'I2C_A_SDA_PIN', 0)):
+                        getattr(settings, 'BUSY_PIN', 0)):
             p = machine.Pin(pin_num, machine.Pin.IN)
             p.value(0)
     except Exception:
@@ -153,15 +131,15 @@ async def hard_reset_lora():
         await asyncio.sleep_ms(150)
     except Exception:
         pass
-    lora = None  # Ensure cleared
+    lora = None
     gc.collect()
 
 async def init_lora():
     global lora
     await debug_print('Init LoRa: Beginning LoRa Module Initialization', 'LORA')
-    await display_message("LoRa Init...", 1)
+    await set_status_banner("LoRa Init...", 1)
     for attempt in range(10):
-        lora = None  # Reset each attempt
+        lora = None
         try:
             await hard_reset_lora()
             await free_pins()

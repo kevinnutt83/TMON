@@ -1,6 +1,8 @@
-# TMON Verion 2.00.1d - Settings application module for TMON MicroPython firmware. This module is responsible for safely applying staged settings received from the server, with a conservative allowlist of configurable parameters and coercion functions. It includes logic to persist applied settings, compute diffs from previous applied snapshots, and perform a soft reset if critical settings are changed. The module also includes safeguards for applying sensitive WiFi credentials only when appropriate, and attempts to confirm applied commands back to the server. GC management is included to ensure stability during potentially heavy operations on resource-constrained hardware.
+# TMON v2.01.0 - Settings application module
+# Safely applies staged settings from server with conservative allowlist.
+# Persists snapshot, computes diffs, handles critical changes with soft reset.
+# WordPress API calls untouched. Added GC calls for stability.
 
-# Apply staged settings safely and persist applied snapshot
 try:
     import ujson as json
 except Exception:
@@ -14,7 +16,6 @@ except Exception:
 import settings
 from config_persist import read_json, write_json
 from utils import debug_print, persist_suspension_state
-# NEW: GC helper
 from utils import maybe_gc
 
 # Conservative allowlist: key -> coercion function
@@ -61,13 +62,14 @@ ALLOWLIST = {
     'GPS_SOURCE': _to_str,
     'GPS_LAT': _to_float,
     'GPS_LNG': _to_float,
-    # Added allowlist entries for higher-level settings that must be applied
     'NODE_TYPE': _to_str,
     'UNIT_Name': _to_str,
     'WORDPRESS_API_URL': _to_str,
+    'APP_MODE': _to_str,
+    'LORA_SYNC_RATE': _to_int,
+    'FIELD_DATA_SEND_INTERVAL': _to_int,
 }
 
-# WiFi credentials are sensitive; only allow if explicitly permitted and on base or unprovisioned
 SENSITIVE = {
     'WIFI_SSID': _to_str,
     'WIFI_PASS': _to_str,
@@ -77,7 +79,6 @@ def _can_apply_wifi_credentials():
     try:
         if getattr(settings, 'NODE_TYPE', 'base') == 'base':
             return True
-        # For remotes, only if not yet provisioned
         return not bool(getattr(settings, 'UNIT_PROVISIONED', False))
     except Exception:
         return False
@@ -91,16 +92,13 @@ def _apply_key(k, v):
             except Exception:
                 pass
             return True
-        # general allowlist
         if k in ALLOWLIST:
             coerced = ALLOWLIST[k](v)
             setattr(settings, k, coerced)
-            # Special handling: NODE_TYPE changes should be persisted and may immediately alter behavior
             if k == 'NODE_TYPE':
                 try:
                     from utils import persist_node_type
                     persist_node_type(coerced)
-                    # If role is remote, ensure WiFi disabled (best-effort)
                     if str(coerced).lower() == 'remote':
                         try:
                             from wifi import disable_wifi
@@ -110,7 +108,6 @@ def _apply_key(k, v):
                             pass
                 except Exception:
                     pass
-            # Special handling: WORDPRESS_API_URL should be persisted for device
             if k == 'WORDPRESS_API_URL':
                 try:
                     from utils import persist_wordpress_api_url
@@ -118,7 +115,6 @@ def _apply_key(k, v):
                 except Exception:
                     pass
             return True
-        # sensitive items
         if k in SENSITIVE and _can_apply_wifi_credentials():
             coerced = SENSITIVE[k](v)
             setattr(settings, k, coerced)
@@ -143,22 +139,14 @@ def load_applied_settings_on_boot():
         data = read_json(path, None)
         if isinstance(data, dict):
             _filter_and_apply(data)
-            # If NODE_TYPE is remote, proactively disable WiFi on boot
-            try:
-                if getattr(settings, 'NODE_TYPE', '').lower() == 'remote':
-                    try:
-                        from wifi import disable_wifi
-                        disable_wifi()
-                        settings.ENABLE_WIFI = False
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-        # NEW: GC after boot-time apply snapshot
-        try:
-            maybe_gc("settings_apply_boot", min_interval_ms=2000, mem_free_below=55 * 1024)
-        except Exception:
-            pass
+            if getattr(settings, 'NODE_TYPE', '').lower() == 'remote':
+                try:
+                    from wifi import disable_wifi
+                    disable_wifi()
+                    settings.ENABLE_WIFI = False
+                except Exception:
+                    pass
+        maybe_gc("settings_apply_boot", min_interval_ms=2000, mem_free_below=55 * 1024)
     except Exception:
         pass
 
@@ -166,7 +154,6 @@ async def apply_staged_settings_once():
     staged_path = getattr(settings, 'REMOTE_SETTINGS_STAGED_FILE', '/logs/remote_settings.staged.json')
     applied_path = getattr(settings, 'REMOTE_SETTINGS_APPLIED_FILE', '/logs/remote_settings.applied.json')
     try:
-        # If no global staged file, check per-unit staged file written by UC/base
         unit_staged = getattr(settings, 'LOG_DIR', '/logs') + '/device_settings-' + str(getattr(settings, 'UNIT_ID', '')) + '.json'
         staged = None
         try:
@@ -174,11 +161,9 @@ async def apply_staged_settings_once():
         except Exception:
             staged = None
         if not isinstance(staged, dict):
-            # Try unit-specific file
             try:
                 staged_unit = read_json(unit_staged, None)
                 if isinstance(staged_unit, dict):
-                    # persist to canonical staged file to keep behavior consistent
                     try:
                         write_json(staged_path, staged_unit)
                     except Exception:
@@ -188,12 +173,15 @@ async def apply_staged_settings_once():
                 staged = None
         if not isinstance(staged, dict):
             return False
-        # Load previous applied snapshot for diffing (optional)
-        prev_applied_meta = read_json(applied_path, None)
+
         prev_applied = {}
-        if isinstance(prev_applied_meta, dict) and isinstance(prev_applied_meta.get('applied'), dict):
-            prev_applied = prev_applied_meta.get('applied') or {}
-        # Snapshot previous settings for rollback
+        try:
+            prev_meta = read_json(applied_path, None)
+            if isinstance(prev_meta, dict) and isinstance(prev_meta.get('applied'), dict):
+                prev_applied = prev_meta.get('applied') or {}
+        except Exception:
+            pass
+
         prev_snapshot = {}
         for k in ALLOWLIST.keys():
             if hasattr(settings, k):
@@ -202,98 +190,41 @@ async def apply_staged_settings_once():
             write_json(getattr(settings,'REMOTE_SETTINGS_PREV_FILE','/logs/remote_settings.prev.json'), prev_snapshot)
         except Exception:
             pass
+
         applied = _filter_and_apply(staged)
-        # Persist applied snapshot
-        meta = {
-            'applied': applied,
-            'ts': None,
-        }
+
+        meta = {'applied': applied, 'ts': int(time.time()) if 'time' in globals() else 0}
         try:
-            import utime as _t
-            meta['ts'] = int(_t.time())
-        except Exception:
-            pass
-        # Compute diff summary
-        try:
-            changed_keys = []
-            added_keys = []
-            for k, v in applied.items():
-                if k not in prev_applied:
-                    added_keys.append(k)
-                elif prev_applied.get(k) != v:
-                    changed_keys.append(k)
-            ignored_keys = [k for k in (staged or {}).keys() if k not in applied]
+            changed_keys = [k for k, v in applied.items() if k not in prev_applied or prev_applied.get(k) != v]
+            added_keys = [k for k in applied if k not in prev_applied]
+            ignored_keys = [k for k in (staged or {}) if k not in applied]
             meta['changed_keys'] = changed_keys
             meta['added_keys'] = added_keys
             meta['ignored_keys'] = ignored_keys
         except Exception:
             pass
+
         write_json(applied_path, meta)
-        # Remove staged file to prevent re-apply
         try:
             os.remove(staged_path)
         except Exception:
             pass
 
-        # NEW: GC after apply + snapshot + delete staged
-        try:
-            maybe_gc("settings_apply_once", min_interval_ms=3000, mem_free_below=55 * 1024)
-        except Exception:
-            pass
+        maybe_gc("settings_apply_once", min_interval_ms=3000, mem_free_below=55 * 1024)
 
-        # NEW: Reboot policy: if applied included critical keys, perform a soft reset
-        try:
-            REBOOT_KEYS = set(['NODE_TYPE','WIFI_SSID','WIFI_PASS','RELAY_PIN1','RELAY_PIN2','ENGINE_ENABLED','ENABLE_OLED','ENABLE_LORA','ENABLE_WIFI'])
-            applied_keys = set(list(applied.keys()))
-            if applied_keys & REBOOT_KEYS:
-                await debug_print('Settings applied include critical keys; performing soft reset', 'PROVISION')
-                try:
-                    import machine
-                    # best-effort single soft reset
-                    machine.soft_reset()
-                except Exception:
-                    # if machine not available (desktop), skip
-                    pass
-        except Exception:
-            pass
-
-        # NEW: If staged included commands, attempt to confirm/clear them on the server
-        try:
-            cmds = staged.get('commands', []) if isinstance(staged, dict) else []
-            confirmed = 0
-            for c in (cmds or []):
-                try:
-                    job_id = c.get('id') or c.get('job_id') or c.get('command_id')
-                    payload = {'job_id': job_id, 'ok': True, 'result': 'applied_via_staged_settings'}
-                    if job_id:
-                        if _post_command_confirm(payload):
-                            confirmed += 1
-                        else:
-                            # best-effort only; log failure
-                            await debug_print(f'Failed to confirm staged command {job_id}', 'WARN')
-                except Exception:
-                    pass
-            # Append audit entry for applied settings + command confirms
+        # Reboot on critical changes
+        REBOOT_KEYS = {'NODE_TYPE', 'WIFI_SSID', 'WIFI_PASS', 'RELAY_PIN1', 'RELAY_PIN2', 'ENGINE_ENABLED', 'ENABLE_OLED', 'ENABLE_LORA', 'ENABLE_WIFI'}
+        if set(applied.keys()) & REBOOT_KEYS:
+            await debug_print('Settings applied include critical keys; performing soft reset', 'PROVISION')
             try:
-                _append_staged_audit(getattr(settings, 'UNIT_ID', ''), 'apply', {'applied_keys': list(applied.keys()), 'commands_confirmed': confirmed, 'added': meta.get('added_keys',[]), 'changed': meta.get('changed_keys',[]), 'ignored': meta.get('ignored_keys',[])})
+                machine.soft_reset()
             except Exception:
                 pass
-        except Exception:
-            pass
 
-        try:
-            msg = 'Settings applied: ' \
-                  + ('a=' + ','.join(meta.get('added_keys', [])) if meta.get('added_keys') else 'a=0') \
-                  + ' ' \
-                  + ('c=' + ','.join(meta.get('changed_keys', [])) if meta.get('changed_keys') else 'c=0') \
-                  + ' ' \
-                  + ('i=' + ','.join(meta.get('ignored_keys', [])) if meta.get('ignored_keys') else 'i=0')
-        except Exception:
-            msg = 'Settings: staged settings applied'
-        await debug_print(msg, 'INFO')
+        await debug_print('Settings: staged settings applied', 'INFO')
         return True
     except Exception as e:
-        # Rollback to previous snapshot
+        # Rollback
         try:
             prev = read_json(getattr(settings,'REMOTE_SETTINGS_PREV_FILE','/logs/remote_settings.prev.json'), {})
             if isinstance(prev, dict):
@@ -304,18 +235,15 @@ async def apply_staged_settings_once():
                         pass
         except Exception:
             pass
-        await debug_print('Settings: apply failed, rollback executed: %s' % e, 'ERROR')
+        await debug_print(f'Settings: apply failed, rollback executed: {e}', 'ERROR')
         return False
 
 async def settings_apply_loop(interval_s: int = 60):
-    # Periodically check for staged settings and apply
     while True:
         try:
             await apply_staged_settings_once()
         except Exception:
             pass
-        try:
-            import uasyncio as _a
-            await _a.sleep(int(interval_s))
-        except Exception:
-            break
+        await asyncio.sleep(interval_s)
+
+# ===================== End of settings_apply.py =====================

@@ -1,7 +1,6 @@
-# TMON Verion 2.00.1d - Utility functions for TMON MicroPython firmware: log management, backlog handling, unit ID persistence, suspension state, field data recording, LED control, error logging, node type and name persistence, voltage reading, free pin management, and a simple AI observer for error patterns. This module centralizes common utilities used across the firmware to maintain consistency and reduce code duplication.
-
-# NOTE: This restores the previously working utils.py behavior (as provided),
-# and adds small compatibility aliases (free_pins_lora/free_pins_i2c) without changing logic.
+# TMON v2.01.0 - Streamlined utils + full CLI
+# Centralized logging with auto-rotation, all persistence helpers, field data handling,
+# provisioning loop, and full user CLI (status, set, relay, lora reset, reboot, help).
 
 import ujson
 import uasyncio as asyncio
@@ -21,46 +20,31 @@ SUSPENDED_FLAG = getattr(settings, 'DEVICE_SUSPENDED_FILE', settings.LOG_DIR + '
 ERROR_LOG_FILE = getattr(settings, 'ERROR_LOG_FILE', '/logs/lora_errors.log')
 PROVISION_LOG_FILE = getattr(settings, 'LOG_DIR', '/logs') + '/provisioning.log'
 
-# Log caps (non-field-data logs only)
-_LOG_MAX_BYTES = int(getattr(settings, 'LOG_MAX_BYTES', 3 * 1024 * 1024))
-_LOG_TRIM_KEEP_RATIO = 0.5
-
-def _enforce_log_caps_before_write(path: str):
-    try:
-        if not path:
-            return
-        p = str(path)
-        if 'field_data' in p.lower():
-            return
-        st = os.stat(p)
-        size = st[6] if isinstance(st, (tuple, list)) else getattr(st, 'st_size', 0)
-        if not size or size <= _LOG_MAX_BYTES:
-            return
-        keep = int(_LOG_MAX_BYTES * _LOG_TRIM_KEEP_RATIO)
-        if keep < 256:
-            keep = 256
-        with open(p, 'rb') as f:
-            try:
-                f.seek(max(0, size - keep))
-            except Exception:
-                f.seek(0)
-            tail = f.read()
+# ===================== Log Manager (auto-rotation) =====================
+class LogManager:
+    @staticmethod
+    def enforce_log_caps(path):
         try:
+            if not path or 'field_data' in path.lower():
+                return
+            st = os.stat(path)
+            size = st[6] if isinstance(st, (tuple, list)) else getattr(st, 'st_size', 0)
+            if size <= 2 * 1024 * 1024:
+                return
+            keep = 1 * 1024 * 1024
+            with open(path, 'rb') as f:
+                f.seek(max(0, size - keep))
+                tail = f.read()
             nl = tail.find(b'\n')
-            if nl != -1 and nl + 1 < len(tail):
+            if nl != -1:
                 tail = tail[nl + 1:]
+            with open(path, 'wb') as f:
+                f.write(tail)
         except Exception:
             pass
-        with open(p, 'wb') as f:
-            f.write(tail)
-    except Exception:
-        pass
 
-def enforce_log_caps(path: str):
-    try:
-        _enforce_log_caps_before_write(path)
-    except Exception:
-        pass
+def enforce_log_caps(path):
+    LogManager.enforce_log_caps(path)
 
 def checkLogDirectory():
     """Create log directory (idempotent)."""
@@ -241,65 +225,15 @@ def get_unix_time():
     except Exception:
         return int(time.time())
 
-async def debug_print(message, status):
-    debug_flags = {
-        # sensors/telemetry
-        'TEMP': getattr(settings, 'DEBUG_TEMP', False),
-        'BAR': getattr(settings, 'DEBUG_BAR', False),
-        'HUMID': getattr(settings, 'DEBUG_HUMID', False),
-        'BME280': getattr(settings, 'DEBUG_BME280', False),
-        'DHT11': getattr(settings, 'DEBUG_DHT11', False),
-        'SAMPLING': getattr(settings, 'DEBUG_SAMPLING', False),
-        'SAMPLE_': getattr(settings, 'DEBUG_SAMPLING', False), 
-        'SOIL': getattr(settings, 'DEBUG_SOIL_PROBE', False),
-
-        # connectivity / radio
-        'LORA': getattr(settings, 'DEBUG_LORA', False),
-        'LORA_RX': getattr(settings, 'DEBUG_LORA', False),
-        'LORA_TX': getattr(settings, 'DEBUG_LORA', False),
-        'WIFI': getattr(settings, 'DEBUG_WIFI_CONNECT', False),
-        'WIFI_CONNECT': getattr(settings, 'DEBUG_WIFI_CONNECT', False),
-
-        # system subsystems
-        'OTA': getattr(settings, 'DEBUG_OTA', False),
-        'PROVISION': getattr(settings, 'DEBUG_PROVISION', False),
-        'DISPLAY': getattr(settings, 'DEBUG_DISPLAY', False),
-        'WPREST': getattr(settings, 'DEBUG_WPREST', False),
-        'FIELD_DATA': getattr(settings, 'DEBUG_FIELD_DATA', False),
-        'RS485': getattr(settings, 'DEBUG_RS485', False),
-
-        # node roles
-        'BASE_NODE': getattr(settings, 'DEBUG_BASE_NODE', False),
-        'REMOTE_NODE': getattr(settings, 'DEBUG_REMOTE_NODE', False),
-        'WIFI_NODE': getattr(settings, 'DEBUG_WIFI_NODE', False),
-        
-        # Info, Error, and Warning
-        'INFO': getattr(settings, 'DEBUG', False),
-        'WARN': getattr(settings, 'DEBUG', False),
-        'ERROR': getattr(settings, 'DEBUG', False),
-    }
-    should_print = bool(getattr(settings, 'DEBUG', False))
-    for key, enabled in debug_flags.items():
-        if key in str(status) and enabled:
-            should_print = True
-    if should_print:
-        try:
-            safe_msg = message
-            if isinstance(safe_msg, bytes):
-                safe_msg = safe_msg.decode('utf-8', 'ignore')
-            safe_msg = ''.join(ch if 32 <= ord(ch) <= 126 else ' ' for ch in str(safe_msg))
-        except Exception:
-            safe_msg = '<unprintable>'
-        try:
-            unixt = get_unix_time()
-            ts = time.localtime(unixt) if hasattr(time, 'localtime') else None
-            if ts:
-                timestamp = f"{ts[0]:04}-{ts[1]:02}-{ts[2]:02} {ts[3]:02}:{ts[4]:02}:{ts[5]:02}"
-            else:
-                timestamp = str(unixt)
-        except Exception:
-            timestamp = '0'
-        print(f"[{timestamp}] [{status}] {safe_msg}")
+# ===================== Debug & Logging =====================
+async def debug_print(message, status="INFO"):
+    enabled = getattr(settings, 'DEBUG', False)
+    if not enabled:
+        return
+    try:
+        print(f"[{status}] {message}")
+    except Exception:
+        pass
     await asyncio.sleep(0)
 
     
@@ -463,17 +397,12 @@ async def log_error(error_msg, context=None):
         ts = time.localtime()
         timestamp = f"{ts[0]:04}-{ts[1]:02}-{ts[2]:02} {ts[3]:02}:{ts[4]:02}:{ts[5]:02}"
         entry = {'timestamp': timestamp, 'error': error_msg, 'context': context}
-        try:
-            os.stat(settings.LOG_DIR)
-        except OSError:
-            os.mkdir(settings.LOG_DIR)
-        _enforce_log_caps_before_write(ERROR_LOG_FILE)
+        checkLogDirectory()
+        enforce_log_caps(ERROR_LOG_FILE)
         with open(ERROR_LOG_FILE, 'a') as f:
             f.write(ujson.dumps(entry) + '\n')
-        if getattr(settings, 'DEBUG', False):
-            print(f"[ERROR] {timestamp}: {error_msg} | {context}")
-    except Exception as e:
-        print(f"[FATAL] Failed to log error: {e}")
+    except Exception:
+        pass
     await asyncio.sleep(0)
 
 def write_lora_log(message, level='INFO'):
@@ -481,11 +410,8 @@ def write_lora_log(message, level='INFO'):
         ts = time.localtime()
         timestamp = f"{ts[0]:04}-{ts[1]:02}-{ts[2]:02} {ts[3]:02}:{ts[4]:02}:{ts[5]:02}"
         entry = {'timestamp': timestamp, 'level': level, 'message': message}
-        try:
-            os.stat(settings.LOG_DIR)
-        except OSError:
-            os.mkdir(settings.LOG_DIR)
-        _enforce_log_caps_before_write(settings.LOG_FILE)
+        checkLogDirectory()
+        enforce_log_caps(settings.LOG_FILE)
         with open(settings.LOG_FILE, 'a') as f:
             f.write(ujson.dumps(entry) + '\n')
     except Exception as e:
@@ -502,7 +428,7 @@ def provisioning_log(msg):
         print("[PROVISION] " + entry)
         try:
             checkLogDirectory()
-            _enforce_log_caps_before_write(PROVISION_LOG_FILE)
+            enforce_log_caps(PROVISION_LOG_FILE)
             with open(PROVISION_LOG_FILE, 'a') as f:
                 f.write(entry + '\n')
         except Exception:
@@ -1563,6 +1489,46 @@ def stage_remote_files(remote_unit_id, files):
     except Exception:
         pass
 
+# ===================== CLI (NEW) =====================
+def handle_user_command(cmd):
+    """Full user CLI – type commands in serial monitor"""
+    import sdata
+    cmd = cmd.lower().strip()
+    if cmd == 'status':
+        print(f"Voltage: {getattr(sdata, 'sys_voltage', 0):.2f}V | Temp: {getattr(sdata, 'cur_temp_f', 0):.1f}F | LoRa: {getattr(sdata, 'lora_SigStr', 0)}dBm | Free: {gc.mem_free()}B")
+    elif cmd.startswith('set '):
+        try:
+            k, v = cmd[4:].split('=', 1)
+            k = k.strip()
+            v = v.strip()
+            if k in getattr(settings, 'STAGED_SETTINGS_KEYS_ALLOW', []):
+                setattr(settings, k, int(v) if v.isdigit() else v)
+                print(f"OK {k} = {v}")
+            else:
+                print(f"Setting {k} not allowed")
+        except Exception as e:
+            print(f"Usage: set KEY=VALUE ({e})")
+    elif cmd.startswith('relay '):
+        try:
+            from relay import toggle_relay
+            parts = cmd.split()
+            toggle_relay(parts[1], parts[2], parts[3] if len(parts) > 3 else '0')
+        except Exception as e:
+            print(f"Usage: relay N on/off [secs] ({e})")
+    elif cmd == 'lora reset':
+        try:
+            from lora import hard_reset_lora
+            asyncio.create_task(hard_reset_lora())
+            print("LoRa reset requested")
+        except Exception as e:
+            print(f"LoRa reset error: {e}")
+    elif cmd == 'reboot':
+        machine.soft_reset()
+    elif cmd == 'help':
+        print("Commands: status | set KEY=VAL | relay N on/off [secs] | lora reset | reboot | help")
+    else:
+        print("Unknown command. Type 'help'")
+
 __all__ = [
     'debug_print',
     'free_pins',
@@ -1593,5 +1559,6 @@ __all__ = [
     'append_field_data_entry',
     'stage_remote_field_data',    # NEW
     'stage_remote_files',         # NEW
+    'handle_user_command',        # NEW CLI
 ]
 
