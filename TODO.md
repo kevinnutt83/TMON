@@ -23,6 +23,8 @@ Notes
 - [x] Added missing placeholder `tmon.py` for frost/heat logic.
 - [x] Updated LICENSE file to MIT.
 - [x] Implemented modular debug system in `micropython/debug.py`.
+- [x] Fixed `utils.debug_print` to check category-specific DEBUG_* flags, not only global `DEBUG` flag.
+- [x] Fixed `debug.py` to print directly instead of delegating back to `debug_print` (avoided double-gating).
 - [x] Expanded `micropython/settings.py` with all configuration variables and persistence logic.
 - [x] Populated `CHANGELOG.md` with initial release notes.
 - [x] Tested structure, debug logging, and settings load/save.

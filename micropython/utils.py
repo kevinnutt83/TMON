@@ -226,8 +226,41 @@ def get_unix_time():
         return int(time.time())
 
 # ===================== Debug & Logging =====================
+
+# Map status/tag values used by callers to their settings.DEBUG_* flags
+_DEBUG_TAG_FLAGS = {
+    'LORA': 'DEBUG_LORA',
+    'PROVISION': 'DEBUG_PROVISION',
+    'OTA': 'DEBUG_OTA',
+    'WIFI': 'DEBUG_WIFI_CONNECT',
+    'BASE_NODE': 'DEBUG_BASE_NODE',
+    'REMOTE_NODE': 'DEBUG_REMOTE_NODE',
+    'WIFI_NODE': 'DEBUG_WIFI_NODE',
+    'SAMPLING': 'DEBUG_SAMPLING',
+    'TEMP': 'DEBUG_TEMP',
+    'BAR': 'DEBUG_BAR',
+    'HUMID': 'DEBUG_HUMID',
+    'DISPLAY': 'DEBUG_DISPLAY',
+    'RS485': 'DEBUG_RS485',
+    'DEBUGRS485': 'DEBUG_RS485',
+    'SOIL': 'DEBUG_SOIL_PROBE',
+    'HTTP': 'DEBUG_WPREST',
+    'WPREST': 'DEBUG_WPREST',
+    'FIELD_DATA': 'DEBUG_FIELD_DATA',
+    'FROSTWATCH': 'DEBUG_SAMPLING',
+    'HEATWATCH': 'DEBUG_SAMPLING',
+    'BME280': 'DEBUG_BME280',
+    'DHT11': 'DEBUG_DHT11',
+}
+
 async def debug_print(message, status="INFO"):
     enabled = getattr(settings, 'DEBUG', False)
+    # Check category-specific flag when global DEBUG is off
+    if not enabled and status:
+        tag = status.upper() if isinstance(status, str) else str(status).upper()
+        flag_name = _DEBUG_TAG_FLAGS.get(tag)
+        if flag_name:
+            enabled = getattr(settings, flag_name, False)
     if not enabled:
         return
     try:
