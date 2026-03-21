@@ -254,6 +254,16 @@ _DEBUG_TAG_FLAGS = {
 }
 
 async def debug_print(message, status="INFO"):
+    # ERROR and WARN always print regardless of debug flags
+    if status and isinstance(status, str):
+        tag_upper = status.upper()
+        if tag_upper in ('ERROR', 'WARN', 'WARNING'):
+            try:
+                print(f"[{status}] {message}")
+            except Exception:
+                pass
+            await asyncio.sleep(0)
+            return
     enabled = getattr(settings, 'DEBUG', False)
     # Check category-specific flag when global DEBUG is off
     if not enabled and status:
@@ -618,8 +628,13 @@ async def free_pins_lora():
 
 async def free_pins_i2c():
     try:
-        machine.Pin(settings.I2C_A_SCL_PIN, machine.Pin.IN)
-        machine.Pin(settings.I2C_A_SDA_PIN, machine.Pin.IN)
+        machine.Pin(settings.DEVICE_TEMP_SCL_PIN, machine.Pin.IN)
+        machine.Pin(settings.DEVICE_TEMP_SDA_PIN, machine.Pin.IN)
+    except Exception:
+        pass
+    try:
+        machine.Pin(settings.BME280_PROBE_SCL_PIN, machine.Pin.IN)
+        machine.Pin(settings.BME280_PROBE_SDA_PIN, machine.Pin.IN)
     except Exception:
         pass
     await asyncio.sleep(0)
@@ -733,6 +748,11 @@ def record_field_data():
     _copy(entry, sdata, 'cur_temp_c')
     _copy(entry, sdata, 'cur_humid')
     _copy(entry, sdata, 'cur_bar_pres')
+    _copy(entry, sdata, 'cur_device_temp_c')
+    _copy(entry, sdata, 'cur_device_temp_f')
+    _copy(entry, sdata, 'cur_device_bar_pres')
+    _copy(entry, sdata, 'cur_device_humid')
+    _copy(entry, sdata, 'cur_soil_moisture')
     _copy(entry, sdata, 'sys_voltage')
     _copy(entry, sdata, 'wifi_rssi')
     _copy(entry, sdata, 'lora_SigStr')
@@ -809,7 +829,7 @@ async def send_field_data_log():
         except OSError:
             with open(settings.FIELD_DATA_LOG, 'w') as f:
                 f.write('')
-            await debug_print('sfd: created empty field log', 'DEBUG')
+            await debug_print('sfd: created empty field log', 'FIELD_DATA')
     except Exception as e:
         await debug_print(f'send_field_data_log: Exception checking/creating FIELD_DATA_LOG: {e}', 'ERROR')
         return
@@ -817,11 +837,11 @@ async def send_field_data_log():
     max_retries = 5
     try:
         if _send_field_data_lock.locked():
-            await debug_print('send_field_data_log: another send in progress, skipping this cycle', 'DEBUG')
+            await debug_print('send_field_data_log: another send in progress, skipping this cycle', 'FIELD_DATA')
             return
 
         async with _send_field_data_lock:
-            await debug_print('sfd: reading log', 'DEBUG')
+            await debug_print('sfd: reading log', 'FIELD_DATA')
             payloads = []
             total_lines = 0
             batch = []
@@ -850,15 +870,15 @@ async def send_field_data_log():
             if batch:
                 payloads.append({'unit_id': settings.UNIT_ID, 'data': batch})
 
-            await debug_print(f'sfd: read {total_lines} lines, {len(payloads)} batches', 'DEBUG')
+            await debug_print(f'sfd: read {total_lines} lines, {len(payloads)} batches', 'FIELD_DATA')
 
             backlog = read_backlog()
-            await debug_print(f'sfd: backlog {len(backlog)}', 'DEBUG')
+            await debug_print(f'sfd: backlog {len(backlog)}', 'FIELD_DATA')
             payloads = backlog + payloads
             backlog_count = len(backlog)
 
             if not payloads:
-                await debug_print('sfd: no payloads', 'DEBUG')
+                await debug_print('sfd: no payloads', 'FIELD_DATA')
                 return
 
             import urequests as requests
@@ -923,7 +943,7 @@ async def send_field_data_log():
                     pass
 
                 delivered = False
-                await debug_print(f'sfd: send {idx+1}/{len(payloads)}', 'DEBUG')
+                await debug_print(f'sfd: send {idx+1}/{len(payloads)}', 'FIELD_DATA')
 
                 for attempt in range(1, max_retries + 1):
                     try:
@@ -932,7 +952,7 @@ async def send_field_data_log():
                         pass
                     try:
                         headers = {'Content-Type': 'application/json; charset=utf-8'}
-                        await debug_print(f'sfd: POST att{attempt} to WP', 'DEBUG')
+                        await debug_print(f'sfd: POST att{attempt} to WP', 'FIELD_DATA')
                         safe_payload = _sanitize_json(payload)
                         try:
                             encoded = ujson.dumps(safe_payload)
@@ -949,7 +969,7 @@ async def send_field_data_log():
                             timeout=10
                         )
                         try:
-                            await debug_print(f'sfd: resp {resp.status_code}', 'DEBUG')
+                            await debug_print(f'sfd: resp {resp.status_code}', 'FIELD_DATA')
                             resp_bytes = b''
                             try:
                                 resp_bytes = resp.content if hasattr(resp, 'content') else b''
@@ -978,7 +998,7 @@ async def send_field_data_log():
                                 except Exception:
                                     pass
                                 delivered = True
-                                await debug_print(f'sfd: payload {idx+1} ok', 'DEBUG')
+                                await debug_print(f'sfd: payload {idx+1} ok', 'FIELD_DATA')
                                 try:
                                     from oled import display_message
                                     await display_message("Field Data Sent", 1.5)
@@ -1008,17 +1028,17 @@ async def send_field_data_log():
                 current_indices = range(backlog_count, len(payloads))
                 delivered_current_all = all(i in sent_indices for i in current_indices) if len(payloads) > backlog_count else False
                 if delivered_current_all:
-                    await debug_print('sfd: rotate field log', 'DEBUG')
+                    await debug_print('sfd: rotate field log', 'FIELD_DATA')
                     rotate_field_data_log()
 
             unsent = [payloads[i] for i in range(len(payloads)) if i not in sent_indices]
             if unsent:
-                await debug_print(f'sfd: backlog write {len(unsent)}', 'DEBUG')
+                await debug_print(f'sfd: backlog write {len(unsent)}', 'FIELD_DATA')
                 clear_backlog()
                 for p in unsent:
                     append_to_backlog(p)
             else:
-                await debug_print('sfd: all delivered, clear backlog', 'DEBUG')
+                await debug_print('sfd: all delivered, clear backlog', 'FIELD_DATA')
                 clear_backlog()
     except Exception as e:
         await debug_print(f'sfd: exception {type(e).__name__}: {e}', 'ERROR')

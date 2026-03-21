@@ -82,6 +82,15 @@ Firmware (Micropython)
 - [x] Remove module-level execution in wifi.py (get_settings bootstrap, utils import) — deferred to first use.
 - [x] Fix Core 1 NULL deref crash: replaced dual-core asyncio.run() with single event loop. MicroPython uasyncio globals are not thread-safe; LoRa now runs as cooperative asyncio task on Core 0.
 - [x] Fix BME280 "unexpected keyword argument 'i2c'" crash: added TypeError fallback in _read_bme280 for devices running older BME280.py without i2c parameter support. lib/BME280.py is not in OTA allowlist so devices retain the old constructor signature.
+- [x] Fix field data log missing interior device readings and soil data: record_field_data() now includes cur_device_temp_c/f, cur_device_bar_pres, cur_device_humid, cur_soil_moisture.
+- [x] Enable probe sampling: SAMPLE_PROBE_TEMP/BAR/HUMID were all False, preventing exterior probe BME280 reads.
+- [x] Remove destructive LoRa SPI deinit from sampleBME280Probe: probe uses I2C1 (pins 6/2), not SPI1 — deinit was unnecessary and killed LoRa.
+- [x] Fix sampleSoil premature clearing of sampling_active flag (conflicted with sampleEnviroment's own flag management).
+- [x] Fix OLED render loop never starting: _update_display imported non-existent update_display; corrected to use show_header().
+- [x] Fix debug_print suppressing ERROR/WARN messages: ERROR and WARN tags now always print regardless of DEBUG flags.
+- [x] Fix send_field_data_log using 'DEBUG' tag instead of 'FIELD_DATA', bypassing DEBUG_FIELD_DATA=True.
+- [x] Fix main.py sample task guard using non-existent settings (SAMPLE_HUMIDITY, SAMPLE_PRESSURE, SAMPLE_GAS); corrected to SAMPLE_HUMID, SAMPLE_BAR.
+- [x] Fix free_pins_i2c referencing non-existent I2C_A_SCL_PIN/I2C_A_SDA_PIN; corrected to actual device and probe pin names.
 
 Admin
 - [ ] Add audit hooks across provisioning save/queue paths.

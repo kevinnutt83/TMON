@@ -73,15 +73,7 @@ async def sampleBME280Probe():
     except:
         pass
 
-    import lora as lora_module
-    async with lora_module.pin_lock:
-        if lora_module.lora is not None:
-            try:
-                lora_module.lora.spi.deinit()
-            except:
-                pass
-            lora_module.lora = None
-
+    # Probe uses I2C bus 1 (pins 6/2) — no conflict with LoRa SPI bus 1 (pins 35/36/37)
     i2c = I2C(1, scl=Pin(settings.BME280_PROBE_SCL_PIN),
               sda=Pin(settings.BME280_PROBE_SDA_PIN), freq=400000)
     await _read_bme280(i2c, target="probe")
@@ -174,7 +166,6 @@ async def sampleSoil():
 
     import sdata as _s
     from utils import led_status_flash
-    _s.sampling_active = True
 
     try:
         try:
@@ -200,8 +191,6 @@ async def sampleSoil():
 
     except Exception as e:
         await debug_print(f"sampleSoil wrapper error: {e}", "ERROR")
-    finally:
-        _s.sampling_active = False
 
 # ===================== Min/Max Trackers =====================
 async def findLowestTemp(compareTemp, source='local'):

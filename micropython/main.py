@@ -65,8 +65,8 @@ except Exception:
 # Lazy OLED import wrappers
 async def _update_display(page=0):
     try:
-        from oled import update_display
-        await update_display(page)
+        from oled import show_header
+        await show_header()
     except Exception:
         pass
 
@@ -369,7 +369,7 @@ async def _check_missed_syncs_wrapper():
 
 tm = TaskManager()
 tm.add_task(first_boot_provision, 'first_boot_provision', 0)
-if settings.SAMPLE_TEMP or settings.SAMPLE_HUMIDITY or settings.SAMPLE_PRESSURE or settings.SAMPLE_GAS:
+if getattr(settings, 'SAMPLE_TEMP', False) or getattr(settings, 'SAMPLE_HUMID', False) or getattr(settings, 'SAMPLE_BAR', False):
     tm.add_task(sample_task, 'sample', 30)
 tm.add_task(periodic_field_data_task, 'field_data', settings.FIELD_DATA_SEND_INTERVAL)
 tm.add_task(periodic_command_poll_task, 'command_poll', 10)
