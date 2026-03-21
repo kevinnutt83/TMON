@@ -33,7 +33,6 @@ except ImportError:
 
 from utils import free_pins, debug_print, TMON_AI, stage_remote_field_data, stage_remote_files, record_field_data, get_machine_id, log_error
 from relay import toggle_relay
-from oled import set_status_banner
 from sampling import findLowestTemp, findHighestTemp, findLowestBar, findHighestBar, findLowestHumid, findHighestHumid
 try:
     import wprest as _wp
@@ -77,6 +76,13 @@ pin_lock = asyncio.Lock()
 lora = None
 last_lora_error_ts = 0
 proxy_last_ts = {}
+
+async def display_message(msg, duration=1.5):
+    try:
+        from oled import display_message as _dm
+        await _dm(msg, duration)
+    except Exception:
+        pass
 
 tx_counter = 0
 rx_counter = 0
@@ -137,7 +143,11 @@ async def hard_reset_lora():
 async def init_lora():
     global lora
     await debug_print('Init LoRa: Beginning LoRa Module Initialization', 'LORA')
-    await set_status_banner("LoRa Init...", 1)
+    try:
+        from oled import set_status_banner
+        await set_status_banner("LoRa Init...", 1)
+    except Exception:
+        pass
     for attempt in range(10):
         lora = None
         try:

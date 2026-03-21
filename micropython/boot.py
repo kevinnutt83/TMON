@@ -1,17 +1,14 @@
 # TMON v2.01.0 - Boot sequence
-# Resilient boot with OLED feedback, persisted remote sync time, and conditional WiFi.
-# LoRa/CLI readiness prepared. No blocking operations.
+# Resilient boot with persisted remote sync time and conditional WiFi.
+# Minimal boot - no OLED to reduce stack depth during early init.
 
 from wifi import connectToWifiNetwork
 import settings
 import uasyncio as asyncio
-from oled import display_message
 
 async def boot():
-    fw_msg = f"Firmware: {settings.FIRMWARE_VERSION}"
-    await display_message(fw_msg, 2)
+    fw_msg = "Firmware: " + str(getattr(settings, 'FIRMWARE_VERSION', '?'))
     print(fw_msg)
-    await display_message("Booting TMON Device", 3)
 
     # If remote node, try to load persisted next sync time
     try:

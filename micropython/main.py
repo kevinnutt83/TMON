@@ -1,43 +1,96 @@
 # TMON v2.01.0 - Main entry (LoRa on Core 1, CLI + all tasks on Core 0)
 # Dual-core architecture: LoRa runs on core 1 (never impeded). Full CLI listener added.
 # All original logic preserved + streamlined error handling and GC calls.
+# Heavy imports (lora, sampling, engine_controller, settings_apply) deferred
+# to reduce C stack depth during module loading on ESP32-S3.
 
 import uasyncio as asyncio
 import settings
 import sdata
 import utime as time
-import _thread
 import machine
-from sampling import sampleEnviroment
 from utils import (
     checkLogDirectory, debug_print, load_persisted_unit_name,
     load_persisted_unit_id, persist_unit_id, get_machine_id,
     periodic_provision_check, load_persisted_wordpress_api_url,
     load_persisted_node_type, handle_user_command
 )
-from lora import connectLora, log_error, TMON_AI, check_missed_syncs
 from ota import check_for_update, apply_pending_update
-from oled import update_display, display_message
-from settings_apply import load_applied_settings_on_boot, settings_apply_loop
-try:
-    from engine_controller import engine_loop
-except Exception:
-    engine_loop = None
+from wifi import connectToWifiNetwork, wifi_rssi_monitor
+import uos as os
+import gc
+
+# Deferred heavy modules — loaded on first use to reduce import-time stack depth
+_lora_mod = None
+_sampling_mod = None
+_settings_apply_mod = None
+_engine_mod = None
+
+def _get_lora():
+    global _lora_mod
+    if _lora_mod is None:
+        import lora as _m
+        _lora_mod = _m
+    return _lora_mod
+
+def _get_sampling():
+    global _sampling_mod
+    if _sampling_mod is None:
+        import sampling as _m
+        _sampling_mod = _m
+    return _sampling_mod
+
+def _get_settings_apply():
+    global _settings_apply_mod
+    if _settings_apply_mod is None:
+        import settings_apply as _m
+        _settings_apply_mod = _m
+    return _settings_apply_mod
+
+def _get_engine():
+    global _engine_mod
+    if _engine_mod is None:
+        try:
+            import engine_controller as _m
+            _engine_mod = _m
+        except Exception:
+            _engine_mod = False
+    return _engine_mod
+
 try:
     import urequests as requests
 except Exception:
     requests = None
-from wifi import connectToWifiNetwork, wifi_rssi_monitor
-import uos as os
-import gc
+
+# Lazy OLED import wrappers
+async def _update_display(page=0):
+    try:
+        from oled import update_display
+        await update_display(page)
+    except Exception:
+        pass
+
+async def _display_message(msg, duration=1.5):
+    try:
+        from oled import display_message
+        await display_message(msg, duration)
+    except Exception:
+        pass
 
 checkLogDirectory()
 
 # Apply any previously applied settings snapshot on boot
 try:
-    load_applied_settings_on_boot()
+    _get_settings_apply().load_applied_settings_on_boot()
 except Exception:
     pass
+
+# Pre-load lora module at module level (outside asyncio.run) so its deep
+# import chain (sx1262 → sx126x → _sx126x, sampling → tmon, relay, wprest)
+# runs with a fresh C stack. Dependencies (utils, settings, sdata) are already
+# cached from earlier imports, keeping incremental depth ~3-4 levels.
+_get_lora()
+gc.collect()
 
 script_start_time = time.ticks_ms()
 
@@ -130,7 +183,10 @@ class TaskManager:
                 await t['coro_func']()
             except Exception as e:
                 await debug_print(f"Task {t['name']} error: {e}", "ERROR")
-                await log_error(f"Task {t['name']} error: {e}")
+                try:
+                    await _get_lora().log_error(f"Task {t['name']} error: {e}")
+                except Exception:
+                    pass
             t['last_run'] = time.ticks_ms()
             elapsed = (t['last_run'] - start) // 1000
             sleep_time = max(0, t['interval'] - elapsed)
@@ -200,10 +256,7 @@ async def first_boot_provision():
                         await debug_print('first_boot_provision: UNIT_ID persisted', 'PROVISION')
             except Exception:
                 pass
-            try:
-                await display_message("Provisioned", 2)
-            except Exception:
-                pass
+            await _display_message("Provisioned", 2)
             try:
                 site_val = (resp_json.get('site_url') or resp_json.get('wordpress_api_url') or '').strip()
                 role_val = (resp_json.get('role') or '').strip()
@@ -219,10 +272,7 @@ async def first_boot_provision():
             except Exception:
                 pass
         else:
-            try:
-                await display_message("Provision Failed", 2)
-            except Exception:
-                pass
+            await _display_message("Provision Failed", 2)
     except Exception as e:
         await debug_print(f'first_boot_provision err {e}', 'ERROR')
 
@@ -237,7 +287,7 @@ async def sample_task():
     if getattr(settings, 'DEVICE_SUSPENDED', False):
         await debug_print("suspended: skip sample", "WARN")
     else:
-        await sampleEnviroment()
+        await _get_sampling().sampleEnviroment()
     sdata.loop_runtime = (time.ticks_ms() - loop_start_time) // 1000
     sdata.script_runtime = get_script_runtime()
     sdata.free_mem = gc.mem_free()
@@ -249,8 +299,9 @@ async def sample_task():
         sdata.cpu_temp = 0
     from utils import update_sys_voltage, record_field_data
     sdata.sys_voltage = update_sys_voltage()
-    sdata.error_count = getattr(TMON_AI, 'error_count', 0)
-    sdata.last_error = getattr(TMON_AI, 'last_error', '')
+    _tmon_ai = getattr(_get_lora(), 'TMON_AI', None)
+    sdata.error_count = getattr(_tmon_ai, 'error_count', 0) if _tmon_ai else 0
+    sdata.last_error = getattr(_tmon_ai, 'last_error', '') if _tmon_ai else ''
     record_field_data()
     await debug_print(f"sample: lr={sdata.loop_runtime}s sr={sdata.script_runtime}s mem={sdata.free_mem}", "INFO")
     try:
@@ -304,6 +355,18 @@ async def periodic_command_poll_task():
         await asyncio.sleep(10)
 
 # ========================== TASK SETUP ==========================
+# settings_apply_loop and engine_loop wrapped for deferred import
+async def _settings_apply_loop_wrapper():
+    await _get_settings_apply().settings_apply_loop()
+
+async def _engine_loop_wrapper():
+    mod = _get_engine()
+    if mod and mod is not False:
+        await mod.engine_loop()
+
+async def _check_missed_syncs_wrapper():
+    await _get_lora().check_missed_syncs()
+
 tm = TaskManager()
 tm.add_task(first_boot_provision, 'first_boot_provision', 0)
 if settings.SAMPLE_TEMP or settings.SAMPLE_HUMIDITY or settings.SAMPLE_PRESSURE or settings.SAMPLE_GAS:
@@ -313,15 +376,15 @@ tm.add_task(periodic_command_poll_task, 'command_poll', 10)
 tm.add_task(check_for_update, 'ota_check', 3600)
 tm.add_task(apply_pending_update, 'ota_apply', settings.OTA_APPLY_INTERVAL_S)
 if settings.ENABLE_OLED:
-    tm.add_task(update_display, 'display', settings.OLED_UPDATE_INTERVAL_S)
-tm.add_task(settings_apply_loop, 'settings_apply', 60)
-if engine_loop:
-    tm.add_task(engine_loop, 'engine', settings.ENGINE_POLL_INTERVAL_S)
+    tm.add_task(_update_display, 'display', settings.OLED_UPDATE_INTERVAL_S)
+tm.add_task(_settings_apply_loop_wrapper, 'settings_apply', 60)
+if getattr(settings, 'ENABLE_ENGINE_CONTROLLER', False):
+    tm.add_task(_engine_loop_wrapper, 'engine', settings.ENGINE_POLL_INTERVAL_S)
 tm.add_task(wifi_rssi_monitor, 'wifi_rssi', settings.WIFI_SIGNAL_SAMPLE_INTERVAL_S)
 tm.add_task(periodic_provision_check, 'provision_check', settings.PROVISION_CHECK_INTERVAL_S)
-tm.add_task(check_missed_syncs, 'missed_syncs', 60)
+tm.add_task(_check_missed_syncs_wrapper, 'missed_syncs', 60)
 
-# NEW: Non-blocking CLI listener
+# Non-blocking CLI listener
 async def cli_listener():
     import sys, select
     while True:
@@ -333,14 +396,22 @@ async def cli_listener():
 
 tm.add_task(cli_listener, 'cli', 0)
 
-# Dual-core: LoRa on core 1 (highest priority, never impeded)
-def lora_core1():
-    asyncio.run(connectLora())
+# LoRa runs as an asyncio task on the same event loop.
+# MicroPython's uasyncio uses module-level globals (_task_queue, _io_queue)
+# shared across all threads. Calling asyncio.run() on Core 1 replaces these
+# globals, corrupting Core 0's active event loop and causing a NULL dereference
+# (EXCVADDR: 0x0000000c). Running LoRa as a cooperative asyncio task avoids
+# this entirely — connectLora() already yields at every await point.
+async def _lora_task():
+    try:
+        await _lora_mod.connectLora()
+    except Exception as e:
+        await debug_print(f"LoRa task fatal: {e}", "ERROR")
 
 async def main():
-    _thread.start_new_thread(lora_core1, ())
-    await asyncio.sleep(1)
-    await debug_print("LoRa started on core 1 – highest priority", "LORA")
+    lora_t = asyncio.create_task(_lora_task())
+    await asyncio.sleep(0.1)
+    await debug_print("LoRa started as async task", "LORA")
     await tm.run()
 
 asyncio.run(main())

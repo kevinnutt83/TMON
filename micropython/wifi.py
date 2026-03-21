@@ -1,25 +1,18 @@
-# TMON Verion 2.00.1d - WiFi management module for TMON MicroPython firmware. Handles WiFi connectivity, scanning, signal strength monitoring, and internet connectivity checks. Implements retry logic with backoff for connections and provides feedback via debug prints and OLED display messages. Also includes safeguards for remote node configurations and graceful handling of missing settings or hardware capabilities.
+# TMON v2.01.0 - WiFi management module
+# Handles WiFi connectivity, scanning, signal strength monitoring, and internet checks.
+# Module-level execution minimized to reduce C stack depth during import.
 
 import utime as time
 import network
 import uasyncio as asyncio
-import urequests
 import gc
 import sdata
 
 gc.enable()
 
-# --- GC: best-effort cleanup after module import / heavy init ---
-try:
-    import gc
-    gc.collect()
-except Exception:
-    pass
-
-# Inserted: lazy settings accessor must exist before use
+# Lazy settings accessor
 _settings_mod = None
 def get_settings():
-	# Return the real settings module or a safe proxy if import fails.
 	global _settings_mod
 	if _settings_mod is not None:
 		return _settings_mod
@@ -44,36 +37,39 @@ def get_settings():
 		_settings_mod = _SettingsProxy()
 		return _settings_mod
 
-# Lazy settings accessor and bootstrap remain as implemented.
+# Deferred utils import — loaded on first use, not at module level
+_debug_print = None
+_runGC = None
 
-# 1) Ensure settings has FIELD_DATA_APP_PASS before importing utils (which imports settings)
-_s = get_settings()
-try:
-	getattr(_s, 'FIELD_DATA_APP_PASS')
-except Exception:
-	# Declare with safe default; real value will override later when persisted config loads.
-	setattr(_s, 'FIELD_DATA_APP_PASS', "")
+def _ensure_utils():
+	global _debug_print, _runGC
+	if _debug_print is not None:
+		return
+	try:
+		from utils import runGC, debug_print
+		_debug_print = debug_print
+		_runGC = runGC
+	except Exception:
+		async def _dp(msg, tag="DEBUG"):
+			try:
+				print("[{}] {}".format(tag, msg))
+			except Exception:
+				pass
+		async def _gc():
+			try:
+				gc.collect()
+			except Exception:
+				pass
+		_debug_print = _dp
+		_runGC = _gc
 
-# 2) Import utils after bootstrap; provide safe fallbacks if import fails
-try:
-	from utils import runGC, debug_print
-except Exception:
-	async def debug_print(msg, tag="DEBUG"):
-		try:
-			print("[{}] {}".format(tag, msg))
-		except Exception:
-			pass
-	async def runGC():
-		try:
-			gc.collect()
-		except Exception:
-			pass
+async def debug_print(msg, tag="DEBUG"):
+	_ensure_utils()
+	await _debug_print(msg, tag)
 
-# Use getattr to avoid NameError when settings initializes later.
-FIELD_DATA_APP_PASS = getattr(get_settings(), 'FIELD_DATA_APP_PASS', '')
-if not FIELD_DATA_APP_PASS:
-	# Skip auth-required flows or log a warning; prevents boot-time NameError
-	pass
+async def runGC():
+	_ensure_utils()
+	await _runGC()
 
 def _should_attempt_connect():
 	# If node is remote, allow WiFi when unprovisioned and policy allows it; otherwise avoid WiFi for provisioned remotes.
@@ -284,6 +280,7 @@ async def showNetworkWIFI():
 async def check_internet_connection():
 	# ...existing code...
 	try:
+		import urequests
 		response = urequests.get("http://www.google.com")
 		try:
 			if response and getattr(response, 'status_code', 0) == 200:

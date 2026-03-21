@@ -75,6 +75,10 @@ Notes
 Firmware (Micropython)
 - [ ] Add persistence helpers for custom vars changed via set_var.
 - [ ] Base <-> Remote LoRa envelopes with HMAC + replay protection; optional encryption.
+- [x] Fix OLED stack overflow: removed _make_driver_class wrapper, separated init_display from __init__, removed redundant _load_imports calls, cached driver class.
+- [x] Defer heavy imports in main.py (lora, sampling, engine_controller, settings_apply) to first use to reduce C stack depth during module loading.
+- [x] Remove module-level execution in wifi.py (get_settings bootstrap, utils import) — deferred to first use.
+- [x] Fix Core 1 NULL deref crash: replaced dual-core asyncio.run() with single event loop. MicroPython uasyncio globals are not thread-safe; LoRa now runs as cooperative asyncio task on Core 0.
 
 Admin
 - [ ] Add audit hooks across provisioning save/queue paths.
