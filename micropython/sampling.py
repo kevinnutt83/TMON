@@ -55,7 +55,21 @@ async def _read_bme280(i2c, target="probe"):
     sensor = None
     try:
         from BME280 import BME280
-        sensor = BME280(i2c=i2c)
+        try:
+            sensor = BME280(i2c=i2c)
+        except TypeError:
+            # Device has older BME280.py without i2c parameter support
+            sensor = BME280()
+            if i2c is not None:
+                try:
+                    sensor.i2c.deinit()
+                except Exception:
+                    pass
+                sensor.i2c = i2c
+                # Re-send config registers on the correct I2C bus
+                sensor.writeReg(0xF2, sensor.osrs_h)
+                sensor.writeReg(0xF4, (sensor.osrs_t << 5) | (sensor.osrs_p << 2) | sensor.mode)
+                sensor.writeReg(0xF5, (sensor.t_sb << 5) | (sensor.filter << 2) | sensor.spi3w_en)
         sensor.get_calib_param()
         data = sensor.readData()
 

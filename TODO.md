@@ -81,6 +81,7 @@ Firmware (Micropython)
 - [x] Defer heavy imports in main.py (lora, sampling, engine_controller, settings_apply) to first use to reduce C stack depth during module loading.
 - [x] Remove module-level execution in wifi.py (get_settings bootstrap, utils import) — deferred to first use.
 - [x] Fix Core 1 NULL deref crash: replaced dual-core asyncio.run() with single event loop. MicroPython uasyncio globals are not thread-safe; LoRa now runs as cooperative asyncio task on Core 0.
+- [x] Fix BME280 "unexpected keyword argument 'i2c'" crash: added TypeError fallback in _read_bme280 for devices running older BME280.py without i2c parameter support. lib/BME280.py is not in OTA allowlist so devices retain the old constructor signature.
 
 Admin
 - [ ] Add audit hooks across provisioning save/queue paths.
