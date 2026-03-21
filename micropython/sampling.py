@@ -80,85 +80,96 @@ async def sampleBME280Probe():
 
 async def _read_bme280(i2c, target="probe"):
     sensor = None
+    addr = getattr(settings, 'i2cAddr_BME280', 0x76)
+    max_attempts = 3
+
+    # Scan I2C bus for the BME280 address before attempting init
     try:
-        from BME280 import BME280
+        devices = i2c.scan()
+        if addr not in devices:
+            await debug_print(
+                f"BME280 {target}: address 0x{addr:02X} not found on bus (found: {['0x{:02X}'.format(d) for d in devices]})",
+                "ERROR"
+            )
+            return None
+    except Exception as e:
+        await debug_print(f"BME280 {target}: I2C scan failed: {e}", "ERROR")
+        return None
+
+    for attempt in range(1, max_attempts + 1):
+        sensor = None
         try:
-            sensor = BME280(i2c=i2c)
-        except TypeError:
-            # Device has older BME280.py without i2c parameter support
-            sensor = BME280()
-            if i2c is not None:
-                try:
-                    sensor.i2c.deinit()
-                except Exception:
-                    pass
-                sensor.i2c = i2c
-                # Re-send config registers on the correct I2C bus
-                sensor.writeReg(0xF2, sensor.osrs_h)
-                sensor.writeReg(0xF4, (sensor.osrs_t << 5) | (sensor.osrs_p << 2) | sensor.mode)
-                sensor.writeReg(0xF5, (sensor.t_sb << 5) | (sensor.filter << 2) | sensor.spi3w_en)
-        sensor.get_calib_param()
-        data = sensor.readData()
+            from BME280 import BME280
+            try:
+                sensor = BME280(i2c=i2c, address=addr)
+            except TypeError:
+                sensor = BME280()
+                if i2c is not None:
+                    try:
+                        sensor.i2c.deinit()
+                    except Exception:
+                        pass
+                    sensor.i2c = i2c
+                    sensor.writeReg(0xF2, sensor.osrs_h)
+                    sensor.writeReg(0xF4, (sensor.osrs_t << 5) | (sensor.osrs_p << 2) | sensor.mode)
+                    sensor.writeReg(0xF5, (sensor.t_sb << 5) | (sensor.filter << 2) | sensor.spi3w_en)
+            sensor.get_calib_param()
+            data = sensor.readData()
 
-        temp_c = data[1]
-        temp_f = (temp_c * 9/5) + 32
-        humid = data[2]
-        bar = data[0]
+            temp_c = data[1]
+            temp_f = (temp_c * 9/5) + 32
+            humid = data[2]
+            bar = data[0]
 
-        if target == "probe":
-            if getattr(settings, 'SAMPLE_PROBE_TEMP', False):
-                sdata.cur_temp_c = temp_c
-                sdata.cur_temp_f = temp_f
-                await findLowestTemp(temp_f)
-                await findHighestTemp(temp_f)
-            if getattr(settings, 'SAMPLE_PROBE_BAR', False):
-                sdata.cur_bar_pres = bar
-                await findLowestBar(bar)
-                await findHighestBar(bar)
-            if getattr(settings, 'SAMPLE_PROBE_HUMID', False):
-                sdata.cur_humid = humid
-                await findLowestHumid(humid)
-                await findHighestHumid(humid)
+            if target == "probe":
+                if getattr(settings, 'SAMPLE_PROBE_TEMP', False):
+                    sdata.cur_temp_c = temp_c
+                    sdata.cur_temp_f = temp_f
+                    await findLowestTemp(temp_f)
+                    await findHighestTemp(temp_f)
+                if getattr(settings, 'SAMPLE_PROBE_BAR', False):
+                    sdata.cur_bar_pres = bar
+                    await findLowestBar(bar)
+                    await findHighestBar(bar)
+                if getattr(settings, 'SAMPLE_PROBE_HUMID', False):
+                    sdata.cur_humid = humid
+                    await findLowestHumid(humid)
+                    await findHighestHumid(humid)
 
-        else:  # device
-            if getattr(settings, 'SAMPLE_DEVICE_TEMP', False):
-                sdata.cur_device_temp_c = temp_c
-                sdata.cur_device_temp_f = temp_f
-            if getattr(settings, 'SAMPLE_DEVICE_BAR', False):
-                sdata.cur_device_bar_pres = bar
-            if getattr(settings, 'SAMPLE_DEVICE_HUMID', False):
-                sdata.cur_device_humid = humid
+            else:  # device
+                if getattr(settings, 'SAMPLE_DEVICE_TEMP', False):
+                    sdata.cur_device_temp_c = temp_c
+                    sdata.cur_device_temp_f = temp_f
+                if getattr(settings, 'SAMPLE_DEVICE_BAR', False):
+                    sdata.cur_device_bar_pres = bar
+                if getattr(settings, 'SAMPLE_DEVICE_HUMID', False):
+                    sdata.cur_device_humid = humid
 
-        if settings.DEBUG and settings.DEBUG_TEMP:
             await debug_print(
                 f"BME280 {target}: p:{bar:7.2f} t:{temp_c:6.2f} h:{humid:6.2f}",
-                "DEBUG TEMP"
+                "TEMP"
             )
-        return data
+            return data
 
-    except Exception as e:
-        await log_error(f"BME280 {target} fatal error: {e}", "BME280")
-        await debug_print(f"BME280 {target} fatal error – disabling sensor", "ERROR")
-        
-        if target == "device":
-            settings.ENABLE_DEVICE_BME280 = False
-            settings.SAMPLE_DEVICE_TEMP = False
-            settings.SAMPLE_DEVICE_BAR = False
-            settings.SAMPLE_DEVICE_HUMID = False
-        else:
-            settings.ENABLE_PROBE_BME280 = False
-            settings.SAMPLE_PROBE_TEMP = False
-            settings.SAMPLE_PROBE_BAR = False
-            settings.SAMPLE_PROBE_HUMID = False
-        return None
-    finally:
-        if sensor is not None:
-            try:
-                if hasattr(sensor, "i2c") and hasattr(sensor.i2c, "deinit"):
-                    sensor.i2c.deinit()
-            except:
-                pass
-            sensor.i2c = None
+        except Exception as e:
+            await debug_print(
+                f"BME280 {target} error (attempt {attempt}/{max_attempts}): {type(e).__name__}: {e}",
+                "ERROR"
+            )
+            if attempt < max_attempts:
+                await asyncio.sleep(0.5)
+            else:
+                await log_error(f"BME280 {target} fatal error after {max_attempts} attempts: {type(e).__name__}: {e}", "BME280")
+                return None
+        finally:
+            if sensor is not None:
+                try:
+                    if hasattr(sensor, "i2c") and hasattr(sensor.i2c, "deinit"):
+                        sensor.i2c.deinit()
+                except:
+                    pass
+                sensor.i2c = None
+    return None
 
 async def sampleSoil():
     if not getattr(settings, 'SAMPLE_SOIL', False):

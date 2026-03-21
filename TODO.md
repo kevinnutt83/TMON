@@ -91,6 +91,9 @@ Firmware (Micropython)
 - [x] Fix send_field_data_log using 'DEBUG' tag instead of 'FIELD_DATA', bypassing DEBUG_FIELD_DATA=True.
 - [x] Fix main.py sample task guard using non-existent settings (SAMPLE_HUMIDITY, SAMPLE_PRESSURE, SAMPLE_GAS); corrected to SAMPLE_HUMID, SAMPLE_BAR.
 - [x] Fix free_pins_i2c referencing non-existent I2C_A_SCL_PIN/I2C_A_SDA_PIN; corrected to actual device and probe pin names.
+- [x] Fix BME280.py global calibration corruption: digT/digP/digH/t_fine were module-level globals shared across instances; moved to instance variables so interior and probe sensors get independent calibration data.
+- [x] Fix _read_bme280 permanently disabling sensor on transient failure: replaced single-try-then-disable with 3-attempt retry, I2C bus scan before init, and detailed per-attempt error logging with exception type.
+- [x] Fix BME280 success debug print double-gated (required both DEBUG and DEBUG_TEMP): changed to use 'TEMP' tag so category flag alone controls output.
 
 Admin
 - [ ] Add audit hooks across provisioning save/queue paths.
