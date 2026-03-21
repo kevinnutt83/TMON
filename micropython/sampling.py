@@ -51,6 +51,41 @@ async def sampleTemp():
         await sampleBME280Probe()
         await free_pins_i2c()
 
+async def sampleBME280Interior():
+    from utils import led_status_flash
+    led_status_flash('SAMPLE_DEVICE_TEMP')
+    try:
+        from oled import display_message
+        await display_message("Sampling Interior Temp", 1)
+    except:
+        pass
+
+    i2c = I2C(0, scl=Pin(settings.DEVICE_TEMP_SCL_PIN),
+              sda=Pin(settings.DEVICE_TEMP_SDA_PIN), freq=400000)
+    await _read_bme280(i2c, target="device")
+
+async def sampleBME280Probe():
+    from utils import led_status_flash
+    led_status_flash('SAMPLE_BME280')
+    try:
+        from oled import display_message
+        await display_message("Sampling Exterior Probe", 1)
+    except:
+        pass
+
+    import lora as lora_module
+    async with lora_module.pin_lock:
+        if lora_module.lora is not None:
+            try:
+                lora_module.lora.spi.deinit()
+            except:
+                pass
+            lora_module.lora = None
+
+    i2c = I2C(1, scl=Pin(settings.BME280_PROBE_SCL_PIN),
+              sda=Pin(settings.BME280_PROBE_SDA_PIN), freq=400000)
+    await _read_bme280(i2c, target="probe")
+
 async def _read_bme280(i2c, target="probe"):
     sensor = None
     try:
@@ -132,41 +167,6 @@ async def _read_bme280(i2c, target="probe"):
             except:
                 pass
             sensor.i2c = None
-
-async def sampleBME280Interior():
-    from utils import led_status_flash
-    led_status_flash('SAMPLE_DEVICE_TEMP')
-    try:
-        from oled import display_message
-        await display_message("Sampling Interior Temp", 1)
-    except:
-        pass
-
-    i2c = I2C(0, scl=Pin(settings.DEVICE_TEMP_SCL_PIN),
-              sda=Pin(settings.DEVICE_TEMP_SDA_PIN), freq=400000)
-    await _read_bme280(i2c, target="device")
-
-async def sampleBME280Probe():
-    from utils import led_status_flash
-    led_status_flash('SAMPLE_BME280')
-    try:
-        from oled import display_message
-        await display_message("Sampling Exterior Probe", 1)
-    except:
-        pass
-
-    import lora as lora_module
-    async with lora_module.pin_lock:
-        if lora_module.lora is not None:
-            try:
-                lora_module.lora.spi.deinit()
-            except:
-                pass
-            lora_module.lora = None
-
-    i2c = I2C(1, scl=Pin(settings.BME280_PROBE_SCL_PIN),
-              sda=Pin(settings.BME280_PROBE_SDA_PIN), freq=400000)
-    await _read_bme280(i2c, target="probe")
 
 async def sampleSoil():
     if not getattr(settings, 'SAMPLE_SOIL', False):
