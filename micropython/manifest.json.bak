@@ -78,7 +78,7 @@
     "lib/urequests.py": "sha256:2bee6a73926682d278a23c52d1c598290c82391372e40615b6075cda5583efcd",
     "lora.py": "sha256:bac4b2755cbc6edccabd6881bca73e5d91cd19ffc85a6fae0fe65ae6292b6ac8",
     "main.py": "sha256:cb3c717344923a5b11031771f83a0d15be1a6409823f9025859be13a75cd58f5",
-    "manifest.json.bak": "sha256:198dfd7610e89cbca80ce8915d678a6226ba118a15389aeccb91d168f3c2fe0e",
+    "manifest.json.bak": "sha256:a0491ab3690fd49ca9b38466bdad51f57ed9d74b5cf5e1f1513eeb0feb335b28",
     "oled.py": "sha256:d2a75d167859259153e573d09a52cccc3f7590ebb8f8e1c07a1461b5796e9c16",
     "ota.py": "sha256:f9a55b6578ce58c693c4c71047ccc00962e16449f9a7c0c24c553db1dbb267ed",
     "provision.py": "sha256:0cbbf5a18154605573a580227ee29f4f4aaab0fbb277985dbb819e7fe32d8431",
@@ -86,14 +86,14 @@
     "relay.py": "sha256:9a0e8f5734cb65dc2e77f08ac4830f51aa3c20552b26c01149f22403dad6a0c5",
     "sampling.py": "sha256:208be1a09dd1b5449e72b142c6cca61e00994d5f9dbb54db1a4dae503b9f6abd",
     "sdata.py": "sha256:87f697054749aec945f616bc0c4b0cfc21372a521d2c540cf41de2cb5925f838",
-    "settings.py": "sha256:a028ddf4992bfc720b90db831a174de1ac39bd6fdfb5777186ff75ad36874750",
-    "settings_apply.py": "sha256:2831d98234385d343b0b8fa53694449cd902f7c01059a769309b41dff1e35e98",
+    "settings.py": "sha256:9acf6791f5b7c10e979d720e2fc0191306aa7639ca100b8a62b53d54b19ce054",
+    "settings_apply.py": "sha256:73d82c08b8f3b91a2ef0554f2917a847ed7f69334129c845d21ed0f54e88c333",
     "tmon.py": "sha256:08031893271d427511126efedd8f930a678242f3e9f44f41f443842dd2999b27",
     "utils.py": "sha256:2ccc76c3e60cb4710e68ffdd09d6b1bfd11462fb80beb73cf2ea397754816d3d",
-    "version.txt": "sha256:edb43e4c6e81378937e78954180d1876f594717f312ad82d0f07c1b9d258fb30",
+    "version.txt": "sha256:4df42ca7f3e7e6080025e08087339f6f7a6d2357e70c736b35150c46ca3097cf",
     "wifi.py": "sha256:d4b066f778d4a6ec39cad5d64f1d08100c130a3d6c97ce342092ecf541e7f8f5",
     "wprest.py": "sha256:da73490f623a70f613236c7846cf9d44cd3d1fe0e5954df5ab3265bab12b4ed8"
   },
   "name": "tmon-micropython",
-  "version": "v2.01.0g"
+  "version": "v2.01.0h"
 }
