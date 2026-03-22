@@ -225,7 +225,7 @@ ENABLE_PROBE_BME280 = True
 
 # SEPARATE ADDRESSES — change probe to 0x77 if your module has SDO tied high
 i2cAddr_DEVICE_BME280 = 0x76
-i2cAddr_PROBE_BME280  = 0x77   # ← change to 0x77 if needed
+i2cAddr_PROBE_BME280  = 0x76   # ← change to 0x77 if needed
 
 # Probe uses softer settings (long cable + SoftI2C)
 BME280_PROBE_FREQ_HZ = 100000   # was 400000 — much more reliable

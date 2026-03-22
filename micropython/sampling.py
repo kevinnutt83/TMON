@@ -13,15 +13,16 @@ async def sampleEnviroment():
     import sdata as _s
     _s.sampling_active = True
     try:
-        led_status_flash('SAMPLE_TEMP')
-        await sampleTemp()
+        if getattr(settings, 'SAMPLE_TEMP', False):
+            led_status_flash('SAMPLE_TEMP')
+            await sampleTemp()
         
         if getattr(settings, 'SAMPLE_SOIL', False):
             led_status_flash('SAMPLE_SOIL')
             await sampleSoil()
         
-        led_status_flash('SAMPLE_BAR')
-        await frost_and_heat_watch()
+        if getattr(settings, 'ENABLE_FROSTWATCH', False) or getattr(settings, 'ENABLE_HEATWATCH', False):
+            await frost_and_heat_watch()
     finally:
         _s.sampling_active = False
 
@@ -79,7 +80,7 @@ async def sampleBME280Probe():
 
 async def _read_bme280(i2c, target="probe"):
     sensor = None
-    addr = getattr(settings, 'i2cAddr_BME280', 0x76)
+    addr = settings.i2cAddr_PROBE_BME280 if target == "probe" else settings.i2cAddr_DEVICE_BME280
     max_attempts = 3
 
     # Scan I2C bus for the BME280 address before attempting init
