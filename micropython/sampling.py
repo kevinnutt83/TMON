@@ -1,7 +1,4 @@
-# TMON v2.01.0 - Sampling module
-# All sensors (BME280 interior/probe, soil probe) with frost/heat watch.
-# Non-blocking, GC calls added, fully compatible with LoRa on Core 1.
-
+# TMON v2.01.0 - Sampling module (UPDATED for reliable exterior probe)
 import sdata
 import settings
 from utils import free_pins_i2c
@@ -73,9 +70,11 @@ async def sampleBME280Probe():
     except:
         pass
 
-    # Probe uses SoftI2C (not hardware I2C(1)) to avoid conflicting with OLED on I2C(1)
-    i2c = SoftI2C(scl=Pin(settings.BME280_PROBE_SCL_PIN),
-                  sda=Pin(settings.BME280_PROBE_SDA_PIN), freq=400000)
+    # CRITICAL FIX: explicit pull-ups + OPEN_DRAIN + lower frequency for long cable
+    scl = Pin(settings.BME280_PROBE_SCL_PIN, Pin.OPEN_DRAIN, Pin.PULL_UP)
+    sda = Pin(settings.BME280_PROBE_SDA_PIN, Pin.OPEN_DRAIN, Pin.PULL_UP)
+    i2c = SoftI2C(scl=scl, sda=sda, freq=100000)  # 100 kHz = much more reliable on long cable
+    
     await _read_bme280(i2c, target="probe")
 
 async def _read_bme280(i2c, target="probe"):
@@ -92,6 +91,7 @@ async def _read_bme280(i2c, target="probe"):
                 "WARN"
             )
             return None
+        await debug_print(f"BME280 {target}: address 0x{addr:02X} FOUND on bus", "INFO")
     except Exception as e:
         await debug_print(f"BME280 {target}: I2C scan failed: {e}", "ERROR")
         return None
@@ -100,19 +100,9 @@ async def _read_bme280(i2c, target="probe"):
         sensor = None
         try:
             from BME280 import BME280
-            try:
-                sensor = BME280(i2c=i2c, address=addr)
-            except TypeError:
-                sensor = BME280()
-                if i2c is not None:
-                    try:
-                        sensor.i2c.deinit()
-                    except Exception:
-                        pass
-                    sensor.i2c = i2c
-                    sensor.writeReg(0xF2, sensor.osrs_h)
-                    sensor.writeReg(0xF4, (sensor.osrs_t << 5) | (sensor.osrs_p << 2) | sensor.mode)
-                    sensor.writeReg(0xF5, (sensor.t_sb << 5) | (sensor.filter << 2) | sensor.spi3w_en)
+            await asyncio.sleep_ms(100)  # extra stability delay after scan
+            
+            sensor = BME280(i2c=i2c, address=addr)
             sensor.get_calib_param()
             data = sensor.readData()
 

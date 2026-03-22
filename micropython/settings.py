@@ -41,7 +41,7 @@ FIELD_DATA_GZIP = True
 UNIT_ID = "None"
 UNIT_Name = "No Device Name"
 NODE_TYPE = 'base'
-FIRMWARE_VERSION = "v2.01.0i"
+FIRMWARE_VERSION = "v2.01.0j"
  
 WORDPRESS_API_URL = ""
 WORDPRESS_USERNAME = "agadmin"
@@ -87,7 +87,7 @@ RELAY_PIN8 = None
 DEVICE_TEMP_SCL_PIN = 33
 DEVICE_TEMP_SDA_PIN = 34
 BME280_PROBE_SCL_PIN = 6
-BME280_PROBE_SDA_PIN = 2
+BME280_PROBE_SDA_PIN = 5
 OLED_SCL_PIN = 38
 OLED_SDA_PIN = 39
 SPI_BUS = 1
@@ -219,8 +219,17 @@ OLED_FOOTER_HEIGHT = 12
 DISPLAY_NET_BARS = True
 OLED_HEADER_FLIP_S = 4
 
+# ===================== BME280 SENSORS =====================
 ENABLE_DEVICE_BME280 = True
 ENABLE_PROBE_BME280 = True
+
+# SEPARATE ADDRESSES — change probe to 0x77 if your module has SDO tied high
+i2cAddr_DEVICE_BME280 = 0x76
+i2cAddr_PROBE_BME280  = 0x77   # ← change to 0x77 if needed
+
+# Probe uses softer settings (long cable + SoftI2C)
+BME280_PROBE_FREQ_HZ = 100000   # was 400000 — much more reliable
+BME280_INIT_DELAY_MS = 100
 
 SAMPLE_DEVICE_TEMP = True
 SAMPLE_DEVICE_BAR = True
