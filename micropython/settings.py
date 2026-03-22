@@ -41,7 +41,7 @@ FIELD_DATA_GZIP = True
 UNIT_ID = "None"
 UNIT_Name = "No Device Name"
 NODE_TYPE = 'base'
-FIRMWARE_VERSION = "v2.01.0f"
+FIRMWARE_VERSION = "v2.01.0g"
  
 WORDPRESS_API_URL = ""
 WORDPRESS_USERNAME = "agadmin"
@@ -275,7 +275,8 @@ OTA_APPLY_INTERVAL_S = 5
 OTA_RESTORE_ON_FAIL = True
 OTA_MAX_FILE_BYTES = 256*1024
 OTA_FILES_ALLOWLIST = [
-    'main.py','lora.py','utils.py','sampling.py','settings.py','relay.py','oled.py','ota.py','wprest.py'
+    'main.py','lora.py','utils.py','sampling.py','settings.py','relay.py','oled.py','ota.py','wprest.py',
+    'lib/BME280.py'
 ]
 OTA_MANIFEST_SIG_URL = OTA_MANIFEST_URL + '.sig'
 OTA_MANIFEST_HMAC_SECRET = ''

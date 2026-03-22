@@ -94,6 +94,9 @@ Firmware (Micropython)
 - [x] Fix BME280.py global calibration corruption: digT/digP/digH/t_fine were module-level globals shared across instances; moved to instance variables so interior and probe sensors get independent calibration data.
 - [x] Fix _read_bme280 permanently disabling sensor on transient failure: replaced single-try-then-disable with 3-attempt retry, I2C bus scan before init, and detailed per-attempt error logging with exception type.
 - [x] Fix BME280 success debug print double-gated (required both DEBUG and DEBUG_TEMP): changed to use 'TEMP' tag so category flag alone controls output.
+- [x] Add lib/BME280.py to OTA_FILES_ALLOWLIST: remote nodes were stuck on old BME280 constructor referencing non-existent I2C_A_SCL_PIN because the file wasn't OTA-updatable.
+- [x] Fix probe I2C bus conflict with OLED: probe was using hardware I2C(1) which conflicts with OLED on I2C(1) with different pins. Changed probe to SoftI2C so both can coexist.
+- [x] Downgrade "address not found on bus" from ERROR to WARN: expected when no physical probe is attached (e.g. base stations without an exterior probe).
 
 Admin
 - [ ] Add audit hooks across provisioning save/queue paths.

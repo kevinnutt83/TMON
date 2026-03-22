@@ -8,7 +8,7 @@ from utils import free_pins_i2c
 import uasyncio as asyncio
 from utils import debug_print, log_error
 from tmon import frostwatchCheck, heatwatchCheck, beginFrostOperations, beginHeatOperations, endFrostOperations, endHeatOperations
-from machine import I2C, Pin
+from machine import I2C, SoftI2C, Pin
 
 # ===================== Sampling Routine =====================
 async def sampleEnviroment():
@@ -73,9 +73,9 @@ async def sampleBME280Probe():
     except:
         pass
 
-    # Probe uses I2C bus 1 (pins 6/2) — no conflict with LoRa SPI bus 1 (pins 35/36/37)
-    i2c = I2C(1, scl=Pin(settings.BME280_PROBE_SCL_PIN),
-              sda=Pin(settings.BME280_PROBE_SDA_PIN), freq=400000)
+    # Probe uses SoftI2C (not hardware I2C(1)) to avoid conflicting with OLED on I2C(1)
+    i2c = SoftI2C(scl=Pin(settings.BME280_PROBE_SCL_PIN),
+                  sda=Pin(settings.BME280_PROBE_SDA_PIN), freq=400000)
     await _read_bme280(i2c, target="probe")
 
 async def _read_bme280(i2c, target="probe"):
@@ -89,7 +89,7 @@ async def _read_bme280(i2c, target="probe"):
         if addr not in devices:
             await debug_print(
                 f"BME280 {target}: address 0x{addr:02X} not found on bus (found: {['0x{:02X}'.format(d) for d in devices]})",
-                "ERROR"
+                "WARN"
             )
             return None
     except Exception as e:
