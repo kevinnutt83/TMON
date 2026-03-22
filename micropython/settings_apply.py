@@ -2,7 +2,7 @@
 # Safely applies staged settings from server with conservative allowlist.
 # Persists snapshot, computes diffs, handles critical changes with soft reset.
 # WordPress API calls untouched. Added GC calls for stability.
-import uasyncio as asyncioa
+import uasyncio as asyncio
 try:
     import ujson as json
 except Exception:
