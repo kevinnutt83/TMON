@@ -65,14 +65,23 @@ def _safe_join(base: str, name: str) -> str:
     return base + name.lstrip('/')
 
 def _ensure_dir(path: str):
+    """Recursively create parent directories for *path*."""
     try:
         d = path.rsplit('/', 1)[0]
-        if d and d != path and d != '.':
+        if not d or d == path or d == '.':
+            return
+        parts = d.split('/')
+        cur = ''
+        for p in parts:
+            if not p:
+                cur = '/'
+                continue
+            cur = cur + p if cur.endswith('/') else cur + '/' + p
             try:
-                os.stat(d)
+                os.stat(cur)
             except Exception:
                 try:
-                    os.mkdir(d)
+                    os.mkdir(cur)
                 except Exception:
                     pass
     except Exception:
@@ -372,7 +381,8 @@ async def apply_pending_update():
                         continue
 
                     # stream download to temp file and compute sha256
-                    tmp_path = getattr(settings, 'LOG_DIR', '/logs').rstrip('/') + f'/ota_tmp_{name}'
+                    safe_name = name.replace('/', '_')
+                    tmp_path = getattr(settings, 'LOG_DIR', '/logs').rstrip('/') + f'/ota_tmp_{safe_name}'
                     final_path = name  # apply path
                     h = _uh.sha256()
                     total = 0
@@ -489,11 +499,14 @@ async def apply_pending_update():
                     try:
                         if getattr(settings, 'OTA_BACKUP_ENABLED', True):
                             try:
+                                bk_path = backup_dir.rstrip('/') + '/' + name
+                                _ensure_dir(bk_path)
                                 with open(final_path, 'rb') as sf:
-                                    with open(backup_dir.rstrip('/') + '/' + name, 'wb') as bf:
+                                    with open(bk_path, 'wb') as bf:
                                         bf.write(sf.read())
                             except Exception:
                                 pass
+                        _ensure_dir(final_path)
                         with open(final_path, 'wb') as out:
                             out.write(open(tmp_path, 'rb').read())
                     except Exception as e:
