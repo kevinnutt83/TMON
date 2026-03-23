@@ -29,6 +29,9 @@ def _init_poller():
         except Exception:
             pass
 
+def _print_prompt():
+    sys.stdout.write("TMON> ")
+
 def _poll_stdin():
     """Return a complete line from stdin if available, else None. Non-blocking."""
     global _input_buf
@@ -37,15 +40,22 @@ def _poll_stdin():
     if _poller is None:
         return None
     try:
-        if _poller.poll(0):
+        while _poller.poll(0):
             ch = sys.stdin.read(1)
             if ch is None:
-                return None
+                break
             if ch in ('\n', '\r'):
                 line = _input_buf.strip()
                 _input_buf = ""
+                print()
                 return line if line else None
-            _input_buf += ch
+            if ch == '\x7f' or ch == '\x08':
+                if _input_buf:
+                    _input_buf = _input_buf[:-1]
+                    sys.stdout.write('\x08 \x08')
+            else:
+                _input_buf += ch
+                sys.stdout.write(ch)
     except Exception:
         pass
     return None
@@ -57,12 +67,14 @@ async def user_commands_task():
     if _poller is None:
         await debug_print("User commands: uselect not available, CLI disabled", "WARN")
         return
-    await debug_print("User commands: CLI ready", "INFO")
+    print("[TMON CLI] Type 'help' for available commands.")
+    _print_prompt()
     while True:
         try:
             line = _poll_stdin()
             if line:
                 await process_command(line)
+                _print_prompt()
         except Exception as e:
             await debug_print(f"User commands error: {e}", "ERROR")
         await asyncio.sleep(0.1)

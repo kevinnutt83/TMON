@@ -786,7 +786,6 @@ async def _unsecure_message(msg_str):
     cnt_str = None
     hmac_received = None
     enc_b64 = None
-    base_idx = len(msg_str)
     for i in range(len(parts)-1, -1, -1):
         p = parts[i]
         if p.startswith('HMAC:'):
@@ -807,43 +806,64 @@ async def _unsecure_message(msg_str):
     except:
         return None
     counter_bytes = cnt.to_bytes(4, 'big')
+
+    # Verify HMAC
     if enc_b64:
         encrypted = _ub.a2b_base64(enc_b64.encode())
         to_hmac = encrypted + counter_bytes
     else:
-        to_hmac = msg_str.encode() + cnt_str.encode()
+        # Strip ,CNT: from msg_str to match what was originally signed
+        cnt_idx = msg_str.rfind(',CNT:')
+        clean_msg = msg_str[:cnt_idx] if cnt_idx >= 0 else msg_str
+        to_hmac = clean_msg.encode() + cnt_str.encode()
     computed_hex = _ub.hexlify(hmac_sha256(getattr(settings, 'LORA_HMAC_SECRET', b'').encode(), to_hmac)).decode()[:getattr(settings, 'LORA_HMAC_TRUNCATE', 16)]
     if computed_hex != hmac_received:
         return None
-    if getattr(settings, 'LORA_HMAC_REPLAY_PROTECT', True):
-        if settings.NODE_TYPE == 'remote':
-            last_rx = rx_counter
-        else:
-            uid = None
-            for part in msg_str.split(','):
-                if part.startswith('UID:') or part.startswith('U:'):
-                    uid = part.split(':', 1)[1]
-                    break
-            if uid is None:
-                return None
-            if uid not in remote_counters:
-                remote_counters[uid] = {'tx': 0, 'rx': 0}
-            last_rx = remote_counters[uid]['rx']
-        if cnt <= last_rx:
-            return None
+
+    # Decrypt BEFORE replay protection so UID is visible in plaintext
     if enc_b64:
         stream_key = getattr(settings, 'LORA_ENCRYPT_SECRET', b'').encode() + counter_bytes
         stream_hash = uhashlib.sha256(stream_key).digest()
-        encrypted = _ub.a2b_base64(enc_b64.encode())
         msg_bytes = xor_bytes(encrypted, stream_hash)
         try:
             msg_str = msg_bytes.decode()
         except:
             return None
+    else:
+        # Strip CNT from returned message for non-encrypted path
+        cnt_idx = msg_str.rfind(',CNT:')
+        if cnt_idx >= 0:
+            msg_str = msg_str[:cnt_idx]
+
+    # Extract UID from decrypted message for base nodes
+    uid = None
+    if settings.NODE_TYPE != 'remote':
+        for part in msg_str.split(','):
+            if part.startswith('UID:') or part.startswith('U:'):
+                uid = part.split(':', 1)[1]
+                break
+
+    # Replay protection (now using decrypted msg_str)
+    if getattr(settings, 'LORA_HMAC_REPLAY_PROTECT', True):
+        if settings.NODE_TYPE == 'remote':
+            if cnt <= rx_counter:
+                return None
+        else:
+            if uid is None:
+                return None
+            if uid not in remote_counters:
+                remote_counters[uid] = {'tx': 0, 'rx': 0}
+            if cnt <= remote_counters[uid]['rx']:
+                return None
+
+    # Update counters
     if settings.NODE_TYPE == 'remote':
         rx_counter = cnt
     else:
-        remote_counters[uid]['rx'] = cnt
+        if uid is not None:
+            if uid not in remote_counters:
+                remote_counters[uid] = {'tx': 0, 'rx': 0}
+            remote_counters[uid]['rx'] = cnt
     return msg_str
 
 async def _send_with_retry(data, retries=5):
