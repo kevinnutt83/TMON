@@ -64,10 +64,14 @@ async def log(message, level='INFO', category=None):
     if not enabled:
         return
     try:
-        tag = category or 'GEN'
-        print(f"[{level}] {tag}: {message}")
+        from utils import debug_print  # import late to avoid cycles
+        await debug_print(f"[{category or 'GEN'}] {message}", level)
     except Exception:
-        pass
+        # Best-effort fallback print without raising
+        try:
+            print(f"[{level}] {category or 'GEN'}: {message}")
+        except Exception:
+            pass
 
 # Convenience helpers
 async def info(msg, category=None):

@@ -1,125 +1,79 @@
-# TMON v2.01.0j - OLED Module (ETIMEDOUT & GENERATOR PROOF - COMPLETE FILE)
-# Fixes the exact crash in your log:
-# • _get_oled is now fully synchronous (no await inside) → no more 'generator' object error
-# • Uses SoftI2C with OPEN_DRAIN + PULL_UP + retries on every command
-# • free_pins_i2c called from the async render loop (safe timing)
-# • Defensive try/except around every I2C operation
-# • LoRa/WiFi bars still accurate and status banners work perfectly
+# TMON Verion 2.00.1d - OLED display module for TMON MicroPython firmware...
 
-import gc
+import uasyncio as asyncio
+import time
+import settings
+import sdata
+import machine
+import framebuf
+from settings import OLED_SCL_PIN, OLED_SDA_PIN
 
-# Deferred imports
-_asyncio = None
-_time = None
-_settings = None
-_sdata = None
-_machine = None
-_framebuf = None
-
-def _load_imports():
-    global _asyncio, _time, _settings, _sdata, _machine, _framebuf
-    if _asyncio is None:
-        import uasyncio
-        _asyncio = uasyncio
-    if _time is None:
-        import time
-        _time = time
-    if _settings is None:
-        import settings
-        _settings = settings
-    if _sdata is None:
-        import sdata
-        _sdata = sdata
-    if _machine is None:
-        import machine
-        _machine = machine
-    if _framebuf is None:
-        import framebuf
-        _framebuf = framebuf
-
-# ===================== State =====================
+# Globals / state
 _render_task = None
-_status_msg = None
-_status_expires = 0
+_status_banner_text = None
+_status_banner_until = 0
+_status_banner_persist = False
+_body_override_lines = None
+_body_override_until = 0
+_last_render_sig = None
 _show_voltage = True
 _last_flip_time = 0
-_gc_counter = 0
-_oled = None
-_oled_init_tried = False
-_SSD1309_cls = None
 
-HEADER_HEIGHT = 16
-FOOTER_HEIGHT = 12
-BODY_TOP = 16
-BODY_BOTTOM = 52
-BODY_HEIGHT = 36
-FLIP_INTERVAL_S = 4
+# Constants
+HEADER_HEIGHT = int(getattr(settings, 'OLED_HEADER_HEIGHT', 16))
+FOOTER_HEIGHT = int(getattr(settings, 'OLED_FOOTER_HEIGHT', 12))
+BODY_TOP = HEADER_HEIGHT
+BODY_BOTTOM = 64 - FOOTER_HEIGHT
+BODY_HEIGHT = BODY_BOTTOM - BODY_TOP
+FLIP_INTERVAL_S = int(getattr(settings, 'OLED_HEADER_FLIP_S', 4))
 RENDER_INTERVAL_S = 0.5
-GC_INTERVAL = 10
-BANNER_TIMEOUT_S = 3.0
+MAX_TEXT_CHARS = 16
 
-# ===================== SSD1309 Driver (retries) =====================
-_INIT_CMDS_INT = (0xAE, 0xD5, 0x80, 0xA8, 0x3F, 0xD3, 0x00, 0x40, 0x8D)
-_INIT_CMDS_TAIL = (0x20, 0x00, 0xA1, 0xC8, 0xDA, 0x12, 0x81, 0xCF, 0xD9)
-_INIT_CMDS_END = (0xDB, 0x40, 0xA4, 0xA6, 0xAF)
+class SSD1309_I2C(framebuf.FrameBuffer):
+    def __init__(self, width, height, i2c, addr=0x3C, external_vcc=False):
+        self.i2c = i2c
+        self.addr = addr
+        self.temp = bytearray(2)
+        self.write_list = [b'\x40', None]
+        self.external_vcc = external_vcc
+        self.width = width
+        self.height = height
+        self.pages = height // 8
+        self.buffer = bytearray(self.pages * self.width)
+        self.col_start = 0
+        self.col_end = self.col_start + self.width - 1
+        super().__init__(self.buffer, self.width, self.height, framebuf.MONO_VLSB)
+        self.init_display()
 
-def _ensure_driver_class():
-    global _SSD1309_cls
-    if _SSD1309_cls is not None:
-        return
-    class _SSD1309(_framebuf.FrameBuffer):
-        def __init__(self, width, height, i2c, addr=0x3C, external_vcc=False):
-            self.i2c = i2c
-            self.addr = addr
-            self.temp = bytearray(2)
-            self.write_list = [b'\x40', None]
-            self.external_vcc = external_vcc
-            self.width = width
-            self.height = height
-            self.pages = height // 8
-            self.buffer = bytearray(self.pages * self.width)
-            self.col_start = 0
-            self.col_end = self.col_start + self.width - 1
-            super().__init__(self.buffer, self.width, self.height, _framebuf.MONO_VLSB)
+    def write_cmd(self, cmd):
+        self.temp[0] = 0x00
+        self.temp[1] = cmd
+        self.i2c.writeto(self.addr, self.temp)
 
-        def write_cmd(self, cmd, retries=5):
-            for attempt in range(retries):
-                try:
-                    self.temp[0] = 0x00
-                    self.temp[1] = cmd
-                    self.i2c.writeto(self.addr, self.temp)
-                    return
-                except Exception:
-                    if attempt < retries - 1:
-                        _asyncio.sleep_ms(50)
-                        continue
-            raise OSError("OLED write_cmd failed after retries")
+    def write_data(self, buf):
+        self.write_list[1] = buf
+        try:
+            self.i2c.writevto(self.addr, self.write_list)
+        except Exception:
+            self.i2c.writeto(self.addr, b'\x40' + buf)
 
-        def write_data(self, buf, retries=5):
-            for attempt in range(retries):
-                try:
-                    self.write_list[1] = buf
-                    self.i2c.writevto(self.addr, self.write_list)
-                    return
-                except Exception:
-                    if attempt < retries - 1:
-                        _asyncio.sleep_ms(50)
-                        continue
-            raise OSError("OLED write_data failed after retries")
-
-        def init_display(self):
-            for cmd in _INIT_CMDS_INT:
+    def init_display(self):
+        for cmd in (
+            0xAE, 0xD5, 0x80, 0xA8, 0x3F, 0xD3, 0x00, 0x40,
+            0x8D, 0x14 if not self.external_vcc else 0x10,
+            0x20, 0x00, 0xA1, 0xC8, 0xDA, 0x12, 0x81, 0xCF,
+            0xD9, 0xF1 if not self.external_vcc else 0x22, 0xDB, 0x40,
+            0xA4, 0xA6, 0xAF
+        ):
+            try:
                 self.write_cmd(cmd)
-            self.write_cmd(0x14 if not self.external_vcc else 0x10)
-            for cmd in _INIT_CMDS_TAIL:
-                self.write_cmd(cmd)
-            self.write_cmd(0xF1 if not self.external_vcc else 0x22)
-            for cmd in _INIT_CMDS_END:
-                self.write_cmd(cmd)
-            self.fill(0)
-            self.show()
+            except Exception:
+                pass
+        self.fill(0)
+        self.show()
 
-        def show(self):
+    def show(self):
+        try:
             self.write_cmd(0x21)
             self.write_cmd(self.col_start)
             self.write_cmd(self.col_end)
@@ -127,180 +81,387 @@ def _ensure_driver_class():
             self.write_cmd(0)
             self.write_cmd(self.pages - 1)
             self.write_data(self.buffer)
+        except Exception:
+            pass
 
-        def poweroff(self):
+    def poweroff(self):
+        try:
             self.write_cmd(0xAE)
+        except Exception:
+            pass
 
-        def poweron(self):
+    def poweron(self):
+        try:
             self.write_cmd(0xAF)
+        except Exception:
+            pass
 
-        def contrast(self, c):
+    def contrast(self, contrast):
+        try:
             self.write_cmd(0x81)
-            self.write_cmd(c)
-    _SSD1309_cls = _SSD1309
+            self.write_cmd(contrast)
+        except Exception:
+            pass
 
-def _get_oled():
-    """Synchronous init - no await here"""
-    global _oled, _oled_init_tried
-    if _oled is not None:
-        return _oled
-    if _oled_init_tried:
-        return None
-    _oled_init_tried = True
-    _load_imports()
-    if not getattr(_settings, 'ENABLE_OLED', False):
-        return None
+    def invert(self, invert):
+        try:
+            self.write_cmd(0xA6 | (invert & 1))
+        except Exception:
+            pass
+
+oled = None
+if getattr(settings, 'ENABLE_OLED', False):
     try:
-        scl = _machine.Pin(getattr(_settings, 'OLED_SCL_PIN', 38), _machine.Pin.OPEN_DRAIN, _machine.Pin.PULL_UP)
-        sda = _machine.Pin(getattr(_settings, 'OLED_SDA_PIN', 39), _machine.Pin.OPEN_DRAIN, _machine.Pin.PULL_UP)
-        i2c = _machine.SoftI2C(scl=scl, sda=sda, freq=100000)
-        _ensure_driver_class()
-        _oled = _SSD1309_cls(128, 64, i2c, addr=0x3C)
-        _oled.init_display()
-        gc.collect()
+        i2c = machine.I2C(1, scl=machine.Pin(OLED_SCL_PIN), sda=machine.Pin(OLED_SDA_PIN), freq=100000)
+        oled = SSD1309_I2C(128, 64, i2c, addr=0x3C)
     except Exception as e:
-        print("[OLED] init failed:", e)
-        _oled = None
-    return _oled
+        print(f"[ERROR] OLED init failed: {e}")
+        oled = None
 
-# ===================== Helpers =====================
-def _net_bars_from_rssi(rssi, cuts=(-60, -80, -90)):
-    if rssi is None:
-        return 0
+async def fade_display(on=True, steps=10, delay=0.03):
+    if not oled:
+        return
+    if on:
+        for c in range(0, 256, max(1, 255 // steps)):
+            oled.contrast(c)
+            await asyncio.sleep(delay)
+        oled.contrast(255)
+    else:
+        for c in range(255, -1, -max(1, 255 // steps)):
+            oled.contrast(c)
+            await asyncio.sleep(delay)
+        oled.contrast(0)
+
+def _safe_attr(obj, name, default=None):
     try:
-        r = int(rssi)
-        if r > cuts[0]: return 3
-        if r > cuts[1]: return 2
-        if r > cuts[2]: return 1
+        return getattr(obj, name, default)
+    except Exception:
+        return default
+
+def _net_bars_from_rssi(rssi, cuts):
+    try:
+        if rssi is None:
+            return 0
+        if rssi > cuts[0]:
+            return 3
+        if rssi > cuts[1]:
+            return 2
+        if rssi > cuts[2]:
+            return 1
     except Exception:
         pass
     return 0
 
 def _draw_bars(o, x, y, bars):
-    for i in range(3):
-        h = 3 + i * 3
-        bx = x + i * 6
-        by = y + 9 - h
-        o.rect(bx, by, 4, h, 1)
-        if i < bars:
-            o.fill_rect(bx + 1, by + 1, 2, h - 2, 1)
+    try:
+        for i in range(3):
+            h = 3 + i * 3
+            bx = x + i * 6
+            by = y + (3 * 3) - h
+            try:
+                o.rect(bx, by, 4, h, 1)
+            except Exception:
+                for yy in range(by, by + h):
+                    o.pixel(bx, yy, 1)
+                    o.pixel(bx + 3, yy, 1)
+                for xx in range(bx, bx + 4):
+                    o.pixel(xx, by, 1)
+                    o.pixel(xx, by + h - 1, 1)
+            if i < bars:
+                o.fill_rect(bx + 1, by + 1, 2, h - 2, 1)
+    except Exception:
+        pass
 
-# ===================== Render Loop =====================
-async def _render_loop():
-    global _show_voltage, _last_flip_time, _status_msg, _status_expires, _gc_counter
-    _load_imports()
-    from utils import free_pins_i2c
-    await free_pins_i2c()  # safe pin reset before first draw
-    oled = _get_oled()
+def _measure_text_w(text):
+    try:
+        return max(0, len(str(text)) * 8)
+    except Exception:
+        return 0
+
+def _compact_label(txt, max_chars):
+    try:
+        s = str(txt or '')
+        if len(s) <= max_chars:
+            return s
+        short_map = {'No Con': 'No', 'Search': 'Srch', 'Searching': 'Srch'}
+        for long, short in short_map.items():
+            if s.startswith(long):
+                return short[:max_chars]
+        return s[:max_chars] if max_chars > 0 else ''
+    except Exception:
+        return str(txt)[:max_chars] if max_chars > 0 else ''
+
+def _layout_header_right(vol_w, right_blocks):
+    try:
+        gap = 4
+        total = 0
+        for b in right_blocks:
+            total += b.get('w', 0) + gap
+        total = max(0, total - gap)
+        right_margin = 2
+        start_x = 128 - right_margin - total
+        xs = []
+        cur = start_x
+        for b in right_blocks:
+            xs.append(cur)
+            cur += b.get('w', 0) + gap
+        return start_x, xs
+    except Exception:
+        return 128, [128] * len(right_blocks)
+
+def _render_signature(page):
+    try:
+        return (
+            page,
+            _status_banner_text,
+            _status_banner_until,
+            _status_banner_persist,
+            _show_voltage,
+            _safe_attr(sdata, 'sys_voltage', 0),
+            _safe_attr(sdata, 'cur_temp_f', None),
+            _safe_attr(sdata, 'wifi_rssi', None),
+            _safe_attr(sdata, 'lora_SigStr', None),
+            _safe_attr(sdata, 'lora_snr', None),
+            _safe_attr(sdata, 'lora_last_rx_ts', 0),
+            _safe_attr(sdata, 'lora_last_tx_ts', 0),
+            _safe_attr(sdata, 'LORA_CONNECTED', False),
+            _safe_attr(sdata, 'last_message', ''),
+            _safe_attr(sdata, 'free_mem', 0),
+            _safe_attr(settings, 'UNIT_ID', ''),
+            _safe_attr(settings, 'UNIT_Name', ''),
+        )
+    except Exception:
+        return (page,)
+
+async def _render_loop(page=0):
+    global _last_render_sig, _show_voltage, _last_flip_time, _body_override_lines, _body_override_until
     if not oled:
         return
-
-    enable_wifi = getattr(_settings, 'ENABLE_WIFI', False)
-    enable_lora = getattr(_settings, 'ENABLE_LORA', False)
-
+    if not getattr(settings, 'DEBUG', False):
+        await fade_display(on=True)
     while True:
-        now = _time.time()
-
-        if _status_msg and now >= _status_expires:
-            _status_msg = None
-
-        if now - _last_flip_time >= FLIP_INTERVAL_S:
-            _show_voltage = not _show_voltage
-            _last_flip_time = now
-
-        # HEADER
-        oled.fill_rect(0, 0, 128, HEADER_HEIGHT, 0)
-        if _show_voltage:
-            v = getattr(_sdata, 'sys_voltage', 0.0) or 0.0
-            oled.text(str(round(v, 2)) + "V", 2, 0)
-        else:
-            t = getattr(_sdata, 'cur_temp_f', None)
-            oled.text(str(round(t, 1)) + "F" if t is not None else "--.-F", 2, 0)
-
-        x_pos = 70
-        if enable_wifi:
-            oled.text("W", x_pos, 0)
-            rssi = getattr(_sdata, 'wifi_rssi', None)
-            bars = _net_bars_from_rssi(rssi)
-            _draw_bars(oled, x_pos + 10, 0, bars)
-            x_pos += 30
-
-        if enable_lora:
-            oled.text("L", x_pos, 0)
-            if getattr(_sdata, 'LORA_CONNECTED', False) and (_time.time() - getattr(_sdata, 'lora_last_rx_ts', 0) < 60):
-                rssi = getattr(_sdata, 'lora_SigStr', None)
-                bars = _net_bars_from_rssi(rssi, (-60, -90, -120))
-            else:
-                bars = 0
-            _draw_bars(oled, x_pos + 10, 0, bars)
-
-        # BODY
-        oled.fill_rect(0, BODY_TOP, 128, BODY_HEIGHT, 0)
-        if _status_msg:
-            msg_len = len(_status_msg)
-            bx = max(0, (128 - msg_len * 8) // 2)
-            oled.text(_status_msg, bx, BODY_TOP + 8)
-        elif getattr(_sdata, 'sampling_active', False):
-            y = BODY_TOP + 2
-            oled.text("Interior:", 0, y)
-            dt = getattr(_sdata, 'cur_device_temp_f', None)
-            oled.text("T" + str(round(dt, 1)) + "F" if dt is not None else "--.-F", 80, y)
-            y += 10
-            oled.text("Probe:", 0, y)
-            pt = getattr(_sdata, 'cur_temp_f', None)
-            oled.text("T" + str(round(pt, 1)) + "F" if pt is not None else "--.-F", 80, y)
-
-        # FOOTER
-        oled.fill_rect(0, BODY_BOTTOM, 128, FOOTER_HEIGHT, 0)
-        unit_name = getattr(_settings, 'UNIT_Name', '')
-        if unit_name:
-            oled.text(str(unit_name)[:16], 0, BODY_BOTTOM + 2)
-
         try:
+            nowt = time.time()
+            if nowt - _last_flip_time >= FLIP_INTERVAL_S:
+                _show_voltage = not _show_voltage
+                _last_flip_time = nowt
+
+            sig = _render_signature(page)
+            if sig == _last_render_sig:
+                await asyncio.sleep(RENDER_INTERVAL_S)
+                continue
+            _last_render_sig = sig
+
+            oled.fill_rect(0, 0, 128, HEADER_HEIGHT, 0)
+            try:
+                voltage = _safe_attr(sdata, 'sys_voltage', 0.0)
+                rtemp = _safe_attr(sdata, 'cur_temp_f', None)
+                if _show_voltage:
+                    txt = f"{voltage:.2f}V"
+                else:
+                    txt = ("--.-F" if rtemp is None else f"{rtemp:.1f}F")
+                oled.text(txt, 2, 0)
+                vol_w = _measure_text_w(txt) + 4
+            except Exception:
+                vol_w = 16
+
+            if getattr(settings, 'DISPLAY_NET_BARS', False):
+                try:
+                    blocks = []
+                    if getattr(settings, 'ENABLE_WIFI', False):
+                        wifi_icon_w = _measure_text_w('W')
+                        bars_w = 3 * 6
+                        wifi_text = ''
+                        if getattr(sdata, 'WIFI_CONNECTED', False):
+                            wrssi = _safe_attr(sdata, 'wifi_rssi', None)
+                            wb = _net_bars_from_rssi(wrssi, (-60, -80, -90))
+                            wifi_text = ''
+                        else:
+                            wifi_text = 'No Con'
+                            wb = 0
+                        text_w = _measure_text_w(wifi_text)
+                        block_w = wifi_icon_w + 2 + bars_w + (4 if text_w else 0) + text_w
+                        blocks.append({'type': 'wifi', 'w': block_w, 'icon': 'W', 'bars': wb, 'text': wifi_text})
+
+                    if getattr(settings, 'ENABLE_LORA', False):
+                        lora_icon_w = _measure_text_w('L')
+                        bars_w = 3 * 6
+                        now_epoch = time.time()
+                        stale_s = int(getattr(settings, 'OLED_LORA_STALE_S', 120))
+                        last_rx = int(_safe_attr(sdata, 'lora_last_rx_ts', 0) or 0)
+                        last_tx = int(_safe_attr(sdata, 'lora_last_tx_ts', 0) or 0)
+                        recent = (last_rx and (now_epoch - last_rx) <= stale_s) or (last_tx and (now_epoch - last_tx) <= stale_s)
+                        connected = bool(_safe_attr(sdata, 'LORA_CONNECTED', False)) or recent
+                        lrssi = _safe_attr(sdata, 'lora_SigStr', None)
+                        if connected:
+                            try:
+                                lb = _net_bars_from_rssi(int(lrssi), (-60, -90, -120)) if lrssi is not None else 0
+                            except Exception:
+                                lb = 0
+                            ltext = ''
+                        else:
+                            node_role = str(getattr(settings, 'NODE_TYPE', '')).lower()
+                            ltext = 'Search' if node_role == 'remote' else 'No Con'
+                            lb = 0
+                        text_w = _measure_text_w(ltext)
+                        block_w = lora_icon_w + 2 + bars_w + (4 if text_w else 0) + text_w
+                        blocks.append({'type': 'lora', 'w': block_w, 'icon': 'L', 'bars': lb, 'text': ltext})
+
+                    start_x, xs = _layout_header_right(vol_w, blocks)
+                    min_gap = 6
+                    if start_x <= (2 + vol_w + min_gap):
+                        for b in blocks:
+                            if b.get('text'):
+                                for maxc in (6, 4, 2, 0):
+                                    short = _compact_label(b['text'], maxc)
+                                    b['text_compact'] = short
+                                    b['w'] = _measure_text_w(b['icon']) + 2 + 3 * 6 + (4 if _measure_text_w(short) else 0) + _measure_text_w(short)
+                                if start_x <= (2 + vol_w + min_gap):
+                                    b['text_compact'] = ''
+                                    b['w'] = _measure_text_w(b['icon']) + 2 + 3 * 6
+                        start_x, xs = _layout_header_right(vol_w, blocks)
+
+                    for b, x in zip(blocks, xs):
+                        try:
+                            icon_x = x
+                            oled.text(b.get('icon','?'), icon_x, 0)
+                            _draw_bars(oled, icon_x + _measure_text_w(b.get('icon','')) + 2, 0, int(b.get('bars', 0)))
+                            t = b.get('text_compact', b.get('text',''))
+                            if t:
+                                oled.text(t, icon_x + _measure_text_w(b.get('icon','')) + 2 + (3 * 6) + 4, 0)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+            try:
+                if _status_banner_text and (_status_banner_persist or time.time() < _status_banner_until):
+                    txt = str(_status_banner_text)[:16]
+                    bx = (128 - len(txt) * 8) // 2
+                    oled.fill_rect(bx - 1, 8, len(txt) * 8 + 2, 8, 0)
+                    oled.text(txt, bx, 8)
+                elif _status_banner_text and not _status_banner_persist and time.time() >= _status_banner_until:
+                    _status_banner_text = None
+            except Exception:
+                pass
+
+            oled.fill_rect(0, BODY_TOP, 128, BODY_HEIGHT, 0)
+
+            try:
+                if _body_override_lines and time.time() < _body_override_until:
+                    start_y = BODY_TOP + max(0, (BODY_HEIGHT - len(_body_override_lines) * 8) // 2)
+                    for i, line in enumerate(_body_override_lines):
+                        x = max(0, (128 - len(line) * 8) // 2)
+                        oled.text(str(line)[:MAX_TEXT_CHARS], x, start_y + i * 8)
+                else:
+                    if getattr(sdata, 'sampling_active', False):
+                        y = BODY_TOP + 2
+                        oled.text("Interior:", 0, y)
+                        oled.text(f"T{sdata.cur_device_temp_f:.1f}F", 80, y)
+                        y += 10
+                        oled.text("Probe:", 0, y)
+                        oled.text(f"T{sdata.cur_temp_f:.1f}F", 80, y)
+                        if getattr(settings, 'SAMPLE_PROBE_HUMID', False):
+                            oled.text(f"H{sdata.cur_humid:.1f}%", 0, y+10)
+                        if getattr(settings, 'SAMPLE_PROBE_BAR', False):
+                            oled.text(f"B{sdata.cur_bar_pres:.1f}", 64, y+10)
+                        y += 20
+                        if getattr(settings, 'SAMPLE_SOIL', False):
+                            oled.text("Soil:", 0, y)
+                            oled.text(f"M{sdata.cur_soil_moisture:.1f}%", 64, y)
+                            if sdata.cur_soil_temp_f is not None:
+                                oled.text(f"T{sdata.cur_soil_temp_f:.1f}F", 0, y+10)
+                    else:
+                        pass
+            except Exception:
+                pass
+
+            try:
+                msg = str(_safe_attr(sdata, 'last_message', ''))[:MAX_TEXT_CHARS]
+                oled.text(msg, 0, 52)
+            except Exception:
+                pass
+
+            oled.fill_rect(0, BODY_BOTTOM, 128, FOOTER_HEIGHT, 0)
+            try:
+                unit_name = str(_safe_attr(settings, 'UNIT_Name', ''))[:MAX_TEXT_CHARS]
+                oled.text(unit_name, 0, BODY_BOTTOM + 2)
+            except Exception:
+                pass
+
             oled.show()
-        except Exception:
-            pass  # swallow transient I2C errors
-
-        _gc_counter += 1
-        if _gc_counter >= GC_INTERVAL:
-            _gc_counter = 0
-            gc.collect()
-
-        await _asyncio.sleep(RENDER_INTERVAL_S)
-
-# ===================== Public API =====================
-async def set_status_banner(message, duration_s=2.0):
-    global _status_msg, _status_expires
-    _load_imports()
-    _status_msg = str(message)[:16]
-    _status_expires = _time.time() + duration_s
-    await show_header()
+        except Exception as e:
+            print("[OLED] render error:", e)
+        await asyncio.sleep(RENDER_INTERVAL_S)
 
 async def show_header():
     global _render_task
-    _load_imports()
-    try:
-        if _render_task is not None and not _render_task.done():
-            return True
-    except Exception:
-        _render_task = None
-    _render_task = _asyncio.create_task(_render_loop())
+    if _render_task is None or _render_task.done():
+        _render_task = asyncio.create_task(_render_loop())
     return True
 
-async def display_message(message, display_time_s=1.5):
-    await set_status_banner(message, display_time_s)
-    await show_header()
-
-async def display_time(display_time_s=0):
-    _load_imports()
-    oled = _get_oled()
+async def display_message(message, display_time_s=0):
     if not oled:
         return
     await show_header()
-    area_top = HEADER_HEIGHT + 2
-    area_bottom = 64 - FOOTER_HEIGHT - 2
+    try:
+        from utils import update_sys_voltage
+        update_sys_voltage()
+    except Exception:
+        pass
+    msg = ' '.join(str(message).split())
+    max_lines = max(1, BODY_HEIGHT // 8)
+    pages = []
+    rem = msg
+    while rem:
+        page_lines = []
+        for _ in range(max_lines):
+            if not rem:
+                break
+            if len(rem) <= MAX_TEXT_CHARS:
+                page_lines.append(rem)
+                rem = ''
+                break
+            idx = rem.rfind(' ', 0, MAX_TEXT_CHARS)
+            if idx == -1:
+                idx = MAX_TEXT_CHARS
+            page_lines.append(rem[:idx].rstrip())
+            rem = rem[idx:].lstrip()
+        pages.append(page_lines)
+    for i, page_lines in enumerate(pages):
+        global _body_override_lines, _body_override_until
+        _body_override_lines = page_lines
+        _body_override_until = time.time() + (display_time_s if display_time_s and display_time_s > 0 else 1.2)
+        oled.fill_rect(0, BODY_TOP, 128, BODY_HEIGHT, 0)
+        start_y = BODY_TOP + max(0, (BODY_HEIGHT - len(page_lines) * 8) // 2)
+        for j, line in enumerate(page_lines):
+            x = max(0, (128 - len(line) * 8) // 2)
+            oled.text(line, x, start_y + j * 8)
+        oled.show()
+        if i < len(pages) - 1:
+            await asyncio.sleep(display_time_s if display_time_s else 1.2)
+        else:
+            if display_time_s and display_time_s > 0:
+                await asyncio.sleep(display_time_s)
+            try:
+                from utils import maybe_gc
+                maybe_gc("oled_display_message", min_interval_ms=5000, mem_free_below=45 * 1024)
+            except Exception:
+                pass
+
+    if not getattr(settings, 'ENABLE_OLED', False):
+        await screen_off()
+
+async def display_time(display_time_s=0):
+    if not oled:
+        return
+    await show_header()
+    header_h = HEADER_HEIGHT
+    footer_h = FOOTER_HEIGHT
+    area_top = header_h + 2
+    area_bottom = 64 - footer_h - 2
     oled.fill_rect(0, area_top, 128, area_bottom - area_top, 0)
-    t = _time.localtime()
+    t = time.localtime()
     hour = t[3] % 12 or 12
     ampm = "AM" if t[3] < 12 else "PM"
     timestr = "{:02}:{:02}:{:02} {}".format(hour, t[4], t[5], ampm)
@@ -308,45 +469,39 @@ async def display_time(display_time_s=0):
     oled.text(timestr, 10, y)
     oled.show()
     if display_time_s and display_time_s > 0:
-        await _asyncio.sleep(display_time_s)
-        if not getattr(_settings, 'DEBUG', False):
+        await asyncio.sleep(display_time_s)
+        if not getattr(settings, 'DEBUG', False):
             await screen_off()
 
 async def screen_off():
-    _load_imports()
-    oled = _get_oled()
-    if not oled or getattr(_settings, 'DEBUG', False):
+    if not oled or getattr(settings, 'DEBUG', False):
         return
-    try:
-        for c in range(255, -1, -25):
-            oled.contrast(c)
-            await _asyncio.sleep(0.03)
-        oled.poweroff()
-    except Exception:
-        pass
+    await fade_display(on=False)
+    oled.poweroff()
 
 async def screen_on():
-    _load_imports()
-    oled = _get_oled()
     if not oled:
         return
-    try:
-        oled.poweron()
-        for c in range(0, 256, 25):
-            oled.contrast(c)
-            await _asyncio.sleep(0.03)
-        oled.contrast(255)
-    except Exception:
-        pass
+    await show_header()
+    oled.poweron()
+
+def set_status_banner(message, duration_s=5, persist=False):
+    global _status_banner_text, _status_banner_until, _status_banner_persist
+    if not oled:
+        return False
+    _status_banner_text = str(message)
+    _status_banner_until = time.time() + int(duration_s)
+    _status_banner_persist = bool(persist)
+    return True
 
 def clear_status_banner():
-    global _status_msg, _status_expires
-    _status_msg = None
-    _status_expires = 0
+    global _status_banner_text, _status_banner_until, _status_banner_persist
+    _status_banner_text = None
+    _status_banner_until = 0
+    _status_banner_persist = False
     return True
 
 def clear_message_area():
-    oled = _get_oled()
     if not oled:
         return False
     try:
@@ -358,6 +513,3 @@ def clear_message_area():
 
 async def update_display(page=0):
     await show_header()
-
-# ===================== End of oled.py =====================
-# Replace your entire oled.py with this file. Reboot immediately after.

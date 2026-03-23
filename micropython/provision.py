@@ -1,14 +1,8 @@
-# TMON v2.01.0j - Provisioning Module (COMPLETE + BULLETPROOF)
-# Fully reviewed and updated from the version you just provided.
-# Fixes applied:
-# • Fixed syntax typo "atry:" → "try:"
-# • Switched to ujson for native MicroPython performance
-# • Added explicit GC after every network/JSON operation
-# • More robust error handling and fallback paths
-# • Better logging and timeout handling
-# • 100% compatible with the rest of the firmware (no missing references)
+# TMON Verion 2.00.1d - Minimal MicroPython provisioning client that uses the canonical micropython/settings.py values. This module defines a function to fetch provisioning settings from the TMON Admin hub using either GET or POST requests, with support for multiple endpoint paths and robust error handling. It also includes a function to apply the fetched settings, which can trigger firmware updates and persist important configuration values. The module is designed to be called during the device's first boot sequence to ensure it is properly registered and configured with the server before normal operation begins. GC management is included to maintain stability on resource-constrained hardware.
 
-import ujson as json
+# Minimal MicroPython provisioning client that uses the canonical micropython/settings.py values.
+
+import json
 import os
 try:
     import urequests as requests
@@ -18,11 +12,11 @@ except Exception:
 # Import device settings robustly: prefer local settings module; fallback to micropython.settings
 device_settings = None
 try:
-    import settings as local_settings
+    import settings as local_settings  # when module is executed in its dir
     device_settings = local_settings
 except Exception:
     try:
-        from micropython import settings as local_settings
+        from micropython import settings as local_settings  # package-style import
         device_settings = local_settings
     except Exception:
         device_settings = None
@@ -58,7 +52,7 @@ def _attempt_endpoint(base_url, endpoint, params=None, json_body=None, timeout=R
     except Exception as e:
         return None, str(e)
     finally:
-        # Aggressive GC after every network call
+        # NEW: GC after endpoint attempt
         try:
             import gc
             gc.collect()
@@ -174,10 +168,10 @@ def apply_settings(settings_doc):
     if not unit_name and settings_doc.get('unit_name'):
         unit_name = settings_doc.get('unit_name')
         print("Setting UNIT_Name (unit_name fallback):", unit_name)
-
     # Persist mapped fields to settings module
     try:
         import settings as _s
+        # Persist UNIT_ID if present (best-effort)
         if settings_doc.get('unit_id'):
             try:
                 from utils import persist_unit_id
@@ -185,8 +179,7 @@ def apply_settings(settings_doc):
                 persist_unit_id(_s.UNIT_ID)
             except Exception:
                 pass
-        if settings_doc.get('plan'):
-            _s.PLAN = settings_doc.get('plan')
+        if settings_doc.get('plan'): _s.PLAN = settings_doc.get('plan')
         if settings_doc.get('site_url') or settings_doc.get('wordpress_api_url'):
             _s.WORDPRESS_API_URL = settings_doc.get('site_url') or settings_doc.get('wordpress_api_url')
             try:
@@ -195,6 +188,7 @@ def apply_settings(settings_doc):
                     f.write(_s.WORDPRESS_API_URL)
             except Exception:
                 pass
+        # Persist unit name via utils to maintain consistent behavior
         if unit_name:
             try:
                 from utils import persist_unit_name
@@ -202,6 +196,7 @@ def apply_settings(settings_doc):
                 _s.UNIT_Name = unit_name
             except Exception:
                 pass
+        # If role -> persist node type and if remote, optionally disable WiFi
         if node_type:
             try:
                 _s.NODE_TYPE = node_type
@@ -217,13 +212,14 @@ def apply_settings(settings_doc):
     except Exception:
         pass
 
-    # GC after applying/persisting provisioning settings
+    # NEW: GC after applying/persisting provisioning settings
     try:
         import gc
         gc.collect()
     except Exception:
         pass
 
+    # Additional device-specific settings application here
     return True
 
 # Exported helpers

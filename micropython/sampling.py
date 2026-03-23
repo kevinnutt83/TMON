@@ -1,39 +1,32 @@
-# TMON v2.01.0j - Sampling Module (BME280 BULLETPROOF - COMPLETE FILE)
-# Fixes:
-# • BME280 address not found / ETIMEDOUT / intermittent failures eliminated
-# • Explicit I2C bus scan before every init (detects real address)
-# • Separate SoftI2C for probe (OPEN_DRAIN + PULL_UP + 100kHz for long cable stability)
-# • Aggressive retries (up to 5) with 150ms delay + bus deinit/re-init
-# • Full pin isolation via free_pins_i2c() before and after every read
-# • Detailed debug logging for every step (address found, data read, errors)
-# • Interior (hard I2C) and Probe (SoftI2C) handled independently
-# • All original frost/heat/soil logic preserved exactly
+# TMON Verion 2.00.1d - Sampling module for TMON MicroPython firmware...
 
 import sdata
 import settings
-from utils import free_pins_i2c, debug_print, log_error
+from utils import free_pins_i2c
 import uasyncio as asyncio
-from machine import I2C, SoftI2C, Pin
+from utils import debug_print, log_error
 from tmon import frostwatchCheck, heatwatchCheck, beginFrostOperations, beginHeatOperations, endFrostOperations, endHeatOperations
+import machine
 
-# ===================== Sampling Routine =====================
+
+#Sampling Routine for sample all sensor types if they are enabled
 async def sampleEnviroment():
     from utils import led_status_flash
     import sdata as _s
     _s.sampling_active = True
     try:
-        if getattr(settings, 'SAMPLE_TEMP', False):
-            led_status_flash('SAMPLE_TEMP')
-            await sampleTemp()
+        led_status_flash('SAMPLE_TEMP')
+        await sampleTemp()
         
         if getattr(settings, 'SAMPLE_SOIL', False):
             led_status_flash('SAMPLE_SOIL')
             await sampleSoil()
         
-        if getattr(settings, 'ENABLE_FROSTWATCH', False) or getattr(settings, 'ENABLE_HEATWATCH', False):
-            await frost_and_heat_watch()
+        led_status_flash('SAMPLE_BAR')
+        await frost_and_heat_watch()
     finally:
         _s.sampling_active = False
+
 
 async def sampleTemp():
     if not getattr(settings, 'SAMPLE_TEMP', True):
@@ -45,7 +38,7 @@ async def sampleTemp():
     # === INTERIOR DEVICE ENCLOSURE SENSOR ===
     if (getattr(settings, 'SAMPLE_DEVICE_TEMP', False) or
         getattr(settings, 'SAMPLE_DEVICE_BAR', False) or
-        getattr(settings, 'SAMPLE_DEVICE_HUMID', False)) and getattr(settings, 'ENABLE_DEVICE_BME280', True):
+        getattr(settings, 'SAMPLE_DEVICE_HUMID', False)) and settings.ENABLE_DEVICE_BME280:
         await free_pins_i2c()
         await sampleBME280Interior()
         await free_pins_i2c()
@@ -53,189 +46,210 @@ async def sampleTemp():
     # === EXTERIOR PROBE SENSOR ===
     if (getattr(settings, 'SAMPLE_PROBE_TEMP', False) or
         getattr(settings, 'SAMPLE_PROBE_BAR', False) or
-        getattr(settings, 'SAMPLE_PROBE_HUMID', False)) and getattr(settings, 'ENABLE_PROBE_BME280', True):
+        getattr(settings, 'SAMPLE_PROBE_HUMID', False)) and settings.ENABLE_PROBE_BME280:
         await free_pins_i2c()
         await sampleBME280Probe()
         await free_pins_i2c()
 
+
+async def _read_bme280(i2c, target="probe"):
+    sensor = None
+    try:
+        from BME280 import BME280
+        sensor = BME280(i2c=i2c)
+        sensor.get_calib_param()
+        data = sensor.readData()
+
+        temp_c = data[1]
+        temp_f = (temp_c * 9/5) + 32
+        humid = data[2]
+        bar = data[0]
+
+        if target == "probe":
+            if getattr(settings, 'SAMPLE_PROBE_TEMP', False):
+                sdata.cur_temp_c = temp_c
+                sdata.cur_temp_f = temp_f
+                await findLowestTemp(temp_f)
+                await findHighestTemp(temp_f)
+            if getattr(settings, 'SAMPLE_PROBE_BAR', False):
+                sdata.cur_bar_pres = bar
+                await findLowestBar(bar)
+                await findHighestBar(bar)
+            if getattr(settings, 'SAMPLE_PROBE_HUMID', False):
+                sdata.cur_humid = humid
+                await findLowestHumid(humid)
+                await findHighestHumid(humid)
+
+        else:  # device
+            if getattr(settings, 'SAMPLE_DEVICE_TEMP', False):
+                sdata.cur_device_temp_c = temp_c
+                sdata.cur_device_temp_f = temp_f
+            if getattr(settings, 'SAMPLE_DEVICE_BAR', False):
+                sdata.cur_device_bar_pres = bar
+            if getattr(settings, 'SAMPLE_DEVICE_HUMID', False):
+                sdata.cur_device_humid = humid
+
+        if settings.DEBUG and settings.DEBUG_TEMP:
+            await debug_print(
+                f"BME280 {target}: p:{bar:7.2f} t:{temp_c:6.2f} h:{humid:6.2f}",
+                "DEBUG TEMP"
+            )
+        return data
+
+    except Exception as e:
+        await log_error(f"BME280 {target} fatal error: {e}", "BME280")
+        await debug_print(f"BME280 {target} fatal error – disabling sensor", "ERROR")
+        
+        if target == "device":
+            settings.ENABLE_DEVICE_BME280 = False
+            settings.SAMPLE_DEVICE_TEMP = False
+            settings.SAMPLE_DEVICE_BAR = False
+            settings.SAMPLE_DEVICE_HUMID = False
+        else:
+            settings.ENABLE_PROBE_BME280 = False
+            settings.SAMPLE_PROBE_TEMP = False
+            settings.SAMPLE_PROBE_BAR = False
+            settings.SAMPLE_PROBE_HUMID = False
+        return None
+    finally:
+        if sensor is not None:
+            try:
+                if hasattr(sensor, "i2c") and hasattr(sensor.i2c, "deinit"):
+                    sensor.i2c.deinit()
+            except:
+                pass
+            sensor.i2c = None
+
+
 async def sampleBME280Interior():
-    await debug_print("BME280 Interior: starting scan + read", "BME280")
-    await free_pins_i2c()
+    from utils import led_status_flash
+    await led_status_flash('SAMPLE_DEVICE_TEMP')
+    try:
+        from oled import display_message
+        await display_message("Sampling Interior Temp", 1)
+    except:
+        pass
+
     i2c = I2C(0, scl=Pin(settings.DEVICE_TEMP_SCL_PIN),
               sda=Pin(settings.DEVICE_TEMP_SDA_PIN), freq=400000)
-    await _read_bme280(i2c, target="device", addr=settings.i2cAddr_DEVICE_BME280)
-    try:
-        if hasattr(i2c, "deinit"):
-            i2c.deinit()
-    except:
-        pass
+    await _read_bme280(i2c, target="device")
+
 
 async def sampleBME280Probe():
-    await debug_print("BME280 Probe: starting SoftI2C scan + read", "BME280")
-    await free_pins_i2c()
-    # Hardened SoftI2C for long cable probe
-    scl = Pin(settings.BME280_PROBE_SCL_PIN, Pin.OPEN_DRAIN, Pin.PULL_UP)
-    sda = Pin(settings.BME280_PROBE_SDA_PIN, Pin.OPEN_DRAIN, Pin.PULL_UP)
-    i2c = SoftI2C(scl=scl, sda=sda, freq=100000)  # 100kHz = ultra reliable
-    await _read_bme280(i2c, target="probe", addr=settings.i2cAddr_PROBE_BME280)
+    from utils import led_status_flash
+    await led_status_flash('SAMPLE_BME280')
     try:
-        if hasattr(i2c, "deinit"):
-            i2c.deinit()
+        from oled import display_message
+        await display_message("Sampling Exterior Probe", 1)
     except:
         pass
 
-async def _read_bme280(i2c, target="probe", addr=0x76):
-    from BME280 import BME280
-    max_attempts = 5
-    found = False
+    import lora as lora_module
+    async with lora_module.pin_lock:
+        if lora_module.lora is not None:
+            try:
+                lora_module.lora.spi.deinit()
+            except:
+                pass
+            lora_module.lora = None
 
-    # CRITICAL: Scan bus first
-    try:
-        devices = i2c.scan()
-        await debug_print(f"BME280 {target} scan found: {[hex(d) for d in devices]}", "BME280")
-        if addr in devices:
-            found = True
-            await debug_print(f"BME280 {target}: address 0x{addr:02X} CONFIRMED", "INFO")
-        else:
-            # Fallback common addresses
-            for fallback in [0x76, 0x77]:
-                if fallback in devices and fallback != addr:
-                    addr = fallback
-                    found = True
-                    await debug_print(f"BME280 {target}: fallback address 0x{addr:02X} used", "WARN")
-                    break
-    except Exception as e:
-        await log_error(f"BME280 {target} scan failed: {e}", "BME280")
-        return None
+    i2c = I2C(1, scl=Pin(settings.BME280_PROBE_SCL_PIN),
+              sda=Pin(settings.BME280_PROBE_SDA_PIN), freq=400000)
+    await _read_bme280(i2c, target="probe")
 
-    if not found:
-        await debug_print(f"BME280 {target}: NO DEVICE at 0x{addr:02X} or fallback", "ERROR")
-        return None
-
-    for attempt in range(1, max_attempts + 1):
-        sensor = None
-        try:
-            await asyncio.sleep_ms(150)  # stability delay after scan
-            sensor = BME280(i2c=i2c, address=addr)
-            sensor.get_calib_param()
-            data = sensor.readData()
-
-            temp_c = data[1]
-            temp_f = (temp_c * 9/5) + 32
-            humid = data[2]
-            bar = data[0]
-
-            if target == "probe":
-                if getattr(settings, 'SAMPLE_PROBE_TEMP', False):
-                    sdata.cur_temp_c = temp_c
-                    sdata.cur_temp_f = temp_f
-                    await findLowestTemp(temp_f)
-                    await findHighestTemp(temp_f)
-                if getattr(settings, 'SAMPLE_PROBE_BAR', False):
-                    sdata.cur_bar_pres = bar
-                    await findLowestBar(bar)
-                    await findHighestBar(bar)
-                if getattr(settings, 'SAMPLE_PROBE_HUMID', False):
-                    sdata.cur_humid = humid
-                    await findLowestHumid(humid)
-                    await findHighestHumid(humid)
-            else:  # device
-                if getattr(settings, 'SAMPLE_DEVICE_TEMP', False):
-                    sdata.cur_device_temp_c = temp_c
-                    sdata.cur_device_temp_f = temp_f
-                if getattr(settings, 'SAMPLE_DEVICE_BAR', False):
-                    sdata.cur_device_bar_pres = bar
-                if getattr(settings, 'SAMPLE_DEVICE_HUMID', False):
-                    sdata.cur_device_humid = humid
-
-            await debug_print(
-                f"BME280 {target} SUCCESS: p:{bar:7.2f} t:{temp_c:6.2f} h:{humid:6.2f}",
-                "BME280"
-            )
-            return data
-
-        except Exception as e:
-            await debug_print(
-                f"BME280 {target} attempt {attempt}/{max_attempts} failed: {type(e).__name__}: {e}",
-                "ERROR"
-            )
-            if attempt < max_attempts:
-                await asyncio.sleep_ms(150)
-            else:
-                await log_error(f"BME280 {target} fatal after {max_attempts} attempts", "BME280")
-                return None
-        finally:
-            if sensor is not None:
-                try:
-                    if hasattr(sensor, "i2c") and hasattr(sensor.i2c, "deinit"):
-                        sensor.i2c.deinit()
-                except:
-                    pass
-                sensor = None
-    return None
 
 async def sampleSoil():
     if not getattr(settings, 'SAMPLE_SOIL', False):
         return
+
     import sdata as _s
     from utils import led_status_flash
+    _s.sampling_active = True
+
     try:
-        await display_message("Sampling Soil Probe", 1) if 'display_message' in globals() else None
+        try:
+            from oled import display_message
+            await display_message("Sampling Soil Probe", 1)
+        except Exception:
+            pass
+
         result = await sample_soil_probe()
+
         if result and result.get("status") == "success":
             _s.cur_soil_moisture = result.get("moisture_percent", 0.0)
             _s.cur_soil_temp_c = result.get("temperature_c")
             _s.cur_soil_temp_f = result.get("temperature_f")
-            await debug_print(f"Soil: {result['moisture_percent']:.1f}% | {result['temperature_f']:.1f}F", "SOIL")
-    except Exception as e:
-        await log_error(f"sampleSoil error: {e}", "SOIL")
 
-# ===================== Min/Max Trackers (unchanged) =====================
+            if getattr(settings, 'DEBUG_SOIL_PROBE', False):
+                await debug_print(
+                    f"Soil Moisture: {_s.cur_soil_moisture:.1f}% | SoilTemp: {_s.cur_soil_temp_f:.1f}°F",
+                    "SOIL"
+                )
+        else:
+            await debug_print("Soil probe returned no valid data", "SOIL")
+
+    except Exception as e:
+        await debug_print(f"sampleSoil wrapper error: {e}", "ERROR")
+    finally:
+        _s.sampling_active = False
+
+
 async def findLowestTemp(compareTemp, source='local'):
     try:
-        if compareTemp is None: return
+        if compareTemp is None:
+            return
         if sdata.lowest_temp_f == 0 or compareTemp < sdata.lowest_temp_f:
             sdata.lowest_temp_f = compareTemp
             await frostwatchCheck()
-    except: pass
+    except Exception:
+        pass
 
 async def findLowestBar(compareBar, source='local'):
     try:
-        if compareBar is None: return
+        if compareBar is None:
+            return
         if sdata.lowest_bar == 0 or compareBar < sdata.lowest_bar:
             sdata.lowest_bar = compareBar
-    except: pass
+    except Exception:
+        pass
 
 async def findLowestHumid(compareHumid, source='local'):
     try:
-        if compareHumid is None: return
+        if compareHumid is None:
+            return
         if sdata.lowest_humid == 0 or compareHumid < sdata.lowest_humid:
             sdata.lowest_humid = compareHumid
-    except: pass
+    except Exception:
+        pass
 
 async def findHighestTemp(compareTemp, source='local'):
     try:
-        if compareTemp is None: return
+        if compareTemp is None:
+            return
         if compareTemp > sdata.highest_temp_f:
             sdata.highest_temp_f = compareTemp
             await heatwatchCheck()
-    except: pass
+    except Exception:
+        pass
 
 async def findHighestBar(compareBar, source='local'):
     try:
-        if compareBar is None: return
+        if compareBar is None:
+            return
         if compareBar > sdata.highest_bar:
             sdata.highest_bar = compareBar
-    except: pass
+    except Exception:
+        pass
 
 async def findHighestHumid(compareHumid, source='local'):
     try:
-        if compareHumid is None: return
+        if compareHumid is None:
+            return
         if compareHumid > sdata.highest_humid:
             sdata.highest_humid = compareHumid
-    except: pass
+    except Exception:
+        pass
 
-# ===================== Frost / Heat Watch (unchanged) =====================
 async def frost_and_heat_watch():
     try:
         if getattr(settings, 'ENABLE_FROSTWATCH', False):
@@ -273,29 +287,71 @@ async def frost_and_heat_watch():
                     sdata.heat_act = False
                     await endHeatOperations()
     except Exception as e:
-        await debug_print(f"frost/heat err: {e}", "ERROR")
+        await debug_print(f"sample:frost/heat err: {e}", "FROSTHEATWATCH ERROR")
+        
 
 async def sample_soil_probe():
     if not getattr(settings, 'SAMPLE_SOIL', False):
+        await debug_print("Soil sampling disabled (SAMPLE_SOIL=False)", "SOIL")
         return {"status": "disabled"}
+
+    await debug_print("Starting soil probe sampling...", "SOIL")
+
     try:
         adc_moist = machine.ADC(settings.SOIL_PROBE_PIN)
-        adc_moist.atten(machine.ADC.ATTN_11DB)
-        readings = [adc_moist.read_u16() for _ in range(10)]
+        adc_moist.atten(machine.ADC.ATTN_11DB)          
+
+        readings = []
+        for _ in range(10):
+            readings.append(adc_moist.read_u16())
+            await asyncio.sleep_ms(10)                  
+
         raw_moisture = sum(readings) // len(readings)
+
+        await debug_print(f"Raw moisture (u16 avg): {raw_moisture}", "SOIL")
+
         min_raw = getattr(settings, 'MIN_SOIL_MOISTURE', 45)
         max_raw = getattr(settings, 'MAX_SOIL_MOISTURE', 120)
-        moisture_pct = (max_raw - raw_moisture) * 100.0 / (max_raw - min_raw) if max_raw > min_raw else 50.0
-        moisture_pct = max(0.0, min(100.0, moisture_pct))
+
+        if raw_moisture >= 65500:
+            await debug_print("Error: Sensor maxed out — check wiring/power", "SOIL")
+            moisture_pct = 0.0
+        elif max_raw > min_raw:
+            moisture_pct = (max_raw - raw_moisture) * 100.0 / (max_raw - min_raw)
+            moisture_pct = max(0.0, min(100.0, moisture_pct))
+        else:
+            moisture_pct = 50.0
+
+        await debug_print(f"Soil Moisture: {moisture_pct:.1f}%", "SOIL")
+
+        temperature_c = None
+        temperature_f = None
+        try:
+            adc_temp = machine.ADC(9)                   
+            adc_temp.atten(machine.ADC.ATTN_11DB)
+
+            t_readings = [adc_temp.read_u16() for _ in range(8)]
+            raw_temp = sum(t_readings) // len(t_readings)
+
+            await debug_print(f"Raw temperature (u16 avg): {raw_temp}", "SOIL")
+
+            temperature_c = (raw_temp / 65535.0) * 100.0 - 50.0
+            temperature_c -= 16.666666666666668
+            temperature_f = (temperature_c * 9 / 5) + 32
+
+            await debug_print(f"Temperature: {temperature_c:.2f}°C ({temperature_f:.1f}°F)", "SOIL")
+        except Exception as temp_e:
+            await debug_print(f"Temperature sensor issue: {temp_e}", "ERROR")
+
         return {
             "status": "success",
             "moisture_percent": round(moisture_pct, 1),
-            "raw_moisture": raw_moisture
+            "raw_moisture": raw_moisture,
+            "temperature_c": round(temperature_c, 2) if temperature_c is not None else None,
+            "temperature_f": round(temperature_f, 1) if temperature_f is not None else None,
+            "raw_temperature": raw_temp if 'raw_temp' in locals() else None
         }
-    except Exception as e:
-        await log_error(f"soil probe error: {e}", "SOIL")
-        return {"status": "error", "message": str(e)}
 
-# ===================== End of sampling.py =====================
-# Replace your entire sampling.py with this file.
-# BME280 will now be 100% reliable - no more address errors.
+    except Exception as e:
+        await debug_print(f"Soil probe error: {e}", "ERROR")
+        return {"status": "error", "message": str(e)}

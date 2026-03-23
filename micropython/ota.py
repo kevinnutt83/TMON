@@ -17,71 +17,47 @@ except Exception:
         asyncio = None
 
 async def _sleep(seconds):
-    """Robust async sleep: prefer event loop sleep, fall back to blocking sleep."""
-    try:
-        if 'asyncio' in globals() and asyncio:
-            await asyncio.sleep(seconds)
-            return
-    except Exception:
-        pass
-    # Try common async variants dynamically
-    try:
-        import uasyncio as _u
-        await _u.sleep(seconds)
-        return
-    except Exception:
-        pass
-    try:
-        import asyncio as _a
-        await _a.sleep(seconds)
-        return
-    except Exception:
-        pass
-    # Last-resort blocking sleep to avoid NameError during retries
-    try:
-        import utime as _t
-        _t.sleep(seconds)
-    except Exception:
-        try:
-            import time as _t
-            _t.sleep(seconds)
-        except Exception:
-            pass
+	"""Robust async sleep: prefer event loop sleep, fall back to blocking sleep."""
+	try:
+		if 'asyncio' in globals() and asyncio:
+			await asyncio.sleep(seconds)
+			return
+	except Exception:
+		pass
+	# Try common async variants dynamically
+	try:
+		import uasyncio as _u
+		await _u.sleep(seconds)
+		return
+	except Exception:
+		pass
+	try:
+		import asyncio as _a
+		await _a.sleep(seconds)
+		return
+	except Exception:
+		pass
+	# Last-resort blocking sleep to avoid NameError during retries
+	try:
+		import utime as _t
+		_t.sleep(seconds)
+	except Exception:
+		try:
+			import time as _t
+			_t.sleep(seconds)
+		except Exception:
+			# give up silently
+			pass
 
 import settings
 from config_persist import write_text
 from utils import debug_print
-try:
-    from utils import maybe_gc
-except Exception:
-    def maybe_gc(*a, **kw):
-        try:
-            import gc
-            gc.collect()
-        except Exception:
-            pass
-try:
-    import ujson as json
-except Exception:
-    import json
-try:
-    import os
-except Exception:
-    os = None
-try:
-    import ubinascii as _binascii
-except Exception:
-    try:
-        import binascii as _binascii
-    except Exception:
-        _binascii = None
-try:
-    import ure as _re
-except Exception:
-    try:
-        import re as _re
-    except Exception:
-        _re = None
+# NEW: GC helper
+from utils import maybe_gc
+import ujson as json
+import os
+import binascii as _binascii
+import re as _re
 
 def _safe_join(base: str, name: str) -> str:
     if not base.endswith('/'):
@@ -89,23 +65,14 @@ def _safe_join(base: str, name: str) -> str:
     return base + name.lstrip('/')
 
 def _ensure_dir(path: str):
-    """Recursively create parent directories for *path*."""
     try:
         d = path.rsplit('/', 1)[0]
-        if not d or d == path or d == '.':
-            return
-        parts = d.split('/')
-        cur = ''
-        for p in parts:
-            if not p:
-                cur = '/'
-                continue
-            cur = cur + p if cur.endswith('/') else cur + '/' + p
+        if d and d != path and d != '.':
             try:
-                os.stat(cur)
+                os.stat(d)
             except Exception:
                 try:
-                    os.mkdir(cur)
+                    os.mkdir(d)
                 except Exception:
                     pass
     except Exception:
@@ -405,8 +372,7 @@ async def apply_pending_update():
                         continue
 
                     # stream download to temp file and compute sha256
-                    safe_name = name.replace('/', '_')
-                    tmp_path = getattr(settings, 'LOG_DIR', '/logs').rstrip('/') + f'/ota_tmp_{safe_name}'
+                    tmp_path = getattr(settings, 'LOG_DIR', '/logs').rstrip('/') + f'/ota_tmp_{name}'
                     final_path = name  # apply path
                     h = _uh.sha256()
                     total = 0
@@ -523,14 +489,11 @@ async def apply_pending_update():
                     try:
                         if getattr(settings, 'OTA_BACKUP_ENABLED', True):
                             try:
-                                bk_path = backup_dir.rstrip('/') + '/' + name
-                                _ensure_dir(bk_path)
                                 with open(final_path, 'rb') as sf:
-                                    with open(bk_path, 'wb') as bf:
+                                    with open(backup_dir.rstrip('/') + '/' + name, 'wb') as bf:
                                         bf.write(sf.read())
                             except Exception:
                                 pass
-                        _ensure_dir(final_path)
                         with open(final_path, 'wb') as out:
                             out.write(open(tmp_path, 'rb').read())
                     except Exception as e:

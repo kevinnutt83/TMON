@@ -1,14 +1,15 @@
-# TMON v2.01.0 - Relay control with safety caps and runtime telemetry
-# Full safety limits (per-relay and global), async runtime tracker, sdata updates,
-# CLI-compatible toggle_relay. Works seamlessly with LoRa on Core 1.
+# TMON Verion 2.00.1d - Relay control with safety caps and runtime telemetry. This module defines the logic for controlling up to 8 relays based on settings, with optional runtime limits that are enforced for safety. It updates the centralized sdata variables to track relay states and runtime counters, allowing for monitoring and reporting of relay usage. The toggle_relay function can be called from command handlers or other parts of the firmware to control the relays while ensuring that safety limits are respected. Runtime tracking is implemented as an async task that increments a counter in sdata every second while the relay is on, and is cancelled when the relay is turned off or when the runtime limit is reached.
 
+"""Relay control with safety caps and runtime telemetry.
+Firmware Version: v2.06.0
+"""
 import uasyncio as asyncio
 import machine
 import sdata
 import settings
-from utils import debug_print, led_status_flash
+from utils import debug_print
 
-# Internal state per relay
+# Internal state per relay: start time and scheduled task
 _relay_tasks = {}
 _relay_start_ts = {}
 
@@ -42,7 +43,7 @@ def _set_sdata_on(n: int, on: bool):
         setattr(sdata, f'relay{n}_on', bool(on))
     except Exception:
         pass
-    # Initialize runtime counter
+    # Initialize runtime counters in sdata
     try:
         key = f'relay{n}_runtime_s'
         if not hasattr(sdata, key):
@@ -52,6 +53,7 @@ def _set_sdata_on(n: int, on: bool):
 
 async def _runtime_tracker(n: int):
     key = f'relay{n}_runtime_s'
+    _relay_start_ts[n] = _relay_start_ts.get(n) or 0
     while getattr(sdata, f'relay{n}_on', False):
         try:
             cur = getattr(sdata, key, 0)
@@ -60,9 +62,9 @@ async def _runtime_tracker(n: int):
             pass
         await asyncio.sleep(1)
 
-async def toggle_relay(relay_num, state, runtime="0"):
-    """Main public function - called from CLI and LoRa CMD"""
+async def toggle_relay(relay_num, state, runtime):
     try:
+        # Validate relay_num (1-8)
         if not relay_num.isdigit() or not (1 <= int(relay_num) <= 8):
             await debug_print(f"Invalid relay number: {relay_num} (must be 1-8)", "ERROR")
             return
@@ -71,20 +73,28 @@ async def toggle_relay(relay_num, state, runtime="0"):
             await debug_print(f"Relay {n} disabled by settings", "WARN")
             return
 
-        pin = _relay_pin(n)
-        if pin is None:
-            await debug_print(f"Missing pin for relay {n}", "ERROR")
+        # Get pin from settings (e.g., settings.RELAY_PIN1)
+        pin_attr = f"RELAY_PIN{n}"
+        if not hasattr(settings, pin_attr):
+            await debug_print(f"Missing pin setting: {pin_attr}", "ERROR")
+            return
+        pin_num = getattr(settings, pin_attr)
+        pin = machine.Pin(pin_num, machine.Pin.OUT)
+
+        # Get sdata variable (e.g., 'relay1_on')
+        sdata_var = f"relay{n}_on"
+        if not hasattr(sdata, sdata_var):
+            await debug_print(f"Missing sdata variable: {sdata_var}", "ERROR")
             return
 
         on = state.lower() == 'on'
-        current_state = 1 if on else 0
+        current_state = 1 if on else 0  # Assume active high: 1 = on, 0 = off
 
         pin.value(current_state)
-        _set_sdata_on(n, on)
+        setattr(sdata, sdata_var, on)
         await debug_print(f"Relay {n} set to {state}", "COMMAND")
-        led_status_flash(f'RELAY_{n}_{"ON" if on else "OFF"}')
 
-        # Cancel any existing tracker if turning off
+        # Cancel prior tracker if toggling off
         if not on:
             t = _relay_tasks.get(n)
             if t:
@@ -95,12 +105,12 @@ async def toggle_relay(relay_num, state, runtime="0"):
                 _relay_tasks[n] = None
             return
 
-        # Turn on with runtime limit
         if runtime != '0':
             try:
                 req_s = int(runtime)
             except Exception:
                 req_s = 0
+            # Enforce safety caps
             limit_s = _relay_runtime_cap_s(n, req_s)
             if limit_s == 0 and req_s > 0:
                 await debug_print(f"Relay {n} runtime capped to 0s (safety)", "WARN")
@@ -109,7 +119,7 @@ async def toggle_relay(relay_num, state, runtime="0"):
                 return
             if limit_s < req_s:
                 await debug_print(f"Relay {n} runtime capped to {limit_s}s (requested {req_s}s)", "WARN")
-
+            # Start runtime tracker
             _set_sdata_on(n, True)
             try:
                 _relay_tasks[n] = asyncio.create_task(_runtime_tracker(n))
@@ -119,9 +129,6 @@ async def toggle_relay(relay_num, state, runtime="0"):
             pin.value(0)
             _set_sdata_on(n, False)
             await debug_print(f"Relay {n} reverted after {limit_s}s", "COMMAND")
-            led_status_flash(f'RELAY_{n}_OFF')
 
     except Exception as e:
         await debug_print(f"Error in toggle_relay: {str(e)}", "ERROR")
-
-# ===================== End of relay.py =====================

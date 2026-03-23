@@ -1,7 +1,5 @@
-# TMON v2.01.0 - Centralized settings module
-# All original settings preserved exactly. Added APP_MODE and CLI-friendly allowlist for flexibility.
+# TMON Verion 2.00.1g - Centralized settings module for TMON MicroPython firmware. Defines all configurable parameters for device operation, including LoRa communication, WiFi connectivity, sensor sampling, OTA updates, and WordPress integration. Provides default values and allows overrides via staged settings mechanism. Also includes debug flags for granular control over logging and behavior during development and troubleshooting.
 
-# Persistent values (do not change here – use CLI or provisioning)
 try:
     FIELD_DATA_APP_PASS
 except NameError:
@@ -41,7 +39,7 @@ FIELD_DATA_GZIP = True
 UNIT_ID = "None"
 UNIT_Name = "No Device Name"
 NODE_TYPE = 'base'
-FIRMWARE_VERSION = "v2.01.0l"
+FIRMWARE_VERSION = "v2.00.2i"
  
 WORDPRESS_API_URL = ""
 WORDPRESS_USERNAME = "agadmin"
@@ -54,6 +52,14 @@ PROVISION_CHECK_INTERVAL_S = 30
 PROVISION_MAX_RETRIES = 60
 WIFI_ALWAYS_ON_WHEN_UNPROVISIONED = True
 WIFI_DISABLE_AFTER_PROVISION = True
+PROVISIONED_FLAG_FILE = '/logs/provisioned.flag'
+REMOTE_SETTINGS_STAGED_FILE = '/logs/remote_settings.staged.json'
+REMOTE_SETTINGS_APPLIED_FILE = '/logs/remote_settings.applied.json'
+REMOTE_SETTINGS_PREV_FILE = '/logs/remote_settings.prev.json'
+UNIT_ID_FILE = '/logs/unit_id.txt'
+MACHINE_ID_FILE = '/logs/machine_id.txt'
+LAST_FIRMWARE_CHECK_FILE = '/logs/fw_last_check.txt'
+OTA_PENDING_FILE = '/logs/ota_pending.flag'
 
 ENABLE_WIFI = True
 ENABLE_LORA = True
@@ -87,7 +93,7 @@ RELAY_PIN8 = None
 DEVICE_TEMP_SCL_PIN = 33
 DEVICE_TEMP_SDA_PIN = 34
 BME280_PROBE_SCL_PIN = 6
-BME280_PROBE_SDA_PIN = 5
+BME280_PROBE_SDA_PIN = 2
 OLED_SCL_PIN = 38
 OLED_SDA_PIN = 39
 SPI_BUS = 1
@@ -219,24 +225,15 @@ OLED_FOOTER_HEIGHT = 12
 DISPLAY_NET_BARS = True
 OLED_HEADER_FLIP_S = 4
 
-# ===================== BME280 SENSORS =====================
 ENABLE_DEVICE_BME280 = True
 ENABLE_PROBE_BME280 = True
-
-# SEPARATE ADDRESSES — change probe to 0x77 if your module has SDO tied high
-i2cAddr_DEVICE_BME280 = 0x76
-i2cAddr_PROBE_BME280  = 0x76   # ← change to 0x77 if needed
-
-# Probe uses softer settings (long cable + SoftI2C)
-BME280_PROBE_FREQ_HZ = 100000   # was 400000 — much more reliable
-BME280_INIT_DELAY_MS = 100
 
 SAMPLE_DEVICE_TEMP = True
 SAMPLE_DEVICE_BAR = True
 SAMPLE_DEVICE_HUMID = True
-SAMPLE_PROBE_TEMP = True
-SAMPLE_PROBE_BAR = True
-SAMPLE_PROBE_HUMID = True
+SAMPLE_PROBE_TEMP = False
+SAMPLE_PROBE_BAR = False 
+SAMPLE_PROBE_HUMID = False
 
 SAMPLE_TEMP = True
 COMPARE_TEMP = True
@@ -250,6 +247,8 @@ SAMPLE_LUX = False
 SAMPLE_SOIL = False
 
 # Soil Probe Min/Max
+MIN_SOIL_MOISTURE = 1
+MAX_SOIL_MOISTURE = 100
 MIN_SOIL_MOISTURE = 45
 MAX_SOIL_MOISTURE = 120
 
@@ -284,8 +283,7 @@ OTA_APPLY_INTERVAL_S = 5
 OTA_RESTORE_ON_FAIL = True
 OTA_MAX_FILE_BYTES = 256*1024
 OTA_FILES_ALLOWLIST = [
-    'main.py','lora.py','utils.py','sampling.py','settings.py','relay.py','oled.py','ota.py','wprest.py',
-    'lib/BME280.py'
+    'main.py','lora.py','utils.py','sampling.py','settings.py','relay.py','oled.py','ota.py','wprest.py'
 ]
 OTA_MANIFEST_SIG_URL = OTA_MANIFEST_URL + '.sig'
 OTA_MANIFEST_HMAC_SECRET = ''
@@ -303,7 +301,7 @@ OTA_MANIFEST_URLS = [
     'https://raw.githubusercontent.com/kevinnutt83/TMON/main/micropython/manifest.json',
 ]
 OTA_HTTP_HEADERS = {
-    'User-Agent': 'TMON-Device/v2.01.0',
+    'User-Agent': 'TMON-Device/v2.06.0',
     'Accept': '*/*',
     'Cache-Control': 'no-cache',
     'Pragma': 'no-cache',
@@ -364,12 +362,6 @@ COMMAND_ALIASES = {
     'run_func': 'run_func',
     'firmware_update': 'firmware_update'
 }
-
-# NEW: Application mode for quick configuration across use cases
-APP_MODE = 'farming'  # options: 'farming', 'wastewater', 'tank', 'engine'
-
-# NEW: CLI-friendly constants
-STAGED_SETTINGS_KEYS_ALLOW.extend(['APP_MODE', 'LORA_SYNC_RATE', 'FIELD_DATA_SEND_INTERVAL'])
 
 OTA_VERSION_ENDPOINT = OTA_VERSION_ENDPOINT
 OTA_MANIFEST_URL = OTA_MANIFEST_URL
