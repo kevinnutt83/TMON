@@ -57,8 +57,21 @@ def _get_engine():
 def _get_ota():
     global _ota_mod
     if _ota_mod is None:
-        import ota as _m
-        _ota_mod = _m
+        import sys as _sys
+        # If a previous failed import left a partial module cached, purge it
+        if 'ota' in _sys.modules:
+            _cached = _sys.modules['ota']
+            if not hasattr(_cached, 'check_for_update'):
+                del _sys.modules['ota']
+        try:
+            import ota as _m
+            if hasattr(_m, 'check_for_update') and hasattr(_m, 'apply_pending_update'):
+                _ota_mod = _m
+            else:
+                # Imported wrong or partial module; do not cache
+                _ota_mod = False
+        except Exception:
+            _ota_mod = False
     return _ota_mod
 
 def _get_wifi():
@@ -368,16 +381,42 @@ if getattr(settings, 'SAMPLE_TEMP', False) or getattr(settings, 'SAMPLE_HUMID', 
     tm.add_task(sample_task, 'sample', 30)
 tm.add_task(periodic_field_data_task, 'field_data', settings.FIELD_DATA_SEND_INTERVAL)
 tm.add_task(periodic_command_poll_task, 'command_poll', 10)
-tm.add_task(_get_ota().check_for_update, 'ota_check', 3600)
-tm.add_task(_get_ota().apply_pending_update, 'ota_apply', settings.OTA_APPLY_INTERVAL_S)
+
+# Deferred wrappers — avoid resolving module attributes at registration time
+# (prevents AttributeError if a lazy module is only partially loaded)
+async def _ota_check_wrapper():
+    mod = _get_ota()
+    if mod:
+        await mod.check_for_update()
+
+async def _ota_apply_wrapper():
+    mod = _get_ota()
+    if mod:
+        await mod.apply_pending_update()
+
+async def _settings_apply_wrapper():
+    await _get_settings_apply().settings_apply_loop()
+
+async def _wifi_rssi_wrapper():
+    await _get_wifi().wifi_rssi_monitor()
+
+async def _lora_missed_syncs_wrapper():
+    await _get_lora().check_missed_syncs()
+
+tm.add_task(_ota_check_wrapper, 'ota_check', 3600)
+tm.add_task(_ota_apply_wrapper, 'ota_apply', settings.OTA_APPLY_INTERVAL_S)
 if settings.ENABLE_OLED:
     tm.add_task(_update_display, 'display', settings.OLED_UPDATE_INTERVAL_S)
-tm.add_task(_get_settings_apply().settings_apply_loop, 'settings_apply', 60)
+tm.add_task(_settings_apply_wrapper, 'settings_apply', 60)
 if getattr(settings, 'ENABLE_ENGINE_CONTROLLER', False):
-    tm.add_task(_get_engine().engine_loop if _get_engine() else lambda: None, 'engine', settings.ENGINE_POLL_INTERVAL_S)
-tm.add_task(_get_wifi().wifi_rssi_monitor, 'wifi_rssi', settings.WIFI_SIGNAL_SAMPLE_INTERVAL_S)
+    async def _engine_wrapper():
+        mod = _get_engine()
+        if mod:
+            await mod.engine_loop()
+    tm.add_task(_engine_wrapper, 'engine', settings.ENGINE_POLL_INTERVAL_S)
+tm.add_task(_wifi_rssi_wrapper, 'wifi_rssi', settings.WIFI_SIGNAL_SAMPLE_INTERVAL_S)
 tm.add_task(periodic_provision_check, 'provision_check', settings.PROVISION_CHECK_INTERVAL_S)
-tm.add_task(_get_lora().check_missed_syncs, 'missed_syncs', 60)
+tm.add_task(_lora_missed_syncs_wrapper, 'missed_syncs', 60)
 
 # CLI listener (fixes user input command line)
 async def cli_listener():

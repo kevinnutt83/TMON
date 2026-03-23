@@ -11,6 +11,7 @@ Immediate tasks
 - Add unit/host tests for wprest async_http_request, send_field_data_log JSON shaping, and OTA manifest parsing.
 - Run static checks for Python 3 vs MicroPython compatibility (type hints, imports).
 - Add basic CI that runs linters and host tests (GitHub Actions).
+- [x] Fix OTA task errors: `_get_ota()` now validates module attributes and won't cache a partial/wrong module; wrappers check validity before calling; `ota.py` `maybe_gc` import wrapped in try/except with inline fallback.
 
 Notes
 - README.md and CHANGELOG.md consolidated here; plugin READMEs are intentionally minimal as docs are centralized.

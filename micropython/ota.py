@@ -17,47 +17,71 @@ except Exception:
         asyncio = None
 
 async def _sleep(seconds):
-	"""Robust async sleep: prefer event loop sleep, fall back to blocking sleep."""
-	try:
-		if 'asyncio' in globals() and asyncio:
-			await asyncio.sleep(seconds)
-			return
-	except Exception:
-		pass
-	# Try common async variants dynamically
-	try:
-		import uasyncio as _u
-		await _u.sleep(seconds)
-		return
-	except Exception:
-		pass
-	try:
-		import asyncio as _a
-		await _a.sleep(seconds)
-		return
-	except Exception:
-		pass
-	# Last-resort blocking sleep to avoid NameError during retries
-	try:
-		import utime as _t
-		_t.sleep(seconds)
-	except Exception:
-		try:
-			import time as _t
-			_t.sleep(seconds)
-		except Exception:
-			# give up silently
-			pass
+    """Robust async sleep: prefer event loop sleep, fall back to blocking sleep."""
+    try:
+        if 'asyncio' in globals() and asyncio:
+            await asyncio.sleep(seconds)
+            return
+    except Exception:
+        pass
+    # Try common async variants dynamically
+    try:
+        import uasyncio as _u
+        await _u.sleep(seconds)
+        return
+    except Exception:
+        pass
+    try:
+        import asyncio as _a
+        await _a.sleep(seconds)
+        return
+    except Exception:
+        pass
+    # Last-resort blocking sleep to avoid NameError during retries
+    try:
+        import utime as _t
+        _t.sleep(seconds)
+    except Exception:
+        try:
+            import time as _t
+            _t.sleep(seconds)
+        except Exception:
+            pass
 
 import settings
 from config_persist import write_text
 from utils import debug_print
-# NEW: GC helper
-from utils import maybe_gc
-import ujson as json
-import os
-import binascii as _binascii
-import re as _re
+try:
+    from utils import maybe_gc
+except Exception:
+    def maybe_gc(*a, **kw):
+        try:
+            import gc
+            gc.collect()
+        except Exception:
+            pass
+try:
+    import ujson as json
+except Exception:
+    import json
+try:
+    import os
+except Exception:
+    os = None
+try:
+    import ubinascii as _binascii
+except Exception:
+    try:
+        import binascii as _binascii
+    except Exception:
+        _binascii = None
+try:
+    import ure as _re
+except Exception:
+    try:
+        import re as _re
+    except Exception:
+        _re = None
 
 def _safe_join(base: str, name: str) -> str:
     if not base.endswith('/'):
