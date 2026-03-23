@@ -4,6 +4,7 @@ import sdata
 import settings
 from utils import free_pins_i2c
 import uasyncio as asyncio
+from machine import I2C, Pin, SoftI2C
 from utils import debug_print, log_error
 from tmon import frostwatchCheck, heatwatchCheck, beginFrostOperations, beginHeatOperations, endFrostOperations, endHeatOperations
 import machine
@@ -54,52 +55,98 @@ async def sampleTemp():
 
 async def _read_bme280(i2c, target="probe"):
     sensor = None
+    primary_addr = getattr(settings, 'i2cAddr_BME280', 0x76)
+    fallback_addr = getattr(settings, 'i2cAddr_BME280_FALLBACK', 0x77)
     try:
         from BME280 import BME280
-        sensor = BME280(i2c=i2c)
-        sensor.get_calib_param()
-        data = sensor.readData()
 
-        temp_c = data[1]
-        temp_f = (temp_c * 9/5) + 32
-        humid = data[2]
-        bar = data[0]
+        # Scan bus and try primary then fallback address
+        detected_addr = None
+        try:
+            devices = i2c.scan()
+            if getattr(settings, 'DEBUG_BME280', False):
+                await debug_print(f"BME280 {target} I2C scan: {[hex(d) for d in devices]}", "BME280")
+            if primary_addr in devices:
+                detected_addr = primary_addr
+            elif fallback_addr in devices:
+                detected_addr = fallback_addr
+                await debug_print(f"BME280 {target}: using fallback address 0x{fallback_addr:02X}", "BME280")
+            else:
+                await debug_print(f"BME280 {target}: address not found on bus (scanned {[hex(d) for d in devices]})", "WARN")
+                return None
+        except Exception as scan_e:
+            await debug_print(f"BME280 {target} I2C scan error: {scan_e}, trying primary", "WARN")
+            detected_addr = primary_addr
 
-        if target == "probe":
-            if getattr(settings, 'SAMPLE_PROBE_TEMP', False):
-                sdata.cur_temp_c = temp_c
-                sdata.cur_temp_f = temp_f
-                await findLowestTemp(temp_f)
-                await findHighestTemp(temp_f)
-            if getattr(settings, 'SAMPLE_PROBE_BAR', False):
-                sdata.cur_bar_pres = bar
-                await findLowestBar(bar)
-                await findHighestBar(bar)
-            if getattr(settings, 'SAMPLE_PROBE_HUMID', False):
-                sdata.cur_humid = humid
-                await findLowestHumid(humid)
-                await findHighestHumid(humid)
+        # Attempt init with retries
+        last_err = None
+        for attempt in range(3):
+            try:
+                sensor = BME280(i2c=i2c, address=detected_addr)
+                sensor.get_calib_param()
+                data = sensor.readData()
 
-        else:  # device
-            if getattr(settings, 'SAMPLE_DEVICE_TEMP', False):
-                sdata.cur_device_temp_c = temp_c
-                sdata.cur_device_temp_f = temp_f
-            if getattr(settings, 'SAMPLE_DEVICE_BAR', False):
-                sdata.cur_device_bar_pres = bar
-            if getattr(settings, 'SAMPLE_DEVICE_HUMID', False):
-                sdata.cur_device_humid = humid
+                temp_c = data[1]
+                temp_f = (temp_c * 9/5) + 32
+                humid = data[2]
+                bar = data[0]
 
-        if settings.DEBUG and settings.DEBUG_TEMP:
-            await debug_print(
-                f"BME280 {target}: p:{bar:7.2f} t:{temp_c:6.2f} h:{humid:6.2f}",
-                "DEBUG TEMP"
-            )
-        return data
+                if target == "probe":
+                    if getattr(settings, 'SAMPLE_PROBE_TEMP', False):
+                        sdata.cur_temp_c = temp_c
+                        sdata.cur_temp_f = temp_f
+                        await findLowestTemp(temp_f)
+                        await findHighestTemp(temp_f)
+                    if getattr(settings, 'SAMPLE_PROBE_BAR', False):
+                        sdata.cur_bar_pres = bar
+                        await findLowestBar(bar)
+                        await findHighestBar(bar)
+                    if getattr(settings, 'SAMPLE_PROBE_HUMID', False):
+                        sdata.cur_humid = humid
+                        await findLowestHumid(humid)
+                        await findHighestHumid(humid)
+
+                else:  # device
+                    if getattr(settings, 'SAMPLE_DEVICE_TEMP', False):
+                        sdata.cur_device_temp_c = temp_c
+                        sdata.cur_device_temp_f = temp_f
+                    if getattr(settings, 'SAMPLE_DEVICE_BAR', False):
+                        sdata.cur_device_bar_pres = bar
+                    if getattr(settings, 'SAMPLE_DEVICE_HUMID', False):
+                        sdata.cur_device_humid = humid
+
+                if getattr(settings, 'DEBUG_BME280', False) or getattr(settings, 'DEBUG_TEMP', False):
+                    await debug_print(
+                        f"BME280 {target}: p:{bar:7.2f} t:{temp_c:6.2f} h:{humid:6.2f}",
+                        "TEMP"
+                    )
+                return data
+            except Exception as e:
+                last_err = e
+                await debug_print(f"BME280 {target} attempt {attempt+1} error: {type(e).__name__}: {e}", "WARN")
+                sensor = None
+                await asyncio.sleep(0.5)
+
+        # All retry attempts failed
+        await log_error(f"BME280 {target} failed after 3 attempts: {last_err}", "BME280")
+        await debug_print(f"BME280 {target} failed after retries - disabling sensor", "ERROR")
+
+        if target == "device":
+            settings.ENABLE_DEVICE_BME280 = False
+            settings.SAMPLE_DEVICE_TEMP = False
+            settings.SAMPLE_DEVICE_BAR = False
+            settings.SAMPLE_DEVICE_HUMID = False
+        else:
+            settings.ENABLE_PROBE_BME280 = False
+            settings.SAMPLE_PROBE_TEMP = False
+            settings.SAMPLE_PROBE_BAR = False
+            settings.SAMPLE_PROBE_HUMID = False
+        return None
 
     except Exception as e:
         await log_error(f"BME280 {target} fatal error: {e}", "BME280")
-        await debug_print(f"BME280 {target} fatal error – disabling sensor", "ERROR")
-        
+        await debug_print(f"BME280 {target} fatal error - disabling sensor", "ERROR")
+
         if target == "device":
             settings.ENABLE_DEVICE_BME280 = False
             settings.SAMPLE_DEVICE_TEMP = False
@@ -123,7 +170,7 @@ async def _read_bme280(i2c, target="probe"):
 
 async def sampleBME280Interior():
     from utils import led_status_flash
-    await led_status_flash('SAMPLE_DEVICE_TEMP')
+    led_status_flash('SAMPLE_DEVICE_TEMP')
     try:
         from oled import display_message
         await display_message("Sampling Interior Temp", 1)
@@ -137,24 +184,16 @@ async def sampleBME280Interior():
 
 async def sampleBME280Probe():
     from utils import led_status_flash
-    await led_status_flash('SAMPLE_BME280')
+    led_status_flash('SAMPLE_BME280')
     try:
         from oled import display_message
         await display_message("Sampling Exterior Probe", 1)
     except:
         pass
 
-    import lora as lora_module
-    async with lora_module.pin_lock:
-        if lora_module.lora is not None:
-            try:
-                lora_module.lora.spi.deinit()
-            except:
-                pass
-            lora_module.lora = None
-
-    i2c = I2C(1, scl=Pin(settings.BME280_PROBE_SCL_PIN),
-              sda=Pin(settings.BME280_PROBE_SDA_PIN), freq=400000)
+    # Probe uses SoftI2C to avoid conflict with OLED on hardware I2C(1)
+    i2c = SoftI2C(scl=Pin(settings.BME280_PROBE_SCL_PIN),
+                  sda=Pin(settings.BME280_PROBE_SDA_PIN), freq=400000)
     await _read_bme280(i2c, target="probe")
 
 

@@ -279,6 +279,12 @@ async def debug_print(message, status):
         'ERROR': getattr(settings, 'DEBUG', False),
     }
     should_print = bool(getattr(settings, 'DEBUG', False))
+    # Always print ERROR, WARN, FATAL, COMMAND regardless of debug flags
+    _always_tags = ('ERROR', 'WARN', 'FATAL', 'COMMAND')
+    for _at in _always_tags:
+        if _at in str(status):
+            should_print = True
+            break
     for key, enabled in debug_flags.items():
         if key in str(status) and enabled:
             should_print = True
@@ -659,8 +665,13 @@ async def free_pins_lora():
 
 async def free_pins_i2c():
     try:
-        machine.Pin(settings.I2C_A_SCL_PIN, machine.Pin.IN)
-        machine.Pin(settings.I2C_A_SDA_PIN, machine.Pin.IN)
+        machine.Pin(settings.DEVICE_TEMP_SCL_PIN, machine.Pin.IN)
+        machine.Pin(settings.DEVICE_TEMP_SDA_PIN, machine.Pin.IN)
+    except Exception:
+        pass
+    try:
+        machine.Pin(settings.BME280_PROBE_SCL_PIN, machine.Pin.IN)
+        machine.Pin(settings.BME280_PROBE_SDA_PIN, machine.Pin.IN)
     except Exception:
         pass
     await asyncio.sleep(0)
@@ -783,6 +794,17 @@ def record_field_data():
     _copy(entry, sdata, 'cpu_temp')
     _copy(entry, sdata, 'error_count')
     _copy(entry, sdata, 'last_error')
+
+    # Device enclosure interior BME280
+    _copy(entry, sdata, 'cur_device_temp_c')
+    _copy(entry, sdata, 'cur_device_temp_f')
+    _copy(entry, sdata, 'cur_device_bar_pres')
+    _copy(entry, sdata, 'cur_device_humid')
+
+    # Soil probe
+    _copy(entry, sdata, 'cur_soil_moisture')
+    _copy(entry, sdata, 'cur_soil_temp_c')
+    _copy(entry, sdata, 'cur_soil_temp_f')
 
     # Engine
     _copy(entry, sdata, 'engine1_speed_rpm')

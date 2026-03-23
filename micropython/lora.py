@@ -280,7 +280,7 @@ async def connectLora():
         stagger_seed = 0
         for c in uid:
             stagger_seed = (stagger_seed * 31 + ord(c)) % 1000000
-        initial_stagger = stagger_seed % 600
+        initial_stagger = stagger_seed % 30
         await debug_print(f"Remote deterministic boot stagger {initial_stagger}s", "REMOTE_NODE")
         await asyncio.sleep(initial_stagger)
 
@@ -295,11 +295,11 @@ async def connectLora():
 
     if settings.NODE_TYPE == 'remote':
         sync_rate = getattr(settings, 'LORA_SYNC_RATE', 300)
-        response_timeout = 300
+        response_timeout = 60
     else:
         sync_rate = 10
         response_timeout = 25
-        burst_window = 30
+        burst_window = 10
 
     while True:
         try:
@@ -353,7 +353,7 @@ async def connectLora():
                                 msg_str = msg.rstrip(b'\x00').decode()
                                 msg_str = await _unsecure_message(msg_str)
                                 if msg_str and msg_str.startswith('ACK:'):
-                                    await debug_print("✅ Remote successfully connected to base", "REMOTE_NODE")
+                                    await debug_print("Remote: ACK received from base", "REMOTE_NODE")
                                     received_response = True
                                     parts = msg_str.split(':')
                                     if len(parts) >= 4 and parts[2] == 'NEXT':
@@ -363,20 +363,64 @@ async def connectLora():
                                     sdata.lora_snr = lora.getSNR() if hasattr(lora, 'getSNR') else 0
                                     sdata.LORA_CONNECTED = True
 
+                                    # Listen briefly for CMD/OTA that base sends right after ACK
+                                    if lora:
+                                        lora.recv(0, False, 0)
+                                    post_ack_end = time.time() + 10
+                                    while time.time() < post_ack_end:
+                                        if lora and hasattr(lora, '_events'):
+                                            pev = lora._events()
+                                            if pev & lora.RX_DONE:
+                                                pmsg, perr = lora.recv()
+                                                if perr == 0 and pmsg:
+                                                    pmsg_str = pmsg.rstrip(b'\x00').decode()
+                                                    pmsg_str = await _unsecure_message(pmsg_str)
+                                                    if pmsg_str and pmsg_str.startswith('CMD:'):
+                                                        cmd_parts = pmsg_str.split(':', 2)
+                                                        if len(cmd_parts) >= 3 and cmd_parts[1] == settings.UNIT_ID:
+                                                            cmd_str = cmd_parts[2]
+                                                            await debug_print(f"Remote: received CMD: {cmd_str}", "REMOTE_NODE")
+                                                            try:
+                                                                if '(' in cmd_str:
+                                                                    func_name = cmd_str.split('(')[0]
+                                                                    args_str = cmd_str.split('(')[1].rstrip(')')
+                                                                    args = [a.strip() for a in args_str.split(',')]
+                                                                    handler = command_handlers.get(func_name)
+                                                                    if handler:
+                                                                        await handler(*args)
+                                                                        await debug_print(f"Remote: CMD executed: {func_name}", "REMOTE_NODE")
+                                                            except Exception as ce:
+                                                                await debug_print(f"Remote: CMD exec error: {ce}", "ERROR")
+                                                    elif pmsg_str and 'OTA:' in pmsg_str:
+                                                        try:
+                                                            ota_json = pmsg_str.split('OTA:', 1)[1]
+                                                            ota_info = ujson.loads(ota_json)
+                                                            handle_ota_chunk(ota_info)
+                                                            await debug_print("Remote: OTA chunk received", "REMOTE_NODE")
+                                                        except Exception as oe:
+                                                            await debug_print(f"Remote: OTA parse error: {oe}", "ERROR")
+                                                if lora:
+                                                    lora.recv(0, False, 0)
+                                        await asyncio.sleep(0.1)
+
+                                    # Transition immediately after ACK + post-listen
+                                    await debug_print("Remote: check-in successful", "REMOTE_NODE")
+                                    await display_message("Success", 1)
+                                    failure_count = 0
+                                    sleep_time = next_delay or (sync_rate + random.randint(-30, 30))
+                                    state = STATE_IDLE
+                                    await asyncio.sleep(max(10, sleep_time))
+                                    gc.collect()
+                                    continue
+
                             if lora:
                                 lora.recv(0, False, 0)
 
                     if time.time() - start_wait > response_timeout:
-                        if received_response:
-                            await debug_print("Remote: check-in successful", "REMOTE_NODE")
-                            await display_message("Success", 1)
-                            failure_count = 0
-                            sleep_time = next_delay or (sync_rate + random.randint(-120, 120))
-                        else:
-                            await debug_print("Remote: no response - backoff", "WARN")
-                            await display_message("No Resp", 1.5)
-                            failure_count += 1
-                            sleep_time = min(600, 60 * (2 ** failure_count))
+                        await debug_print("Remote: no ACK received - backoff", "WARN")
+                        await display_message("No Resp", 1.5)
+                        failure_count += 1
+                        sleep_time = min(600, 60 * (2 ** failure_count))
                         state = STATE_IDLE
                         await asyncio.sleep(max(10, sleep_time))
                         gc.collect()
@@ -507,6 +551,7 @@ async def connectLora():
                             await debug_print(f"Processing burst for {uid}: types {st['types']}", "BASE_NODE")
                             remote_machine_id = None
 
+                            # Parse telemetry data first
                             if 'TS' in st['types']:
                                 data = st['data']['TS']
                                 remote_ts = data['remote_ts']
@@ -559,16 +604,61 @@ async def connectLora():
                                     if temp_f_val < 80:
                                         pending_commands[uid] = "toggle_relay(1,on,5)"
 
+                            # Stage local data from SETTINGS and SDATA
+                            if 'SETTINGS' in st['types']:
+                                settings_dict = st['data']['SETTINGS']
+                                stage_remote_files(uid, {'settings.py': ujson.dumps(settings_dict).encode()})
+
+                            if 'SDATA' in st['types']:
+                                sdata_dict = st['data']['SDATA']
+                                stage_remote_field_data(uid, [sdata_dict])
+
+                            # Calculate next delay and update remote info
+                            next_delay = calculate_next_delay(uid)
+                            now = time.time()
+                            if uid not in settings.REMOTE_NODE_INFO:
+                                settings.REMOTE_NODE_INFO[uid] = {}
+                            settings.REMOTE_NODE_INFO[uid]['next_expected'] = now + next_delay
+                            settings.REMOTE_NODE_INFO[uid]['missed_syncs'] = 0
+                            save_remote_node_info()
+
+                            # SEND ACK + CMD + OTA IMMEDIATELY before proxy HTTP
+                            try:
+                                ack_msg = f"ACK:{uid}:NEXT:{next_delay}"
+                                ack_msg = await _secure_message(ack_msg, remote_uid=uid)
+                                await _send_with_retry(ack_msg.encode())
+                                await debug_print(f"Sent ACK with next delay {next_delay}s to {uid}", "BASE_NODE")
+                                await display_message("ACK Sent", 0.5)
+
+                                if uid in pending_commands:
+                                    cmd = pending_commands.pop(uid)
+                                    cmd_msg = f"CMD:{uid}:{cmd}"
+                                    cmd_msg = await _secure_message(cmd_msg, remote_uid=uid)
+                                    await _send_with_retry(cmd_msg.encode())
+                                    await debug_print(f"Sent CMD to {uid}: {cmd}", "BASE_NODE")
+                                    await display_message("CMD Sent", 0.5)
+
+                                ota_pending = ota_send_pending.pop(uid, False)
+                                if ota_pending:
+                                    chunk = get_next_ota_chunk(uid)
+                                    if chunk:
+                                        ota_str = f"OTA:{ujson.dumps(chunk)}"
+                                        ota_str = await _secure_message(ota_str, remote_uid=uid)
+                                        await _send_with_retry(ota_str.encode())
+                                        await debug_print(f"Sent OTA chunk {chunk['chunk_num']}/{chunk['total_chunks']} to {uid}", "BASE_NODE")
+                                        advance_ota_chunk(uid)
+                                        await display_message(f"OTA->{uid[:6]}", 0.5)
+                            except Exception as ack_e:
+                                await log_error(f"ACK/CMD/OTA send error to {uid}: {ack_e}")
+
+                            # Proxy HTTP calls AFTER ACK is sent (non-blocking for remote)
+                            if 'TS' in st['types']:
                                 if uid and remote_machine_id:
                                     await proxy_register_for_remote(uid, remote_machine_id)
 
                             if 'SETTINGS' in st['types']:
-                                settings_dict = st['data']['SETTINGS']
-                                stage_remote_files(uid, {'settings.py': ujson.dumps(settings_dict).encode()})
-                                # proxy logic unchanged
                                 remote_machine_id = settings.REMOTE_NODE_INFO.get(uid, {}).get('MACHINE_ID', None)
                                 if remote_machine_id:
-                                    # (proxy send_settings_to_wp logic identical to original)
                                     original_uid = settings.UNIT_ID
                                     original_get = None
                                     send_ok = False
@@ -601,9 +691,6 @@ async def connectLora():
                                 gc.collect()
 
                             if 'SDATA' in st['types']:
-                                sdata_dict = st['data']['SDATA']
-                                stage_remote_field_data(uid, [sdata_dict])
-                                # proxy send_data_to_wp logic identical
                                 remote_machine_id = settings.REMOTE_NODE_INFO.get(uid, {}).get('MACHINE_ID', None)
                                 if remote_machine_id:
                                     original_uid = settings.UNIT_ID
@@ -637,42 +724,6 @@ async def connectLora():
                                         await display_message(f"Proxy {uid[:8]}", 1)
                                         ota_send_pending[uid] = True
                                 gc.collect()
-
-                            next_delay = calculate_next_delay(uid)
-                            now = time.time()
-                            if uid not in settings.REMOTE_NODE_INFO:
-                                settings.REMOTE_NODE_INFO[uid] = {}
-                            settings.REMOTE_NODE_INFO[uid]['next_expected'] = now + next_delay
-                            settings.REMOTE_NODE_INFO[uid]['missed_syncs'] = 0
-                            save_remote_node_info()
-
-                            try:
-                                ack_msg = f"ACK:{uid}:NEXT:{next_delay}"
-                                ack_msg = await _secure_message(ack_msg, remote_uid=uid)
-                                await _send_with_retry(ack_msg.encode())
-                                await debug_print(f"Sent ACK with next delay {next_delay}s to {uid}", "BASE_NODE")
-                                await display_message("ACK Sent", 0.5)
-
-                                if uid in pending_commands:
-                                    cmd = pending_commands.pop(uid)
-                                    cmd_msg = f"CMD:{uid}:{cmd}"
-                                    cmd_msg = await _secure_message(cmd_msg, remote_uid=uid)
-                                    await _send_with_retry(cmd_msg.encode())
-                                    await debug_print(f"Sent CMD to {uid}: {cmd}", "BASE_NODE")
-                                    await display_message("CMD Sent", 0.5)
-
-                                ota_pending = ota_send_pending.pop(uid, False)
-                                if ota_pending:
-                                    chunk = get_next_ota_chunk(uid)
-                                    if chunk:
-                                        ota_str = f"OTA:{ujson.dumps(chunk)}"
-                                        ota_str = await _secure_message(ota_str, remote_uid=uid)
-                                        await _send_with_retry(ota_str.encode())
-                                        await debug_print(f"Sent OTA chunk {chunk['chunk_num']}/{chunk['total_chunks']} to {uid}", "BASE_NODE")
-                                        advance_ota_chunk(uid)
-                                        await display_message(f"OTA→{uid[:6]}", 0.5)
-                            except Exception as ack_e:
-                                await log_error(f"ACK/CMD/OTA send error to {uid}: {ack_e}")
 
                             del remote_states[uid]
                             gc.collect()

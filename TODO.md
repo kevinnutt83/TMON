@@ -98,6 +98,13 @@ Firmware (Micropython)
 - [x] Add lib/BME280.py to OTA_FILES_ALLOWLIST: remote nodes were stuck on old BME280 constructor referencing non-existent I2C_A_SCL_PIN because the file wasn't OTA-updatable.
 - [x] Fix probe I2C bus conflict with OLED: probe was using hardware I2C(1) which conflicts with OLED on I2C(1) with different pins. Changed probe to SoftI2C so both can coexist.
 - [x] Downgrade "address not found on bus" from ERROR to WARN: expected when no physical probe is attached (e.g. base stations without an exterior probe).
+- [x] Fix LoRa remote initial stagger too long (up to 600s); reduced to 30s max.
+- [x] Fix LoRa remote response_timeout too long (300s); reduced to 60s.
+- [x] Fix LoRa remote STATE_WAIT_RESPONSE blocking full timeout even after ACK received; now transitions immediately on ACK with 10s post-listen for CMD/OTA.
+- [x] Fix LoRa base sending ACK after slow HTTP proxy calls; restructured to send ACK+CMD+OTA first, then proxy HTTP.
+- [x] Rewrite user_commands.py: replaced blocking input() and non-existent module references with non-blocking uselect.poll() async CLI; integrates with TaskManager.
+- [x] Add user_commands_task integration in main.py with safe import fallback.
+- [x] Add DEBUG_USER_CMD flag to settings.py for user command debug output control.
 - [x] Fix OTA failing for subdirectory files (lib/BME280.py): temp path embedded raw name with `/` creating non-existent dir; `_ensure_dir` only created one level. Fixed by sanitizing temp filename (`/` → `_`), making `_ensure_dir` recursive, and adding dir creation before backup and final writes.
 
 Admin

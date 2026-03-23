@@ -4,6 +4,7 @@
 from utils import debug_print
 import settings
 import sdata
+import utime as time
 
 # --- GC: best-effort cleanup after module import / heavy init ---
 try:
@@ -23,7 +24,7 @@ async def frostwatchCheck():
         await debug_print(f"Frostwatch Active at {sdata.cur_temp_f}F", "FROSTWATCH")
         if sdata.cur_temp_f <= settings.FROSTWATCH_ACTION_TEMP:
             await beginFrostOperations()
-        settings.FROSTWATCH_LAST_TIME_ACTIVE = sdata.cur_time
+        settings.FROSTWATCH_LAST_TIME_ACTIVE = time.time()
         sdata.frostwatch_active = True
 
     if sdata.frostwatch_active and sdata.cur_temp_f >= settings.FROSTWATCH_STANDDOWN_TEMP:
@@ -42,7 +43,7 @@ async def heatwatchCheck():
         await debug_print(f"Heatwatch Active at {sdata.cur_temp_f}F", "HEATWATCH")
         if sdata.cur_temp_f >= settings.HEATWATCH_ACTION_TEMP:
             await beginHeatOperations()
-        settings.HEATWATCH_LAST_TIME_ACTIVE = sdata.cur_time
+        settings.HEATWATCH_LAST_TIME_ACTIVE = time.time()
         sdata.heatwatch_active = True
 
     if sdata.heatwatch_active and sdata.cur_temp_f <= settings.HEATWATCH_STANDDOWN_TEMP:

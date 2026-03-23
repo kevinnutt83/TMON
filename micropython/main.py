@@ -19,6 +19,10 @@ from ota import check_for_update, apply_pending_update
 from oled import update_display, display_message
 from settings_apply import load_applied_settings_on_boot, settings_apply_loop
 try:
+    from user_commands import user_commands_task
+except Exception:
+    user_commands_task = None
+try:
     from engine_controller import engine_loop
 except Exception:
     engine_loop = None
@@ -306,7 +310,7 @@ async def periodic_command_poll_task():
 # ========================== TASK SETUP ==========================
 tm = TaskManager()
 tm.add_task(first_boot_provision, 'first_boot_provision', 0)
-if settings.SAMPLE_TEMP or settings.SAMPLE_HUMIDITY or settings.SAMPLE_PRESSURE or settings.SAMPLE_GAS:
+if settings.SAMPLE_TEMP or getattr(settings, 'SAMPLE_HUMID', False) or getattr(settings, 'SAMPLE_BAR', False):
     tm.add_task(sample_task, 'sample', 30)
 tm.add_task(periodic_field_data_task, 'field_data', settings.FIELD_DATA_SEND_INTERVAL)
 tm.add_task(periodic_command_poll_task, 'command_poll', 10)
@@ -320,6 +324,8 @@ if engine_loop:
 tm.add_task(wifi_rssi_monitor, 'wifi_rssi', settings.WIFI_SIGNAL_SAMPLE_INTERVAL_S)
 tm.add_task(periodic_provision_check, 'provision_check', settings.PROVISION_CHECK_INTERVAL_S)
 tm.add_task(check_missed_syncs, 'missed_syncs', 60)
+if user_commands_task:
+    tm.add_task(user_commands_task, 'user_commands', 0)
 
 # ========================== MAIN ENTRY POINT ==========================
 async def main():
