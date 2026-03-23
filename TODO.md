@@ -108,6 +108,8 @@ Firmware (Micropython)
 - [x] Fix _unsecure_message dropping all encrypted messages: replay protection was checking UID in encrypted wire string before decryption; restructured to decrypt first, then extract UID, then replay check.
 - [x] Fix _unsecure_message HMAC verification for non-encrypted messages: msg_str still contained ,CNT: suffix that wasn't in the original signed payload; now stripped before HMAC computation.
 - [x] Fix user_commands CLI not visible: added TMON> prompt, character echo, backspace support, and always-visible startup banner.
+- [x] Fix _unsecure_message `break` in HMAC parsing loop: loop iterates backwards so HMAC (always last) is found first and break fires before CNT/ENC are ever parsed, causing cnt_str=None and every message silently dropped. Removed break, changed to elif chain.
+- [x] Add diagnostic logging when base or remote rx message fails auth/decrypt, so failures are no longer silent.
 - [x] Fix OTA failing for subdirectory files (lib/BME280.py): temp path embedded raw name with `/` creating non-existent dir; `_ensure_dir` only created one level. Fixed by sanitizing temp filename (`/` → `_`), making `_ensure_dir` recursive, and adding dir creation before backup and final writes.
 
 Admin

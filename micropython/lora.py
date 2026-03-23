@@ -352,6 +352,8 @@ async def connectLora():
                             if err == 0 and msg:
                                 msg_str = msg.rstrip(b'\x00').decode()
                                 msg_str = await _unsecure_message(msg_str)
+                                if not msg_str:
+                                    await debug_print("Remote: rx message dropped (auth/decrypt failed)", "LORA")
                                 if msg_str and msg_str.startswith('ACK:'):
                                     await debug_print("Remote: ACK received from base", "REMOTE_NODE")
                                     received_response = True
@@ -437,6 +439,8 @@ async def connectLora():
                             if err == 0 and msg:
                                 msg_str = msg.rstrip(b'\x00').decode()
                                 msg_str = await _unsecure_message(msg_str)
+                                if not msg_str:
+                                    await debug_print("Base: rx message dropped (auth/decrypt failed)", "LORA")
                                 if msg_str:
                                     await debug_print(f"Base received: {msg_str[:120]}...", "BASE_NODE")
                                     await display_message("RX Remote", 1)
@@ -792,10 +796,9 @@ async def _unsecure_message(msg_str):
             hmac_received = p[5:]
             base_idx = msg_str.rfind(',HMAC:')
             msg_str = msg_str[:base_idx]
-            break
-        if p.startswith('CNT:'):
+        elif p.startswith('CNT:'):
             cnt_str = p[4:]
-        if p.startswith('ENC:'):
+        elif p.startswith('ENC:'):
             enc_b64 = p[4:]
     if hmac_received is None and getattr(settings, 'LORA_HMAC_REJECT_UNSIGNED', True):
         return None
