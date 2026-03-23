@@ -78,7 +78,7 @@
     "lib/urequests.py": "sha256:2bee6a73926682d278a23c52d1c598290c82391372e40615b6075cda5583efcd",
     "lora.py": "sha256:a8e6a3a60d01dc53e8bdeaf9d6df57ec023aa3de3f82aef4b848985eca411f6d",
     "main.py": "sha256:dc46af3202bde716f8bc4c83ce7535e0f57440f6c9fee58a00f82cac2d3abfd2",
-    "manifest.json.bak": "sha256:b6c6475212854e07846988e83e7aa01c6e5d4e5f1afadd46a4f2bb6f6e787858",
+    "manifest.json.bak": "sha256:8a0a00275c35a71c2950ef9ca69f1dc98d006c546da12878e8bbf1d08f98c3cd",
     "oled.py": "sha256:598bcb2cf3f302dc2d84c31f6aa17d6fd9e87b218307e4661a7193e7582a1e38",
     "ota.py": "sha256:f9a55b6578ce58c693c4c71047ccc00962e16449f9a7c0c24c553db1dbb267ed",
     "provision.py": "sha256:0cbbf5a18154605573a580227ee29f4f4aaab0fbb277985dbb819e7fe32d8431",
@@ -86,15 +86,15 @@
     "relay.py": "sha256:ac80bed0519c5dbf9cd63e554547fd732143e16c548d29b230b5f884cdb15669",
     "sampling.py": "sha256:f55694103b2d08c892090345445f090591759e6617fa69a7450b23eb32fa98b8",
     "sdata.py": "sha256:fa039dee25c50865e60f615aea9bbca909ace68ed12621b9cfef0e0f99df8277",
-    "settings.py": "sha256:7074cbf4f21c442ace8d3230661c9908a7b1b8615e7bb54f8d9f0aa071270223",
+    "settings.py": "sha256:937cd4e1f79645a0b486724f0a678c7273f8323a5ba8b6196007e4495a67b785",
     "settings_apply.py": "sha256:2a33c7b7be2559c7c0adaa54181f4e363ce86eb1c00c3455dfda31f6adf2c935",
     "tmon.py": "sha256:21d490594fce9b4b3c9025c66d6ef2346a75757cb34c8d33ae6ad919da59c57e",
     "user_commands.py": "sha256:d0b86b4bb995c72a4e3fb8f1316f8f01b76e465bd263cd6fdc2440fc159e6aa1",
     "utils.py": "sha256:01cd8194b8c88e3f7b673f28e22890a414296e833d1de326bfba6e909483f035",
-    "version.txt": "sha256:ddced646d2b45bad588736250092081070e7ea077314cd4b6060aeabd037cc51",
+    "version.txt": "sha256:c8f95bab4d6ae4e67052d7ce3ac370d7e8de0aa394f493e02689d2835195b9a5",
     "wifi.py": "sha256:61e4008defbc97bcb7d7ffa892e10f9629dc3f6efb690698333b95da08401f09",
     "wprest.py": "sha256:da73490f623a70f613236c7846cf9d44cd3d1fe0e5954df5ab3265bab12b4ed8"
   },
   "name": "tmon-micropython",
-  "version": "v2.00.2m"
+  "version": "v2.00.2n"
 }
