@@ -116,6 +116,11 @@ Admin
 - [ ] Add audit hooks across provisioning save/queue paths.
 
 Unit Connector
+- [x] Update field-data-api.php $flatten to include device interior sensors (cur_device_temp_f/c, cur_device_humid, cur_device_bar_pres), soil sensors (cur_soil_moisture, cur_soil_temp_c/f), engine data, CPU temp, runtime metrics, and diagnostics.
+- [x] Update tmon_uc_get_device_history points array to return device interior, soil, engine, and CPU temp fields for charting.
+- [x] Update tmon_uc_get_device_sdata friendly names to include all new telemetry fields with human-readable labels.
+- [x] Update tmon_devices_sdata shortcode table to display device interior temp/humidity/pressure and soil moisture instead of probe-only values.
+- [x] Update tmon_device_history chart datasets to graph device interior temp/humidity/pressure and soil moisture alongside probe data.
 - [ ] Widgets/graphs for device data; relay controls; shortcodes polish.
 
 Docs/QA

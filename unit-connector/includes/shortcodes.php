@@ -689,6 +689,10 @@ add_shortcode('tmon_device_history', function($atts) {
 				const humid = pts.map(p => (p && typeof p.humid !== 'undefined') ? p.humid : null);
 				const bar = pts.map(p => (p && typeof p.bar !== 'undefined') ? p.bar : null);
 				const volt = pts.map(p => (p && typeof p.volt !== 'undefined') ? p.volt : null);
+				const devTemp = pts.map(p => (p && typeof p.device_temp_f !== 'undefined') ? p.device_temp_f : null);
+				const devHumid = pts.map(p => (p && typeof p.device_humid !== 'undefined') ? p.device_humid : null);
+				const devBar = pts.map(p => (p && typeof p.device_bar !== 'undefined') ? p.device_bar : null);
+				const soilMoisture = pts.map(p => (p && typeof p.soil_moisture !== 'undefined') ? p.soil_moisture : null);
 
 				const relayNums = Array.isArray(data.enabled_relays) && data.enabled_relays.length ? data.enabled_relays : detectRelaysFromPoints(pts);
 				const relayColors = ["#6c757d","#95a5a6","#34495e","#7f8c8d","#95a5a6","#2d3436","#636e72","#99a3ad"];
@@ -709,10 +713,14 @@ add_shortcode('tmon_device_history', function($atts) {
                 });
 
                 const datasets = [
-                    { label: "Temp (F)", data: temp, borderColor: "#e67e22", fill:false, yAxisID: "y1", pointRadius: 0, cubicInterpolationMode: 'monotone' },
-                    { label: "Humidity (%)", data: humid, borderColor: "#3498db", fill:false, yAxisID: "y2", pointRadius: 0, cubicInterpolationMode: 'monotone' },
-                    { label: "Pressure (hPa)", data: bar, borderColor: "#2ecc71", fill:false, yAxisID: "y3", pointRadius: 0, cubicInterpolationMode: 'monotone' },
-                    { label: "Voltage (V)", data: volt, borderColor: "#9b59b6", fill:false, yAxisID: "y4", pointRadius: 0, cubicInterpolationMode: 'monotone' }
+                    { label: "Probe Temp (F)", data: temp, borderColor: "#e67e22", fill:false, yAxisID: "y1", pointRadius: 0, cubicInterpolationMode: 'monotone' },
+                    { label: "Device Temp (F)", data: devTemp, borderColor: "#d35400", borderDash: [4,2], fill:false, yAxisID: "y1", pointRadius: 0, cubicInterpolationMode: 'monotone' },
+                    { label: "Probe Humidity (%)", data: humid, borderColor: "#3498db", fill:false, yAxisID: "y2", pointRadius: 0, cubicInterpolationMode: 'monotone' },
+                    { label: "Device Humidity (%)", data: devHumid, borderColor: "#2980b9", borderDash: [4,2], fill:false, yAxisID: "y2", pointRadius: 0, cubicInterpolationMode: 'monotone' },
+                    { label: "Probe Pressure (hPa)", data: bar, borderColor: "#2ecc71", fill:false, yAxisID: "y3", pointRadius: 0, cubicInterpolationMode: 'monotone' },
+                    { label: "Device Pressure (hPa)", data: devBar, borderColor: "#27ae60", borderDash: [4,2], fill:false, yAxisID: "y3", pointRadius: 0, cubicInterpolationMode: 'monotone' },
+                    { label: "Voltage (V)", data: volt, borderColor: "#9b59b6", fill:false, yAxisID: "y4", pointRadius: 0, cubicInterpolationMode: 'monotone' },
+                    { label: "Soil Moisture", data: soilMoisture, borderColor: "#795548", fill:false, yAxisID: "y2", pointRadius: 0, cubicInterpolationMode: 'monotone' }
                 ].concat(relayDatasets);
 
                 // Config for initial creation
@@ -850,27 +858,29 @@ add_shortcode('tmon_devices_sdata', function($atts){
     $rows = $params ? $wpdb->get_results($wpdb->prepare($sql, ...$params), ARRAY_A) : $wpdb->get_results($sql, ARRAY_A);
     if (!$rows) return '<em>No matching devices.</em>';
     // Fetch latest sdata row per unit
-    $out = '<table class="wp-list-table widefat"><thead><tr><th>Unit</th><th>Name</th><th>Last Seen</th><th>Temp (F)</th><th>Humidity (%)</th><th>Pressure (hPa)</th><th>Voltage (V)</th></tr></thead><tbody>';
+    $out = '<table class="wp-list-table widefat"><thead><tr><th>Unit</th><th>Name</th><th>Last Seen</th><th>Device Temp (F)</th><th>Device Humidity (%)</th><th>Device Pressure (hPa)</th><th>Voltage (V)</th><th>Soil Moisture</th></tr></thead><tbody>';
     foreach ($rows as $r) {
         $fd = $wpdb->get_row($wpdb->prepare("SELECT data, created_at FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s ORDER BY created_at DESC LIMIT 1", $r['unit_id']), ARRAY_A);
-        $temp = $humid = $bar = $volt = '';
+        $device_temp = $device_humid = $device_bar = $volt = $soil = '';
         if ($fd) {
             $d = json_decode($fd['data'], true);
             if (is_array($d)) {
-                $temp = $d['t_f'] ?? ($d['cur_temp_f'] ?? '');
-                $humid = $d['hum'] ?? ($d['cur_humid'] ?? '');
-                $bar = $d['bar'] ?? ($d['cur_bar_pres'] ?? '');
+                $device_temp = $d['cur_device_temp_f'] ?? '';
+                $device_humid = $d['cur_device_humid'] ?? '';
+                $device_bar = $d['cur_device_bar_pres'] ?? '';
                 $volt = $d['v'] ?? ($d['sys_voltage'] ?? '');
+                $soil = $d['cur_soil_moisture'] ?? '';
             }
         }
         $out .= '<tr>'
             .'<td>'.esc_html($r['unit_id']).'</td>'
             .'<td>'.esc_html($r['unit_name']).'</td>'
             .'<td>'.esc_html($r['last_seen']).'</td>'
-            .'<td>'.esc_html($temp).'</td>'
-            .'<td>'.esc_html($humid).'</td>'
-            .'<td>'.esc_html($bar).'</td>'
+            .'<td>'.esc_html($device_temp).'</td>'
+            .'<td>'.esc_html($device_humid).'</td>'
+            .'<td>'.esc_html($device_bar).'</td>'
             .'<td>'.esc_html($volt).'</td>'
+            .'<td>'.esc_html($soil).'</td>'
             .'</tr>';
     }
     $out .= '</tbody></table>';
