@@ -773,7 +773,7 @@ async def connectLora():
     if not getattr(settings, 'ENABLE_LORA', True):
         return False
 
-    await debug_print(f"Enabling BULLETPROOF LoRa v2.01.5j - {getattr(settings, 'FIRMWARE_VERSION', 'unknown')}", "LORA")
+    await debug_print(f"Enabling LoRa - {getattr(settings, 'FIRMWARE_VERSION', 'unknown')}", "LORA")
     await display_message("LoRa Starting...", 1)
 
     async with pin_lock:
@@ -790,7 +790,7 @@ async def connectLora():
         for c in uid:
             stagger_seed = (stagger_seed * 31 + ord(c)) % 1000000
         initial_stagger = stagger_seed % 35
-        await debug_print(f"Remote deterministic stagger {initial_stagger}s", "REMOTE_NODE")
+        await debug_print(f"Remote Check-In Stagger {initial_stagger}s", "REMOTE_NODE")
         await asyncio.sleep(initial_stagger)
 
     STATE_IDLE = 0
