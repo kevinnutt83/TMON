@@ -1,13 +1,11 @@
-# TMON v2.01.5j - BULLETPROOF LoRa (FULLY REFACTORED + uasyncio COMPATIBLE + MULTI-NODE FIXES)
-# CRITICAL FIXES APPLIED IN THIS UPDATE (v2.01.5j):
-# • IMMEDIATE BURST PROCESSING: assembly now triggers ACK + processing instantly (no more 12s silence wait)
-# • CHUNK PROGRESS LOGGING: clear visibility into every chunk + assembly success/failure
-# • MULTI-NODE CROSSTALK FIX: remotes now ignore packets not addressed to them + stricter UID check on ACK
-# • NET/PASS filter moved to top of base RX (prevents processing foreign network packets)
-# • Remote listen window shortened to 20s + 0.5s post-burst sleep (reduces overlap with other remotes)
-# • Partial-burst cleanup (old incomplete chunks discarded after 30s)
-# • All previous speed fixes preserved (fast CAD, tight inter-chunk sleep)
-# • Remote nodes now reliably cycle at their deterministic stagger times without interference
+# TMON v2.01.6 - BULLETPROOF LoRa (FULLY REFACTORED + uasyncio COMPATIBLE + MULTI-NODE FIXES)
+# CRITICAL FIXES APPLIED IN THIS UPDATE (v2.01.6):
+# • FULL BURST COMPLETION DETECTION: processing/ACK now triggers ONLY after ALL types (TS + SETTINGS + SDATA) are assembled OR timeout
+#   (fixes the exact issue: base was sending premature ACK after SETTINGS completed → remote stopped sending SDATA → transmission halted right before completion)
+# • PERSISTENT REMOTE NODE INFO: now keeps next_expected / missed_syncs / COMPANY / MACHINE_ID across bursts (previous unconditional del lost scheduling)
+# • TS metadata update uses .update() instead of overwriting the entire dict (prevents loss of persistent keys)
+# • Cleanup now safely pops only temporary burst keys (types/data/chunks/last_rx)
+# • All previous bulletproof fixes preserved (immediate assembly logging, multi-node UID filtering, short listen windows, etc.)
 
 import ujson
 import os
@@ -134,7 +132,7 @@ async def log_error(error_msg):
 
 async def hard_reset_lora():
     global lora
-    await debug_print("Hard LoRa reset + full pin isolation (v2.01.5j)", "LORA")
+    await debug_print("Hard LoRa reset + full pin isolation (v2.01.6)", "LORA")
     if lora:
         try:
             lora.reset()
@@ -195,7 +193,7 @@ async def ensure_lora_listening():
 
 async def init_lora():
     global lora
-    await debug_print("LoRa bulletproof init sequence (v2.01.5j)", "LORA")
+    await debug_print("LoRa bulletproof init sequence (v2.01.6)", "LORA")
     await display_message("LoRa Init...", 1)
     for attempt in range(20):
         await hard_reset_lora()
@@ -310,7 +308,7 @@ async def proxy_register_for_remote(remote_uid, remote_machine_id):
 
 # ===================== BACKGROUND PROCESSOR =====================
 async def process_remote_burst(uid, st):
-    """Called immediately after full assembly OR after idle timeout"""
+    """Called immediately after FULL burst (TS+SETTINGS+SDATA) OR after idle timeout"""
     await debug_print(f"Processing complete burst for {uid} (background)", "BASE_NODE")
     remote_machine_id = None
 
@@ -330,11 +328,13 @@ async def process_remote_burst(uid, st):
         remote_machine_id = data.get('remote_machine_id')
 
         if uid and remote_company is not None:
-            settings.REMOTE_NODE_INFO[uid] = {
+            if uid not in settings.REMOTE_NODE_INFO:
+                settings.REMOTE_NODE_INFO[uid] = {}
+            settings.REMOTE_NODE_INFO[uid].update({
                 'COMPANY': remote_company, 'SITE': remote_site,
                 'ZONE': remote_zone, 'CLUSTER': remote_cluster,
                 'MACHINE_ID': remote_machine_id
-            }
+            })
             save_remote_node_info()
 
         if None not in (uid, remote_runtime, remote_script_runtime, temp_c, temp_f, bar, humid):
@@ -390,9 +390,11 @@ async def process_remote_burst(uid, st):
     if 'TS' in st['types'] and remote_machine_id:
         await proxy_register_for_remote(uid, remote_machine_id)
 
+    # Cleanup ONLY temporary burst tracking keys - KEEP persistent info (next_expected, missed_syncs, COMPANY, etc.)
     if uid in settings.REMOTE_NODE_INFO:
-        del settings.REMOTE_NODE_INFO[uid]
-    save_remote_node_info()
+        for temp_key in ('types', 'data', 'chunks', 'last_rx'):
+            settings.REMOTE_NODE_INFO[uid].pop(temp_key, None)
+        save_remote_node_info()
 
 async def base_packet_processor():
     while True:
@@ -406,8 +408,6 @@ async def base_packet_processor():
             if uid not in settings.REMOTE_NODE_INFO:
                 settings.REMOTE_NODE_INFO[uid] = {'types': set(), 'last_rx': current_time, 'data': {}, 'chunks': {}}
             st = settings.REMOTE_NODE_INFO[uid]
-
-            burst_complete = False
 
             if packet_type.endswith('_CHUNK'):
                 orig_type = packet_type[:-6]
@@ -430,7 +430,6 @@ async def base_packet_processor():
                         st['types'].add(orig_type)
                         del st['chunks'][orig_type]
                         await debug_print(f"✅ FULLY ASSEMBLED {orig_type} ({total} chunks) for {uid}", "BASE_NODE")
-                        burst_complete = True
                 except Exception as e:
                     await log_error(f"Chunk parse error for {uid}: {e}")
 
@@ -439,14 +438,17 @@ async def base_packet_processor():
                 st['data'][packet_type] = parsed_data
                 st['last_rx'] = current_time
 
-            # IMMEDIATE processing if we just completed a full type
-            if burst_complete or (current_time - st['last_rx'] > 12):
+            # FULL BURST PROCESSING: only after ALL three expected types are present (or silence timeout)
+            # This prevents premature ACK after SETTINGS (which was causing remote to stop before sending SDATA)
+            full_burst = all(t in st['types'] for t in ('TS', 'SETTINGS', 'SDATA'))
+            if full_burst or (current_time - st['last_rx'] > 12):
                 await process_remote_burst(uid, st)
 
-            # Cleanup old partial bursts (prevent memory leak)
-            for t in list(st.get('chunks', {})):
-                if current_time - st['last_rx'] > 30:
-                    del st['chunks'][t]
+            # Cleanup old partial bursts (prevent memory leak) - safe even if keys were popped in process_remote_burst
+            chunks_dict = st.get('chunks', {})
+            for t in list(chunks_dict):
+                if current_time - st.get('last_rx', 0) > 30:
+                    del chunks_dict[t]
                     await debug_print(f"Discarded partial {t} chunks for {uid} (timeout)", "BASE_NODE")
 
             lora_rx_queue.task_done()
@@ -731,7 +733,7 @@ async def _send_chunked(msg_type, full_b64):
             data_str = await _secure_message(data_str)
             await _send_with_retry(data_str.encode())
             await asyncio.sleep(random.uniform(0.08, 0.25))
-        await asyncio.sleep(0.5)  # ← final pause so base can finish processing last chunk
+        await asyncio.sleep(0.5)  # final pause so base can finish processing last chunk
 
 # ===================== PERIODIC TASKS (unchanged) =====================
 async def periodic_wp_sync():
@@ -912,4 +914,3 @@ async def connectLora():
                 retry_count = 0
             await asyncio.sleep(3)
             gc.collect()
-
