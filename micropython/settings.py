@@ -43,7 +43,7 @@ FIELD_DATA_GZIP = True
 UNIT_ID = "None"
 UNIT_Name = "No Device Name"
 NODE_TYPE = 'base'
-FIRMWARE_VERSION = "v2.00.2r"
+FIRMWARE_VERSION = "v2.00.2s"
 
 # ============================================================
 # BOOTSTRAP CREDENTIALS (Required for First-Boot Provisioning)
