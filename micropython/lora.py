@@ -426,8 +426,15 @@ async def process_remote_burst(uid, st):
 async def process_remote_field_data(uid, st):
     try:
         payload = st.get('data', {}).get('FIELD_DATA')
+        defaults = {}
         if isinstance(payload, dict) and 'data' in payload:
             records = payload.get('data')
+            defaults = {
+                'unit_id': payload.get('unit_id') or uid,
+                'machine_id': payload.get('machine_id'),
+                'firmware_version': payload.get('firmware_version'),
+                'NODE_TYPE': payload.get('NODE_TYPE') or payload.get('node_type') or 'remote',
+            }
         elif isinstance(payload, list):
             records = payload
         elif isinstance(payload, dict):
@@ -436,8 +443,18 @@ async def process_remote_field_data(uid, st):
             records = None
 
         if isinstance(records, list) and records:
-            stage_remote_field_data(uid, records)
-            await debug_print(f"Staged {len(records)} remote field records from {uid}", "BASE_NODE")
+            merged_records = []
+            for record in records:
+                if not isinstance(record, dict):
+                    continue
+                merged = dict(defaults)
+                merged.update(record)
+                if 'unit_id' not in merged or not merged.get('unit_id'):
+                    merged['unit_id'] = uid
+                merged_records.append(merged)
+            if merged_records:
+                stage_remote_field_data(uid, merged_records)
+                await debug_print(f"Staged {len(merged_records)} remote field records from {uid}", "BASE_NODE")
     except Exception as e:
         await log_error(f"Remote field data processor error for {uid}: {e}")
     finally:

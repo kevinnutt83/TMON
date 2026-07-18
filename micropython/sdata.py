@@ -8,12 +8,8 @@ free_mem = 0
 cpu_temp = 0
 error_count = 0
 last_error = ''
-# Device Information and Data
-loop_runtime = 0
-script_runtime = 0
-sys_voltage = 0
 
-# Lora Information
+# LoRa Information
 lora_SigStr = 0
 lora_snr = 0
 
@@ -30,7 +26,7 @@ engine1_batt_v = 0
 engine2_batt_v = 0
 engine_last_poll_ts = 0
 
-# Remote Node Data Variables (EXTERIOR PROBE - main environmental data)
+# Exterior BME280 probe data. This sensor is mounted outside the enclosure.
 cur_temp_c = 0
 cur_temp_f = 0
 cur_bar_pres = 0
@@ -38,7 +34,7 @@ cur_humid = 0
 # NEW: indicate sampling in progress so OLED can render sampling-only content
 sampling_active = False
 
-# === DEVICE ENCLOSURE INTERIOR BME280 ===
+# Device enclosure interior BME280 data.
 cur_device_temp_c = 0.0
 cur_device_temp_f = 0.0
 cur_device_bar_pres = 0.0

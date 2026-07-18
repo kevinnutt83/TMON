@@ -311,6 +311,16 @@ function tmon_uc_receive_field_data($request) {
         $out['script_runtime']  = $rec['script_runtime'] ?? null;
         $out['loop_runtime']    = $rec['loop_runtime'] ?? null;
         $out['lora_snr']        = $rec['lora_snr'] ?? null;
+        $out['wifi_connected']  = $rec['WIFI_CONNECTED'] ?? null;
+        $out['wan_connected']   = $rec['WAN_CONNECTED'] ?? null;
+        $out['lora_connected']  = $rec['LORA_CONNECTED'] ?? null;
+        $out['lowest_temp_f']   = $rec['lowest_temp_f'] ?? null;
+        $out['highest_temp_f']  = $rec['highest_temp_f'] ?? null;
+        $out['lowest_bar']      = $rec['lowest_bar'] ?? null;
+        $out['highest_bar']     = $rec['highest_bar'] ?? null;
+        $out['lowest_humid']    = $rec['lowest_humid'] ?? null;
+        $out['highest_humid']   = $rec['highest_humid'] ?? null;
+        $out['last_message']    = $rec['last_message'] ?? null;
         // Engine fields
         $out['engine1_speed_rpm'] = $rec['engine1_speed_rpm'] ?? null;
         $out['engine1_batt_v']    = $rec['engine1_batt_v'] ?? null;
@@ -384,8 +394,18 @@ function tmon_uc_receive_field_data($request) {
     }
 
     $received = 0;
+    $envelope_defaults = [
+        'unit_id' => $unit_id,
+        'machine_id' => $machine_id,
+        'firmware_version' => $data['firmware_version'] ?? null,
+        'NODE_TYPE' => $data['NODE_TYPE'] ?? ($data['node_type'] ?? null),
+    ];
+
     foreach ($records as $rec) {
         if (!is_array($rec)) continue;
+        $rec = array_merge(array_filter($envelope_defaults, static function($value) {
+            return $value !== null && $value !== '';
+        }), $rec);
         // REMOTE_NODE_INFO may be on the record (from base) or top-level
         $remote_map = [];
         if (isset($rec['REMOTE_NODE_INFO']) && is_array($rec['REMOTE_NODE_INFO'])) {
@@ -596,6 +616,16 @@ function tmon_uc_get_device_history($request) {
             'soil_moisture' => $d['cur_soil_moisture'] ?? null,
             'soil_temp_f' => $d['cur_soil_temp_f'] ?? null,
             'cpu_temp' => $d['cpu_temp'] ?? null,
+            'lora_snr' => $d['lora_snr'] ?? null,
+            'wifi_connected' => $d['WIFI_CONNECTED'] ?? null,
+            'wan_connected' => $d['WAN_CONNECTED'] ?? null,
+            'lora_connected' => $d['LORA_CONNECTED'] ?? null,
+            'lowest_temp_f' => $d['lowest_temp_f'] ?? null,
+            'highest_temp_f' => $d['highest_temp_f'] ?? null,
+            'lowest_bar' => $d['lowest_bar'] ?? null,
+            'highest_bar' => $d['highest_bar'] ?? null,
+            'lowest_humid' => $d['lowest_humid'] ?? null,
+            'highest_humid' => $d['highest_humid'] ?? null,
             'engine1_rpm' => $d['engine1_speed_rpm'] ?? null,
             'engine1_batt' => $d['engine1_batt_v'] ?? null,
             'engine2_rpm' => $d['engine2_speed_rpm'] ?? null,
@@ -619,6 +649,7 @@ function tmon_uc_get_device_sdata($request) {
     $friendly = [
         // Prefer device-provided timestamp when available; otherwise show site-local formatted DB created_at
         'Timestamp' => isset($data['timestamp']) ? $data['timestamp'] : tmon_uc_format_mysql_datetime($row['created_at']),
+        'Machine ID' => $data['machine_id'] ?? null,
         'Node Type' => $data['NODE_TYPE'] ?? ($data['node_type'] ?? null),
         // Probe sensors
         'Probe Temp (F)' => $data['t_f'] ?? ($data['cur_temp_f'] ?? null),
@@ -639,8 +670,18 @@ function tmon_uc_get_device_sdata($request) {
         'CPU Temp' => $data['cpu_temp'] ?? null,
         'WiFi RSSI' => $data['wifi_rssi'] ?? null,
         'LoRa Signal' => $data['lora_SigStr'] ?? null,
+        'LoRa SNR' => $data['lora_snr'] ?? null,
+        'WiFi Connected' => $data['WIFI_CONNECTED'] ?? null,
+        'WAN Connected' => $data['WAN_CONNECTED'] ?? null,
+        'LoRa Connected' => $data['LORA_CONNECTED'] ?? null,
         'Free Mem (bytes)' => $data['fm'] ?? ($data['free_mem'] ?? null),
         'Firmware' => $data['firmware_version'] ?? null,
+        'Lowest Probe Temp (F)' => $data['lowest_temp_f'] ?? null,
+        'Highest Probe Temp (F)' => $data['highest_temp_f'] ?? null,
+        'Lowest Pressure (hPa)' => $data['lowest_bar'] ?? null,
+        'Highest Pressure (hPa)' => $data['highest_bar'] ?? null,
+        'Lowest Humidity (%)' => $data['lowest_humid'] ?? null,
+        'Highest Humidity (%)' => $data['highest_humid'] ?? null,
         // Engine
         'Engine 1 RPM' => $data['engine1_speed_rpm'] ?? null,
         'Engine 1 Battery (V)' => $data['engine1_batt_v'] ?? null,
@@ -650,6 +691,12 @@ function tmon_uc_get_device_sdata($request) {
         'Script Runtime (s)' => $data['script_runtime'] ?? null,
         'Loop Runtime (s)' => $data['loop_runtime'] ?? null,
         'Error Count' => $data['error_count'] ?? null,
+        'Last Error' => $data['last_error'] ?? null,
+        'Last Message' => $data['last_message'] ?? null,
+        'Frostwatch Active' => $data['frostwatch_active'] ?? null,
+        'Heatwatch Active' => $data['heatwatch_active'] ?? null,
+        'Frost Alert' => $data['frost'] ?? null,
+        'Heat Alert' => $data['heat'] ?? null,
         'Device Name' => $data['name'] ?? '',
     ];
     return rest_ensure_response([

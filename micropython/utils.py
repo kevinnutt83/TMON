@@ -944,101 +944,71 @@ def append_field_data_entry(entry: dict):
         except Exception:
             pass
 
-def record_field_data():
-    """Append a minimal telemetry record for the device."""
+def _json_safe_sdata_value(value, depth=0):
+    if depth > 3:
+        return None
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, (list, tuple)):
+        out = []
+        for item in value:
+            safe_item = _json_safe_sdata_value(item, depth + 1)
+            if safe_item is None and item is not None:
+                return None
+            out.append(safe_item)
+        return out
+    if isinstance(value, dict):
+        out = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                key = str(key)
+            safe_item = _json_safe_sdata_value(item, depth + 1)
+            if safe_item is None and item is not None:
+                continue
+            out[key] = safe_item
+        return out
+    return None
+
+def build_sdata_snapshot(include_meta=True):
+    """Return a JSON-safe snapshot of the current sdata module state."""
     import sdata
-    entry = {'timestamp': int(get_unix_time())}
+    entry = {}
+    for key, value in getattr(sdata, '__dict__', {}).items():
+        if key.startswith('_') or callable(value):
+            continue
+        safe_value = _json_safe_sdata_value(value)
+        if safe_value is None and value is not None:
+            continue
+        entry[key] = safe_value
+
+    if include_meta:
+        try:
+            entry['unit_id'] = getattr(settings, 'UNIT_ID', '')
+        except Exception:
+            pass
+        try:
+            entry['machine_id'] = get_machine_id()
+        except Exception:
+            pass
+        try:
+            entry['firmware_version'] = getattr(settings, 'FIRMWARE_VERSION', '')
+        except Exception:
+            pass
+        try:
+            entry['NODE_TYPE'] = getattr(settings, 'NODE_TYPE', '')
+        except Exception:
+            pass
+    return entry
+
+def record_field_data():
+    """Append the current device telemetry snapshot for transport and storage."""
+    entry = build_sdata_snapshot(include_meta=True)
+    entry['timestamp'] = int(get_unix_time())
     try:
         ts = time.localtime()
         entry['ts_iso'] = f"{ts[0]:04}-{ts[1]:02}-{ts[2]:02} {ts[3]:02}:{ts[4]:02}:{ts[5]:02}"
     except Exception:
         pass
-
-    def _copy(dst, src, key, alias=None):
-        try:
-            val = getattr(src, key)
-            dst[alias or key] = val
-        except Exception:
-            pass
-
-    def _copy_if_true(dst, src, key, alias=None):
-        try:
-            val = getattr(src, key)
-            if val:
-                dst[alias or key] = val
-        except Exception:
-            pass
-
-    def _copy_if_set(dst, src, key, alias=None):
-        try:
-            val = getattr(src, key)
-            if val is not None and val != '':
-                dst[alias or key] = val
-        except Exception:
-            pass
-
-    _copy(entry, sdata, 'cur_temp_f')
-    _copy(entry, sdata, 'cur_temp_c')
-    _copy(entry, sdata, 'cur_humid')
-    _copy(entry, sdata, 'cur_bar_pres')
-    _copy(entry, sdata, 'sys_voltage')
-    _copy(entry, sdata, 'wifi_rssi')
-    _copy(entry, sdata, 'lora_SigStr')
-    _copy(entry, sdata, 'free_mem')
-    _copy(entry, sdata, 'script_runtime')
-    _copy(entry, sdata, 'loop_runtime')
-    _copy(entry, sdata, 'cpu_temp')
-    _copy(entry, sdata, 'error_count')
-    _copy(entry, sdata, 'last_error')
-
-    # Device enclosure interior BME280
-    _copy(entry, sdata, 'cur_device_temp_c')
-    _copy(entry, sdata, 'cur_device_temp_f')
-    _copy(entry, sdata, 'cur_device_bar_pres')
-    _copy(entry, sdata, 'cur_device_humid')
-
-    # Soil probe
-    _copy(entry, sdata, 'cur_soil_moisture')
-    _copy(entry, sdata, 'cur_soil_temp_c')
-    _copy(entry, sdata, 'cur_soil_temp_f')
-
-    # Engine
-    _copy(entry, sdata, 'engine1_speed_rpm')
-    _copy(entry, sdata, 'engine2_speed_rpm')
-    _copy(entry, sdata, 'engine1_batt_v')
-    _copy(entry, sdata, 'engine2_batt_v')
-    _copy(entry, sdata, 'engine_last_poll_ts')
-
-    for i in range(1, 9):
-        try:
-            val = getattr(sdata, f'relay{i}_runtime_s')
-            if val:
-                entry[f'relay{i}_runtime_s'] = val
-            on_state = getattr(sdata, f'relay{i}_on')
-            if on_state:
-                entry[f'relay{i}_on'] = 1
-        except Exception:
-            pass
-
-    _copy_if_true(entry, sdata, 'frostwatch_active')
-    _copy_if_true(entry, sdata, 'heatwatch_active')
-    _copy_if_true(entry, sdata, 'frost')
-    _copy_if_true(entry, sdata, 'heat')
-    _copy_if_true(entry, sdata, 'frost_act')
-    _copy_if_true(entry, sdata, 'heat_act')
-
-    _copy_if_set(entry, sdata, 'last_error')
-
-    # GPS mirrors
-    _copy(entry, sdata, 'gps_lat')
-    _copy(entry, sdata, 'gps_lng')
-    _copy(entry, sdata, 'gps_alt_m')
-    _copy(entry, sdata, 'gps_accuracy_m')
-    _copy(entry, sdata, 'gps_last_fix_ts')
-
-    entry['unit_id'] = getattr(settings, 'UNIT_ID', '')
-    entry['firmware_version'] = getattr(settings, 'FIRMWARE_VERSION', '')
-    entry['NODE_TYPE'] = getattr(settings, 'NODE_TYPE', '')
 
     if getattr(settings, 'NODE_TYPE', 'base') not in ('base', 'remote', 'wifi'):
         return
