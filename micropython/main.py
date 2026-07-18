@@ -12,9 +12,9 @@ from utils import (
     checkLogDirectory, debug_print, load_persisted_unit_name,
     load_persisted_unit_id, persist_unit_id, get_machine_id,
     periodic_provision_check, load_persisted_wordpress_api_url,
-    load_persisted_node_type
+    load_persisted_node_type, load_persisted_custom_settings, log_exception
 )
-from lora import connectLora, log_error, TMON_AI, check_missed_syncs
+from lora import connectLora, log_error, TMON_AI, check_missed_syncs, periodic_wp_sync
 from ota import check_for_update, apply_pending_update
 from oled import update_display, display_message
 from settings_apply import load_applied_settings_on_boot, settings_apply_loop
@@ -34,6 +34,10 @@ from wifi import connectToWifiNetwork, wifi_rssi_monitor
 import uos as os
 import gc
 import machine
+try:
+    import random
+except Exception:
+    random = None
 
 checkLogDirectory()
 
@@ -64,7 +68,11 @@ try:
     stored_uid = load_persisted_unit_id()
     if stored_uid and str(stored_uid) != str(settings.UNIT_ID):
         settings.UNIT_ID = str(stored_uid)
-    print(f"[BOOT] Loaded persisted UNIT_ID: {settings.UNIT_ID}")
+    try:
+        from utils import provisioning_log
+        provisioning_log(f"[BOOT] Loaded persisted UNIT_ID: {settings.UNIT_ID}")
+    except Exception:
+        print(f"[BOOT] Loaded persisted UNIT_ID: {settings.UNIT_ID}")
 except Exception:
     pass
 
@@ -73,7 +81,11 @@ try:
     stored_uname = load_persisted_unit_name()
     if stored_uname and str(stored_uname) != str(settings.UNIT_Name):
         settings.UNIT_Name = str(stored_uname)
-    print(f"[BOOT] Loaded persisted UNIT_Name: {settings.UNIT_Name}")
+    try:
+        from utils import provisioning_log
+        provisioning_log(f"[BOOT] Loaded persisted UNIT_Name: {settings.UNIT_Name}")
+    except Exception:
+        print(f"[BOOT] Loaded persisted UNIT_Name: {settings.UNIT_Name}")
 except Exception:
     pass
 
@@ -88,6 +100,12 @@ try:
     _nt = load_persisted_node_type()
     if _nt:
         settings.NODE_TYPE = _nt
+except Exception:
+    pass
+
+# Load persisted custom settings that are not part of the staged-settings allowlist.
+try:
+    load_persisted_custom_settings()
 except Exception:
     pass
 
@@ -108,21 +126,31 @@ def is_provisioned():
         return True
     except Exception:
         if not _provision_warned:
-            print('[WARN] Device not marked provisioned (no flag or WORDPRESS_API_URL).')
+            try:
+                from utils import provisioning_log
+                provisioning_log('[WARN] Device not marked provisioned (no flag or WORDPRESS_API_URL).')
+            except Exception:
+                print('[WARN] Device not marked provisioned (no flag or WORDPRESS_API_URL).')
             _provision_warned = True
         return False
 
 class TaskManager:
     def __init__(self):
         self.tasks = []
+        self._task_names = set()
     def add_task(self, coro_func, name, interval):
+        task_name = str(name)
+        if task_name in self._task_names:
+            return False
+        self._task_names.add(task_name)
         self.tasks.append({
             'coro_func': coro_func,
-            'name': name,
+            'name': task_name,
             'interval': interval,
             'last_run': 0,
             'task': None
         })
+        return True
     async def run(self):
         for t in self.tasks:
             t['task'] = asyncio.create_task(self._task_wrapper(t))
@@ -133,8 +161,7 @@ class TaskManager:
             try:
                 await t['coro_func']()
             except Exception as e:
-                await debug_print(f"Task {t['name']} error: {e}", "ERROR")
-                await log_error(f"Task {t['name']} error: {e}")
+                await log_exception(f"Task {t['name']}", e)
             t['last_run'] = time.ticks_ms()
             elapsed = (t['last_run'] - start) // 1000
             sleep_time = max(0, t['interval'] - elapsed)
@@ -228,7 +255,7 @@ async def first_boot_provision():
             except Exception:
                 pass
     except Exception as e:
-        await debug_print(f'first_boot_provision err {e}', 'ERROR')
+        await log_exception('first_boot_provision', e)
 
 # Sample task
 async def sample_task():
@@ -266,7 +293,7 @@ async def sample_task():
 
 # Periodic field data task
 async def periodic_field_data_task():
-    from utils import send_field_data_log
+    from utils import send_field_data_log, send_field_data_via_lora
     while True:
         if not is_provisioned():
             await asyncio.sleep(2)
@@ -275,9 +302,12 @@ async def periodic_field_data_task():
             if getattr(settings, 'DEVICE_SUSPENDED', False):
                 await debug_print("suspended: skip sfd send", "WARN")
             else:
-                await send_field_data_log()
+                if str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'remote':
+                    await send_field_data_via_lora()
+                else:
+                    await send_field_data_log()
         except Exception as e:
-            await debug_print(f"sfd: task err {e}", "ERROR")
+            await log_exception('periodic_field_data_task', e)
         try:
             from utils import maybe_gc
             maybe_gc("field_data_send", min_interval_ms=12000, mem_free_below=40 * 1024)
@@ -291,6 +321,8 @@ async def periodic_command_poll_task():
         from wprest import poll_device_commands
     except Exception:
         poll_device_commands = None
+    interval = int(getattr(settings, 'COMMANDS_POLL_INTERVAL_S', 20))
+    jitter = float(getattr(settings, 'COMMANDS_POLL_JITTER_S', 0))
     while True:
         if not is_provisioned():
             await asyncio.sleep(2)
@@ -299,13 +331,34 @@ async def periodic_command_poll_task():
             try:
                 await poll_device_commands()
             except Exception as e:
-                await debug_print(f"Command poll error: {e}", "ERROR")
+                await log_exception('periodic_command_poll_task', e)
             try:
                 from utils import maybe_gc
                 maybe_gc("cmd_poll", min_interval_ms=12000, mem_free_below=40 * 1024)
             except Exception:
                 pass
-        await asyncio.sleep(10)
+        sleep_s = max(2, interval)
+        if jitter > 0 and random:
+            sleep_s += random.uniform(0, jitter)
+        await asyncio.sleep(sleep_s)
+
+
+async def periodic_diagnostics_task():
+    try:
+        from wprest import send_diagnostics_to_wp
+    except Exception:
+        send_diagnostics_to_wp = None
+    interval = int(getattr(settings, 'DIAGNOSTIC_SEND_INTERVAL_S', 300))
+    while True:
+        if not is_provisioned():
+            await asyncio.sleep(2)
+            continue
+        if send_diagnostics_to_wp and not getattr(settings, 'DEVICE_SUSPENDED', False):
+            try:
+                await send_diagnostics_to_wp()
+            except Exception as e:
+                await log_exception('periodic_diagnostics_task', e)
+        await asyncio.sleep(interval)
 
 # ========================== TASK SETUP ==========================
 tm = TaskManager()
@@ -324,6 +377,13 @@ if engine_loop:
 tm.add_task(wifi_rssi_monitor, 'wifi_rssi', settings.WIFI_SIGNAL_SAMPLE_INTERVAL_S)
 tm.add_task(periodic_provision_check, 'provision_check', settings.PROVISION_CHECK_INTERVAL_S)
 tm.add_task(check_missed_syncs, 'missed_syncs', 60)
+tm.add_task(periodic_diagnostics_task, 'diagnostics', int(getattr(settings, 'DIAGNOSTIC_SEND_INTERVAL_S', 300)))
+# If running as base and WP sync helpers are available, schedule the periodic WP sync
+try:
+    if str(getattr(settings, 'NODE_TYPE', '')).lower() == 'base':
+        tm.add_task(periodic_wp_sync, 'wp_sync', 300)
+except Exception:
+    pass
 if user_commands_task:
     tm.add_task(user_commands_task, 'user_commands', 0)
 

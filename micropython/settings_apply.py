@@ -12,8 +12,8 @@ except Exception:
     import os
 
 import settings
-from config_persist import read_json, write_json
-from utils import debug_print, persist_suspension_state
+from config_persist import read_json, read_json_safe, write_json, write_json_atomic
+from utils import debug_print, persist_suspension_state, load_persisted_custom_settings
 # NEW: GC helper
 from utils import maybe_gc
 
@@ -50,6 +50,9 @@ def _to_str(v):
 ALLOWLIST = {
     'FIELD_DATA_SEND_INTERVAL': _to_int,
     'FIELD_DATA_MAX_BATCH': _to_int,
+    'FIELD_DATA_MAX_ATTEMPTS': _to_int,
+    'FIELD_DATA_RETRY_BASE_S': _to_int,
+    'FIELD_DATA_MAX_BACKOFF_S': _to_int,
     'OLED_UPDATE_INTERVAL_S': _to_int,
     'OLED_PAGE_ROTATE_INTERVAL_S': _to_int,
     'OLED_SCROLL_ENABLED': _to_bool,
@@ -61,6 +64,23 @@ ALLOWLIST = {
     'GPS_SOURCE': _to_str,
     'GPS_LAT': _to_float,
     'GPS_LNG': _to_float,
+    'LORA_MAX_RETRIES': _to_int,
+    'LORA_RETRY_BASE_DELAY_S': _to_int,
+    'LORA_MAX_BACKOFF_S': _to_int,
+    'LORA_HEARTBEAT_INTERVAL_S': _to_int,
+    'LORA_MISSED_SYNC_THRESHOLD': _to_int,
+    'LORA_CRC_ENABLED': _to_bool,
+    'DIAGNOSTIC_SEND_INTERVAL_S': _to_int,
+    'DIAGNOSTIC_MAX_ATTEMPTS': _to_int,
+    'DIAGNOSTIC_RETRY_BASE_S': _to_int,
+    'DIAGNOSTIC_FAILURE_STREAK': _to_int,
+    'DIAGNOSTIC_FAILURE_COOLDOWN_S': _to_int,
+    'COMMANDS_POLL_INTERVAL_S': _to_int,
+    'COMMANDS_POLL_JITTER_S': _to_float,
+    'COMMANDS_MAX_PER_POLL': _to_int,
+    'COMMAND_CONFIRM_DELAY_S': _to_float,
+    'COMMANDS_RESULT_TIMEOUT_S': _to_int,
+    'COMMAND_ACK_UNSUPPORTED': _to_bool,
     # Added allowlist entries for higher-level settings that must be applied
     'NODE_TYPE': _to_str,
     'UNIT_Name': _to_str,
@@ -140,9 +160,13 @@ def _filter_and_apply(incoming: dict):
 def load_applied_settings_on_boot():
     path = getattr(settings, 'REMOTE_SETTINGS_APPLIED_FILE', '/logs/remote_settings.applied.json')
     try:
-        data = read_json(path, None)
+        data = read_json_safe(path, None)
         if isinstance(data, dict):
             _filter_and_apply(data)
+            try:
+                load_persisted_custom_settings()
+            except Exception:
+                pass
             # If NODE_TYPE is remote, proactively disable WiFi on boot
             try:
                 if getattr(settings, 'NODE_TYPE', '').lower() == 'remote':
@@ -180,7 +204,7 @@ async def apply_staged_settings_once():
                 if isinstance(staged_unit, dict):
                     # persist to canonical staged file to keep behavior consistent
                     try:
-                        write_json(staged_path, staged_unit)
+                        write_json_atomic(staged_path, staged_unit)
                     except Exception:
                         pass
                     staged = staged_unit
@@ -189,7 +213,7 @@ async def apply_staged_settings_once():
         if not isinstance(staged, dict):
             return False
         # Load previous applied snapshot for diffing (optional)
-        prev_applied_meta = read_json(applied_path, None)
+        prev_applied_meta = read_json_safe(applied_path, None)
         prev_applied = {}
         if isinstance(prev_applied_meta, dict) and isinstance(prev_applied_meta.get('applied'), dict):
             prev_applied = prev_applied_meta.get('applied') or {}
@@ -199,7 +223,7 @@ async def apply_staged_settings_once():
             if hasattr(settings, k):
                 prev_snapshot[k] = getattr(settings, k)
         try:
-            write_json(getattr(settings,'REMOTE_SETTINGS_PREV_FILE','/logs/remote_settings.prev.json'), prev_snapshot)
+            write_json_atomic(getattr(settings,'REMOTE_SETTINGS_PREV_FILE','/logs/remote_settings.prev.json'), prev_snapshot)
         except Exception:
             pass
         applied = _filter_and_apply(staged)
@@ -228,7 +252,7 @@ async def apply_staged_settings_once():
             meta['ignored_keys'] = ignored_keys
         except Exception:
             pass
-        write_json(applied_path, meta)
+        write_json_atomic(applied_path, meta)
         # Remove staged file to prevent re-apply
         try:
             os.remove(staged_path)

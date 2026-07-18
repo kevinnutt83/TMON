@@ -529,22 +529,22 @@ add_shortcode('tmon_device_status', function($atts) {
                 var d = res.data || {}; var msg = d.scheduled ? "Scheduled" : "Queued"; alert(msg+" relay "+relay+" "+state+ (runtime_min? (" for "+runtime_min+" min"): "") );
             }).catch(function(){ btn.textContent = old; btn.disabled=false; alert("Network error"); });
          });
-+        // Auto-refresh device status tbody periodically (admin context)
-+        (function(){
-+            var tbl = document.getElementById("tmon-device-status-table");
-+            if (!tbl) return;
-+            function refreshStatus(){
-+                fetch("'.esc_js($ajax_url).'?action=tmon_device_status_refresh&_wpnonce='.$status_nonce.'")
-+                    .then(r=>r.json()).then(function(res){
-+                        if (res && res.success && res.data && res.data.html){
-+                            var tb = tbl.tBodies[0];
-+                            if (tb) tb.innerHTML = res.data.html;
-+                        }
-+                    }).catch(function(e){ console.error("status refresh", e); });
-+            }
-+            refreshStatus();
-+            setInterval(refreshStatus, 30000);
-+        })();
+        // Auto-refresh device status tbody periodically (admin context)
+        (function(){
+            var tbl = document.getElementById("tmon-device-status-table");
+            if (!tbl) return;
+            function refreshStatus(){
+                fetch("'.esc_js($ajax_url).'?action=tmon_device_status_refresh&_wpnonce='.$status_nonce.'")
+                    .then(r=>r.json()).then(function(res){
+                        if (res && res.success && res.data && res.data.html){
+                            var tb = tbl.tBodies[0];
+                            if (tb) tb.innerHTML = res.data.html;
+                        }
+                    }).catch(function(e){ console.error("status refresh", e); });
+            }
+            refreshStatus();
+            setInterval(refreshStatus, 30000);
+        })();
      })();</script>';
     return ob_get_clean();
 });
@@ -617,8 +617,28 @@ add_shortcode('tmon_device_history', function($atts) {
 
 		const ctx = canvas.getContext('2d');
 		const base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : "<?php echo $ajax_root; ?>".replace(/\/$/, "");
+        const legendKey = "tmon_history_legend_" + (canvas.id || "default");
 		let chart = null;
 		let lastData = null;
+
+        function loadLegendState() {
+            try {
+                const raw = localStorage.getItem(legendKey);
+                return raw ? JSON.parse(raw) : {};
+            } catch(e) {
+                return {};
+            }
+        }
+
+        function saveLegendState(ds) {
+            try {
+                const state = {};
+                (ds || []).forEach(function(d){
+                    if (d && d.label) state[d.label] = !!d.hidden;
+                });
+                localStorage.setItem(legendKey, JSON.stringify(state));
+            } catch(e) {}
+        }
 
 		// Robust relay value extraction (top-level keys and nested p.relay)
 		function relayStateValue(pt, num) {
@@ -723,6 +743,13 @@ add_shortcode('tmon_device_history', function($atts) {
                     { label: "Soil Moisture", data: soilMoisture, borderColor: "#795548", fill:false, yAxisID: "y2", pointRadius: 0, cubicInterpolationMode: 'monotone' }
                 ].concat(relayDatasets);
 
+                const persistedLegend = loadLegendState();
+                datasets.forEach(function(ds){
+                    if (ds && ds.label && Object.prototype.hasOwnProperty.call(persistedLegend, ds.label)) {
+                        ds.hidden = !!persistedLegend[ds.label];
+                    }
+                });
+
                 // Config for initial creation
                 const cfg = {
                     type: "line",
@@ -731,7 +758,20 @@ add_shortcode('tmon_device_history', function($atts) {
                         responsive: true,
                         animation: { duration: 600, easing: 'linear' },
                         interaction: { mode: "index", intersect: false },
-                        plugins: { legend: { position: "top", labels: { usePointStyle: true } } },
+                        plugins: {
+                            legend: {
+                                position: "top",
+                                labels: { usePointStyle: true },
+                                onClick: function(e, legendItem, legend) {
+                                    const ci = legend.chart;
+                                    const idx = legendItem.datasetIndex;
+                                    const meta = ci.getDatasetMeta(idx);
+                                    meta.hidden = meta.hidden === null ? !ci.data.datasets[idx].hidden : null;
+                                    ci.update();
+                                    saveLegendState(ci.data.datasets);
+                                }
+                            }
+                        },
                         elements: { line: { tension: 0.25 }, point: { radius: 0 } },
                         scales: {
                             y1: { type: "linear", position: "left" },
@@ -748,8 +788,10 @@ add_shortcode('tmon_device_history', function($atts) {
                     chart.data.labels = labels;
                     chart.data.datasets = datasets;
                     chart.update('active'); // animate the transition
+                    saveLegendState(chart.data.datasets);
                 } else {
                     chart = new Chart(ctx, cfg);
+                    saveLegendState(chart.data.datasets);
                 }
             }).catch(err=>{
                 console.error("TMON history fetch error", err);
@@ -885,6 +927,108 @@ add_shortcode('tmon_devices_sdata', function($atts){
     }
     $out .= '</tbody></table>';
     return $out;
+});
+
+// [tmon_device_widgets limit="12"]
+// Compact telemetry widgets for quick fleet visibility.
+add_shortcode('tmon_device_widgets', function($atts){
+    global $wpdb;
+    $a = shortcode_atts(['limit' => '12'], $atts);
+    $limit = max(1, min(50, intval($a['limit'])));
+
+    $devices = $wpdb->get_results("SELECT unit_id, unit_name, last_seen, suspended FROM {$wpdb->prefix}tmon_devices ORDER BY last_seen DESC LIMIT {$limit}", ARRAY_A);
+    if (!$devices) {
+        return '<em>No devices found.</em>';
+    }
+
+    $now = current_time('timestamp');
+    $online = 0;
+    $warning = 0;
+    $offline = 0;
+    $cards = [];
+
+    foreach ($devices as $d) {
+        $uid = (string) ($d['unit_id'] ?? '');
+        $name = (string) ($d['unit_name'] ?? $uid);
+        $last_seen = (string) ($d['last_seen'] ?? '');
+        $last_ts = $last_seen ? tmon_uc_mysql_to_local_timestamp($last_seen) : 0;
+        $age = $last_ts ? max(0, $now - $last_ts) : PHP_INT_MAX;
+        $status = 'offline';
+        if (intval($d['suspended'] ?? 0)) {
+            $status = 'suspended';
+            $offline++;
+        } elseif ($age <= 15 * 60) {
+            $status = 'online';
+            $online++;
+        } elseif ($age <= 30 * 60) {
+            $status = 'warning';
+            $warning++;
+        } else {
+            $offline++;
+        }
+
+        $fd = $wpdb->get_row($wpdb->prepare("SELECT data, created_at FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s ORDER BY created_at DESC LIMIT 1", $uid), ARRAY_A);
+        $temp = $humid = $volt = $soil = '';
+        if ($fd && !empty($fd['data'])) {
+            $j = json_decode($fd['data'], true);
+            if (is_array($j)) {
+                $temp = $j['cur_device_temp_f'] ?? ($j['t_f'] ?? '');
+                $humid = $j['cur_device_humid'] ?? ($j['hum'] ?? '');
+                $volt = $j['sys_voltage'] ?? ($j['v'] ?? '');
+                $soil = $j['cur_soil_moisture'] ?? '';
+            }
+        }
+        $cards[] = [
+            'unit_id' => $uid,
+            'name' => $name,
+            'status' => $status,
+            'last_seen' => $last_seen,
+            'temp' => $temp,
+            'humid' => $humid,
+            'volt' => $volt,
+            'soil' => $soil,
+        ];
+    }
+
+    ob_start();
+    echo '<style>
+    .tmon-widgets-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+    .tmon-widget-card{border:1px solid #d9d9d9;border-radius:10px;padding:10px 12px;background:#fff}
+    .tmon-widget-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+    .tmon-pill{font-size:11px;padding:2px 8px;border-radius:999px;background:#f0f0f0}
+    .tmon-pill-online{background:#e9f9ef;color:#1e7e34}
+    .tmon-pill-warning{background:#fff8e1;color:#8a6d3b}
+    .tmon-pill-offline,.tmon-pill-suspended{background:#fdecea;color:#a94442}
+    .tmon-widget-metrics{display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:12px}
+    .tmon-widget-summary{display:grid;grid-template-columns:repeat(3,minmax(90px,1fr));gap:8px;margin:0 0 12px 0}
+    .tmon-widget-summary .box{border:1px solid #d9d9d9;border-radius:8px;padding:8px 10px;background:#fafafa;text-align:center}
+    .tmon-widget-summary .n{font-size:20px;font-weight:700;line-height:1.1}
+    </style>';
+
+    echo '<div class="tmon-widget-summary">';
+    echo '<div class="box"><div>Online</div><div class="n">' . intval($online) . '</div></div>';
+    echo '<div class="box"><div>Warning</div><div class="n">' . intval($warning) . '</div></div>';
+    echo '<div class="box"><div>Offline</div><div class="n">' . intval($offline) . '</div></div>';
+    echo '</div>';
+
+    echo '<div class="tmon-widgets-grid">';
+    foreach ($cards as $c) {
+        $pill = 'tmon-pill-' . esc_attr($c['status']);
+        echo '<div class="tmon-widget-card">';
+        echo '<div class="tmon-widget-head"><strong>' . esc_html($c['name']) . '</strong><span class="tmon-pill ' . $pill . '">' . esc_html($c['status']) . '</span></div>';
+        echo '<div class="tmon-widget-metrics">';
+        echo '<div><span class="tmon-text-muted">Unit</span><br>' . esc_html($c['unit_id']) . '</div>';
+        echo '<div><span class="tmon-text-muted">Seen</span><br>' . esc_html(tmon_uc_format_mysql_datetime($c['last_seen'])) . '</div>';
+        echo '<div><span class="tmon-text-muted">Temp F</span><br>' . esc_html((string) $c['temp']) . '</div>';
+        echo '<div><span class="tmon-text-muted">Humidity</span><br>' . esc_html((string) $c['humid']) . '</div>';
+        echo '<div><span class="tmon-text-muted">Voltage</span><br>' . esc_html((string) $c['volt']) . '</div>';
+        echo '<div><span class="tmon-text-muted">Soil</span><br>' . esc_html((string) $c['soil']) . '</div>';
+        echo '</div>';
+        echo '</div>';
+    }
+    echo '</div>';
+
+    return ob_get_clean();
 });
 
 // [tmon_claim_device]
@@ -1476,7 +1620,8 @@ add_action('wp_ajax_tmon_pending_commands_refresh', function(){
                 .'<td>'.esc_html($r['unit_name']).'</td>'
                 .'<td>'.$cmd_html.'</td>'
                 .'<td>'.esc_html($created_site).'</td>'
-                .'<td></td>'
+                .'<td><button class="button button-small tmon-cmd-del" data-id="'.intval($r['id']).'">Delete</button> '
+                .'<button class="button button-small tmon-cmd-requeue" data-id="'.intval($r['id']).'" data-unit="'.esc_attr($r['device_id']).'">Re-Queue</button></td>'
                 .'</tr>';
         }
     }
@@ -1532,6 +1677,7 @@ add_action('wp_ajax_tmon_device_status_refresh', function(){
         }
     }
     $rows = array_values($index);
+    $nonce = wp_create_nonce('tmon_uc_relay');
     ob_start();
     $now = current_time('timestamp');
     foreach ($rows as $r) {
@@ -1573,9 +1719,13 @@ add_action('wp_ajax_tmon_device_status_refresh', function(){
         echo '<td>'.esc_html(tmon_uc_format_mysql_datetime($r['last_seen'])).'</td>';
         echo '<td>';
         if (!empty($enabled_relays)) {
+            echo '<div class="tmon-relay-ctl" data-unit="'.esc_attr($r['unit_id']).'" data-nonce="'.esc_attr($nonce).'">';
+            echo '<label class="tmon-text-muted">Run (min)</label><input type="number" min="0" max="1440" step="1" class="tmon-runtime-min" title="Runtime minutes (0 = no auto-off)" value="0">';
+            echo '<label class="tmon-text-muted">At</label><input type="datetime-local" class="tmon-schedule-at" title="Optional schedule time">';
             foreach ($enabled_relays as $n) {
                 echo '<div class="tmon-relay-row"><span class="tmon-text-muted">R'.$n.'</span> <button type="button" class="button button-small tmon-relay-btn" data-relay="'.$n.'" data-state="on">On</button> <button type="button" class="button button-small tmon-relay-btn" data-relay="'.$n.'" data-state="off">Off</button></div>';
             }
+            echo '</div>';
         } else {
             echo '<span class="tmon-text-muted">No relays enabled</span>';
         }

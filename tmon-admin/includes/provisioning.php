@@ -207,12 +207,270 @@ if (!function_exists('tmon_admin_provisioned_devices_page')) {
 }
 if (!function_exists('tmon_admin_provisioning_activity_page')) {
 	function tmon_admin_provisioning_activity_page() {
-		echo '<div class="wrap"><h1>Provisioning Activity</h1><p>Queue and active jobs appear here.</p></div>';
+		if (!current_user_can('manage_options')) {
+			wp_die('Forbidden');
+		}
+
+		global $wpdb;
+		$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+		$rows = [];
+		$status_filter = isset($_GET['status']) ? sanitize_text_field(wp_unslash((string) $_GET['status'])) : '';
+		$query_filter = isset($_GET['q']) ? sanitize_text_field(wp_unslash((string) $_GET['q'])) : '';
+		$site_filter = isset($_GET['site']) ? esc_url_raw(wp_unslash((string) $_GET['site'])) : '';
+		$limit = isset($_GET['limit']) ? intval($_GET['limit']) : 100;
+		$limit = max(10, min($limit, 500));
+		$status_counts = [];
+		$site_options = [];
+
+		$has_table = (bool) $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $prov_table));
+		if ($has_table) {
+			$where_parts = [];
+			$params = [];
+			if ($status_filter !== '') {
+				$where_parts[] = 'status = %s';
+				$params[] = $status_filter;
+			}
+			if ($site_filter !== '') {
+				$where_parts[] = 'site_url = %s';
+				$params[] = $site_filter;
+			}
+			if ($query_filter !== '') {
+				$like = '%' . $wpdb->esc_like($query_filter) . '%';
+				$where_parts[] = '(unit_id LIKE %s OR machine_id LIKE %s OR unit_name LIKE %s OR site_url LIKE %s)';
+				$params[] = $like;
+				$params[] = $like;
+				$params[] = $like;
+				$params[] = $like;
+			}
+			$where = '';
+			if (!empty($where_parts)) {
+				$where = 'WHERE ' . implode(' AND ', $where_parts);
+			}
+
+			$sql = "SELECT unit_id, machine_id, unit_name, role, plan, status, settings_staged, provisioned, site_url, updated_at, created_at FROM {$prov_table} {$where} ORDER BY updated_at DESC, created_at DESC LIMIT {$limit}";
+			if (!empty($params)) {
+				$rows = $wpdb->get_results($wpdb->prepare($sql, $params), ARRAY_A);
+			} else {
+				$rows = $wpdb->get_results($sql, ARRAY_A);
+			}
+
+			$status_rows = $wpdb->get_results("SELECT status, COUNT(*) AS c FROM {$prov_table} GROUP BY status", ARRAY_A);
+			foreach (($status_rows ?: []) as $sr) {
+				$k = (string) ($sr['status'] ?? '');
+				$status_counts[$k] = intval($sr['c'] ?? 0);
+			}
+			$site_rows = $wpdb->get_col("SELECT DISTINCT site_url FROM {$prov_table} WHERE site_url <> '' ORDER BY site_url ASC");
+			foreach (($site_rows ?: []) as $u) {
+				$site_options[] = (string) $u;
+			}
+		}
+
+		$pending_queue = get_option('tmon_admin_pending_provision', []);
+		if (!is_array($pending_queue)) {
+			$pending_queue = [];
+		}
+		$pending_rows = array_values($pending_queue);
+		if ($query_filter !== '') {
+			$qf = strtolower($query_filter);
+			$pending_rows = array_values(array_filter($pending_rows, function ($item) use ($qf) {
+				if (!is_array($item)) {
+					return false;
+				}
+				$hay = strtolower(implode(' ', [
+					(string) ($item['unit_id'] ?? ''),
+					(string) ($item['machine_id'] ?? ''),
+					(string) ($item['site_url'] ?? ''),
+					(string) ($item['requested_by_user'] ?? ''),
+				]));
+				return strpos($hay, $qf) !== false;
+			}));
+		}
+		if ($site_filter !== '') {
+			$pending_rows = array_values(array_filter($pending_rows, function ($item) use ($site_filter) {
+				return is_array($item) && (string) ($item['site_url'] ?? '') === $site_filter;
+			}));
+		}
+		$pending_rows = array_slice($pending_rows, 0, max(10, min($limit, 200)));
+
+		echo '<div class="wrap"><h1>Provisioning Activity</h1>';
+		echo '<p class="description">Current provisioning queue/state from provisioned device records.</p>';
+		echo '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:12px 0 16px;max-width:980px;">';
+		echo '<div class="postbox" style="padding:10px 12px;"><div style="font-size:12px;color:#50575e;">Provisioned Rows</div><div style="font-size:24px;font-weight:600;">' . intval(count($rows)) . '</div></div>';
+		echo '<div class="postbox" style="padding:10px 12px;"><div style="font-size:12px;color:#50575e;">Pending Queue</div><div style="font-size:24px;font-weight:600;">' . intval(count($pending_queue)) . '</div></div>';
+		echo '<div class="postbox" style="padding:10px 12px;"><div style="font-size:12px;color:#50575e;">Active</div><div style="font-size:24px;font-weight:600;">' . intval($status_counts['active'] ?? 0) . '</div></div>';
+		echo '<div class="postbox" style="padding:10px 12px;"><div style="font-size:12px;color:#50575e;">Queued/Staged/Pending</div><div style="font-size:24px;font-weight:600;">' . intval(($status_counts['queued'] ?? 0) + ($status_counts['staged'] ?? 0) + ($status_counts['pending'] ?? 0)) . '</div></div>';
+		echo '</div>';
+
+		echo '<form method="get" style="margin:12px 0">';
+		echo '<input type="hidden" name="page" value="tmon-admin-provisioning-activity">';
+		echo '<label for="tmon_prov_status" style="margin-right:8px;">Status</label>';
+		echo '<input id="tmon_prov_status" name="status" type="text" value="' . esc_attr($status_filter) . '" placeholder="queued|active|staged" style="margin-right:12px;">';
+		echo '<label for="tmon_prov_site" style="margin-right:8px;">Site</label>';
+		echo '<select id="tmon_prov_site" name="site" style="margin-right:12px;max-width:280px;"><option value="">all sites</option>';
+		foreach ($site_options as $su) {
+			echo '<option value="' . esc_attr($su) . '" ' . selected($site_filter, $su, false) . '>' . esc_html($su) . '</option>';
+		}
+		echo '</select>';
+		echo '<label for="tmon_prov_q" style="margin-right:8px;">Search</label>';
+		echo '<input id="tmon_prov_q" name="q" type="text" value="' . esc_attr($query_filter) . '" placeholder="unit, machine, name, site" style="margin-right:12px;">';
+		echo '<label for="tmon_prov_limit" style="margin-right:8px;">Limit</label>';
+		echo '<input id="tmon_prov_limit" name="limit" type="number" min="10" max="500" value="' . intval($limit) . '" style="width:90px;margin-right:12px;">';
+		submit_button('Filter', 'secondary', '', false);
+		echo ' <a class="button" href="' . esc_url(admin_url('admin.php?page=tmon-admin-provisioning-activity')) . '">Reset</a>';
+		echo '</form>';
+
+		echo '<table class="widefat striped"><thead><tr><th>Unit</th><th>Machine</th><th>Name</th><th>Role</th><th>Plan</th><th>Status</th><th>Staged</th><th>Provisioned</th><th>Site</th><th>Updated</th></tr></thead><tbody>';
+		if ($rows) {
+			foreach ($rows as $row) {
+				echo '<tr>';
+				echo '<td>' . esc_html((string) ($row['unit_id'] ?? '')) . '</td>';
+				echo '<td>' . esc_html((string) ($row['machine_id'] ?? '')) . '</td>';
+				echo '<td>' . esc_html((string) ($row['unit_name'] ?? '')) . '</td>';
+				echo '<td>' . esc_html((string) ($row['role'] ?? '')) . '</td>';
+				echo '<td>' . esc_html((string) ($row['plan'] ?? '')) . '</td>';
+				echo '<td>' . esc_html((string) ($row['status'] ?? '')) . '</td>';
+				echo '<td>' . (!empty($row['settings_staged']) ? 'Yes' : 'No') . '</td>';
+				echo '<td>' . (!empty($row['provisioned']) ? 'Yes' : 'No') . '</td>';
+				echo '<td>' . esc_html((string) ($row['site_url'] ?? '')) . '</td>';
+				echo '<td>' . esc_html((string) (($row['updated_at'] ?? '') ?: ($row['created_at'] ?? ''))) . '</td>';
+				echo '</tr>';
+			}
+		} else {
+			echo '<tr><td colspan="10"><em>No provisioning activity found for this filter.</em></td></tr>';
+		}
+		echo '</tbody></table></div>';
+
+		echo '<h2 style="margin-top:20px;">Pending Provision Queue</h2>';
+		echo '<table class="widefat striped"><thead><tr><th>Unit</th><th>Machine</th><th>Site</th><th>Requested By</th><th>Requested At</th></tr></thead><tbody>';
+		if ($pending_rows) {
+			foreach ($pending_rows as $p) {
+				echo '<tr>';
+				echo '<td>' . esc_html((string) ($p['unit_id'] ?? '')) . '</td>';
+				echo '<td>' . esc_html((string) ($p['machine_id'] ?? '')) . '</td>';
+				echo '<td>' . esc_html((string) ($p['site_url'] ?? '')) . '</td>';
+				echo '<td>' . esc_html((string) ($p['requested_by_user'] ?? '')) . '</td>';
+				echo '<td>' . esc_html((string) ($p['requested_at'] ?? '')) . '</td>';
+				echo '</tr>';
+			}
+		} else {
+			echo '<tr><td colspan="5"><em>No pending queue entries for this filter.</em></td></tr>';
+		}
+		echo '</tbody></table>';
+		echo '</div>';
 	}
 }
 if (!function_exists('tmon_admin_provisioning_history_page')) {
 	function tmon_admin_provisioning_history_page() {
-		echo '<div class="wrap"><h1>Provisioning History</h1><p>Recent provisioning events will render here.</p></div>';
+		if (!current_user_can('manage_options')) {
+			wp_die('Forbidden');
+		}
+
+		$unit_filter = isset($_GET['unit_id']) ? sanitize_text_field(wp_unslash((string) $_GET['unit_id'])) : '';
+		$action_filter = isset($_GET['action']) ? sanitize_text_field(wp_unslash((string) $_GET['action'])) : '';
+		$user_filter = isset($_GET['user']) ? sanitize_text_field(wp_unslash((string) $_GET['user'])) : '';
+		$query_filter = isset($_GET['q']) ? sanitize_text_field(wp_unslash((string) $_GET['q'])) : '';
+		$limit = isset($_GET['limit']) ? intval($_GET['limit']) : 100;
+		$limit = max(10, min($limit, 500));
+
+		$history = get_option('tmon_admin_provision_history', []);
+		if (!is_array($history)) {
+			$history = [];
+		}
+
+		$history = array_reverse($history);
+		$rows = [];
+		$action_options = [];
+		$user_options = [];
+		foreach ($history as $entry) {
+			if (!is_array($entry)) {
+				continue;
+			}
+			$unit_id = (string) ($entry['unit_id'] ?? '');
+			$action = (string) ($entry['action'] ?? '');
+			$user = (string) ($entry['user'] ?? '');
+			if ($action !== '') {
+				$action_options[$action] = true;
+			}
+			if ($user !== '') {
+				$user_options[$user] = true;
+			}
+			if ($unit_filter !== '' && strcasecmp($unit_filter, $unit_id) !== 0) {
+				continue;
+			}
+			if ($action_filter !== '' && strcasecmp($action_filter, $action) !== 0) {
+				continue;
+			}
+			if ($user_filter !== '' && strcasecmp($user_filter, $user) !== 0) {
+				continue;
+			}
+			if ($query_filter !== '') {
+				$qf = strtolower($query_filter);
+				$meta_json = (isset($entry['meta']) && is_array($entry['meta'])) ? wp_json_encode($entry['meta']) : '';
+				$hay = strtolower(implode(' ', [
+					$unit_id,
+					(string) ($entry['machine_id'] ?? ''),
+					$action,
+					$user,
+					(string) $meta_json,
+				]));
+				if (strpos($hay, $qf) === false) {
+					continue;
+				}
+			}
+			$rows[] = $entry;
+			if (count($rows) >= $limit) {
+				break;
+			}
+		}
+		ksort($action_options);
+		ksort($user_options);
+
+		echo '<div class="wrap"><h1>Provisioning History</h1>';
+		echo '<p class="description">Historical provisioning events captured from save/provision flows.</p>';
+		echo '<form method="get" style="margin:12px 0">';
+		echo '<input type="hidden" name="page" value="tmon-admin-provisioning-history">';
+		echo '<label for="tmon_hist_unit" style="margin-right:8px;">Unit ID</label>';
+		echo '<input id="tmon_hist_unit" name="unit_id" type="text" value="' . esc_attr($unit_filter) . '" style="margin-right:12px;">';
+		echo '<label for="tmon_hist_action" style="margin-right:8px;">Action</label>';
+		echo '<select id="tmon_hist_action" name="action" style="margin-right:12px;"><option value="">all actions</option>';
+		foreach (array_keys($action_options) as $a) {
+			echo '<option value="' . esc_attr($a) . '" ' . selected($action_filter, $a, false) . '>' . esc_html($a) . '</option>';
+		}
+		echo '</select>';
+		echo '<label for="tmon_hist_user" style="margin-right:8px;">User</label>';
+		echo '<select id="tmon_hist_user" name="user" style="margin-right:12px;"><option value="">all users</option>';
+		foreach (array_keys($user_options) as $u) {
+			echo '<option value="' . esc_attr($u) . '" ' . selected($user_filter, $u, false) . '>' . esc_html($u) . '</option>';
+		}
+		echo '</select>';
+		echo '<label for="tmon_hist_q" style="margin-right:8px;">Search</label>';
+		echo '<input id="tmon_hist_q" name="q" type="text" value="' . esc_attr($query_filter) . '" placeholder="machine, action, meta" style="margin-right:12px;">';
+		echo '<label for="tmon_hist_limit" style="margin-right:8px;">Limit</label>';
+		echo '<input id="tmon_hist_limit" name="limit" type="number" min="10" max="500" value="' . intval($limit) . '" style="width:90px;margin-right:12px;">';
+		submit_button('Filter', 'secondary', '', false);
+		echo ' <a class="button" href="' . esc_url(admin_url('admin.php?page=tmon-admin-provisioning-history')) . '">Reset</a>';
+		echo '</form>';
+
+		echo '<table class="widefat striped"><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Unit</th><th>Machine</th><th>Meta</th></tr></thead><tbody>';
+		if ($rows) {
+			foreach ($rows as $entry) {
+				$meta = '';
+				if (isset($entry['meta']) && is_array($entry['meta'])) {
+					$meta = wp_json_encode($entry['meta']);
+				}
+				echo '<tr>';
+				echo '<td>' . esc_html((string) (($entry['ts'] ?? '') ?: ($entry['created_at'] ?? ''))) . '</td>';
+				echo '<td>' . esc_html((string) ($entry['user'] ?? '')) . '</td>';
+				echo '<td>' . esc_html((string) ($entry['action'] ?? '')) . '</td>';
+				echo '<td>' . esc_html((string) ($entry['unit_id'] ?? '')) . '</td>';
+				echo '<td>' . esc_html((string) ($entry['machine_id'] ?? '')) . '</td>';
+				echo '<td><code>' . esc_html($meta) . '</code></td>';
+				echo '</tr>';
+			}
+		} else {
+			echo '<tr><td colspan="6"><em>No provisioning history found for this filter.</em></td></tr>';
+		}
+		echo '</tbody></table></div>';
 	}
 }
 
@@ -440,7 +698,108 @@ if (!function_exists('tmon_admin_render_provisioning_page')) {
 }
 if (!function_exists('tmon_admin_render_provisioned_devices')) {
 	function tmon_admin_render_provisioned_devices() {
-		// ...existing code...
+		global $wpdb;
+		$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+		
+		// Check table exists before querying
+		if ($wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $prov_table)) !== $prov_table) {
+			echo '<div class="wrap"><h1>Provisioned Devices</h1><p class="notice notice-warning">Database table not initialized.</p></div>';
+			return;
+		}
+		
+		// Get pagination parameters
+		$paged = intval($_GET['paged'] ?? 1);
+		$per_page = 20;
+		$offset = ($paged - 1) * $per_page;
+		
+		// Build query
+		$total = $wpdb->get_var("SELECT COUNT(*) FROM {$prov_table}");
+		$devices = $wpdb->get_results($wpdb->prepare(
+			"SELECT id, unit_id, machine_id, unit_name, role, status, site_url, created_at, updated_at FROM {$prov_table} ORDER BY updated_at DESC LIMIT %d OFFSET %d",
+			$per_page,
+			$offset
+		));
+		
+		?>
+		<div class="wrap">
+			<h1>Provisioned Devices
+				<a href="<?php echo admin_url('admin.php?page=tmon-admin-provisioning'); ?>" class="page-title-action">
+					+ New Provisioning
+				</a>
+			</h1>
+			
+			<?php if (function_exists('tmon_admin_render_admin_notices')) { tmon_admin_render_admin_notices(); } ?>
+			
+			<?php if (empty($devices)): ?>
+				<div class="notice notice-info"><p>No provisioned devices yet. <a href="<?php echo admin_url('admin.php?page=tmon-admin-provisioning'); ?>">Start provisioning a device.</a></p></div>
+			<?php else: ?>
+				<table class="widefat fixed striped">
+					<thead>
+						<tr>
+							<th>Unit ID</th>
+							<th>Machine ID</th>
+							<th>Unit Name</th>
+							<th>Role</th>
+							<th>Status</th>
+							<th>Site URL</th>
+							<th>Updated</th>
+							<th>Actions</th>
+						</tr>
+					</thead>
+					<tbody>
+						<?php foreach ($devices as $device): ?>
+							<tr>
+								<td><code><?php echo esc_html($device->unit_id); ?></code></td>
+								<td><code><?php echo esc_html(substr($device->machine_id, 0, 16)); ?></code></td>
+								<td><?php echo esc_html($device->unit_name ?: '—'); ?></td>
+								<td><span class="badge" style="background: #777; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px;">
+									<?php echo esc_html(ucfirst($device->role)); ?>
+								</span></td>
+								<td><span class="status-badge" style="background: <?php echo ($device->status === 'active' ? '#28a745' : '#dc3545'); ?>; color: white; padding: 2px 6px; border-radius: 3px; font-size: 11px;">
+									<?php echo esc_html(ucfirst($device->status)); ?>
+								</span></td>
+								<td><?php echo esc_html($device->site_url ?: '—'); ?></td>
+								<td><?php echo esc_html(date('M d, Y H:i', strtotime($device->updated_at))); ?></td>
+								<td>
+									<a href="<?php echo wp_nonce_url(
+										add_query_arg([
+											'page' => 'tmon-admin-provisioning',
+											'edit_id' => $device->id
+										], admin_url('admin.php')),
+										'tmon_admin_provision',
+										'nonce'
+									); ?>" class="button button-small">Edit</a>
+									<a href="<?php echo wp_nonce_url(
+										add_query_arg([
+											'page' => 'tmon-admin-provisioning',
+											'delete_id' => $device->id
+										], admin_url('admin.php')),
+										'tmon_admin_provision',
+										'nonce'
+									); ?>" class="button button-small button-link-delete" onclick="return confirm('Delete this provisioned device? This action cannot be undone.');">Delete</a>
+								</td>
+							</tr>
+						<?php endforeach; ?>
+					</tbody>
+				</table>
+				
+				<?php if ($total > $per_page): ?>
+					<div class="tablenav">
+						<div class="tablenav-pages">
+							<?php echo paginate_links([
+								'base' => add_query_arg('paged', '%#%'),
+								'format' => '',
+								'prev_text' => '&laquo;',
+								'next_text' => '&raquo;',
+								'total' => ceil($total / $per_page),
+								'current' => $paged,
+							]); ?>
+						</div>
+					</div>
+				<?php endif; ?>
+			<?php endif; ?>
+		</div>
+		<?php
 	}
 }
 if (!function_exists('tmon_admin_render_provisioning_activity')) {
@@ -552,6 +911,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && function_exists('tmon_admin_verify_
             ],
         ];
         tmon_admin_append_provision_history($history_data);
+		if (function_exists('tmon_admin_audit_log')) {
+			tmon_admin_audit_log($do_provision ? 'provision_save' : 'provision_update', 'provisioning_form_post', [
+				'unit_id' => (string) $unit_id,
+				'machine_id' => (string) $machine_id,
+				'extra' => [
+					'site_url' => (string) $site_url,
+					'plan' => (string) $plan,
+					'role' => (string) $role,
+					'settings_staged' => $settings_staged_flag ? 1 : 0,
+				],
+			]);
+		}
 
         // --- REDIRECT AFTER SAVE ---
         // Redirect to the same page with a success flag
@@ -644,7 +1015,31 @@ add_action('admin_post_tmon_admin_provision_device', function(){
 			'action' => 'save_and_provision',
 			'meta' => array('unit_name'=>$unit_name,'plan'=>$plan,'role'=>$role,'site_url'=>$site_url),
 		));
+		if (function_exists('tmon_admin_audit_log')) {
+			tmon_admin_audit_log('provision_save_and_queue', 'admin_post_tmon_admin_provision_device', [
+				'unit_id' => (string) $unit_id,
+				'machine_id' => (string) $machine_id,
+				'extra' => [
+					'unit_name' => (string) $unit_name,
+					'plan' => (string) $plan,
+					'role' => (string) $role,
+					'site_url' => (string) $site_url,
+					'settings_staged' => !empty($settings_staged) ? 1 : 0,
+				],
+			]);
+		}
 		$ok = true;
+	}
+
+	if (!$ok && function_exists('tmon_admin_audit_log')) {
+		tmon_admin_audit_log('provision_save_and_queue_failed', 'admin_post_tmon_admin_provision_device', [
+			'unit_id' => (string) $unit_id,
+			'machine_id' => (string) $machine_id,
+			'extra' => [
+				'reason' => (!$unit_id || !$machine_id) ? 'missing_identity' : 'db_write_failed',
+				'site_url' => (string) $site_url,
+			],
+		]);
 	}
 
 	$redir = wp_get_referer() ?: admin_url('admin.php?page=tmon-admin-provisioning');

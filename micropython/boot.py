@@ -16,7 +16,11 @@ from oled import display_message
 async def boot():
     fw_msg = f"Firmware: {settings.FIRMWARE_VERSION}"
     await display_message(fw_msg, 2)
-    print(fw_msg)
+    try:
+        from utils import provisioning_log
+        provisioning_log(fw_msg)
+    except Exception:
+        print(fw_msg)
     await display_message("Booting TMON Device", 3)
     # If remote node, try to load persisted next sync time
     try:

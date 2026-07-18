@@ -142,49 +142,6 @@ add_action('rest_api_init', function() {
             if (is_wp_error($result)) {
                 $code = $result->get_error_code() === 'forbidden' ? 403 : 400;
                 return new WP_REST_Response(['success'=>false,'message'=>$result->get_error_message()], $code);
-
-            // UC sync: accept device mirror payload from Unit Connector (X-TMON-HUB authenticated)
-            register_rest_route('tmon-admin/v1', '/uc/sync-devices', [
-                'methods' => 'POST',
-                'permission_callback' => '__return_true',
-                'callback' => function($request){
-                    $expected = get_option('tmon_admin_uc_key', '');
-                    $provided = '';
-                    if (function_exists('getallheaders')) { $headers = getallheaders(); $provided = $headers['X-TMON-HUB'] ?? ($headers['x-tmon-hub'] ?? ''); }
-                    else { $provided = $_SERVER['HTTP_X_TMON_HUB'] ?? ''; }
-                    if (!$expected || !$provided || !hash_equals((string)$expected, (string)$provided)) {
-                        return new WP_REST_Response(['status'=>'forbidden','message'=>'Invalid hub key'], 403);
-                    }
-
-                    $devices = $request->get_param('devices');
-                    if (!is_array($devices)) {
-                        return new WP_REST_Response(['status'=>'error','message'=>'devices array required'], 400);
-                    }
-                    global $wpdb;
-                    if (function_exists('tmon_admin_ensure_tables')) { tmon_admin_ensure_tables(); }
-                    $prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
-                    $count = 0;
-                    foreach ($devices as $d) {
-                        if (!is_array($d)) continue;
-                        $unit_id = sanitize_text_field($d['unit_id'] ?? '');
-                        $machine_id = sanitize_text_field($d['machine_id'] ?? '');
-                        if (!$unit_id && !$machine_id) continue;
-                        $role = sanitize_text_field($d['role'] ?? '');
-                        $name = sanitize_text_field($d['unit_name'] ?? '');
-                        $plan = sanitize_text_field($d['plan'] ?? '');
-                        $status = sanitize_text_field($d['status'] ?? 'active');
-                        $assigned = isset($d['assigned']) ? intval($d['assigned']) : 1;
-                        $wpdb->query($wpdb->prepare(
-                            "INSERT INTO {$prov_table} (unit_id, machine_id, unit_name, role, plan, status, notes, created_at, updated_at)
-                             VALUES (%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
-                             ON DUPLICATE KEY UPDATE machine_id=VALUES(machine_id), unit_name=VALUES(unit_name), role=VALUES(role), plan=VALUES(plan), status=VALUES(status), notes=VALUES(notes), updated_at=NOW()",
-                            $unit_id ?: $machine_id, $machine_id ?: $unit_id, $name ?: ($unit_id ?: $machine_id), $role, $plan, $status, $assigned ? 'synced from UC' : 'unassigned from UC'
-                        ));
-                        $count++;
-                    }
-                    return rest_ensure_response(['status'=>'ok','synced'=>$count]);
-                }
-            ]);
             }
             return rest_ensure_response([
                 'success' => true,
@@ -655,6 +612,272 @@ add_action('rest_api_init', function () {
 		'callback'            => 'tmon_admin_handle_device_check_in',
 		'permission_callback' => '__return_true',
 	]);
+});
+
+if (!function_exists('tmon_admin_receive_device_diagnostics')) {
+    if (!function_exists('tmon_admin_diag_sanitize_value')) {
+        function tmon_admin_diag_sanitize_value($value, $depth = 0) {
+            if ($depth > 3) {
+                return is_scalar($value) ? sanitize_text_field((string) $value) : null;
+            }
+            if (is_array($value)) {
+                $out = [];
+                $count = 0;
+                foreach ($value as $k => $v) {
+                    if ($count >= 40) {
+                        $out['_truncated'] = true;
+                        break;
+                    }
+                    $key = is_string($k) ? sanitize_key($k) : strval($k);
+                    $out[$key] = tmon_admin_diag_sanitize_value($v, $depth + 1);
+                    $count++;
+                }
+                return $out;
+            }
+            if (is_bool($value) || is_int($value) || is_float($value) || is_null($value)) {
+                return $value;
+            }
+            return substr(sanitize_text_field((string) $value), 0, 500);
+        }
+    }
+
+    if (!function_exists('tmon_admin_diag_cap')) {
+        function tmon_admin_diag_cap($value, $max_bytes = 8192) {
+            $sanitized = tmon_admin_diag_sanitize_value($value, 0);
+            $json = wp_json_encode($sanitized);
+            if (!is_string($json) || strlen($json) <= $max_bytes) {
+                return $sanitized;
+            }
+            return [
+                '_truncated' => true,
+                '_bytes' => strlen($json),
+            ];
+        }
+    }
+
+    if (!function_exists('tmon_admin_diagnostics_authorized')) {
+        function tmon_admin_diagnostics_authorized(WP_REST_Request $request, $allow_read_token = true) {
+            $hub_key = (string) ($request->get_header('x-tmon-hub') ?: '');
+            $admin_key = (string) ($request->get_header('x-tmon-admin') ?: '');
+            $read_key = (string) ($request->get_header('x-tmon-read') ?: '');
+
+            if (current_user_can('manage_options')) {
+                return true;
+            }
+
+            $expected_hub = (string) get_option('tmon_admin_uc_key', '');
+            if ($expected_hub && $hub_key && hash_equals($expected_hub, $hub_key)) {
+                return true;
+            }
+
+            if (function_exists('tmon_admin_validate_uc_key')) {
+                $v = tmon_admin_validate_uc_key($request);
+                if (!is_wp_error($v)) {
+                    return true;
+                }
+            }
+
+            if (($admin_key || ($allow_read_token && $read_key)) && function_exists('get_option')) {
+                $sites = get_option('tmon_admin_uc_sites', []);
+                if (is_array($sites)) {
+                    foreach ($sites as $site_meta) {
+                        if (!is_array($site_meta)) {
+                            continue;
+                        }
+                        $site_uc_key = (string) ($site_meta['uc_key'] ?? '');
+                        $site_read = (string) ($site_meta['read_token'] ?? '');
+                        if ($admin_key && $site_uc_key && hash_equals($site_uc_key, $admin_key)) {
+                            return true;
+                        }
+                        if ($allow_read_token && $read_key && $site_read && hash_equals($site_read, $read_key)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            // Optional compatibility mode for legacy installs.
+            $allow_legacy_opt = (int) get_option('tmon_admin_allow_diagnostics_no_auth', 0) === 1;
+            $allow_legacy_const = defined('TMON_ADMIN_ALLOW_DIAGNOSTICS_NO_AUTH') ? (bool) TMON_ADMIN_ALLOW_DIAGNOSTICS_NO_AUTH : false;
+            $allow_legacy = $allow_legacy_opt || $allow_legacy_const;
+            if ($allow_legacy && !$expected_hub && !$hub_key && !$admin_key && !$read_key) {
+                return true;
+            }
+            return false;
+        }
+    }
+
+    function tmon_admin_receive_device_diagnostics(WP_REST_Request $request) {
+        if (!tmon_admin_diagnostics_authorized($request, true)) {
+            return new WP_REST_Response(['status' => 'forbidden', 'message' => 'invalid credentials'], 403);
+        }
+
+        $params = $request->get_json_params();
+        if (!is_array($params)) {
+            $params = $request->get_params();
+        }
+
+        $unit_id = sanitize_text_field($params['unit_id'] ?? ($params['device_id'] ?? ''));
+        if (!$unit_id) {
+            return new WP_REST_Response(['status' => 'error', 'message' => 'unit_id required'], 400);
+        }
+
+        $payload = [
+            'unit_id' => $unit_id,
+            'machine_id' => sanitize_text_field($params['machine_id'] ?? ''),
+            'node_type' => sanitize_text_field($params['node_type'] ?? ''),
+            'firmware_version' => sanitize_text_field($params['firmware_version'] ?? ''),
+            'uptime_s' => intval($params['uptime_s'] ?? 0),
+            'free_mem' => intval($params['free_mem'] ?? 0),
+            'wifi_rssi' => is_numeric($params['wifi_rssi'] ?? null) ? floatval($params['wifi_rssi']) : null,
+            'lora_rssi' => is_numeric($params['lora_rssi'] ?? null) ? floatval($params['lora_rssi']) : null,
+            'error_count' => intval($params['error_count'] ?? 0),
+            'last_error' => substr(sanitize_text_field($params['last_error'] ?? ''), 0, 500),
+            'rest_error' => tmon_admin_diag_cap(is_array($params['rest_error'] ?? null) ? $params['rest_error'] : []),
+            'extra' => tmon_admin_diag_cap(is_array($params['extra'] ?? null) ? $params['extra'] : []),
+            'received_at' => current_time('mysql'),
+        ];
+
+        $store = get_option('tmon_admin_device_diagnostics', []);
+        if (!is_array($store)) {
+            $store = [];
+        }
+        $store[$unit_id] = $payload;
+        if (count($store) > 1000) {
+            $store = array_slice($store, -1000, 1000, true);
+        }
+        update_option('tmon_admin_device_diagnostics', $store);
+
+        if (function_exists('tmon_admin_audit_log')) {
+            tmon_admin_audit_log('device_diagnostics', 'device/diagnostics', [
+                'unit_id' => $unit_id,
+                'extra' => [
+                    'node_type' => $payload['node_type'],
+                    'error_count' => $payload['error_count'],
+                ],
+            ]);
+        }
+
+        return new WP_REST_Response(['status' => 'accepted', 'unit_id' => $unit_id], 202);
+    }
+}
+
+if (!function_exists('tmon_admin_list_device_diagnostics')) {
+    function tmon_admin_list_device_diagnostics(WP_REST_Request $request) {
+        if (!tmon_admin_diagnostics_authorized($request, true)) {
+            return new WP_REST_Response(['status' => 'forbidden', 'message' => 'invalid credentials'], 403);
+        }
+
+        $store = get_option('tmon_admin_device_diagnostics', []);
+        if (!is_array($store)) {
+            $store = [];
+        }
+
+        $unit_id = sanitize_text_field((string) $request->get_param('unit_id'));
+        if ($unit_id !== '') {
+            $store = isset($store[$unit_id]) ? [$unit_id => $store[$unit_id]] : [];
+        }
+
+        $rows = array_values($store);
+        usort($rows, function ($a, $b) {
+            $ta = isset($a['received_at']) ? strtotime((string) $a['received_at']) : 0;
+            $tb = isset($b['received_at']) ? strtotime((string) $b['received_at']) : 0;
+            return $tb <=> $ta;
+        });
+
+        $limit = intval($request->get_param('limit'));
+        if ($limit <= 0) {
+            $limit = 100;
+        }
+        $limit = max(1, min($limit, 500));
+        $rows = array_slice($rows, 0, $limit);
+
+        return rest_ensure_response([
+            'status' => 'ok',
+            'count' => count($rows),
+            'diagnostics' => $rows,
+        ]);
+    }
+}
+
+add_action('rest_api_init', function () {
+    register_rest_route('tmon-admin/v1', '/device/diagnostics', [
+        'methods' => 'POST',
+        'callback' => 'tmon_admin_receive_device_diagnostics',
+        'permission_callback' => '__return_true',
+    ]);
+
+    register_rest_route('tmon-admin/v1', '/device/diagnostics', [
+        'methods' => 'GET',
+        'callback' => 'tmon_admin_list_device_diagnostics',
+        'permission_callback' => '__return_true',
+    ]);
+});
+
+add_action('rest_api_init', function () {
+    register_rest_route('tmon-admin/v1', '/uc/sync-devices', [
+        'methods' => 'POST',
+        'permission_callback' => '__return_true',
+        'callback' => function (WP_REST_Request $request) {
+            $expected = get_option('tmon_admin_uc_key', '');
+            $provided = '';
+            if (function_exists('getallheaders')) {
+                $headers = getallheaders();
+                $provided = $headers['X-TMON-HUB'] ?? ($headers['x-tmon-hub'] ?? '');
+            } else {
+                $provided = $_SERVER['HTTP_X_TMON_HUB'] ?? '';
+            }
+            if (!$expected || !$provided || !hash_equals((string) $expected, (string) $provided)) {
+                return new WP_REST_Response(['status' => 'forbidden', 'message' => 'Invalid hub key'], 403);
+            }
+
+            $devices = $request->get_param('devices');
+            if (!is_array($devices)) {
+                return new WP_REST_Response(['status' => 'error', 'message' => 'devices array required'], 400);
+            }
+
+            global $wpdb;
+            if (function_exists('tmon_admin_ensure_tables')) {
+                tmon_admin_ensure_tables();
+            }
+            $prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+            $count = 0;
+            foreach ($devices as $d) {
+                if (!is_array($d)) {
+                    continue;
+                }
+                $unit_id = sanitize_text_field($d['unit_id'] ?? '');
+                $machine_id = sanitize_text_field($d['machine_id'] ?? '');
+                if (!$unit_id && !$machine_id) {
+                    continue;
+                }
+                $role = sanitize_text_field($d['role'] ?? '');
+                $name = sanitize_text_field($d['unit_name'] ?? '');
+                $plan = sanitize_text_field($d['plan'] ?? '');
+                $status = sanitize_text_field($d['status'] ?? 'active');
+                $assigned = isset($d['assigned']) ? intval($d['assigned']) : 1;
+                $wpdb->query($wpdb->prepare(
+                    "INSERT INTO {$prov_table} (unit_id, machine_id, unit_name, role, plan, status, notes, created_at, updated_at)
+                     VALUES (%s,%s,%s,%s,%s,%s,%s,NOW(),NOW())
+                     ON DUPLICATE KEY UPDATE machine_id=VALUES(machine_id), unit_name=VALUES(unit_name), role=VALUES(role), plan=VALUES(plan), status=VALUES(status), notes=VALUES(notes), updated_at=NOW()",
+                    $unit_id ?: $machine_id,
+                    $machine_id ?: $unit_id,
+                    $name ?: ($unit_id ?: $machine_id),
+                    $role,
+                    $plan,
+                    $status,
+                    $assigned ? 'synced from UC' : 'unassigned from UC'
+                ));
+                $count++;
+            }
+
+            if (function_exists('tmon_admin_audit_log')) {
+                tmon_admin_audit_log('uc_sync_devices', 'uc/sync-devices', ['extra' => ['count' => $count]]);
+            }
+
+            return rest_ensure_response(['status' => 'ok', 'synced' => $count]);
+        },
+    ]);
 });
 
 if (!function_exists('tmon_admin_handle_device_check_in')) {

@@ -10,8 +10,9 @@ import utime as time
 import settings
 import machine
 import gc
+import random
 
-from config_persist import write_text, read_json, set_flag, is_flag_set, write_json, read_text
+from config_persist import write_text, read_json, set_flag, is_flag_set, write_json, write_json_atomic, read_text
 
 # Persistent backlog file for unsent field data
 FIELD_DATA_BACKLOG = settings.LOG_DIR + '/field_data_backlog.log'
@@ -20,6 +21,18 @@ SUSPENDED_FLAG = getattr(settings, 'DEVICE_SUSPENDED_FILE', settings.LOG_DIR + '
 
 ERROR_LOG_FILE = getattr(settings, 'ERROR_LOG_FILE', '/logs/lora_errors.log')
 PROVISION_LOG_FILE = getattr(settings, 'LOG_DIR', '/logs') + '/provisioning.log'
+CUSTOM_SETTINGS_FILE = getattr(settings, 'CUSTOM_SETTINGS_FILE', getattr(settings, 'LOG_DIR', '/logs') + '/custom_settings.json')
+
+_CUSTOM_SETTINGS_MANAGED = set(getattr(settings, 'STAGED_SETTINGS_KEYS_ALLOW', [])) | set(getattr(settings, 'STAGED_SETTINGS_KEYS_DENY', [])) | {
+    'MACHINE_ID',
+    'UNIT_PROVISIONED',
+    'TMON_ADMIN_API_URL',
+    'PROVISION_CHECK_INTERVAL_S',
+    'PROVISION_MAX_RETRIES',
+    'WIFI_ALWAYS_ON_WHEN_UNPROVISIONED',
+    'WIFI_DISABLE_AFTER_PROVISION',
+    'FIRMWARE_VERSION',
+}
 
 # Log caps (non-field-data logs only)
 _LOG_MAX_BYTES = int(getattr(settings, 'LOG_MAX_BYTES', 3 * 1024 * 1024))
@@ -98,6 +111,44 @@ def read_backlog():
     except Exception as e:
         print(f"Error reading backlog: {e}")
         return []
+
+
+def _field_data_record_priority(record):
+    try:
+        if not isinstance(record, dict):
+            return 0
+        if record.get('frost') or record.get('heat'):
+            return 100
+        if record.get('frostwatch_active') or record.get('heatwatch_active'):
+            return 90
+        if record.get('frost_act') or record.get('heat_act'):
+            return 85
+        if any(k.endswith('_on') and 'relay' in k for k in record.keys()):
+            return 80
+        if any(k.endswith('_runtime_s') and 'relay' in k for k in record.keys()):
+            return 75
+    except Exception:
+        pass
+    return 0
+
+
+def _payload_priority(payload):
+    try:
+        if not isinstance(payload, dict):
+            return 0
+        data = payload.get('data') if isinstance(payload.get('data'), (list, tuple)) else []
+        priority = 0
+        for record in data:
+            try:
+                priority = max(priority, _field_data_record_priority(record))
+                if priority >= 100:
+                    break
+            except Exception:
+                pass
+        return priority
+    except Exception:
+        return 0
+
 
 def clear_backlog():
     checkLogDirectory()
@@ -218,6 +269,81 @@ def load_persisted_wordpress_api_url():
     except Exception:
         pass
 
+def _is_custom_persistable_setting(key):
+    try:
+        name = str(key).strip()
+        if not name or name.startswith('_'):
+            return False
+        if name in _CUSTOM_SETTINGS_MANAGED:
+            return False
+        return True
+    except Exception:
+        return False
+
+def persist_custom_setting(key, value):
+    try:
+        if not _is_custom_persistable_setting(key):
+            return False
+        name = str(key).strip()
+        checkLogDirectory()
+        current = read_json(CUSTOM_SETTINGS_FILE, {})
+        if not isinstance(current, dict):
+            current = {}
+        current[name] = value
+        if not write_json_atomic(CUSTOM_SETTINGS_FILE, current):
+            return False
+        try:
+            setattr(settings, name, value)
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return False
+
+def persist_custom_settings(updates):
+    try:
+        if not isinstance(updates, dict) or not updates:
+            return False
+        checkLogDirectory()
+        current = read_json(CUSTOM_SETTINGS_FILE, {})
+        if not isinstance(current, dict):
+            current = {}
+        changed = False
+        for key, value in updates.items():
+            if not _is_custom_persistable_setting(key):
+                continue
+            name = str(key).strip()
+            current[name] = value
+            try:
+                setattr(settings, name, value)
+            except Exception:
+                pass
+            changed = True
+        if not changed:
+            return False
+        return write_json_atomic(CUSTOM_SETTINGS_FILE, current)
+    except Exception:
+        return False
+
+def load_persisted_custom_settings():
+    try:
+        checkLogDirectory()
+        data = read_json(CUSTOM_SETTINGS_FILE, None)
+        if not isinstance(data, dict):
+            return False
+        loaded = False
+        for key, value in data.items():
+            if not _is_custom_persistable_setting(key):
+                continue
+            try:
+                setattr(settings, str(key).strip(), value)
+                loaded = True
+            except Exception:
+                pass
+        return loaded
+    except Exception:
+        return False
+
 def get_machine_id():
     try:
         try:
@@ -240,6 +366,36 @@ def get_unix_time():
         return t
     except Exception:
         return int(time.time())
+
+
+def _sanitize_log_text(message, max_len=96):
+    try:
+        safe_msg = message
+        if isinstance(safe_msg, bytes):
+            safe_msg = safe_msg.decode('utf-8', 'ignore')
+        safe_msg = ''.join(ch if 32 <= ord(ch) <= 126 else ' ' for ch in str(safe_msg))
+        safe_msg = ' '.join(safe_msg.split())
+        if max_len and len(safe_msg) > max_len:
+            safe_msg = safe_msg[:max_len - 3].rstrip() + '...'
+        return safe_msg
+    except Exception:
+        return '<unprintable>'
+
+
+def queue_oled_status(message, duration_s=2, level='INFO', persist=False):
+    if not getattr(settings, 'ENABLE_OLED', False):
+        return False
+    try:
+        from oled import set_status_banner
+        return bool(set_status_banner(
+            _sanitize_log_text(message, 48),
+            duration_s=duration_s,
+            persist=persist,
+            level=level,
+        ))
+    except Exception:
+        return False
+
 
 async def debug_print(message, status):
     debug_flags = {
@@ -279,23 +435,18 @@ async def debug_print(message, status):
         'ERROR': getattr(settings, 'DEBUG', False),
     }
     should_print = bool(getattr(settings, 'DEBUG', False))
+    status_text = str(status)
     # Always print ERROR, WARN, FATAL, COMMAND regardless of debug flags
     _always_tags = ('ERROR', 'WARN', 'FATAL', 'COMMAND')
     for _at in _always_tags:
-        if _at in str(status):
+        if _at in status_text:
             should_print = True
             break
     for key, enabled in debug_flags.items():
-        if key in str(status) and enabled:
+        if key in status_text and enabled:
             should_print = True
     if should_print:
-        try:
-            safe_msg = message
-            if isinstance(safe_msg, bytes):
-                safe_msg = safe_msg.decode('utf-8', 'ignore')
-            safe_msg = ''.join(ch if 32 <= ord(ch) <= 126 else ' ' for ch in str(safe_msg))
-        except Exception:
-            safe_msg = '<unprintable>'
+        safe_msg = _sanitize_log_text(message)
         try:
             unixt = get_unix_time()
             ts = time.localtime(unixt) if hasattr(time, 'localtime') else None
@@ -306,6 +457,10 @@ async def debug_print(message, status):
         except Exception:
             timestamp = '0'
         print(f"[{timestamp}] [{status}] {safe_msg}")
+        if 'ERROR' in status_text or 'WARN' in status_text or 'FATAL' in status_text or 'COMMAND' in status_text:
+            queue_oled_status(safe_msg, duration_s=2, level=('ERROR' if 'ERROR' in status_text or 'FATAL' in status_text else ('WARN' if 'WARN' in status_text else 'INFO')))
+        elif getattr(settings, 'DEBUG_DISPLAY', False):
+            queue_oled_status(safe_msg, duration_s=1, level='INFO')
     await asyncio.sleep(0)
 
     
@@ -481,6 +636,31 @@ async def log_error(error_msg, context=None):
     except Exception as e:
         print(f"[FATAL] Failed to log error: {e}")
     await asyncio.sleep(0)
+
+
+def format_exception(exc):
+    """Return stable one-line exception text for logs and diagnostics."""
+    try:
+        return f"{type(exc).__name__}: {exc}"
+    except Exception:
+        return "Exception: <unprintable>"
+
+
+async def log_exception(context, exc, status='ERROR'):
+    """Log exception consistently to debug stream and persistent error log."""
+    msg = format_exception(exc)
+    try:
+        await debug_print(f"{context}: {msg}", status)
+    except Exception:
+        pass
+    try:
+        queue_oled_status(f"{context}: {msg}", duration_s=2, level='ERROR')
+    except Exception:
+        pass
+    try:
+        await log_error(msg, context)
+    except Exception:
+        pass
 
 def write_lora_log(message, level='INFO'):
     try:
@@ -781,6 +961,22 @@ def record_field_data():
         except Exception:
             pass
 
+    def _copy_if_true(dst, src, key, alias=None):
+        try:
+            val = getattr(src, key)
+            if val:
+                dst[alias or key] = val
+        except Exception:
+            pass
+
+    def _copy_if_set(dst, src, key, alias=None):
+        try:
+            val = getattr(src, key)
+            if val is not None and val != '':
+                dst[alias or key] = val
+        except Exception:
+            pass
+
     _copy(entry, sdata, 'cur_temp_f')
     _copy(entry, sdata, 'cur_temp_c')
     _copy(entry, sdata, 'cur_humid')
@@ -823,6 +1019,15 @@ def record_field_data():
                 entry[f'relay{i}_on'] = 1
         except Exception:
             pass
+
+    _copy_if_true(entry, sdata, 'frostwatch_active')
+    _copy_if_true(entry, sdata, 'heatwatch_active')
+    _copy_if_true(entry, sdata, 'frost')
+    _copy_if_true(entry, sdata, 'heat')
+    _copy_if_true(entry, sdata, 'frost_act')
+    _copy_if_true(entry, sdata, 'heat_act')
+
+    _copy_if_set(entry, sdata, 'last_error')
 
     # GPS mirrors
     _copy(entry, sdata, 'gps_lat')
@@ -873,6 +1078,7 @@ async def send_field_data_log():
             with open(settings.FIELD_DATA_LOG, 'w') as f:
                 f.write('')
             await debug_print('sfd: created empty field log', 'DEBUG')
+            await asyncio.sleep_ms(5)
     except Exception as e:
         await debug_print(f'send_field_data_log: Exception checking/creating FIELD_DATA_LOG: {e}', 'ERROR')
         return
@@ -885,10 +1091,12 @@ async def send_field_data_log():
 
         async with _send_field_data_lock:
             await debug_print('sfd: reading log', 'DEBUG')
-            payloads = []
+            current_items = []
             total_lines = 0
             batch = []
-            batch_size = 10
+            batch_size = int(getattr(settings, 'FIELD_DATA_MAX_BATCH', 10))
+            max_retries = int(getattr(settings, 'FIELD_DATA_MAX_ATTEMPTS', 5))
+            backoff_base = int(getattr(settings, 'FIELD_DATA_RETRY_BASE_S', 5))
 
             with open(settings.FIELD_DATA_LOG, 'rb') as f:
                 for raw_line in f:
@@ -906,21 +1114,31 @@ async def send_field_data_log():
                             batch.append(ujson.loads(line))
                             total_lines += 1
                             if len(batch) >= batch_size:
-                                payloads.append({'unit_id': settings.UNIT_ID, 'data': batch})
+                                current_items.append({'payload': {'unit_id': settings.UNIT_ID, 'data': batch}, 'source': 'log'})
                                 batch = []
+                                if asyncio:
+                                    await asyncio.sleep_ms(1)
                         except Exception as pe:
                             await debug_print(f'send_field_data_log: JSON parse error on a line: {pe}', 'ERROR')
             if batch:
-                payloads.append({'unit_id': settings.UNIT_ID, 'data': batch})
+                current_items.append({'payload': {'unit_id': settings.UNIT_ID, 'data': batch}, 'source': 'log'})
 
-            await debug_print(f'sfd: read {total_lines} lines, {len(payloads)} batches', 'DEBUG')
+            await debug_print(f'sfd: read {total_lines} lines, {len(current_items)} batches', 'DEBUG')
 
-            backlog = read_backlog()
-            await debug_print(f'sfd: backlog {len(backlog)}', 'DEBUG')
-            payloads = backlog + payloads
-            backlog_count = len(backlog)
+            backlog_items = []
+            try:
+                backlog = read_backlog()
+            except Exception:
+                backlog = []
+            for item in backlog:
+                backlog_items.append({'payload': item, 'source': 'backlog'})
+            if asyncio:
+                await asyncio.sleep_ms(5)
+            await debug_print(f'sfd: backlog {len(backlog_items)}', 'DEBUG')
+            payload_items = backlog_items + current_items
+            payload_items.sort(key=lambda item: _payload_priority(item['payload']), reverse=True)
 
-            if not payloads:
+            if not payload_items:
                 await debug_print('sfd: no payloads', 'DEBUG')
                 return
 
@@ -969,9 +1187,15 @@ async def send_field_data_log():
                 except Exception:
                     return '<obj>'
 
+            field_data_max_backoff = int(getattr(settings, 'FIELD_DATA_MAX_BACKOFF_S', 60))
             sent_indices = []
-            for idx, payload in enumerate(payloads):
-                delay = 2
+            for idx, item in enumerate(payload_items):
+                delay = backoff_base
+                payload = item.get('payload', {})
+                try:
+                    await asyncio.sleep_ms(2)
+                except Exception:
+                    pass
                 try:
                     payload['machine_id'] = get_machine_id()
                 except Exception:
@@ -986,11 +1210,15 @@ async def send_field_data_log():
                     pass
 
                 delivered = False
-                await debug_print(f'sfd: send {idx+1}/{len(payloads)}', 'DEBUG')
+                await debug_print(f'sfd: send {idx+1}/{len(payload_items)}', 'DEBUG')
 
                 for attempt in range(1, max_retries + 1):
                     try:
                         gc.collect()
+                    except Exception:
+                        pass
+                    try:
+                        await asyncio.sleep_ms(1)
                     except Exception:
                         pass
                     try:
@@ -1047,6 +1275,8 @@ async def send_field_data_log():
                                     await display_message("Field Data Sent", 1.5)
                                 except Exception:
                                     pass
+                                if asyncio:
+                                    await asyncio.sleep_ms(5)
                                 break
                             else:
                                 await log_error(f'sfd: delivery fail att{attempt} {resp.status_code}', 'field_data')
@@ -1058,28 +1288,42 @@ async def send_field_data_log():
                     except Exception as e:
                         await debug_print(f'sfd: delivery exc att{attempt}: {type(e).__name__}: {e}', 'ERROR')
                         await log_error(f'Field data log delivery exception (attempt {attempt}): {type(e).__name__}: {e}', 'field_data')
-                    await asyncio.sleep(delay)
-                    delay = min(delay * 2, 60)
+                    jitter = random.uniform(0, backoff_base)
+                    await asyncio.sleep(min(field_data_max_backoff, delay) + jitter)
+                    delay = min(delay * 2, field_data_max_backoff)
 
                 if delivered:
                     sent_indices.append(idx)
                 else:
                     await debug_print(f'sfd: payload {idx+1} failed after max', 'ERROR')
                     await log_error('Field data log delivery failed after max retries, will try again later.', 'field_data')
+                if asyncio and (idx % 3 == 0):
+                    try:
+                        await asyncio.sleep_ms(1)
+                    except Exception:
+                        pass
 
             if total_lines:
-                current_indices = range(backlog_count, len(payloads))
-                delivered_current_all = all(i in sent_indices for i in current_indices) if len(payloads) > backlog_count else False
+                delivered_current_all = all(
+                    idx in sent_indices
+                    for idx, item in enumerate(payload_items)
+                    if item.get('source') == 'log'
+                )
                 if delivered_current_all:
                     await debug_print('sfd: rotate field log', 'DEBUG')
                     rotate_field_data_log()
 
-            unsent = [payloads[i] for i in range(len(payloads)) if i not in sent_indices]
+            unsent = [item['payload'] for idx, item in enumerate(payload_items) if idx not in sent_indices]
             if unsent:
                 await debug_print(f'sfd: backlog write {len(unsent)}', 'DEBUG')
                 clear_backlog()
-                for p in unsent:
+                for i, p in enumerate(unsent):
                     append_to_backlog(p)
+                    if asyncio and (i % 5 == 0):
+                        try:
+                            await asyncio.sleep_ms(1)
+                        except Exception:
+                            pass
             else:
                 await debug_print('sfd: all delivered, clear backlog', 'DEBUG')
                 clear_backlog()
@@ -1141,6 +1385,8 @@ async def send_field_data_via_lora():
             except Exception as e:
                 await debug_print(f'sfd_lora: read log err: {e}', 'ERROR')
                 return
+            if asyncio:
+                await asyncio.sleep_ms(5)
 
             batches = []
             batch = []
@@ -1172,6 +1418,8 @@ async def send_field_data_via_lora():
                 if len(batch) >= batch_size:
                     batches.append((batch, batch_indices))
                     batch, batch_indices = [], []
+                if asyncio and idx and idx % 20 == 0:
+                    await asyncio.sleep_ms(1)
             if batch:
                 batches.append((batch, batch_indices))
 
@@ -1179,6 +1427,7 @@ async def send_field_data_via_lora():
                 await debug_print('sfd_lora: no records to send', 'DEBUG')
                 return
 
+            batches.sort(key=lambda batch_info: _payload_priority({'data': batch_info[0]}), reverse=True)
             acked_indices = set()
             try:
                 max_attempts = int(getattr(settings, 'FIELD_DATA_MAX_ATTEMPTS', 5))
@@ -1188,6 +1437,10 @@ async def send_field_data_via_lora():
                 base_delay = int(getattr(settings, 'FIELD_DATA_RETRY_BASE_S', 5))
             except Exception:
                 base_delay = 5
+            try:
+                field_data_max_backoff = int(getattr(settings, 'FIELD_DATA_MAX_BACKOFF_S', 60))
+            except Exception:
+                field_data_max_backoff = 60
 
             for bi, (data_batch, idx_list) in enumerate(batches):
                 payload = {
@@ -1233,15 +1486,19 @@ async def send_field_data_via_lora():
 
                     await debug_print(f'sfd_lora: batch {bi+1} att{attempt} failed, retry', 'WARN')
                     try:
-                        await asyncio.sleep(delay)
+                        jitter = random.uniform(0, base_delay)
+                        await asyncio.sleep(min(field_data_max_backoff, delay) + jitter)
                     except Exception:
                         pass
-                    delay = delay * 2
-                    if delay > 60:
-                        delay = 60
+                    delay = min(delay * 2, field_data_max_backoff)
 
                 if not delivered:
                     await debug_print(f'sfd_lora: batch {bi+1} failed after retries', 'ERROR')
+                if asyncio and (bi % 2 == 0):
+                    try:
+                        await asyncio.sleep_ms(1)
+                    except Exception:
+                        pass
 
             # Rewrite field_data.log excluding acked lines
             if acked_indices:
@@ -1251,6 +1508,11 @@ async def send_field_data_via_lora():
                             if idx not in acked_indices:
                                 try:
                                     f.write(raw)
+                                except Exception:
+                                    pass
+                            if asyncio and idx and idx % 40 == 0:
+                                try:
+                                    await asyncio.sleep_ms(1)
                                 except Exception:
                                     pass
                     await debug_print(f'sfd_lora: trimmed {len(acked_indices)} delivered lines', 'DEBUG')
@@ -1290,7 +1552,16 @@ async def send_field_data_via_lora():
 
 async def periodic_field_data_send():
     while True:
-        await send_field_data_log()
+        try:
+            if str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'remote':
+                await send_field_data_via_lora()
+            else:
+                await send_field_data_log()
+        except Exception as e:
+            try:
+                await debug_print(f'periodic_field_data_send: {e}', 'ERROR')
+            except Exception:
+                pass
         await asyncio.sleep(settings.FIELD_DATA_SEND_INTERVAL)
 
 # --- provisioning loop (restored, single definition) ---
@@ -1508,7 +1779,7 @@ def start_background_tasks():
             try:
                 wp_url = str(getattr(settings, 'WORDPRESS_API_URL', '')).strip()
                 role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
-                if wp_url and role in ('base', 'wifi'):
+                if role == 'remote' or (wp_url and role in ('base', 'wifi')):
                     _a.create_task(periodic_field_data_send())
             except Exception:
                 pass
@@ -1594,6 +1865,9 @@ __all__ = [
     'load_persisted_unit_id',
     'persist_wordpress_api_url',
     'load_persisted_wordpress_api_url',
+    'persist_custom_setting',
+    'persist_custom_settings',
+    'load_persisted_custom_settings',
     'periodic_field_data_send',
     'periodic_provision_check',
     'get_machine_id',

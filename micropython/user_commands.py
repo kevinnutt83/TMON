@@ -14,7 +14,7 @@ try:
 except ImportError:
     uselect = None
 
-from utils import debug_print
+from utils import debug_print, persist_custom_setting, persist_node_type, persist_unit_name, persist_wordpress_api_url, persist_suspension_state
 
 # Non-blocking stdin poller
 _poller = None
@@ -142,6 +142,16 @@ async def handle_set_command(parts):
         else:
             new_val = raw_value
         setattr(settings, var_name, new_val)
+        if var_name == 'UNIT_Name':
+            persist_unit_name(new_val)
+        elif var_name == 'NODE_TYPE':
+            persist_node_type(new_val)
+        elif var_name == 'WORDPRESS_API_URL':
+            persist_wordpress_api_url(new_val)
+        elif var_name == 'DEVICE_SUSPENDED':
+            persist_suspension_state(bool(new_val))
+        else:
+            persist_custom_setting(var_name, new_val)
         print(f"{var_name} = {new_val}")
         await debug_print(f"CLI: set {var_name} = {new_val}", "COMMAND")
     except Exception as e:

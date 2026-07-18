@@ -57,12 +57,42 @@ def write_json(path, obj):
     except Exception:
         return False
 
+def write_json_atomic(path, obj):
+    try:
+        ensure_dir(path)
+        tmp_path = path + '.tmp'
+        with open(tmp_path, 'w') as f:
+            f.write(json.dumps(obj))
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+        try:
+            os.rename(tmp_path, path)
+        except Exception:
+            # Fallback for filesystems where rename semantics differ.
+            with open(path, 'w') as f:
+                f.write(json.dumps(obj))
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+        return True
+    except Exception:
+        return False
+
 def read_json(path, default=None):
     try:
         with open(path, 'r') as f:
             return json.loads(f.read())
     except Exception:
         return default
+
+def read_json_safe(path, default=None):
+    data = read_json(path, None)
+    if isinstance(data, dict) or isinstance(data, list):
+        return data
+    return default
 
 def set_flag(path: str, enabled: bool) -> bool:
     try:

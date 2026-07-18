@@ -5,6 +5,11 @@ add_action('admin_init', function() {
     register_setting('tmon_admin_settings_group', 'tmon_admin_hub_url');
     register_setting('tmon_admin_settings_group', 'tmon_admin_queue_lifetime');
     register_setting('tmon_admin_settings_group', 'tmon_admin_queue_max_per_site');
+    register_setting('tmon_admin_settings_group', 'tmon_admin_allow_diagnostics_no_auth', [
+        'type' => 'boolean',
+        'sanitize_callback' => function ($v) { return !empty($v) ? 1 : 0; },
+        'default' => 0,
+    ]);
     add_settings_section('tmon_admin_main', 'Main Settings', function(){
         echo '<p>Configure cross-site integration and defaults for TMON Admin.</p>';
     }, 'tmon-admin-settings');
@@ -17,6 +22,11 @@ add_action('admin_init', function() {
         $val = get_option('tmon_admin_hub_url', home_url());
         echo '<input type="url" name="tmon_admin_hub_url" class="regular-text" value="' . esc_attr($val) . '" />';
         echo '<p class="description">Optional; Unit Connector can set TMON_ADMIN_HUB_URL to forward unknown devices here.</p>';
+    }, 'tmon-admin-settings', 'tmon_admin_main');
+    add_settings_field('tmon_admin_allow_diagnostics_no_auth', 'Diagnostics Without Auth (Legacy Compatibility)', function() {
+        $val = (int) get_option('tmon_admin_allow_diagnostics_no_auth', 0);
+        echo '<label><input type="checkbox" name="tmon_admin_allow_diagnostics_no_auth" value="1" ' . checked(1, $val, false) . ' /> Allow diagnostics endpoints to accept unauthenticated requests when no credentials are configured</label>';
+        echo '<p class="description">Recommended OFF. Enable only for temporary legacy compatibility during migration.</p>';
     }, 'tmon-admin-settings', 'tmon_admin_main');
 });
 
@@ -54,6 +64,8 @@ if (!function_exists('tmon_admin_settings_page')) {
 		$cur_max = intval(get_option('tmon_admin_queue_max_per_site', 10));
 		echo '<tr><th scope="row">Queue Lifetime (seconds)</th><td><input name="tmon_admin_queue_lifetime" type="number" class="small-text" value="'.esc_attr($cur_lifetime).'" /></td></tr>';
 		echo '<tr><th scope="row">Max Pending Per Site</th><td><input name="tmon_admin_queue_max_per_site" type="number" min="1" class="small-text" value="'.esc_attr($cur_max).'" /></td></tr>';
+        $diag_no_auth = (int) get_option('tmon_admin_allow_diagnostics_no_auth', 0);
+        echo '<tr><th scope="row">Diagnostics No-Auth Compatibility</th><td><label><input type="checkbox" name="tmon_admin_allow_diagnostics_no_auth" value="1" ' . checked(1, $diag_no_auth, false) . ' /> Enabled</label><p class="description">Keeps diagnostics endpoints open only when legacy compatibility is needed. Leave disabled for secure-by-default behavior.</p></td></tr>';
 		echo '</table>';
 		submit_button('Save Queue Settings');
 		echo '</form>';

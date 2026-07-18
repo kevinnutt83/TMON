@@ -128,7 +128,11 @@ try:
     from firmware_updater import download_and_apply_firmware
 except Exception:
     def download_and_apply_firmware(url, version_hint=None, chunk_size=CHUNK_SIZE):
-        print("No firmware_updater; skipping firmware:", url)
+        try:
+            from utils import provisioning_log
+            provisioning_log(f"No firmware_updater; skipping firmware: {url}")
+        except Exception:
+            print("No firmware_updater; skipping firmware:", url)
         return True
 
 def apply_settings(settings_doc):
@@ -143,31 +147,59 @@ def apply_settings(settings_doc):
 
     node_type = settings_doc.get('NODE_TYPE')
     if node_type:
-        print("Setting NODE_TYPE:", node_type)
+        try:
+            from utils import provisioning_log
+            provisioning_log(f"Setting NODE_TYPE: {node_type}")
+        except Exception:
+            print("Setting NODE_TYPE:", node_type)
 
     unit_name = settings_doc.get('UNIT_Name')
     if unit_name:
-        print("Setting UNIT_Name:", unit_name)
+        try:
+            from utils import provisioning_log
+            provisioning_log(f"Setting UNIT_Name: {unit_name}")
+        except Exception:
+            print("Setting UNIT_Name:", unit_name)
 
     fw_url = settings_doc.get('FIRMWARE_URL') or settings_doc.get('firmware_url')
     fw_ver = settings_doc.get('FIRMWARE') or settings_doc.get('firmware')
     if fw_url:
-        print("Firmware requested:", fw_ver, fw_url)
+        try:
+            from utils import provisioning_log
+            provisioning_log(f"Firmware requested: {fw_ver} {fw_url}")
+        except Exception:
+            print("Firmware requested:", fw_ver, fw_url)
         try:
             download_and_apply_firmware(fw_url, fw_ver, chunk_size=CHUNK_SIZE)
         except Exception as e:
-            print("Firmware download/apply failed:", e)
+            try:
+                from utils import provisioning_log
+                provisioning_log(f"Firmware download/apply failed: {e}")
+            except Exception:
+                print("Firmware download/apply failed:", e)
 
     if settings_doc.get('WIFI_DISABLE_AFTER_PROVISION', False):
-        print("Configured to disable WiFi after provisioning (device-specific).")
+        try:
+            from utils import provisioning_log
+            provisioning_log("Configured to disable WiFi after provisioning (device-specific).")
+        except Exception:
+            print("Configured to disable WiFi after provisioning (device-specific).")
 
     # NEW: fallback mapping from alternative keys
     if not node_type and settings_doc.get('role'):
         node_type = settings_doc.get('role')
-        print("Setting NODE_TYPE (role fallback):", node_type)
+        try:
+            from utils import provisioning_log
+            provisioning_log(f"Setting NODE_TYPE (role fallback): {node_type}")
+        except Exception:
+            print("Setting NODE_TYPE (role fallback):", node_type)
     if not unit_name and settings_doc.get('unit_name'):
         unit_name = settings_doc.get('unit_name')
-        print("Setting UNIT_Name (unit_name fallback):", unit_name)
+        try:
+            from utils import provisioning_log
+            provisioning_log(f"Setting UNIT_Name (unit_name fallback): {unit_name}")
+        except Exception:
+            print("Setting UNIT_Name (unit_name fallback):", unit_name)
     # Persist mapped fields to settings module
     try:
         import settings as _s

@@ -8,6 +8,120 @@ add_action('rest_api_init', function(){
     ]);
 });
 
+if (!function_exists('tmon_uc_receive_device_diagnostics')) {
+    if (!function_exists('tmon_uc_diag_sanitize_value')) {
+        function tmon_uc_diag_sanitize_value($value, $depth = 0) {
+            if ($depth > 3) {
+                return is_scalar($value) ? sanitize_text_field((string) $value) : null;
+            }
+            if (is_array($value)) {
+                $out = [];
+                $count = 0;
+                foreach ($value as $k => $v) {
+                    if ($count >= 40) {
+                        $out['_truncated'] = true;
+                        break;
+                    }
+                    $key = is_string($k) ? sanitize_key($k) : strval($k);
+                    $out[$key] = tmon_uc_diag_sanitize_value($v, $depth + 1);
+                    $count++;
+                }
+                return $out;
+            }
+            if (is_bool($value) || is_int($value) || is_float($value) || is_null($value)) {
+                return $value;
+            }
+            return substr(sanitize_text_field((string) $value), 0, 500);
+        }
+    }
+
+    if (!function_exists('tmon_uc_diag_cap')) {
+        function tmon_uc_diag_cap($value, $max_bytes = 8192) {
+            $sanitized = tmon_uc_diag_sanitize_value($value, 0);
+            $json = wp_json_encode($sanitized);
+            if (!is_string($json) || strlen($json) <= $max_bytes) {
+                return $sanitized;
+            }
+            return [
+                '_truncated' => true,
+                '_bytes' => strlen($json),
+            ];
+        }
+    }
+
+    function tmon_uc_receive_device_diagnostics($request) {
+        $params = $request->get_json_params();
+        if (!is_array($params)) {
+            $params = $request->get_params();
+        }
+
+        $unit_id = sanitize_text_field($params['unit_id'] ?? ($params['device_id'] ?? ''));
+        if (!$unit_id) {
+            return new WP_REST_Response(['status' => 'error', 'message' => 'unit_id required'], 400);
+        }
+
+        $auth_ok = false;
+        if (function_exists('tmon_uc_admin_read_auth')) {
+            $auth_ok = (bool) tmon_uc_admin_read_auth($request);
+        }
+        if (!$auth_ok) {
+            $exp_admin = (string) get_option('tmon_uc_admin_key', '');
+            $exp_hub = (string) get_option('tmon_uc_hub_shared_key', '');
+            $exp_read = (string) get_option('tmon_uc_hub_read_token', '');
+            $allow_legacy_opt = (int) get_option('tmon_uc_allow_diagnostics_no_auth', 0) === 1;
+            $allow_legacy_const = defined('TMON_UC_ALLOW_DIAGNOSTICS_NO_AUTH') ? (bool) TMON_UC_ALLOW_DIAGNOSTICS_NO_AUTH : false;
+            $allow_legacy = $allow_legacy_opt || $allow_legacy_const;
+            if ($exp_admin || $exp_hub || $exp_read || !$allow_legacy) {
+                return new WP_REST_Response(['status' => 'forbidden', 'message' => 'auth required'], 403);
+            }
+        }
+
+        $payload = [
+            'unit_id' => $unit_id,
+            'machine_id' => sanitize_text_field($params['machine_id'] ?? ''),
+            'node_type' => sanitize_text_field($params['node_type'] ?? ''),
+            'firmware_version' => sanitize_text_field($params['firmware_version'] ?? ''),
+            'uptime_s' => intval($params['uptime_s'] ?? 0),
+            'free_mem' => intval($params['free_mem'] ?? 0),
+            'wifi_rssi' => is_numeric($params['wifi_rssi'] ?? null) ? floatval($params['wifi_rssi']) : null,
+            'lora_rssi' => is_numeric($params['lora_rssi'] ?? null) ? floatval($params['lora_rssi']) : null,
+            'error_count' => intval($params['error_count'] ?? 0),
+            'last_error' => substr(sanitize_text_field($params['last_error'] ?? ''), 0, 500),
+            'rest_error' => tmon_uc_diag_cap(is_array($params['rest_error'] ?? null) ? $params['rest_error'] : []),
+            'extra' => tmon_uc_diag_cap(is_array($params['extra'] ?? null) ? $params['extra'] : []),
+            'received_at' => current_time('mysql'),
+        ];
+
+        $store = get_option('tmon_uc_device_diagnostics', []);
+        if (!is_array($store)) {
+            $store = [];
+        }
+        $store[$unit_id] = $payload;
+        if (count($store) > 1000) {
+            $store = array_slice($store, -1000, 1000, true);
+        }
+        update_option('tmon_uc_device_diagnostics', $store);
+
+        do_action('tmon_uc_receive_diagnostics', $unit_id, $payload);
+
+        return new WP_REST_Response(['status' => 'accepted', 'unit_id' => $unit_id], 202);
+    }
+}
+
+add_action('rest_api_init', function() {
+    register_rest_route('tmon/v1', '/device/diagnostics', [
+        'methods' => 'POST',
+        'callback' => 'tmon_uc_receive_device_diagnostics',
+        'permission_callback' => '__return_true',
+    ]);
+    // Alias namespace for firmware compatibility.
+    register_rest_route('unit-connector/v1', '/device/diagnostics', [
+        'methods' => 'POST',
+        'callback' => 'tmon_uc_receive_device_diagnostics',
+        'permission_callback' => '__return_true',
+    ]);
+});
+
 function tmon_uc_pull_install($request){
     if (!current_user_can('manage_options')) return new WP_REST_Response(['status'=>'forbidden'], 403);
     $payload = $request->get_param('payload');

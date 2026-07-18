@@ -166,25 +166,32 @@ micropython/
 | `/logs/unit_id.txt` | Persisted UNIT_ID |
 | `/logs/unit_name.txt` | Persisted UNIT_Name |
 | `/logs/wordpress_api_url.txt` | Persisted WordPress URL |
+| `/logs/custom_settings.json` | Persisted custom `set_var` values |
 | `/logs/provisioned.flag` | Provisioning complete flag |
 | `/logs/remote_settings.staged.json` | Pending settings |
 | `/logs/remote_settings.applied.json` | Applied settings snapshot |
+| `/logs/custom_settings.json` | Persisted custom `set_var` values |
 
 ## Runtime Tasks
 
 | Task | Interval | Description |
 |------|----------|-------------|
-| `lora_comm_task` | 1s | LoRa init/retry and communication |
-| `sample_task` | 60s | Sensor sampling and field data recording |
-| `periodic_field_data_task` | configurable | Field data upload to WordPress |
-| `periodic_command_poll_task` | 10s | Poll for queued commands |
-| `periodic_provision_check` | 30s | Provisioning check-in loop |
-| `periodic_uc_checkin_task` | 300s | Unit Connector heartbeat |
-| `settings_apply_loop` | 60s | Apply staged settings |
-| `ota_version_task` | 30min | Check for OTA updates |
-| `ota_apply_task` | 10min | Apply pending OTA updates |
-| `wifi_rssi_monitor` | 30s | WiFi signal strength sampling |
-| `_oled_loop` | 10s | OLED display refresh |
+| `connectLora` | continuous | LoRa radio loop and node-specific traffic |
+| `first_boot_provision` | startup | First-boot registration check-in |
+| `sample` | 30s | Sensor sampling and field data recording |
+| `field_data` | configurable | Field data upload to WordPress or LoRa forwarding |
+| `command_poll` | 10s | Poll for queued commands |
+| `ota_check` | 3600s | Check for OTA updates |
+| `ota_apply` | configurable | Apply pending OTA updates |
+| `display` | configurable | OLED display refresh |
+| `settings_apply` | 60s | Apply staged settings |
+| `engine` | configurable | Engine controller loop |
+| `wifi_rssi` | 30s | WiFi signal strength sampling |
+| `provision_check` | 30s | Provisioning check-in loop |
+| `missed_syncs` | 60s | LoRa missed-sync tracking |
+| `diagnostics` | configurable | Push diagnostics snapshots after failures |
+| `wp_sync` | 300s | Base-node WordPress sync and OTA polling |
+| `user_commands` | 0s | Non-blocking CLI loop |
 
 ## LED Status Colors
 
@@ -255,6 +262,15 @@ DEBUG_SAMPLING = True
 - LoRa HMAC and encryption secrets should be unique per deployment.
 - OTA manifest signatures prevent tampering with update files.
 - Credentials in `settings.py` should be secured in production.
+
+### Crypto Implementation Limits
+
+- LoRa frame protection is integrity/authentication first: HMAC validation and replay counters are required for trust.
+- Optional payload obfuscation/encryption uses stream-style XOR over hash-derived bytes; this is lightweight and optimized for constrained devices, not a full modern AEAD stack.
+- Counter handling is in-memory during runtime and can reset on reboot if persistence is unavailable; mixed old/new packets may be rejected after resets.
+- CRC support is transport-integrity only and does not replace HMAC checks.
+- Secret material is loaded from firmware settings; secure element / hardware key storage is not currently implemented.
+- Recommendation: rotate deployment secrets periodically and keep OTA signature/HMAC verification enabled.
 
 ## License
 

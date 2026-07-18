@@ -108,6 +108,18 @@ if (!function_exists('tmon_admin_enqueue_provision')) {
 		}
 
 		update_option('tmon_admin_pending_provision', $queue);
+		if (function_exists('tmon_admin_audit_log')) {
+			tmon_admin_audit_log('provision_enqueued', 'pending_provision_queue', [
+				'unit_id' => (string) ($payload['unit_id'] ?? ''),
+				'machine_id' => (string) ($payload['machine_id'] ?? ''),
+				'extra' => [
+					'queue_key' => $key,
+					'site_url' => (string) ($payload['site_url'] ?? ''),
+					'requested_by_user' => (string) ($payload['requested_by_user'] ?? ''),
+					'queue_count' => count($queue),
+				],
+			]);
+		}
 
 		// diagnostics: log count and keys
 		$keys = array_keys($queue);
@@ -250,6 +262,17 @@ if (!function_exists('tmon_admin_admin_post_queue_and_notify')) {
 
 		// audit
 		do_action('tmon_admin_audit', 'queue_notify', sprintf('key=%s user=%s site=%s notified=%d', $key, wp_get_current_user()->user_login, $payload['site_url'] ?? '', $notified ? 1 : 0));
+		if (function_exists('tmon_admin_audit_log')) {
+			tmon_admin_audit_log('provision_queue_notify', 'queue_and_notify', [
+				'unit_id' => (string) $unit_id,
+				'machine_id' => (string) $machine_id,
+				'extra' => [
+					'queue_key' => (string) $key,
+					'site_url' => (string) ($payload['site_url'] ?? ''),
+					'notified' => $notified ? 1 : 0,
+				],
+			]);
+		}
 
 		wp_redirect(add_query_arg('provision', $notified ? 'queued-notified' : 'queued', wp_get_referer() ?: admin_url('admin.php?page=tmon-admin-provisioning')));
 		exit;
@@ -595,6 +618,14 @@ if (!function_exists('tmon_admin_ajax_manage_pending')) {
 
 		if ($action === 'delete') {
 			tmon_admin_dequeue_provision($key_norm);
+			if (function_exists('tmon_admin_audit_log')) {
+				tmon_admin_audit_log('provision_queue_delete', 'manage_pending', [
+					'extra' => [
+						'queue_key' => (string) $key_norm,
+						'manage_action' => 'delete',
+					],
+				]);
+			}
 			wp_send_json_success(['message' => 'deleted']);
 		} elseif ($action === 'reenqueue') {
 			// If empty payload, attempt to re-enqueue the existing queued payload;
@@ -606,6 +637,16 @@ if (!function_exists('tmon_admin_ajax_manage_pending')) {
 					$existing['requested_at'] = current_time('mysql');
 					$existing['requested_by_user'] = wp_get_current_user()->user_login ?: ($existing['requested_by_user'] ?? 'system');
 					tmon_admin_enqueue_provision($key_norm, $existing);
+					if (function_exists('tmon_admin_audit_log')) {
+						tmon_admin_audit_log('provision_queue_reenqueue', 'manage_pending', [
+							'unit_id' => (string) ($existing['unit_id'] ?? ''),
+							'machine_id' => (string) ($existing['machine_id'] ?? ''),
+							'extra' => [
+								'queue_key' => (string) $key_norm,
+								'source' => 'existing',
+							],
+						]);
+					}
 					wp_send_json_success(['message' => 'reenqueued existing']);
 				}
 				// fallback: try to build from DB row if staged settings exist
@@ -625,6 +666,16 @@ if (!function_exists('tmon_admin_ajax_manage_pending')) {
 					$derived['requested_by_user'] = wp_get_current_user()->user_login ?: 'system';
 					$derived['requested_at'] = current_time('mysql');
 					tmon_admin_enqueue_provision($key_norm, $derived);
+					if (function_exists('tmon_admin_audit_log')) {
+						tmon_admin_audit_log('provision_queue_reenqueue', 'manage_pending', [
+							'unit_id' => (string) ($row['unit_id'] ?? ''),
+							'machine_id' => (string) ($row['machine_id'] ?? ''),
+							'extra' => [
+								'queue_key' => (string) $key_norm,
+								'source' => 'db_staged',
+							],
+						]);
+					}
 					wp_send_json_success(['message' => 'reenqueued from db']);
 				}
 				wp_send_json_error(['message' => 'no payload available to reenqueue']);
@@ -640,6 +691,16 @@ if (!function_exists('tmon_admin_ajax_manage_pending')) {
 				// ensure user attributed if missing
 				if (empty($data['requested_by_user'])) $data['requested_by_user'] = wp_get_current_user()->user_login ?: 'system';
 				tmon_admin_enqueue_provision($key_norm, $data);
+				if (function_exists('tmon_admin_audit_log')) {
+					tmon_admin_audit_log('provision_queue_reenqueue', 'manage_pending', [
+						'unit_id' => (string) ($data['unit_id'] ?? ''),
+						'machine_id' => (string) ($data['machine_id'] ?? ''),
+						'extra' => [
+							'queue_key' => (string) $key_norm,
+							'source' => 'payload',
+						],
+					]);
+				}
 				wp_send_json_success(['message' => 'reenqueued']);
 			}
 			wp_send_json_error(['message' => 'invalid payload']);

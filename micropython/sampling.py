@@ -228,7 +228,8 @@ async def sampleSoil():
             await debug_print("Soil probe returned no valid data", "SOIL")
 
     except Exception as e:
-        await debug_print(f"sampleSoil wrapper error: {e}", "ERROR")
+        from utils import log_exception
+        await log_exception("sampleSoil wrapper", e)
     finally:
         _s.sampling_active = False
 
@@ -326,7 +327,8 @@ async def frost_and_heat_watch():
                     sdata.heat_act = False
                     await endHeatOperations()
     except Exception as e:
-        await debug_print(f"sample:frost/heat err: {e}", "FROSTHEATWATCH ERROR")
+        from utils import log_exception
+        await log_exception("sample frost/heat watch", e)
         
 
 async def sample_soil_probe():
@@ -380,7 +382,8 @@ async def sample_soil_probe():
 
             await debug_print(f"Temperature: {temperature_c:.2f}°C ({temperature_f:.1f}°F)", "SOIL")
         except Exception as temp_e:
-            await debug_print(f"Temperature sensor issue: {temp_e}", "ERROR")
+            from utils import log_exception
+            await log_exception("soil probe temperature sensor", temp_e)
 
         return {
             "status": "success",
@@ -392,5 +395,6 @@ async def sample_soil_probe():
         }
 
     except Exception as e:
-        await debug_print(f"Soil probe error: {e}", "ERROR")
+        from utils import log_exception
+        await log_exception("soil probe sampling", e)
         return {"status": "error", "message": str(e)}

@@ -13,11 +13,14 @@ _render_task = None
 _status_banner_text = None
 _status_banner_until = 0
 _status_banner_persist = False
+_status_banner_level = 'INFO'
 _body_override_lines = None
 _body_override_until = 0
 _last_render_sig = None
 _show_voltage = True
 _last_flip_time = 0
+_page_index = 0
+_last_page_flip_time = 0
 
 # Constants
 HEADER_HEIGHT = int(getattr(settings, 'OLED_HEADER_HEIGHT', 16))
@@ -28,6 +31,8 @@ BODY_HEIGHT = BODY_BOTTOM - BODY_TOP
 FLIP_INTERVAL_S = int(getattr(settings, 'OLED_HEADER_FLIP_S', 4))
 RENDER_INTERVAL_S = 0.5
 MAX_TEXT_CHARS = 16
+PAGE_INTERVAL_S = int(getattr(settings, 'OLED_PAGE_FLIP_S', 6))
+PAGE_NAMES = ('Summary', 'Runtime', 'Network')
 
 class SSD1309_I2C(framebuf.FrameBuffer):
     def __init__(self, width, height, i2c, addr=0x3C, external_vcc=False):
@@ -191,6 +196,45 @@ def _compact_label(txt, max_chars):
     except Exception:
         return str(txt)[:max_chars] if max_chars > 0 else ''
 
+def _page_title(page):
+    try:
+        if 0 <= int(page) < len(PAGE_NAMES):
+            return PAGE_NAMES[int(page)]
+    except Exception:
+        pass
+    return 'Status'
+
+def _draw_page_marker(o, page, total):
+    try:
+        if total <= 0:
+            return
+        marker_w = total * 5 - 1
+        start_x = max(2, 128 - marker_w - 2)
+        y = BODY_BOTTOM + 4
+        for i in range(total):
+            x = start_x + i * 5
+            if i == page:
+                o.fill_rect(x, y, 3, 3, 1)
+            else:
+                o.rect(x, y, 3, 3, 1)
+    except Exception:
+        pass
+
+def _banner_text(text, level):
+    try:
+        prefix_map = {
+            'SUCCESS': '+',
+            'WARN': '!',
+            'ERROR': '!',
+        }
+        prefix = prefix_map.get(str(level).upper(), '')
+        msg = str(text).strip()
+        if prefix:
+            msg = f"{prefix} {msg}"
+        return msg
+    except Exception:
+        return str(text)
+
 def _layout_header_right(vol_w, right_blocks):
     try:
         gap = 4
@@ -214,6 +258,7 @@ def _render_signature(page):
         return (
             page,
             _status_banner_text,
+            _status_banner_level,
             _status_banner_until,
             _status_banner_persist,
             _show_voltage,
@@ -229,12 +274,15 @@ def _render_signature(page):
             _safe_attr(sdata, 'free_mem', 0),
             _safe_attr(settings, 'UNIT_ID', ''),
             _safe_attr(settings, 'UNIT_Name', ''),
+            _safe_attr(sdata, 'cur_soil_moisture', None),
+            _safe_attr(sdata, 'cpu_temp', None),
+            _safe_attr(sdata, 'error_count', None),
         )
     except Exception:
         return (page,)
 
 async def _render_loop(page=0):
-    global _last_render_sig, _show_voltage, _last_flip_time, _body_override_lines, _body_override_until
+    global _last_render_sig, _show_voltage, _last_flip_time, _body_override_lines, _body_override_until, _page_index, _last_page_flip_time
     if not oled:
         return
     if not getattr(settings, 'DEBUG', False):
@@ -245,8 +293,11 @@ async def _render_loop(page=0):
             if nowt - _last_flip_time >= FLIP_INTERVAL_S:
                 _show_voltage = not _show_voltage
                 _last_flip_time = nowt
+            if nowt - _last_page_flip_time >= PAGE_INTERVAL_S:
+                _page_index = (_page_index + 1) % 3
+                _last_page_flip_time = nowt
 
-            sig = _render_signature(page)
+            sig = _render_signature(_page_index)
             if sig == _last_render_sig:
                 await asyncio.sleep(RENDER_INTERVAL_S)
                 continue
@@ -338,8 +389,11 @@ async def _render_loop(page=0):
                 if _status_banner_text and (_status_banner_persist or time.time() < _status_banner_until):
                     txt = str(_status_banner_text)[:16]
                     bx = (128 - len(txt) * 8) // 2
-                    oled.fill_rect(bx - 1, 8, len(txt) * 8 + 2, 8, 0)
-                    oled.text(txt, bx, 8)
+                    banner = _banner_text(txt, _status_banner_level)
+                    banner_w = len(banner) * 8 + 6
+                    box_x = max(2, (128 - banner_w) // 2)
+                    oled.rect(box_x, 8, min(124, banner_w), 10, 1)
+                    oled.text(banner[:16], box_x + 3, 9)
                 elif _status_banner_text and not _status_banner_persist and time.time() >= _status_banner_until:
                     _status_banner_text = None
             except Exception:
@@ -354,7 +408,7 @@ async def _render_loop(page=0):
                         x = max(0, (128 - len(line) * 8) // 2)
                         oled.text(str(line)[:MAX_TEXT_CHARS], x, start_y + i * 8)
                 else:
-                    if getattr(sdata, 'sampling_active', False):
+                    if _page_index == 0 and getattr(sdata, 'sampling_active', False):
                         y = BODY_TOP + 2
                         oled.text("Interior:", 0, y)
                         oled.text(f"T{sdata.cur_device_temp_f:.1f}F", 80, y)
@@ -371,6 +425,22 @@ async def _render_loop(page=0):
                             oled.text(f"M{sdata.cur_soil_moisture:.1f}%", 64, y)
                             if sdata.cur_soil_temp_f is not None:
                                 oled.text(f"T{sdata.cur_soil_temp_f:.1f}F", 0, y+10)
+                    elif _page_index == 0:
+                        oled.text("Summary:", 0, BODY_TOP + 2)
+                        oled.text("Sampling idle", 0, BODY_TOP + 12)
+                        oled.text(f"V {_safe_attr(sdata, 'sys_voltage', 0.0):.2f}", 0, BODY_TOP + 22)
+                        oled.text(f"Err {_safe_attr(sdata, 'error_count', 0)}", 0, BODY_TOP + 32)
+                    elif _page_index == 1:
+                        oled.text("Runtime:", 0, BODY_TOP + 2)
+                        oled.text(f"CPU {float(_safe_attr(sdata, 'cpu_temp', 0)):.1f}", 0, BODY_TOP + 12)
+                        oled.text(f"Mem {_safe_attr(sdata, 'free_mem', 0)}", 0, BODY_TOP + 22)
+                        oled.text(f"Err {_safe_attr(sdata, 'error_count', 0)}", 0, BODY_TOP + 32)
+                    elif _page_index == 2:
+                        oled.text("Network:", 0, BODY_TOP + 2)
+                        oled.text(f"W {_safe_attr(sdata, 'wifi_rssi', '-')}", 0, BODY_TOP + 12)
+                        oled.text(f"L {_safe_attr(sdata, 'lora_SigStr', '-')}", 0, BODY_TOP + 22)
+                        node = str(getattr(settings, 'NODE_TYPE', ''))[:12]
+                        oled.text(node, 0, BODY_TOP + 32)
                     else:
                         pass
             except Exception:
@@ -386,12 +456,20 @@ async def _render_loop(page=0):
             try:
                 unit_name = str(_safe_attr(settings, 'UNIT_Name', ''))[:MAX_TEXT_CHARS]
                 oled.text(unit_name, 0, BODY_BOTTOM + 2)
+                page_title = _page_title(_page_index)
+                title_x = max(54, 128 - (len(page_title) * 8) - 24)
+                oled.text(page_title[:10], title_x, BODY_BOTTOM + 2)
+                _draw_page_marker(oled, _page_index, len(PAGE_NAMES))
             except Exception:
                 pass
 
             oled.show()
         except Exception as e:
-            print("[OLED] render error:", e)
+            try:
+                from utils import log_exception
+                await log_exception('OLED render loop', e)
+            except Exception:
+                print("[OLED] render error:", e)
         await asyncio.sleep(RENDER_INTERVAL_S)
 
 async def show_header():
@@ -407,8 +485,12 @@ async def display_message(message, display_time_s=0):
     try:
         from utils import update_sys_voltage
         update_sys_voltage()
-    except Exception:
-        pass
+    except Exception as e:
+        try:
+            from utils import log_exception
+            await log_exception('OLED display message voltage update', e)
+        except Exception:
+            pass
     msg = ' '.join(str(message).split())
     max_lines = max(1, BODY_HEIGHT // 8)
     pages = []
@@ -485,20 +567,22 @@ async def screen_on():
     await show_header()
     oled.poweron()
 
-def set_status_banner(message, duration_s=5, persist=False):
-    global _status_banner_text, _status_banner_until, _status_banner_persist
+def set_status_banner(message, duration_s=5, persist=False, level='INFO'):
+    global _status_banner_text, _status_banner_until, _status_banner_persist, _status_banner_level
     if not oled:
         return False
     _status_banner_text = str(message)
     _status_banner_until = time.time() + int(duration_s)
     _status_banner_persist = bool(persist)
+    _status_banner_level = str(level or 'INFO').upper()
     return True
 
 def clear_status_banner():
-    global _status_banner_text, _status_banner_until, _status_banner_persist
+    global _status_banner_text, _status_banner_until, _status_banner_persist, _status_banner_level
     _status_banner_text = None
     _status_banner_until = 0
     _status_banner_persist = False
+    _status_banner_level = 'INFO'
     return True
 
 def clear_message_area():

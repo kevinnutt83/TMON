@@ -3,6 +3,11 @@
 add_action('admin_init', function() {
     register_setting('tmon_uc_settings', 'tmon_uc_admin_key');
     register_setting('tmon_uc_settings', 'tmon_uc_hub_url');
+    register_setting('tmon_uc_settings', 'tmon_uc_allow_diagnostics_no_auth', [
+        'type' => 'boolean',
+        'sanitize_callback' => function ($v) { return !empty($v) ? 1 : 0; },
+        'default' => 0,
+    ]);
     register_setting('tmon_uc_settings', 'tmon_uc_remove_data_on_deactivate');
     register_setting('tmon_uc_settings', 'tmon_uc_auto_update');
     register_setting('tmon_uc_settings', 'tmon_uc_history_voltage_min');
@@ -23,6 +28,11 @@ add_action('admin_init', function() {
         $val = get_option('tmon_uc_hub_url', $current);
         echo '<input type="url" name="tmon_uc_hub_url" class="regular-text" placeholder="'.esc_attr($current).'" value="' . esc_attr($val) . '" />';
         echo '<p class="description">Defaults to this site URL; set your Admin hub if different. Pairing and diagnostics now live under Hub Pairing.</p>';
+    }, 'tmon_uc_settings', 'tmon_uc_main');
+    add_settings_field('tmon_uc_allow_diagnostics_no_auth', 'Diagnostics Without Auth (Legacy Compatibility)', function() {
+        $val = (int) get_option('tmon_uc_allow_diagnostics_no_auth', 0);
+        echo '<label><input type="checkbox" name="tmon_uc_allow_diagnostics_no_auth" value="1" ' . checked(1, $val, false) . ' /> Allow diagnostics ingestion without auth when no credentials are configured</label>';
+        echo '<p class="description">Recommended OFF. Enable only while migrating legacy devices.</p>';
     }, 'tmon_uc_settings', 'tmon_uc_main');
 
     add_settings_section('tmon_uc_chart', 'Chart Display', function(){

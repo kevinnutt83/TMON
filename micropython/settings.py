@@ -22,7 +22,8 @@ PROVISIONED_FLAG_FILE = LOG_DIR + '/provisioned.flag'
 REMOTE_SETTINGS_STAGED_FILE = LOG_DIR + '/remote_settings.staged.json'
 REMOTE_SETTINGS_APPLIED_FILE = LOG_DIR + '/remote_settings.applied.json'
 REMOTE_SETTINGS_PREV_FILE = LOG_DIR + '/remote_settings.prev.json'
-UNIT_NAME_FILE = '/logs/unit_name.txt'
+CUSTOM_SETTINGS_FILE = LOG_DIR + '/custom_settings.json'
+UNIT_NAME_FILE = LOG_DIR + '/unit_name.txt'
 
 LOG_FILE = LOG_DIR + '/lora.log'
 ERROR_LOG_FILE = LOG_DIR + '/lora_errors.log'
@@ -32,6 +33,9 @@ DATA_HISTORY_LOG = LOG_DIR + '/data_history.log'
 FIELD_DATA_DELIVERED_LOG = LOG_DIR + '/field_data.delivered.log'
 FIELD_DATA_MAX_BYTES = 256 * 1024
 FIELD_DATA_MAX_BATCH = 50
+FIELD_DATA_MAX_ATTEMPTS = 5
+FIELD_DATA_RETRY_BASE_S = 5
+FIELD_DATA_MAX_BACKOFF_S = 60
 FIELD_DATA_SEND_INTERVAL = 30
 FIELD_DATA_BACKOFF_S = 10
 FIELD_DATA_GZIP = True
@@ -40,7 +44,22 @@ UNIT_ID = "None"
 UNIT_Name = "No Device Name"
 NODE_TYPE = 'base'
 FIRMWARE_VERSION = "v2.00.2r"
- 
+
+# ============================================================
+# BOOTSTRAP CREDENTIALS (Required for First-Boot Provisioning)
+# ============================================================
+# These credentials allow unprovisioned devices to connect to WiFi
+# and reach the TMON Admin hub to receive their permanent configuration.
+#
+# After successful provisioning:
+# - Remote nodes disable WiFi (see WIFI_DISABLE_AFTER_PROVISION)
+# - Base and wifi nodes use persisted/staged credentials
+# - Ongoing communication prefers FIELD_DATA_APP_PASS when available
+#
+# Production note: For large deployments, consider flashing devices
+# with unique per-device bootstrap credentials.
+# ============================================================
+
 WORDPRESS_API_URL = ""
 WORDPRESS_USERNAME = "agadmin"
 WORDPRESS_PASSWORD = "Pepper-1"
@@ -52,14 +71,8 @@ PROVISION_CHECK_INTERVAL_S = 30
 PROVISION_MAX_RETRIES = 60
 WIFI_ALWAYS_ON_WHEN_UNPROVISIONED = True
 WIFI_DISABLE_AFTER_PROVISION = True
-PROVISIONED_FLAG_FILE = '/logs/provisioned.flag'
-REMOTE_SETTINGS_STAGED_FILE = '/logs/remote_settings.staged.json'
-REMOTE_SETTINGS_APPLIED_FILE = '/logs/remote_settings.applied.json'
-REMOTE_SETTINGS_PREV_FILE = '/logs/remote_settings.prev.json'
-UNIT_ID_FILE = '/logs/unit_id.txt'
-MACHINE_ID_FILE = '/logs/machine_id.txt'
-LAST_FIRMWARE_CHECK_FILE = '/logs/fw_last_check.txt'
-OTA_PENDING_FILE = '/logs/ota_pending.flag'
+LAST_FIRMWARE_CHECK_FILE = LOG_DIR + '/fw_last_check.txt'
+OTA_PENDING_FILE = LOG_DIR + '/ota_pending.flag'
 
 ENABLE_WIFI = True
 ENABLE_LORA = True
@@ -176,6 +189,12 @@ LORA_SYNC_WINDOW = 2
 LORA_SLOT_SPACING_S = LORA_SYNC_WINDOW
 LORA_CHECK_IN_MINUTES = 5
 LORA_INIT_RETRY_BACKOFF_S = 1
+LORA_MAX_RETRIES = 5
+LORA_RETRY_BASE_DELAY_S = 2
+LORA_MAX_BACKOFF_S = 90
+LORA_MISSED_SYNC_THRESHOLD = 3
+LORA_HEARTBEAT_INTERVAL_S = 120
+LORA_CRC_ENABLED = True
 LORA_HARD_REBOOT_ERR_CODES = [-2]
 LORA_ERR_PERSIST_REBOOTS = 2
 ERROR_STATE_FILE = LOG_DIR + '/last_error.state'
@@ -313,6 +332,12 @@ OTA_HTTP_HEADERS = {
 HTTP_TIMEOUT_S = 20
 TLS_VERIFY = True
 
+DIAGNOSTIC_SEND_INTERVAL_S = 300
+DIAGNOSTIC_MAX_ATTEMPTS = 2
+DIAGNOSTIC_RETRY_BASE_S = 2
+DIAGNOSTIC_FAILURE_STREAK = 3
+DIAGNOSTIC_FAILURE_COOLDOWN_S = 300
+
 DEVICE_SUSPENDED = False
 DEVICE_SUSPENDED_FILE = '/logs/suspended.flag'
 LORA_NETWORK_NAME = 'tmon'
@@ -336,8 +361,11 @@ PLAN = ""
 PROVISION_REBOOT_GUARD_FILE = LOG_DIR + '/provision_reboot.flag'
 
 COMMANDS_POLL_INTERVAL_S = 20
+COMMANDS_POLL_JITTER_S = 2
 COMMANDS_MAX_PER_POLL = 10
 COMMAND_CONFIRM_DELAY_S = 0.2
+COMMANDS_RESULT_TIMEOUT_S = 8
+COMMAND_ACK_UNSUPPORTED = True
 
 APPLY_STAGED_SETTINGS_ON_BOOT = True
 APPLY_STAGED_SETTINGS_ON_SYNC = True
@@ -350,6 +378,9 @@ STAGED_SETTINGS_KEYS_ALLOW = [
     'SAMPLE_TEMP','SAMPLE_BAR','SAMPLE_HUMID','SYS_VOLTAGE_SAMPLE_INTERVAL_S',
     'GPS_ENABLED','GPS_SOURCE','GPS_LAT','GPS_LNG','GPS_ALT_M','GPS_ACCURACY_M',
     'FIELD_DATA_HMAC_ENABLED','FIELD_DATA_HMAC_SECRET',
+    'COMMANDS_POLL_INTERVAL_S','COMMANDS_POLL_JITTER_S','COMMANDS_MAX_PER_POLL',
+    'COMMAND_CONFIRM_DELAY_S','COMMANDS_RESULT_TIMEOUT_S',
+    'COMMAND_ACK_UNSUPPORTED',
     'DEBUG','DEBUG_PROVISION','DEBUG_LORA','DEBUG_WIFI','DEBUG_OTA',
     'ENGINE_ENABLED','ENGINE_FORCE_DISABLED','ENABLE_SENSORBME280',
     'RELAY_PIN1','RELAY_PIN2','RELAY_RUNTIME_LIMITS',

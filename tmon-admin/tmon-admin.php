@@ -70,13 +70,77 @@ require_once TMON_ADMIN_PATH . 'admin/firmware.php';
 if (!function_exists('tmon_admin_dashboard_page_render')) {
 	function tmon_admin_dashboard_page_render() {
 		if (!current_user_can('manage_options')) { wp_die('Forbidden'); }
+		global $wpdb;
+		$devices_total = 0;
+		$provisioned_total = 0;
+		$queued_total = 0;
+		$diagnostics_total = 0;
+		$recent_diagnostics = [];
+
+		$dev_table = $wpdb->prefix . 'tmon_devices';
+		$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
+		$history = get_option('tmon_admin_provision_history', []);
+		if (!is_array($history)) {
+			$history = [];
+		}
+
+		$has_dev = (bool) $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $dev_table));
+		$has_prov = (bool) $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $prov_table));
+		if ($has_dev) {
+			$devices_total = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$dev_table}");
+		}
+		if ($has_prov) {
+			$provisioned_total = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$prov_table} WHERE provisioned = 1 OR status = 'active'");
+			$queued_total = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$prov_table} WHERE status IN ('queued','staged','pending')");
+		}
+
+		$diag_store = get_option('tmon_admin_device_diagnostics', []);
+		if (!is_array($diag_store)) {
+			$diag_store = [];
+		}
+		$diagnostics_total = count($diag_store);
+		$recent_diagnostics = array_values($diag_store);
+		usort($recent_diagnostics, function ($a, $b) {
+			$ta = isset($a['received_at']) ? strtotime((string) $a['received_at']) : 0;
+			$tb = isset($b['received_at']) ? strtotime((string) $b['received_at']) : 0;
+			return $tb <=> $ta;
+		});
+		$recent_diagnostics = array_slice($recent_diagnostics, 0, 5);
+
 		echo '<div class="wrap"><h1>TMON Admin</h1>';
 		echo '<p class="description">Manage provisioning, firmware, notifications, and Unit Connector tooling from this dashboard.</p>';
+		echo '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:14px 0 18px;max-width:980px;">';
+		echo '<div class="postbox" style="padding:10px 12px;"><div style="font-size:12px;color:#50575e;">Registered Devices</div><div style="font-size:24px;font-weight:600;">' . intval($devices_total) . '</div></div>';
+		echo '<div class="postbox" style="padding:10px 12px;"><div style="font-size:12px;color:#50575e;">Provisioned</div><div style="font-size:24px;font-weight:600;">' . intval($provisioned_total) . '</div></div>';
+		echo '<div class="postbox" style="padding:10px 12px;"><div style="font-size:12px;color:#50575e;">Queued/Staged</div><div style="font-size:24px;font-weight:600;">' . intval($queued_total) . '</div></div>';
+		echo '<div class="postbox" style="padding:10px 12px;"><div style="font-size:12px;color:#50575e;">Diagnostics Records</div><div style="font-size:24px;font-weight:600;">' . intval($diagnostics_total) . '</div></div>';
+		echo '<div class="postbox" style="padding:10px 12px;"><div style="font-size:12px;color:#50575e;">Provision History</div><div style="font-size:24px;font-weight:600;">' . intval(count($history)) . '</div></div>';
+		echo '</div>';
+
+		echo '<h2 style="margin-top:0;">Recent Diagnostics</h2>';
+		echo '<table class="widefat striped" style="max-width:980px;"><thead><tr><th>Unit</th><th>Received</th><th>Node</th><th>Error Count</th><th>Last Error</th></tr></thead><tbody>';
+		if ($recent_diagnostics) {
+			foreach ($recent_diagnostics as $diag) {
+				echo '<tr>';
+				echo '<td>' . esc_html((string) ($diag['unit_id'] ?? '')) . '</td>';
+				echo '<td>' . esc_html((string) ($diag['received_at'] ?? '')) . '</td>';
+				echo '<td>' . esc_html((string) ($diag['node_type'] ?? '')) . '</td>';
+				echo '<td>' . intval($diag['error_count'] ?? 0) . '</td>';
+				echo '<td>' . esc_html((string) ($diag['last_error'] ?? '')) . '</td>';
+				echo '</tr>';
+			}
+		} else {
+			echo '<tr><td colspan="5"><em>No diagnostics received yet.</em></td></tr>';
+		}
+		echo '</tbody></table>';
+
+		echo '<h2>Quick Links</h2>';
 		echo '<ul class="tmon-quick-links">';
 		echo '<li><a href="' . esc_url(admin_url('admin.php?page=tmon-admin-provisioning')) . '">Provisioning</a></li>';
 		echo '<li><a href="' . esc_url(admin_url('admin.php?page=tmon-admin-firmware')) . '">Firmware</a></li>';
 		echo '<li><a href="' . esc_url(admin_url('admin.php?page=tmon-admin-ota')) . '">OTA Jobs</a></li>';
 		echo '<li><a href="' . esc_url(admin_url('admin.php?page=tmon-admin-provisioned')) . '">Provisioned Devices</a></li>';
+		echo '<li><a href="' . esc_url(admin_url('admin.php?page=tmon-admin-diagnostics')) . '">Diagnostics</a></li>';
 		echo '<li><a href="' . esc_url(admin_url('admin.php?page=tmon-admin-settings')) . '">Settings</a></li>';
 		echo '</ul>';
 		echo '</div>';
@@ -96,6 +160,7 @@ $tmon_admin_page_actions = [
 	'tmon_admin_provisioning_activity_page' => 'tmon_admin_provisioning_activity_page',
 	'tmon_admin_provisioning_history_page' => 'tmon_admin_provisioning_history_page',
 	'tmon_admin_provisioned_devices_page' => 'tmon_admin_provisioned_devices_page',
+	'tmon_admin_diagnostics_page' => 'tmon_admin_diagnostics_page',
 	'tmon_admin_command_logs_page' => 'tmon_admin_command_logs_page',
 ];
 foreach ($tmon_admin_page_actions as $hook => $callback) {
@@ -183,6 +248,9 @@ add_action('admin_menu', function () {
 	});
 	add_submenu_page('tmon-admin', 'Provisioned Devices', 'Provisioned Devices', 'manage_options', 'tmon-admin-provisioned', function () {
 		do_action('tmon_admin_provisioned_devices_page');
+	});
+	add_submenu_page('tmon-admin', 'Diagnostics', 'Diagnostics', 'manage_options', 'tmon-admin-diagnostics', function () {
+		do_action('tmon_admin_diagnostics_page');
 	});
 	add_submenu_page('tmon-admin', 'Provisioning Activity', 'Provisioning Activity', 'manage_options', 'tmon-admin-provisioning-activity', function () {
 		do_action('tmon_admin_provisioning_activity_page');

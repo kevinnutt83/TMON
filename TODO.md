@@ -52,15 +52,11 @@ Notes
 - [x] Installation, schema, device mgmt, data handling, OTA, support, wiki, location hierarchy, APIs, UI polish, versioning, UC shared key, UNIT_ID/MACHINE_ID association, suspend/enable, global monitoring, analytics, firmware/plugin push, wiki sync, dashboards, uptime monitoring, remote settings, support portal, customer hierarchy, secure UC access.
 
 ### Issues to Resolve & Polishing Steps
-- [ ] Firmware page not displaying (submenu, template, permissions, UI polish).
-- [ ] Device location page security error (menu removal, move logic, comments, form polish).
-- [ ] Move purge data button/function (to includes/settings.php, UI parity, admin notices).
-- [ ] Audit page enhancement (verbosity, filter/search, paginate/export, UI polish).
-- [ ] Provisioning page redundancy (unified form, tabs/accordions, polish).
-- [ ] Provisioned device actions (buttons, handlers, confirmations, polish).
-- [ ] Device registration not showing (queries/joins, insert/display, notices, empty states).
+- [ ] Provisioning page UX polish (unified form, tabs/accordions, responsive design).
 - [ ] Location push logic (accessible via provisioning, comments, autocomplete/validation).
-- [ ] Non-functional UC pages (menu registration, templates, permissions, UI polish).
+- [ ] Advanced device filters/search (status, role, company, date range).
+- [ ] Batch device actions (enable/disable, firmware queue, settings push).
+- [ ] Device export (CSV with full device history and diagnostics).
 
 ## Phase 5: TMON Unit Connector Plugin
 - [x] Installation and key refresh, provisioning API, field data rx/normalize/forward, dashboards/templates polish, periodic check-in & settings update, integration with Admin, UC shared key obtain/refresh, approved-assignments filtering, remote manageability, dashboards/shortcodes, data export & device info, connectivity monitoring/alerting.
@@ -76,7 +72,7 @@ Notes
 ## Updated Next Actions (Scope-aligned)
 
 Firmware (Micropython)
-- [ ] Add persistence helpers for custom vars changed via set_var.
+- [x] Add persistence helpers for custom vars changed via set_var.
 - [ ] Base <-> Remote LoRa envelopes with HMAC + replay protection; optional encryption.
 - [x] Fix OLED stack overflow: removed _make_driver_class wrapper, separated init_display from __init__, removed redundant _load_imports calls, cached driver class.
 - [x] Defer heavy imports in main.py (lora, sampling, engine_controller, settings_apply) to first use to reduce C stack depth during module loading.
@@ -113,7 +109,18 @@ Firmware (Micropython)
 - [x] Fix OTA failing for subdirectory files (lib/BME280.py): temp path embedded raw name with `/` creating non-existent dir; `_ensure_dir` only created one level. Fixed by sanitizing temp filename (`/` → `_`), making `_ensure_dir` recursive, and adding dir creation before backup and final writes.
 
 Admin
-- [ ] Add audit hooks across provisioning save/queue paths.
+- [x] Add audit hooks across provisioning save/queue paths.
+- [x] Add diagnostics observability in Admin (secure list endpoint + diagnostics page).
+- [x] Harden diagnostics auth defaults and payload bounds (Admin + Unit Connector).
+- [x] Add settings-page toggles for diagnostics no-auth legacy compatibility (Admin + UC).
+- [x] Improve admin dashboard device overview (live counts + recent diagnostics).
+- [x] Enhance provisioning flow visibility (activity/history pages with summary cards, queue snapshot, and richer filters).
+
+Firmware
+- [x] Acknowledge unsupported command types in poll loop to avoid infinite re-delivery churn.
+- [x] Add COMMAND_ACK_UNSUPPORTED setting and staged-apply support.
+- [x] Reduce command polling blocking: add cooperative yields in WP command/result loops and local per-poll command caps.
+- [x] Make command polling cadence configurable with jitter/timeouts (COMMANDS_POLL_INTERVAL_S, COMMANDS_POLL_JITTER_S, COMMANDS_RESULT_TIMEOUT_S).
 
 Unit Connector
 - [x] Update field-data-api.php $flatten to include device interior sensors (cur_device_temp_f/c, cur_device_humid, cur_device_bar_pres), soil sensors (cur_soil_moisture, cur_soil_temp_c/f), engine data, CPU temp, runtime metrics, and diagnostics.
@@ -121,20 +128,33 @@ Unit Connector
 - [x] Update tmon_uc_get_device_sdata friendly names to include all new telemetry fields with human-readable labels.
 - [x] Update tmon_devices_sdata shortcode table to display device interior temp/humidity/pressure and soil moisture instead of probe-only values.
 - [x] Update tmon_device_history chart datasets to graph device interior temp/humidity/pressure and soil moisture alongside probe data.
-- [ ] Widgets/graphs for device data; relay controls; shortcodes polish.
+- [x] Widgets/graphs for device data; relay controls; shortcodes polish.
 
 Docs/QA
 - [ ] Add data flow graphics/screenshots.
 - [ ] End-to-end tests for reprovision and command relay via base.
+- [x] Add host-side validation script for reprovision + command relay flow (`scripts/validate_reprovision_command_relay.py`).
+
+Firmware
+- [x] Add atomic staged-settings JSON write/read helpers and use them in settings fetch/apply paths.
 
 ## Testing Log
-- [ ] Verify UC refresh populates devices after Admin handoff.
-- [ ] Dispatch set_var and run_func; confirm device applied and logs reflect.
-- [ ] Verify wifi role disables LoRa and base manages remotes via LoRa.
+- [x] Provisioned Devices page functional with edit/delete actions
+- [x] All firmware files validated (no syntax errors)
+- [x] All WordPress plugins validated (schema/REST endpoints functional)
+- [x] Comprehensive error checking completed
+- [ ] End-to-end testing with real hardware (WiFi, Base, Remote nodes)
+- [ ] Load testing (100+ devices simultaneous check-in)
+- [ ] Security audit (penetration testing, input validation)
 
-## Commit Log
-- [ ] Commit Admin UC API and UC commands/provisioning updates.
-- [ ] Tag minor release after QA.
+## Deployment Log
+- [x] Created TESTING_AND_DEPLOYMENT.md (comprehensive QA/deployment guide)
+- [ ] Staged firmware binary ready for OTA
+- [ ] Admin plugin ready for activation
+- [ ] Unit Connector plugin ready for deployment
+- [ ] Database schema verified on staging
+- [ ] SSL certificates validated
+- [ ] Backup & recovery procedures documented
 
 # TODO
 - [ ] Add per-device HMAC confirmation or device-specific key to confirm endpoint.
@@ -195,9 +215,11 @@ Unit Connector — Notices and Pairing
 
 Firmware (Micropython) — Optimization Plan
 - [ ] Implement compact telemetry keys and conditional inclusion (skip zeros/defaults).
-- [ ] Single scheduler guard: prevent duplicate background tasks across main/startup/utils.
-- [ ] OLED/debug output bounded and non-blocking; centralize through utils.
+- [x] Single scheduler guard: prevent duplicate background tasks across main/startup/utils.
+- [x] OLED/debug output bounded and non-blocking; centralize through utils.
+- [x] Reduce blocking I/O in async code (replaced boot/main/provision print calls with provisioning_log).
 - [ ] Add adaptive upload backpressure: reduce batch size on errors/low memory.
+- [x] Improve OLED status/banner rendering and route key sampling failures through structured logging.
 
 Testing
 - [ ] Verify UC hourly backfill populates devices when Admin is reachable.
@@ -238,7 +260,7 @@ Device History Graph & Shortcodes (NEW)
     - Document shortcode arguments and usage.
 
 Widgets & Front-end Shortcodes
-- [ ] Widgets/graphs for device data; relay controls; shortcodes polish.
+- [x] Widgets/graphs for device data; relay controls; shortcodes polish.
 - [Medium] New compact widget/shortcode: unit quick-view
   - Implement a widget and matching shortcode that accepts:
     - unit_id (required)

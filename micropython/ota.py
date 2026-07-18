@@ -54,6 +54,8 @@ from config_persist import write_text
 from utils import debug_print
 # NEW: GC helper
 from utils import maybe_gc
+from utils import format_exception
+from utils import log_exception
 import ujson as json
 import os
 import binascii as _binascii
@@ -133,7 +135,7 @@ async def check_for_update():
         except Exception:
             pass
     except Exception as e:
-        await debug_print(f'OTA check failed: {e}', 'ERROR')
+        await log_exception('ota.check_for_update', e)
 
 # Helper: write debug artifact
 def _write_debug_artifact(name, data_bytes):
@@ -259,7 +261,7 @@ async def apply_pending_update():
                             pass
                         break
                     except Exception as pe:
-                        await debug_print(f'OTA: manifest parse failed from {murl}: {pe}', 'ERROR')
+                        await log_exception(f'ota.manifest_parse:{murl}', pe)
                         # save page for inspection
                         try:
                             _write_debug_artifact('ota_manifest_fetch_error.txt', (body or '').encode('utf-8', 'ignore'))
@@ -276,7 +278,7 @@ async def apply_pending_update():
                 except Exception:
                     pass
             except Exception as e:
-                await debug_print(f'OTA: manifest request exception for {murl}: {e}', 'ERROR')
+                await log_exception(f'ota.manifest_request:{murl}', e)
 
         if not manifest_fetched:
             await debug_print('OTA: manifest not available; aborting OTA apply', 'ERROR')
@@ -436,7 +438,7 @@ async def apply_pending_update():
                             total = len(data)
                     except Exception as de:
                         # Mark HTML-response differently for diagnostics but follow same retry/backoff flow
-                        await debug_print(f'OTA: download write error for {name}: {de}', 'ERROR')
+                        await log_exception(f'ota.download_write:{name}', de)
                         try:
                             rr.close()
                         except Exception:
@@ -497,7 +499,7 @@ async def apply_pending_update():
                         with open(final_path, 'wb') as out:
                             out.write(open(tmp_path, 'rb').read())
                     except Exception as e:
-                        await debug_print(f'OTA: apply write failed for {name}: {e}', 'ERROR')
+                        await log_exception(f'ota.apply_write:{name}', e)
                         last_error = f'apply_error:{e}'
                         # restore from backup if available
                         if getattr(settings, 'OTA_RESTORE_ON_FAIL', True):
@@ -515,7 +517,7 @@ async def apply_pending_update():
                     download_ok = True
 
                 except Exception as e:
-                    await debug_print(f'OTA: exception when downloading {name}: {e}', 'ERROR')
+                    await log_exception(f'ota.download:{name}', e)
                     last_error = f'exception:{e}'
                     await _sleep(retry_interval_s)
 
@@ -549,7 +551,7 @@ async def apply_pending_update():
             pass
         return True
     except Exception as e:
-        await debug_print(f'ota: apply exc: {e}', 'ERROR')
+        await log_exception('ota.apply_pending_update', e)
         return False
 
 def _const_time_eq(a, b):
