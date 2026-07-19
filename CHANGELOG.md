@@ -40,6 +40,7 @@ All notable changes to this project will be documented in this file.
 - Firmware: field-testing power hardening for remotes: base now ACKs field-data bursts with `NEXT` delay and remotes persist server-driven sync timing when available.
 - Firmware: field-testing battery controls added for remotes (voltage-adaptive sleep bounds and low/critical multipliers).
 - Firmware: optional EXT wake fallback/recovery controls added for maintenance wake scenarios.
+- OTA: `apply_pending_update` now treats missing pending-flag file (`ENOENT`) as normal idle state and no longer emits repeated WARN logs.
 - Removed duplicated settings block (deduplicated settings.py).
 - Hardened async HTTP client in wprest to support host:port and full reads.
 - Made debug/config_persist compatible with MicroPython (removed union type hints).

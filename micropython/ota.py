@@ -176,7 +176,13 @@ async def apply_pending_update():
             with open(pending_file, 'r') as f:
                 target_ver = _normalize_version(f.read())
         except Exception as e:
-            record_exception('ota.apply_pending_update.read_pending', e, status='WARN')
+            # No pending flag is a normal idle state; avoid warning spam.
+            try:
+                enoent = isinstance(e, OSError) and (getattr(e, 'errno', None) == 2)
+            except Exception:
+                enoent = False
+            if not enoent:
+                record_exception('ota.apply_pending_update.read_pending', e, status='WARN')
             return False
         base_url = getattr(settings, 'OTA_FIRMWARE_BASE_URL', '')
         if not base_url or not requests:
