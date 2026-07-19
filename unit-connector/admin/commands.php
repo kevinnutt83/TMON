@@ -1,6 +1,10 @@
 <?php
 // Simple admin UI to enqueue a device command
 
+if (defined('TMON_UC_COMMANDS_CANONICAL')) {
+	return;
+}
+
 // Guard: sender helper
 if (!function_exists('tmon_uc_send_command')) {
 	function tmon_uc_send_command($unit_id, $machine_id, $type, $payload) {

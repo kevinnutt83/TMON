@@ -346,6 +346,8 @@ add_action('tmon_uc_scan_offline_event', function(){
     }
 });
 
+// Legacy command routes are disabled when canonical handlers are loaded from includes/commands.php.
+if (!defined('TMON_UC_COMMANDS_CANONICAL')) {
 // Device Commands API: enqueue, poll, and complete
 add_action('rest_api_init', function() {
     register_rest_route('tmon/v1', '/device/command', [
@@ -414,20 +416,85 @@ function tmon_uc_api_device_commands_poll($request) {
     return rest_ensure_response(['status' => 'ok', 'jobs' => $jobs]);
 }
 
+if (!function_exists('tmon_uc_cmd_confirm_hmac_secret')) {
+function tmon_uc_cmd_confirm_hmac_secret() {
+    $opt = (string) get_option('tmon_uc_command_confirm_hmac_secret', '');
+    if ($opt === '') {
+        $opt = (string) get_option('tmon_uc_field_data_hmac_secret', '');
+    }
+    if ($opt === '' && defined('TMON_FIELD_DATA_HMAC_SECRET')) {
+        $opt = (string) TMON_FIELD_DATA_HMAC_SECRET;
+    }
+    return $opt;
+}}
+
+if (!function_exists('tmon_uc_verify_command_confirm_sig')) {
+function tmon_uc_verify_command_confirm_sig($params, $unit_id, $job_id, $ok, $status) {
+    $required = (int) get_option('tmon_uc_command_confirm_hmac_required', 0) === 1;
+    $secret = tmon_uc_cmd_confirm_hmac_secret();
+    if ($secret === '') {
+        return !$required;
+    }
+
+    $sig = isset($params['sig']) ? strtolower(sanitize_text_field((string) $params['sig'])) : '';
+    if ($sig === '') {
+        return !$required;
+    }
+
+    $sig_v = isset($params['sig_v']) ? intval($params['sig_v']) : 0;
+    if ($sig_v !== 2) {
+        return false;
+    }
+
+    $sig_ts = isset($params['sig_ts']) ? intval($params['sig_ts']) : 0;
+    if ($sig_ts <= 0) {
+        return false;
+    }
+    $max_age = max(30, intval(get_option('tmon_uc_command_confirm_hmac_max_age', 900)));
+    if (abs(time() - $sig_ts) > $max_age) {
+        return false;
+    }
+
+    $unit_id = sanitize_text_field((string) $unit_id);
+    $machine_id = isset($params['machine_id']) ? sanitize_text_field((string) $params['machine_id']) : '';
+    $job_id = (string) $job_id;
+    $status = sanitize_text_field((string) $status);
+    $ok_bit = $ok ? '1' : '0';
+
+    $device_secret = hash('sha256', $secret . '|' . $unit_id . '|' . $machine_id);
+    $canon = implode('|', [$unit_id, $machine_id, $job_id, $ok_bit, $status, (string) $sig_ts]);
+    $digest = hash('sha256', $device_secret . '|' . $canon);
+
+    $len = min(strlen($sig), strlen($digest));
+    if ($len <= 0) {
+        return false;
+    }
+    return hash_equals(substr($digest, 0, $len), substr($sig, 0, $len));
+}}
+
 function tmon_uc_api_device_command_complete($request) {
     global $wpdb;
     $params = $request->get_json_params();
     $job_id = isset($params['job_id']) ? intval($params['job_id']) : 0;
     $ok = isset($params['ok']) ? intval(!!$params['ok']) : null;
+    $ok_bool = !is_null($ok) ? (bool) $ok : false;
+    $status = isset($params['status']) ? sanitize_text_field((string) $params['status']) : ($ok_bool ? 'done' : 'failed');
     $result = isset($params['result']) ? $params['result'] : null;
     if (!$job_id) {
         return rest_ensure_response(['status' => 'error', 'message' => 'Missing job_id']);
     }
     // Merge completion info into params to avoid schema changes
-    $row = $wpdb->get_row($wpdb->prepare("SELECT params FROM {$wpdb->prefix}tmon_device_commands WHERE id = %d", $job_id));
+    $row = $wpdb->get_row($wpdb->prepare("SELECT device_id, params FROM {$wpdb->prefix}tmon_device_commands WHERE id = %d", $job_id), ARRAY_A);
+    $unit_id = isset($params['unit_id']) ? sanitize_text_field($params['unit_id']) : '';
+    if (!$unit_id && is_array($row)) {
+        $unit_id = sanitize_text_field((string) ($row['device_id'] ?? ''));
+    }
+    if (!tmon_uc_verify_command_confirm_sig($params, $unit_id, $job_id, $ok_bool, $status)) {
+        return new WP_REST_Response(['status' => 'error', 'message' => 'invalid_signature'], 401);
+    }
     $p = [];
-    if ($row && !empty($row->params)) {
-        $decoded = json_decode($row->params, true);
+    if (is_array($row) && !empty($row['params'])) {
+        $decoded = json_decode($row['params'], true);
         if (is_array($decoded)) $p = $decoded;
     }
     $p['__ok'] = $ok;
@@ -452,10 +519,17 @@ function tmon_uc_api_device_command_ack($request) {
     if (!$job_id) {
         return rest_ensure_response(['status' => 'error', 'message' => 'Missing command_id']);
     }
-    $row = $wpdb->get_row($wpdb->prepare("SELECT params FROM {$wpdb->prefix}tmon_device_commands WHERE id = %d", $job_id));
+    $row = $wpdb->get_row($wpdb->prepare("SELECT device_id, params FROM {$wpdb->prefix}tmon_device_commands WHERE id = %d", $job_id), ARRAY_A);
+    $unit_id = isset($params['unit_id']) ? sanitize_text_field($params['unit_id']) : '';
+    if (!$unit_id && is_array($row)) {
+        $unit_id = sanitize_text_field((string) ($row['device_id'] ?? ''));
+    }
+    if (!tmon_uc_verify_command_confirm_sig($params, $unit_id, $job_id, true, 'done')) {
+        return new WP_REST_Response(['status' => 'error', 'message' => 'invalid_signature'], 401);
+    }
     $p = [];
-    if ($row && !empty($row->params)) {
-        $decoded = json_decode($row->params, true);
+    if (is_array($row) && !empty($row['params'])) {
+        $decoded = json_decode($row['params'], true);
         if (is_array($decoded)) $p = $decoded;
     }
     if (!is_null($result)) $p['__result'] = $result;
@@ -469,6 +543,7 @@ function tmon_uc_api_device_command_ack($request) {
         ['id' => $job_id]
     );
     return rest_ensure_response(['status' => 'ok']);
+}
 }
 // AJAX endpoints for frontend shortcodes
 add_action('wp_ajax_tmon_uc_get_devices', 'tmon_uc_get_devices');

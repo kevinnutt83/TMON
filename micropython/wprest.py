@@ -162,6 +162,59 @@ def _now_ts():
         return 0
 
 
+def _sha256_hex(text):
+    payload = str(text).encode('utf-8')
+    try:
+        import uhashlib as _hashlib
+        import ubinascii as _ub
+        return _ub.hexlify(_hashlib.sha256(payload).digest()).decode('ascii')
+    except Exception:
+        try:
+            import hashlib as _hashlib
+            return _hashlib.sha256(payload).hexdigest()
+        except Exception:
+            return ''
+
+
+def _command_confirm_secret():
+    try:
+        return str(
+            getattr(settings, 'COMMAND_CONFIRM_HMAC_SECRET', '')
+            or getattr(settings, 'FIELD_DATA_HMAC_SECRET', '')
+            or ''
+        )
+    except Exception:
+        return ''
+
+
+def _command_confirm_sig(job_id, status, ok, sig_ts, unit_id, machine_id):
+    secret = _command_confirm_secret()
+    if not secret:
+        return ''
+    dev_secret = _sha256_hex(secret + '|' + str(unit_id) + '|' + str(machine_id))
+    if not dev_secret:
+        return ''
+    canon = '|'.join([
+        str(unit_id),
+        str(machine_id),
+        str(job_id),
+        '1' if bool(ok) else '0',
+        str(status),
+        str(sig_ts),
+    ])
+    digest = _sha256_hex(dev_secret + '|' + canon)
+    if not digest:
+        return ''
+    try:
+        truncate = int(getattr(settings, 'COMMAND_CONFIRM_HMAC_TRUNCATE', 32))
+    except Exception:
+        truncate = 32
+    truncate = 32 if truncate <= 0 else truncate
+    if truncate > len(digest):
+        truncate = len(digest)
+    return digest[:truncate]
+
+
 def _set_last_rest_error(operation, code=0, path='', message='', detail=None):
     global LAST_REST_ERROR, REST_ERROR_STREAK
     try:
@@ -782,15 +835,29 @@ async def _post_command_result(job_id, status='done', result=None):
     if not requests:
         return False
     timeout_s = int(getattr(settings, 'COMMANDS_RESULT_TIMEOUT_S', 8))
+    unit_id = str(getattr(settings, 'UNIT_ID', '') or '')
+    machine_id = str(getattr(settings, 'MACHINE_ID', '') or get_machine_id() or '')
+    ok = str(status).lower() in ('done', 'ok', 'success')
+    sig_ts = _now_ts()
+    sig = _command_confirm_sig(job_id, status, ok, sig_ts, unit_id, machine_id)
     payload = {
         'id': job_id,
         'job_id': job_id,
-        'unit_id': getattr(settings, 'UNIT_ID', ''),
-        'device_id': getattr(settings, 'UNIT_ID', ''),
+        'command_id': job_id,
+        'unit_id': unit_id,
+        'device_id': unit_id,
+        'machine_id': machine_id,
+        'ok': ok,
         'status': status,
         'result': result or {},
+        'sig_v': 2,
+        'sig_ts': sig_ts,
     }
+    if sig:
+        payload['sig'] = sig
     paths = [
+        '/wp-json/tmon/v1/device/command-complete',
+        '/wp-json/tmon/v1/device/ack',
         '/wp-json/tmon/v1/device/command-result',
         '/wp-json/tmon/v1/device/command/confirm',
         '/wp-json/tmon-uc/v1/device/command-result',
@@ -879,7 +946,8 @@ async def poll_device_commands():
             commands = commands[:local_limit]
 
         staged_updates = {}
-        processed_ids = []
+        staged_ids = []
+        confirm_items = []
         handled_any = False
         for cmd in commands:
             if not isinstance(cmd, dict):
@@ -890,25 +958,52 @@ async def poll_device_commands():
                     cmd.get('data') if isinstance(cmd.get('data'), dict) else {}
                 )
             )
-            if ctype == 'set_var':
+            cmd_id = cmd.get('id')
+            if ctype in ('set_var', 'set_setting'):
                 key = str(payload.get('key') or '').strip()
                 if key:
                     staged_updates[key] = payload.get('value')
                     handled_any = True
-                    if cmd.get('id') is not None:
-                        processed_ids.append(cmd.get('id'))
+                    if cmd_id is not None:
+                        staged_ids.append(cmd_id)
+            elif ctype in ('settings_update', 'settings_change'):
+                if isinstance(payload, dict):
+                    safe_updates = {}
+                    for k, v in payload.items():
+                        sk = str(k or '').strip()
+                        if sk:
+                            safe_updates[sk] = v
+                    if safe_updates:
+                        staged_updates.update(safe_updates)
+                        handled_any = True
+                        if cmd_id is not None:
+                            staged_ids.append(cmd_id)
+            elif ctype in ('relay_ctrl', 'toggle_relay'):
+                try:
+                    from relay import toggle_relay
+                    relay_num = payload.get('relay_num', payload.get('relay', '1'))
+                    state = payload.get('state', 'off')
+                    runtime = payload.get('runtime', payload.get('duration_s', 0))
+                    coro = toggle_relay(str(relay_num), str(state), str(runtime))
+                    if asyncio and hasattr(asyncio, 'create_task'):
+                        asyncio.create_task(coro)
+                    else:
+                        await coro
+                    handled_any = True
+                    if cmd_id is not None:
+                        confirm_items.append((cmd_id, 'done', {'executed': True, 'type': ctype}))
+                except Exception as re:
+                    await debug_print(f'poll_device_commands: relay command failed: {re}', 'ERROR')
+                    if cmd_id is not None:
+                        confirm_items.append((cmd_id, 'failed', {'reason': 'relay_command_error'}))
             else:
                 await debug_print(f'poll_device_commands: unsupported command type {ctype}', 'WARN')
-                if cmd.get('id') is not None and bool(getattr(settings, 'COMMAND_ACK_UNSUPPORTED', True)):
+                if cmd_id is not None and bool(getattr(settings, 'COMMAND_ACK_UNSUPPORTED', True)):
                     try:
-                        await _post_command_result(
-                            cmd.get('id'),
-                            'rejected',
-                            {
-                                'reason': 'unsupported_command_type',
-                                'type': ctype or 'unknown',
-                            },
-                        )
+                        confirm_items.append((cmd_id, 'rejected', {
+                            'reason': 'unsupported_command_type',
+                            'type': ctype or 'unknown',
+                        }))
                         handled_any = True
                     except Exception:
                         pass
@@ -930,20 +1025,23 @@ async def poll_device_commands():
             await debug_print(f'poll_device_commands: staged {len(staged_updates)} set_var updates', 'INFO')
 
             # Confirm only commands that were transformed into staged settings.
+            for jid in list(dict.fromkeys(staged_ids)):
+                confirm_items.append((jid, 'done', {'staged': True}))
+
+        if confirm_items:
             confirm_delay = float(getattr(settings, 'COMMAND_CONFIRM_DELAY_S', 0.2))
-            for jid in list(dict.fromkeys(processed_ids)):
+            for jid, st, rs in confirm_items:
                 try:
-                    await _post_command_result(jid, 'done', {'staged': True})
+                    await _post_command_result(jid, st, rs)
                     if confirm_delay > 0 and asyncio:
                         await asyncio.sleep(confirm_delay)
                 except Exception:
                     pass
+
+        if staged_updates or handled_any or confirm_items:
             _mark_rest_success()
             return True
 
-        if handled_any:
-            _mark_rest_success()
-            return True
         return False
     except Exception as e:
         await _record_rest_failure('poll_device_commands', 0, '', 'unhandled_exception', {'exception': format_exception(e)})

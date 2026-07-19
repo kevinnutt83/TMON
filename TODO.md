@@ -157,7 +157,7 @@ Firmware
 - [ ] Backup & recovery procedures documented
 
 # TODO
-- [ ] Add per-device HMAC confirmation or device-specific key to confirm endpoint.
+- [x] Add per-device HMAC confirmation or device-specific key to confirm endpoint.
 - [ ] Add email notifications for provisioning events (optional).
 - [ ] Add per-device staging preview and direct push tools in UI.
 - [ ] Add tests to verify full provisioning lifecycle.
@@ -167,7 +167,8 @@ Firmware
 High-priority
 - [x] Define missing vars in inline update branch in provisioning page.
 - [ ] Validate nonce usage across forms/handlers.
-- [ ] Confirm device-side queue consumption and normalized key matching.
+- [x] Confirm device-side queue consumption and normalized key matching.
+- [x] Consolidate duplicate UC command routes/UI to canonical includes/commands.php.
 
 Medium
 - [ ] Device mirror consistency updates and backfills.
@@ -214,11 +215,11 @@ Unit Connector — Notices and Pairing
 - [ ] (no pending items)
 
 Firmware (Micropython) — Optimization Plan
-- [ ] Implement compact telemetry keys and conditional inclusion (skip zeros/defaults).
+- [x] Implement compact telemetry keys and conditional inclusion (skip zeros/defaults).
 - [x] Single scheduler guard: prevent duplicate background tasks across main/startup/utils.
 - [x] OLED/debug output bounded and non-blocking; centralize through utils.
 - [x] Reduce blocking I/O in async code (replaced boot/main/provision print calls with provisioning_log).
-- [ ] Add adaptive upload backpressure: reduce batch size on errors/low memory.
+- [x] Add adaptive upload backpressure: reduce batch size on errors/low memory.
 - [x] Improve OLED status/banner rendering and route key sampling failures through structured logging.
 
 Testing

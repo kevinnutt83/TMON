@@ -296,20 +296,20 @@ function tmon_uc_receive_field_data($request) {
         $out['lora_rssi'] = $rec['lora_SigStr'] ?? null;
         $out['free_mem']  = isset($rec['fm']) ? $rec['fm'] : ($rec['free_mem'] ?? null);
         // Device interior sensor fields
-        $out['device_temp_f']   = $rec['cur_device_temp_f'] ?? null;
-        $out['device_temp_c']   = $rec['cur_device_temp_c'] ?? null;
-        $out['device_humid']    = $rec['cur_device_humid'] ?? null;
-        $out['device_bar_pres'] = $rec['cur_device_bar_pres'] ?? null;
+        $out['device_temp_f']   = $rec['dt_f'] ?? ($rec['cur_device_temp_f'] ?? null);
+        $out['device_temp_c']   = $rec['dt_c'] ?? ($rec['cur_device_temp_c'] ?? null);
+        $out['device_humid']    = $rec['dh'] ?? ($rec['cur_device_humid'] ?? null);
+        $out['device_bar_pres'] = $rec['db'] ?? ($rec['cur_device_bar_pres'] ?? null);
         // Soil sensor fields
-        $out['soil_moisture']   = $rec['cur_soil_moisture'] ?? null;
-        $out['soil_temp_c']     = $rec['cur_soil_temp_c'] ?? null;
-        $out['soil_temp_f']     = $rec['cur_soil_temp_f'] ?? null;
+        $out['soil_moisture']   = $rec['sm'] ?? ($rec['cur_soil_moisture'] ?? null);
+        $out['soil_temp_c']     = $rec['st_c'] ?? ($rec['cur_soil_temp_c'] ?? null);
+        $out['soil_temp_f']     = $rec['st_f'] ?? ($rec['cur_soil_temp_f'] ?? null);
         // System / diagnostics
-        $out['cpu_temp']        = $rec['cpu_temp'] ?? null;
+        $out['cpu_temp']        = $rec['cpu'] ?? ($rec['cpu_temp'] ?? null);
         $out['node_type']       = $rec['NODE_TYPE'] ?? ($rec['node_type'] ?? null);
-        $out['error_count']     = $rec['error_count'] ?? null;
-        $out['script_runtime']  = $rec['script_runtime'] ?? null;
-        $out['loop_runtime']    = $rec['loop_runtime'] ?? null;
+        $out['error_count']     = $rec['ec'] ?? ($rec['error_count'] ?? null);
+        $out['script_runtime']  = $rec['sr'] ?? ($rec['script_runtime'] ?? null);
+        $out['loop_runtime']    = $rec['lr'] ?? ($rec['loop_runtime'] ?? null);
         $out['lora_snr']        = $rec['lora_snr'] ?? null;
         $out['wifi_connected']  = $rec['WIFI_CONNECTED'] ?? null;
         $out['wan_connected']   = $rec['WAN_CONNECTED'] ?? null;
@@ -322,10 +322,10 @@ function tmon_uc_receive_field_data($request) {
         $out['highest_humid']   = $rec['highest_humid'] ?? null;
         $out['last_message']    = $rec['last_message'] ?? null;
         // Engine fields
-        $out['engine1_speed_rpm'] = $rec['engine1_speed_rpm'] ?? null;
-        $out['engine1_batt_v']    = $rec['engine1_batt_v'] ?? null;
-        $out['engine2_speed_rpm'] = $rec['engine2_speed_rpm'] ?? null;
-        $out['engine2_batt_v']    = $rec['engine2_batt_v'] ?? null;
+        $out['engine1_speed_rpm'] = $rec['e1r'] ?? ($rec['engine1_speed_rpm'] ?? null);
+        $out['engine1_batt_v']    = $rec['e1v'] ?? ($rec['engine1_batt_v'] ?? null);
+        $out['engine2_speed_rpm'] = $rec['e2r'] ?? ($rec['engine2_speed_rpm'] ?? null);
+        $out['engine2_batt_v']    = $rec['e2v'] ?? ($rec['engine2_batt_v'] ?? null);
         // GPS fields if present
         $out['gps_lat']   = $rec['gps_lat'] ?? ($rec['GPS_LAT'] ?? null);
         $out['gps_lng']   = $rec['gps_lng'] ?? ($rec['GPS_LNG'] ?? null);
@@ -610,12 +610,12 @@ function tmon_uc_get_device_history($request) {
             'humid' => $d['hum'] ?? ($d['cur_humid'] ?? null),
             'bar' => $d['bar'] ?? ($d['cur_bar_pres'] ?? null),
             'volt' => $d['v'] ?? ($d['sys_voltage'] ?? null),
-            'device_temp_f' => $d['cur_device_temp_f'] ?? null,
-            'device_humid' => $d['cur_device_humid'] ?? null,
-            'device_bar' => $d['cur_device_bar_pres'] ?? null,
-            'soil_moisture' => $d['cur_soil_moisture'] ?? null,
-            'soil_temp_f' => $d['cur_soil_temp_f'] ?? null,
-            'cpu_temp' => $d['cpu_temp'] ?? null,
+            'device_temp_f' => $d['dt_f'] ?? ($d['cur_device_temp_f'] ?? null),
+            'device_humid' => $d['dh'] ?? ($d['cur_device_humid'] ?? null),
+            'device_bar' => $d['db'] ?? ($d['cur_device_bar_pres'] ?? null),
+            'soil_moisture' => $d['sm'] ?? ($d['cur_soil_moisture'] ?? null),
+            'soil_temp_f' => $d['st_f'] ?? ($d['cur_soil_temp_f'] ?? null),
+            'cpu_temp' => $d['cpu'] ?? ($d['cpu_temp'] ?? null),
             'lora_snr' => $d['lora_snr'] ?? null,
             'wifi_connected' => $d['WIFI_CONNECTED'] ?? null,
             'wan_connected' => $d['WAN_CONNECTED'] ?? null,
@@ -626,10 +626,10 @@ function tmon_uc_get_device_history($request) {
             'highest_bar' => $d['highest_bar'] ?? null,
             'lowest_humid' => $d['lowest_humid'] ?? null,
             'highest_humid' => $d['highest_humid'] ?? null,
-            'engine1_rpm' => $d['engine1_speed_rpm'] ?? null,
-            'engine1_batt' => $d['engine1_batt_v'] ?? null,
-            'engine2_rpm' => $d['engine2_speed_rpm'] ?? null,
-            'engine2_batt' => $d['engine2_batt_v'] ?? null,
+            'engine1_rpm' => $d['e1r'] ?? ($d['engine1_speed_rpm'] ?? null),
+            'engine1_batt' => $d['e1v'] ?? ($d['engine1_batt_v'] ?? null),
+            'engine2_rpm' => $d['e2r'] ?? ($d['engine2_speed_rpm'] ?? null),
+            'engine2_batt' => $d['e2v'] ?? ($d['engine2_batt_v'] ?? null),
             'relay' => $relay_states,
         ];
     }
@@ -657,17 +657,17 @@ function tmon_uc_get_device_sdata($request) {
         'Probe Humidity (%)' => $data['hum'] ?? ($data['cur_humid'] ?? null),
         'Probe Pressure (hPa)' => $data['bar'] ?? ($data['cur_bar_pres'] ?? null),
         // Device interior sensors
-        'Device Temp (F)' => $data['cur_device_temp_f'] ?? null,
-        'Device Temp (C)' => $data['cur_device_temp_c'] ?? null,
-        'Device Humidity (%)' => $data['cur_device_humid'] ?? null,
-        'Device Pressure (hPa)' => $data['cur_device_bar_pres'] ?? null,
+        'Device Temp (F)' => $data['dt_f'] ?? ($data['cur_device_temp_f'] ?? null),
+        'Device Temp (C)' => $data['dt_c'] ?? ($data['cur_device_temp_c'] ?? null),
+        'Device Humidity (%)' => $data['dh'] ?? ($data['cur_device_humid'] ?? null),
+        'Device Pressure (hPa)' => $data['db'] ?? ($data['cur_device_bar_pres'] ?? null),
         // Soil sensors
-        'Soil Moisture' => $data['cur_soil_moisture'] ?? null,
-        'Soil Temp (C)' => $data['cur_soil_temp_c'] ?? null,
-        'Soil Temp (F)' => $data['cur_soil_temp_f'] ?? null,
+        'Soil Moisture' => $data['sm'] ?? ($data['cur_soil_moisture'] ?? null),
+        'Soil Temp (C)' => $data['st_c'] ?? ($data['cur_soil_temp_c'] ?? null),
+        'Soil Temp (F)' => $data['st_f'] ?? ($data['cur_soil_temp_f'] ?? null),
         // System
         'Voltage (V)' => $data['v'] ?? ($data['sys_voltage'] ?? null),
-        'CPU Temp' => $data['cpu_temp'] ?? null,
+        'CPU Temp' => $data['cpu'] ?? ($data['cpu_temp'] ?? null),
         'WiFi RSSI' => $data['wifi_rssi'] ?? null,
         'LoRa Signal' => $data['lora_SigStr'] ?? null,
         'LoRa SNR' => $data['lora_snr'] ?? null,
@@ -683,14 +683,14 @@ function tmon_uc_get_device_sdata($request) {
         'Lowest Humidity (%)' => $data['lowest_humid'] ?? null,
         'Highest Humidity (%)' => $data['highest_humid'] ?? null,
         // Engine
-        'Engine 1 RPM' => $data['engine1_speed_rpm'] ?? null,
-        'Engine 1 Battery (V)' => $data['engine1_batt_v'] ?? null,
-        'Engine 2 RPM' => $data['engine2_speed_rpm'] ?? null,
-        'Engine 2 Battery (V)' => $data['engine2_batt_v'] ?? null,
+        'Engine 1 RPM' => $data['e1r'] ?? ($data['engine1_speed_rpm'] ?? null),
+        'Engine 1 Battery (V)' => $data['e1v'] ?? ($data['engine1_batt_v'] ?? null),
+        'Engine 2 RPM' => $data['e2r'] ?? ($data['engine2_speed_rpm'] ?? null),
+        'Engine 2 Battery (V)' => $data['e2v'] ?? ($data['engine2_batt_v'] ?? null),
         // Runtime
-        'Script Runtime (s)' => $data['script_runtime'] ?? null,
-        'Loop Runtime (s)' => $data['loop_runtime'] ?? null,
-        'Error Count' => $data['error_count'] ?? null,
+        'Script Runtime (s)' => $data['sr'] ?? ($data['script_runtime'] ?? null),
+        'Loop Runtime (s)' => $data['lr'] ?? ($data['loop_runtime'] ?? null),
+        'Error Count' => $data['ec'] ?? ($data['error_count'] ?? null),
         'Last Error' => $data['last_error'] ?? null,
         'Last Message' => $data['last_message'] ?? null,
         'Frostwatch Active' => $data['frostwatch_active'] ?? null,

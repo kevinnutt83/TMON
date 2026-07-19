@@ -1,6 +1,11 @@
 <?php
 if (!defined('ABSPATH')) { exit; }
 
+// Canonical command pipeline marker used to disable duplicate legacy handlers.
+if (!defined('TMON_UC_COMMANDS_CANONICAL')) {
+	define('TMON_UC_COMMANDS_CANONICAL', true);
+}
+
 // Ensure device data table exists (used by REST: tmon_uc_api_device_data)
 if (!function_exists('tmon_uc_ensure_device_data_table')) {
 	function tmon_uc_ensure_device_data_table() {
@@ -156,58 +161,7 @@ add_action('rest_api_init', function () {
 	));
 });
 
-// Compatibility: device polls commands via POST /tmon/v1/device/commands with unit_id
-add_action('rest_api_init', function(){
-	register_rest_route('tmon/v1', '/device/commands', array(
-		'methods' => 'POST',
-		'permission_callback' => '__return_true',
-		'callback' => function($req){
-			global $wpdb;
-			$table = $wpdb->prefix . 'tmon_device_commands';
-			$unit = sanitize_text_field($req->get_param('unit_id') ?: $req->get_param('device_id'));
-			if (!$unit) return rest_ensure_response(array());
-			$rows = $wpdb->get_results($wpdb->prepare(
-				"SELECT id, command, params FROM {$table} WHERE device_id=%s AND (status='queued' OR status='claimed') ORDER BY id ASC LIMIT 20",
-				$unit
-			), ARRAY_A);
-			if ($rows) {
-				$ids = wp_list_pluck($rows, 'id');
-				$wpdb->query("UPDATE {$table} SET status='claimed', updated_at=NOW() WHERE id IN (".implode(',', array_map('intval', $ids)).")");
-			}
-			$cmds = array();
-			foreach ($rows as $r) {
-				$payload = json_decode($r['params'], true);
-				if (!is_array($payload)) { $payload = array(); }
-				$cmds[] = array(
-					'id' => intval($r['id']),
-					'type' => $r['command'],
-					'payload' => $payload,
-				);
-			}
-			return rest_ensure_response($cmds);
-		}
-	));
-	register_rest_route('tmon/v1', '/device/command-result', array(
-		'methods' => 'POST',
-		'permission_callback' => '__return_true',
-		'callback' => function($req){
-			global $wpdb;
-			$table = $wpdb->prefix . 'tmon_device_commands';
-			$id = intval($req->get_param('id') ?: $req->get_param('job_id'));
-			$status = sanitize_text_field($req->get_param('status') ?: 'done');
-			$result = $req->get_param('result');
-			if ($id <= 0) return rest_ensure_response(array('status'=>'error','message'=>'id required'));
-			$wpdb->update($table, array(
-				'status' => $status,
-				'executed_status' => $status,
-				'updated_at' => current_time('mysql'),
-				'executed_at' => current_time('mysql'),
-				'result' => is_scalar($result) ? strval($result) : wp_json_encode($result),
-			), array('id' => $id));
-			return rest_ensure_response(array('status'=>'ok'));
-		}
-	));
-});
+// Legacy /tmon/v1 command routes removed; canonical handlers are registered below.
 
 // Devices poll for commands (returns queued or claimed for retry)
 add_action('rest_api_init', function () {
@@ -277,6 +231,30 @@ add_action('rest_api_init', function () {
 	));
 });
 
+if (!function_exists('tmon_uc_enqueue_local_command')) {
+	function tmon_uc_enqueue_local_command($unit_id, $command, $payload = array()) {
+		global $wpdb;
+		$unit_id = sanitize_text_field((string) $unit_id);
+		$command = sanitize_text_field((string) $command);
+		if ($unit_id === '' || $command === '') {
+			return new WP_Error('bad_request', 'unit_id and command are required');
+		}
+		$table = $wpdb->prefix . 'tmon_device_commands';
+		$ok = $wpdb->insert($table, array(
+			'device_id' => $unit_id,
+			'command' => $command,
+			'params' => wp_json_encode(is_array($payload) ? $payload : array()),
+			'status' => 'queued',
+			'created_at' => current_time('mysql'),
+			'updated_at' => current_time('mysql'),
+		));
+		if (!$ok) {
+			return new WP_Error('db_insert_failed', 'Failed to queue command');
+		}
+		return intval($wpdb->insert_id);
+	}
+}
+
 // Guard: page callback
 if (!function_exists('tmon_uc_commands_page')) {
 	function tmon_uc_commands_page() {
@@ -284,29 +262,37 @@ if (!function_exists('tmon_uc_commands_page')) {
 		$msgs = array();
 
 		if (isset($_POST['tmon_uc_send_cmd']) && check_admin_referer('tmon_uc_cmd')) {
-			$unit = sanitize_text_field($_POST['unit_id']);
-			$machine = sanitize_text_field($_POST['machine_id']);
+			$unit = sanitize_text_field($_POST['unit_id'] ?? '');
 			$type = sanitize_text_field($_POST['cmd_type']);
 			$payload = array();
 			switch ($type) {
 				case 'set_var':
-					$payload = array('key' => sanitize_text_field($_POST['var_key']), 'value' => wp_unslash($_POST['var_value']));
+					$payload = array(
+						'key' => sanitize_text_field($_POST['var_key'] ?? ''),
+						'value' => wp_unslash($_POST['var_value'] ?? ''),
+					);
 					break;
-				case 'run_func':
-					$payload = array('name' => sanitize_text_field($_POST['func_name']), 'args' => wp_unslash($_POST['func_args']));
-					break;
-				case 'firmware_update':
-					$payload = array('version' => sanitize_text_field($_POST['fw_version']));
+				case 'settings_update':
+					$raw_json = wp_unslash($_POST['settings_json'] ?? '{}');
+					$decoded = json_decode($raw_json, true);
+					$payload = is_array($decoded) ? $decoded : array();
 					break;
 				case 'relay_ctrl':
-					$payload = array('relay' => intval($_POST['relay_num']), 'state' => sanitize_text_field($_POST['relay_state']));
+					$payload = array(
+						'relay_num' => intval($_POST['relay_num'] ?? 1),
+						'state' => sanitize_text_field($_POST['relay_state'] ?? 'off'),
+						'runtime' => strval(intval($_POST['relay_runtime'] ?? 0)),
+					);
+					break;
+				default:
+					$payload = array();
 					break;
 			}
-			$res = tmon_uc_send_command($unit, $machine, $type, $payload);
-			if (is_wp_error($res)) {
-				$msgs[] = array('type' => 'error', 'text' => esc_html($res->get_error_message()));
+			$queued = tmon_uc_enqueue_local_command($unit, $type, $payload);
+			if (is_wp_error($queued)) {
+				$msgs[] = array('type' => 'error', 'text' => esc_html($queued->get_error_message()));
 			} else {
-				$msgs[] = array('type' => 'updated', 'text' => __('Command dispatched to Admin hub.', 'tmon'));
+				$msgs[] = array('type' => 'updated', 'text' => sprintf(__('Command queued locally. ID: %d', 'tmon'), intval($queued)));
 			}
 		}
 
@@ -316,28 +302,49 @@ if (!function_exists('tmon_uc_commands_page')) {
 		}
 		echo '<div class="card" style="padding:12px;">';
 		echo '<h2>' . esc_html__('Send Command to Device', 'tmon') . '</h2>';
+		echo '<p>' . esc_html__('Commands queued here are delivered through the same DB queue polled by firmware.', 'tmon') . '</p>';
 		echo '<form method="post">';
 		wp_nonce_field('tmon_uc_cmd');
-		echo '<p><label>UNIT_ID <input type="text" name="unit_id" required /></label> ';
-		echo '<label>MACHINE_ID <input type="text" name="machine_id" required /></label></p>';
+		echo '<p><label>UNIT_ID <input type="text" name="unit_id" required /></label></p>';
 		echo '<p><label>Type ';
-		echo '<select name="cmd_type">';
+		echo '<select name="cmd_type" id="tmon-cmd-type">';
 		echo '<option value="set_var">Set Variable</option>';
-		echo '<option value="run_func">Run Function</option>';
-		echo '<option value="firmware_update">Firmware Update</option>';
+		echo '<option value="settings_update">Settings Update (JSON)</option>';
 		echo '<option value="relay_ctrl">Relay Control</option>';
 		echo '</select></label></p>';
 		echo '<div id="cmd-fields">';
-		echo '<p><label>Variable Key <input type="text" name="var_key" /></label> ';
+		echo '<p class="tmon-cmd-set-var"><label>Variable Key <input type="text" name="var_key" /></label> ';
 		echo '<label>Variable Value <input type="text" name="var_value" /></label></p>';
-		echo '<p><label>Function Name <input type="text" name="func_name" /></label> ';
-		echo '<label>Function Args (JSON) <input type="text" name="func_args" /></label></p>';
-		echo '<p><label>Firmware Version <input type="text" name="fw_version" /></label></p>';
-		echo '<p><label>Relay # <input type="number" min="1" max="8" name="relay_num" /></label> ';
+		echo '<p class="tmon-cmd-settings"><label>Settings JSON <input type="text" class="large-text" name="settings_json" value="{}" /></label></p>';
+		echo '<p class="tmon-cmd-relay"><label>Relay # <input type="number" min="1" max="8" name="relay_num" value="1" /></label> ';
 		echo '<label>State <select name="relay_state"><option value="on">On</option><option value="off">Off</option></select></label></p>';
+		echo '<p class="tmon-cmd-relay"><label>Runtime (s) <input type="number" min="0" step="1" name="relay_runtime" value="0" /></label></p>';
 		echo '</div>';
 		submit_button(__('Send Command', 'tmon'), 'primary', 'tmon_uc_send_cmd', false);
-		echo '</form></div>';
+		echo '</form>';
+		echo '<script>(function(){var sel=document.getElementById("tmon-cmd-type");if(!sel){return;}var vis=function(cls,on){var els=document.querySelectorAll(cls);for(var i=0;i<els.length;i++){els[i].style.display=on?"block":"none";}};var sync=function(){var t=sel.value;vis(".tmon-cmd-set-var",t==="set_var");vis(".tmon-cmd-settings",t==="settings_update");vis(".tmon-cmd-relay",t==="relay_ctrl");};sel.addEventListener("change",sync);sync();})();</script>';
+		echo '</div>';
+
+		global $wpdb;
+		$table = $wpdb->prefix . 'tmon_device_commands';
+		$pending = $wpdb->get_results("SELECT id, device_id, command, params, created_at FROM {$table} WHERE status IN ('queued','claimed') ORDER BY id DESC LIMIT 25", ARRAY_A);
+		echo '<h2>' . esc_html__('Recent Pending Commands', 'tmon') . '</h2>';
+		echo '<table class="widefat striped"><thead><tr><th>ID</th><th>Unit ID</th><th>Command</th><th>Params</th><th>Status</th><th>Created</th></tr></thead><tbody>';
+		if ($pending) {
+			foreach ($pending as $r) {
+				echo '<tr>';
+				echo '<td>' . intval($r['id']) . '</td>';
+				echo '<td>' . esc_html($r['device_id']) . '</td>';
+				echo '<td>' . esc_html($r['command']) . '</td>';
+				echo '<td><code>' . esc_html($r['params']) . '</code></td>';
+				echo '<td>' . esc_html('pending') . '</td>';
+				echo '<td>' . esc_html(tmon_uc_format_mysql_datetime($r['created_at'])) . '</td>';
+				echo '</tr>';
+			}
+		} else {
+			echo '<tr><td colspan="6">' . esc_html__('No pending commands.', 'tmon') . '</td></tr>';
+		}
+		echo '</tbody></table>';
 		echo '</div>';
 	}
 }
@@ -414,9 +421,68 @@ if (!function_exists('tmon_uc_send_command')) {
 //  - POST /wp-json/tmon/v1/device/command-complete -> acknowledges completion
 //  - POST /wp-json/tmon/v1/device/ack -> legacy alias to the above
 //
-// Commands are stored (and filtered) via a small option map: option 'tmon_device_commands'
-// Structure: array( unit_id => [ [ 'id'=>..., 'command'=>..., 'params'=>..., 'processed'=>bool, ... ], ... ] )
+// Commands are stored in DB table {$wpdb->prefix}tmon_device_commands.
+// Legacy option map support is retained for backward compatibility with older installs.
 // Confirmations are appended to option 'tmon_device_command_confirms' for audit/history.
+
+if ( ! function_exists( 'tmon_uc_cmd_confirm_hmac_secret' ) ) {
+	function tmon_uc_cmd_confirm_hmac_secret() {
+		$opt = (string) get_option( 'tmon_uc_command_confirm_hmac_secret', '' );
+		if ( '' === $opt ) {
+			$opt = (string) get_option( 'tmon_uc_field_data_hmac_secret', '' );
+		}
+		if ( '' === $opt && defined( 'TMON_FIELD_DATA_HMAC_SECRET' ) ) {
+			$opt = (string) TMON_FIELD_DATA_HMAC_SECRET;
+		}
+		return $opt;
+	}
+}
+
+if ( ! function_exists( 'tmon_uc_verify_command_confirm_sig' ) ) {
+	function tmon_uc_verify_command_confirm_sig( $params, $unit_id, $job_id, $ok, $status ) {
+		$required = (int) get_option( 'tmon_uc_command_confirm_hmac_required', 0 ) === 1;
+		$secret = tmon_uc_cmd_confirm_hmac_secret();
+		if ( '' === $secret ) {
+			return ! $required;
+		}
+
+		$sig = isset( $params['sig'] ) ? strtolower( sanitize_text_field( (string) $params['sig'] ) ) : '';
+		if ( '' === $sig ) {
+			return ! $required;
+		}
+
+		$sig_v = isset( $params['sig_v'] ) ? intval( $params['sig_v'] ) : 0;
+		if ( 2 !== $sig_v ) {
+			return false;
+		}
+
+		$sig_ts = isset( $params['sig_ts'] ) ? intval( $params['sig_ts'] ) : 0;
+		if ( $sig_ts <= 0 ) {
+			return false;
+		}
+		$max_age = max( 30, intval( get_option( 'tmon_uc_command_confirm_hmac_max_age', 900 ) ) );
+		$now = time();
+		if ( abs( $now - $sig_ts ) > $max_age ) {
+			return false;
+		}
+
+		$unit_id = sanitize_text_field( (string) $unit_id );
+		$machine_id = isset( $params['machine_id'] ) ? sanitize_text_field( (string) $params['machine_id'] ) : '';
+		$job_id = (string) $job_id;
+		$status = sanitize_text_field( (string) $status );
+		$ok_bit = $ok ? '1' : '0';
+
+		$device_secret = hash( 'sha256', $secret . '|' . $unit_id . '|' . $machine_id );
+		$canon = implode( '|', array( $unit_id, $machine_id, $job_id, $ok_bit, $status, (string) $sig_ts ) );
+		$digest = hash( 'sha256', $device_secret . '|' . $canon );
+
+		$len = min( strlen( $sig ), strlen( $digest ) );
+		if ( $len <= 0 ) {
+			return false;
+		}
+		return hash_equals( substr( $digest, 0, $len ), substr( $sig, 0, $len ) );
+	}
+}
 //
 // Register REST routes
 add_action( 'rest_api_init', function () {
@@ -446,17 +512,38 @@ function tmon_uc_get_device_commands( WP_REST_Request $req ) {
 	if ( ! $unit_id ) {
 		return new WP_REST_Response( array( 'error' => 'missing unit_id' ), 400 );
 	}
-	$all = get_option( 'tmon_device_commands', array() );
-	$list = isset( $all[ $unit_id ] ) && is_array( $all[ $unit_id ] ) ? $all[ $unit_id ] : array();
+	global $wpdb;
+	$table = $wpdb->prefix . 'tmon_device_commands';
+	$rows = $wpdb->get_results(
+		$wpdb->prepare(
+			"SELECT id, command, params FROM {$table} WHERE device_id=%s AND (status='queued' OR status='claimed') ORDER BY id ASC LIMIT %d",
+			$unit_id,
+			max(1, min(100, $limit))
+		),
+		ARRAY_A
+	);
+	$ids = array();
 	$out = array();
-	foreach ( $list as $cmd ) {
-		if ( ! empty( $cmd['processed'] ) ) {
-			continue;
+	foreach ( (array) $rows as $r ) {
+		$payload = json_decode( (string) ($r['params'] ?? '{}'), true );
+		if ( ! is_array( $payload ) ) {
+			$payload = array();
 		}
-		$out[] = $cmd;
-		if ( count( $out ) >= $limit ) {
-			break;
+		$id = intval( $r['id'] ?? 0 );
+		if ( $id > 0 ) {
+			$ids[] = $id;
 		}
+		$out[] = array(
+			'id' => $id,
+			'type' => (string) ($r['command'] ?? ''),
+			'command' => (string) ($r['command'] ?? ''),
+			'payload' => $payload,
+			'params' => $payload,
+			'data' => $payload,
+		);
+	}
+	if ( ! empty( $ids ) ) {
+		$wpdb->query( "UPDATE {$table} SET status='claimed', updated_at=NOW() WHERE id IN (" . implode(',', array_map('intval', $ids)) . ")" );
 	}
 	return rest_ensure_response( array( 'commands' => $out ) );
 }
@@ -467,35 +554,45 @@ function tmon_uc_mark_command_processed( $unit_id, $job_id, $ok = true, $result 
 		return false;
 	}
 	$unit_id = $unit_id ? sanitize_text_field( $unit_id ) : '';
-	$all = get_option( 'tmon_device_commands', array() );
-	$changed = false;
-	if ( ! isset( $all[ $unit_id ] ) || ! is_array( $all[ $unit_id ] ) ) {
-		$all[ $unit_id ] = array();
-	}
-	foreach ( $all[ $unit_id ] as &$cmd ) {
-		if ( (string) ( $cmd['id'] ?? '' ) === (string) $job_id ) {
-			$cmd['processed'] = true;
-			$cmd['processed_at'] = current_time( 'mysql' );
-			$cmd['ok'] = boolval( $ok );
-			$cmd['result'] = is_scalar( $result ) ? $result : wp_json_encode( $result );
-			$changed = true;
-			break;
+	global $wpdb;
+	$table = $wpdb->prefix . 'tmon_device_commands';
+	$row = $wpdb->get_row( $wpdb->prepare( "SELECT id, params, device_id FROM {$table} WHERE id=%d", intval( $job_id ) ), ARRAY_A );
+	if ( $row ) {
+		if ( ! $unit_id ) {
+			$unit_id = sanitize_text_field( (string) ($row['device_id'] ?? '') );
 		}
-	}
-	// If not found, append a tombstone (useful for late confirmations)
-	if ( ! $changed ) {
-		$all[ $unit_id ][] = array(
-			'id'           => (string) $job_id,
-			'command'      => 'unknown',
-			'params'       => (object) array(),
-			'processed'    => true,
-			'processed_at' => current_time( 'mysql' ),
-			'ok'           => boolval( $ok ),
-			'result'       => is_scalar( $result ) ? $result : wp_json_encode( $result ),
+		$params = json_decode( (string) ($row['params'] ?? '{}'), true );
+		if ( ! is_array( $params ) ) {
+			$params = array();
+		}
+		$params['__ok'] = boolval( $ok );
+		$params['__result'] = is_scalar( $result ) ? (string) $result : wp_json_encode( $result );
+		$wpdb->update(
+			$table,
+			array(
+				'status' => boolval( $ok ) ? 'done' : 'failed',
+				'executed_status' => boolval( $ok ) ? 'done' : 'failed',
+				'executed_at' => current_time('mysql'),
+				'updated_at' => current_time('mysql'),
+				'params' => wp_json_encode( $params ),
+				'result' => is_scalar( $result ) ? (string) $result : wp_json_encode( $result ),
+			),
+			array( 'id' => intval( $job_id ) )
 		);
-		$changed = true;
 	}
-	if ( $changed ) {
+
+	// Legacy option-map confirmation log support for older tooling
+	$all = get_option( 'tmon_device_commands', array() );
+	if ( isset( $all[ $unit_id ] ) && is_array( $all[ $unit_id ] ) ) {
+		foreach ( $all[ $unit_id ] as &$cmd ) {
+			if ( (string) ( $cmd['id'] ?? '' ) === (string) $job_id ) {
+				$cmd['processed'] = true;
+				$cmd['processed_at'] = current_time( 'mysql' );
+				$cmd['ok'] = boolval( $ok );
+				$cmd['result'] = is_scalar( $result ) ? $result : wp_json_encode( $result );
+				break;
+			}
+		}
 		update_option( 'tmon_device_commands', $all );
 	}
 	// Append to confirms for audit/history
@@ -519,21 +616,32 @@ function tmon_uc_handle_command_complete( WP_REST_Request $req ) {
 	$job_id = isset( $params['job_id'] ) ? $params['job_id'] : ( isset( $params['command_id'] ) ? $params['command_id'] : '' );
 	$unit_id = isset( $params['unit_id'] ) ? sanitize_text_field( $params['unit_id'] ) : '';
 	$ok = isset( $params['ok'] ) ? boolval( $params['ok'] ) : false;
+	$status = isset( $params['status'] ) ? sanitize_text_field( (string) $params['status'] ) : ( $ok ? 'done' : 'failed' );
 	$result = isset( $params['result'] ) ? $params['result'] : '';
 	if ( ! $job_id ) {
 		return new WP_REST_Response( array( 'error' => 'missing job_id' ), 400 );
 	}
-	// If unit_id missing, attempt to locate job across units
+	// If unit_id missing, attempt to locate from DB first, then legacy option-map.
 	if ( empty( $unit_id ) ) {
-		$all = get_option( 'tmon_device_commands', array() );
-		foreach ( $all as $u => $list ) {
-			foreach ( $list as $cmd ) {
-				if ( (string) ( $cmd['id'] ?? '' ) === (string) $job_id ) {
-					$unit_id = $u;
-					break 2;
+		global $wpdb;
+		$table = $wpdb->prefix . 'tmon_device_commands';
+		$db_row = $wpdb->get_row( $wpdb->prepare( "SELECT device_id FROM {$table} WHERE id=%d", intval( $job_id ) ), ARRAY_A );
+		if ( is_array( $db_row ) && ! empty( $db_row['device_id'] ) ) {
+			$unit_id = sanitize_text_field( (string) $db_row['device_id'] );
+		} else {
+			$all = get_option( 'tmon_device_commands', array() );
+			foreach ( $all as $u => $list ) {
+				foreach ( $list as $cmd ) {
+					if ( (string) ( $cmd['id'] ?? '' ) === (string) $job_id ) {
+						$unit_id = $u;
+						break 2;
+					}
 				}
 			}
 		}
+	}
+	if ( ! tmon_uc_verify_command_confirm_sig( $params, $unit_id, $job_id, $ok, $status ) ) {
+		return new WP_REST_Response( array( 'error' => 'invalid_signature' ), 401 );
 	}
 	tmon_uc_mark_command_processed( $unit_id ?: 'unknown', $job_id, $ok, $result );
 	return rest_ensure_response( array( 'status' => 'ok' ) );

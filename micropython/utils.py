@@ -232,6 +232,76 @@ def delete_data_history_log():
         print(f"Error deleting data history log: {e}")
 
 _send_field_data_lock = asyncio.Lock()
+_field_data_dynamic_batch = None
+
+def _get_adaptive_batch_size(default_batch):
+    """Return batch size adjusted for current memory pressure and previous failures."""
+    try:
+        if not bool(getattr(settings, 'FIELD_DATA_ADAPTIVE_BACKPRESSURE', True)):
+            return max(1, int(default_batch))
+    except Exception:
+        return max(1, int(default_batch))
+
+    try:
+        min_batch = max(1, int(getattr(settings, 'FIELD_DATA_MIN_BATCH', 5)))
+    except Exception:
+        min_batch = 5
+
+    try:
+        mem_low = int(getattr(settings, 'FIELD_DATA_MEM_LOW_WATERMARK', 40 * 1024))
+    except Exception:
+        mem_low = 40 * 1024
+
+    target = max(min_batch, int(default_batch))
+    global _field_data_dynamic_batch
+    if _field_data_dynamic_batch is not None:
+        try:
+            target = min(target, max(min_batch, int(_field_data_dynamic_batch)))
+        except Exception:
+            pass
+
+    try:
+        free_now = int(gc.mem_free())
+        if free_now < mem_low:
+            target = max(min_batch, target // 2)
+    except Exception:
+        pass
+
+    return max(1, target)
+
+def _update_adaptive_batch_size(default_batch, delivered):
+    """Shrink batch after failures, grow slowly after success."""
+    try:
+        if not bool(getattr(settings, 'FIELD_DATA_ADAPTIVE_BACKPRESSURE', True)):
+            return
+    except Exception:
+        return
+
+    try:
+        min_batch = max(1, int(getattr(settings, 'FIELD_DATA_MIN_BATCH', 5)))
+    except Exception:
+        min_batch = 5
+
+    try:
+        cap = max(min_batch, int(default_batch))
+    except Exception:
+        cap = max(min_batch, 10)
+
+    global _field_data_dynamic_batch
+    cur = _field_data_dynamic_batch
+    if cur is None:
+        cur = cap
+    try:
+        cur = int(cur)
+    except Exception:
+        cur = cap
+
+    if delivered:
+        cur = min(cap, cur + max(1, cap // 10))
+    else:
+        cur = max(min_batch, cur // 2)
+
+    _field_data_dynamic_batch = cur
 
 def persist_wordpress_api_url(url):
     """Persist WORDPRESS_API_URL to file and sync wprest."""
@@ -1000,6 +1070,63 @@ def build_sdata_snapshot(include_meta=True):
             pass
     return entry
 
+def _compact_field_record(record):
+    """Optionally compact telemetry keys and omit default/empty values.
+
+    This is opt-in via settings.FIELD_DATA_COMPACT_KEYS to keep compatibility safe.
+    """
+    if not isinstance(record, dict):
+        return record
+
+    if not bool(getattr(settings, 'FIELD_DATA_COMPACT_KEYS', False)):
+        return record
+
+    skip_defaults = bool(getattr(settings, 'FIELD_DATA_SKIP_DEFAULTS', True))
+    key_map = {
+        'cur_temp_f': 't_f',
+        'cur_temp_c': 't_c',
+        'cur_humid': 'hum',
+        'cur_bar_pres': 'bar',
+        'sys_voltage': 'v',
+        'free_mem': 'fm',
+        'loop_runtime': 'lr',
+        'script_runtime': 'sr',
+        'cur_device_temp_f': 'dt_f',
+        'cur_device_temp_c': 'dt_c',
+        'cur_device_humid': 'dh',
+        'cur_device_bar_pres': 'db',
+        'cur_soil_moisture': 'sm',
+        'cur_soil_temp_f': 'st_f',
+        'cur_soil_temp_c': 'st_c',
+        'engine1_speed_rpm': 'e1r',
+        'engine2_speed_rpm': 'e2r',
+        'engine1_batt_v': 'e1v',
+        'engine2_batt_v': 'e2v',
+        'cpu_temp': 'cpu',
+        'error_count': 'ec',
+    }
+
+    def _keep_val(v):
+        if not skip_defaults:
+            return True
+        if v is None or v == '':
+            return False
+        if v is False:
+            return False
+        if isinstance(v, (int, float)) and v == 0:
+            return False
+        if isinstance(v, (list, tuple, dict)) and len(v) == 0:
+            return False
+        return True
+
+    compact = {}
+    for k, v in record.items():
+        if not _keep_val(v):
+            continue
+        nk = key_map.get(k, k)
+        compact[nk] = v
+    return compact
+
 def record_field_data():
     """Append the current device telemetry snapshot for transport and storage."""
     entry = build_sdata_snapshot(include_meta=True)
@@ -1064,7 +1191,8 @@ async def send_field_data_log():
             current_items = []
             total_lines = 0
             batch = []
-            batch_size = int(getattr(settings, 'FIELD_DATA_MAX_BATCH', 10))
+            batch_default = int(getattr(settings, 'FIELD_DATA_MAX_BATCH', 10))
+            batch_size = _get_adaptive_batch_size(batch_default)
             max_retries = int(getattr(settings, 'FIELD_DATA_MAX_ATTEMPTS', 5))
             backoff_base = int(getattr(settings, 'FIELD_DATA_RETRY_BASE_S', 5))
 
@@ -1081,7 +1209,8 @@ async def send_field_data_log():
                             line = ''
                     if line and line.strip():
                         try:
-                            batch.append(ujson.loads(line))
+                            obj = ujson.loads(line)
+                            batch.append(_compact_field_record(obj))
                             total_lines += 1
                             if len(batch) >= batch_size:
                                 current_items.append({'payload': {'unit_id': settings.UNIT_ID, 'data': batch}, 'source': 'log'})
@@ -1264,9 +1393,11 @@ async def send_field_data_log():
 
                 if delivered:
                     sent_indices.append(idx)
+                    _update_adaptive_batch_size(batch_default, True)
                 else:
                     await debug_print(f'sfd: payload {idx+1} failed after max', 'ERROR')
                     await log_error('Field data log delivery failed after max retries, will try again later.', 'field_data')
+                    _update_adaptive_batch_size(batch_default, False)
                 if asyncio and (idx % 3 == 0):
                     try:
                         await asyncio.sleep_ms(1)
@@ -1362,9 +1493,11 @@ async def send_field_data_via_lora():
             batch = []
             batch_indices = []
             try:
-                batch_size = int(getattr(settings, 'FIELD_DATA_MAX_BATCH', 10))
+                batch_default = int(getattr(settings, 'FIELD_DATA_MAX_BATCH', 10))
+                batch_size = _get_adaptive_batch_size(batch_default)
             except Exception:
-                batch_size = 10
+                batch_default = 10
+                batch_size = _get_adaptive_batch_size(batch_default)
 
             for idx, raw in enumerate(raw_lines):
                 if not raw:
@@ -1379,7 +1512,7 @@ async def send_field_data_via_lora():
                 if not line.strip():
                     continue
                 try:
-                    obj = ujson.loads(line)
+                    obj = _compact_field_record(ujson.loads(line))
                 except Exception as pe:
                     await debug_print(f'sfd_lora: JSON parse err on line {idx}: {pe}', 'ERROR')
                     continue
@@ -1452,6 +1585,7 @@ async def send_field_data_via_lora():
                     if delivered:
                         acked_indices.update(idx_list)
                         await debug_print(f'sfd_lora: batch {bi+1} delivered', 'DEBUG')
+                        _update_adaptive_batch_size(batch_default, True)
                         break
 
                     await debug_print(f'sfd_lora: batch {bi+1} att{attempt} failed, retry', 'WARN')
@@ -1464,6 +1598,7 @@ async def send_field_data_via_lora():
 
                 if not delivered:
                     await debug_print(f'sfd_lora: batch {bi+1} failed after retries', 'ERROR')
+                    _update_adaptive_batch_size(batch_default, False)
                 if asyncio and (bi % 2 == 0):
                     try:
                         await asyncio.sleep_ms(1)

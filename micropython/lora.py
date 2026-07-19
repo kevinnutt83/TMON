@@ -42,7 +42,7 @@ except ImportError:
     sdata = None
     settings = None
 
-from utils import free_pins, debug_print, TMON_AI, stage_remote_field_data, stage_remote_files, record_field_data, get_machine_id
+from utils import free_pins, debug_print, TMON_AI, stage_remote_field_data, stage_remote_files, record_field_data, get_machine_id, persist_custom_settings
 from relay import toggle_relay
 from sampling import findLowestTemp, findHighestTemp, findLowestBar, findHighestBar, findLowestHumid, findHighestHumid
 try:
@@ -402,12 +402,20 @@ async def process_remote_burst(uid, st):
     settings.REMOTE_NODE_INFO[uid]['missed_syncs'] = 0
     save_remote_node_info()
 
-    # SEND ACK
+    # SEND ACK (optionally piggyback one pending command for this remote)
     try:
+        pending_cmd = await _fetch_remote_pending_command(uid, remote_machine_id)
         ack_msg = f"ACK:{uid}:NEXT:{next_delay}"
+        if isinstance(pending_cmd, dict):
+            cmd_blob = _encode_ack_command(pending_cmd)
+            if cmd_blob:
+                ack_msg += f":CMD:{cmd_blob}"
         ack_msg = await _secure_message(ack_msg, remote_uid=uid)
         await _send_with_retry(ack_msg.encode())
-        await debug_print(f"Sent ACK with next delay {next_delay}s to {uid}", "BASE_NODE")
+        if isinstance(pending_cmd, dict):
+            await debug_print(f"Sent ACK+CMD to {uid} (cmd_id={pending_cmd.get('id')})", "BASE_NODE")
+        else:
+            await debug_print(f"Sent ACK with next delay {next_delay}s to {uid}", "BASE_NODE")
         await display_message("ACK Sent", 0.5)
     except Exception as ack_e:
         await log_error(f"ACK send error to {uid}: {ack_e}")
@@ -537,6 +545,8 @@ async def base_packet_processor():
 
             if orig_type == 'FIELD_DATA':
                 await process_remote_field_data(uid, st)
+            elif orig_type == 'CMD_RESULT':
+                await process_remote_command_result(uid, st)
             elif orig_type == 'STATE_FILES':
                 await process_remote_state_files(uid, st)
             else:
@@ -928,6 +938,252 @@ async def send_remote_state_files(files):
         return False
 
 
+async def _fetch_remote_pending_command(remote_unit_id, remote_machine_id=None):
+    """Base helper: fetch one queued command for a remote unit from UC/WP."""
+    try:
+        if settings.NODE_TYPE != 'base':
+            return None
+        wp_url = ''
+        headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
+        req_mod = None
+        if '_wp' in globals() and _wp is not None:
+            try:
+                wp_url = str(getattr(_wp, '_current_wp_url', lambda: '')() or '').strip()
+            except Exception:
+                wp_url = ''
+            try:
+                headers = getattr(_wp, '_auth_headers', lambda *_: headers)()
+            except Exception:
+                pass
+            req_mod = getattr(_wp, 'requests', None)
+        if not req_mod:
+            try:
+                import urequests as req_mod
+            except Exception:
+                req_mod = None
+        if not wp_url or not req_mod:
+            return None
+
+        body = {
+            'unit_id': str(remote_unit_id),
+            'device_id': str(remote_unit_id),
+            'machine_id': str(remote_machine_id or ''),
+            'limit': 1,
+        }
+        resp = None
+        try:
+            try:
+                resp = req_mod.post(wp_url.rstrip('/') + '/wp-json/tmon/v1/device/commands', json=body, headers=headers, timeout=8)
+            except TypeError:
+                resp = req_mod.post(wp_url.rstrip('/') + '/wp-json/tmon/v1/device/commands', json=body, headers=headers)
+            status = int(getattr(resp, 'status_code', 0) or 0)
+            if status not in (200, 201):
+                return None
+            parsed = None
+            try:
+                parsed = resp.json()
+            except Exception:
+                parsed = None
+            commands = []
+            if isinstance(parsed, dict) and isinstance(parsed.get('commands'), list):
+                commands = parsed.get('commands')
+            elif isinstance(parsed, list):
+                commands = parsed
+            if not commands:
+                return None
+            cmd = commands[0] if isinstance(commands[0], dict) else None
+            if not cmd:
+                return None
+            ctype = str(cmd.get('type') or cmd.get('command') or '').strip().lower()
+            payload = cmd.get('payload') if isinstance(cmd.get('payload'), dict) else (
+                cmd.get('params') if isinstance(cmd.get('params'), dict) else (
+                    cmd.get('data') if isinstance(cmd.get('data'), dict) else {}
+                )
+            )
+            if ctype not in ('set_var', 'set_setting', 'settings_update', 'settings_change', 'relay_ctrl', 'toggle_relay'):
+                return None
+            return {
+                'id': cmd.get('id'),
+                'type': ctype,
+                'payload': payload if isinstance(payload, dict) else {},
+            }
+        finally:
+            try:
+                if resp:
+                    resp.close()
+            except Exception:
+                pass
+    except Exception:
+        return None
+
+
+def _encode_ack_command(cmd_obj):
+    try:
+        if not isinstance(cmd_obj, dict):
+            return ''
+        raw = ujson.dumps(cmd_obj).encode()
+        return _ub.b2a_base64(raw).rstrip(b'\n').decode()
+    except Exception:
+        return ''
+
+
+def _decode_ack_command(encoded):
+    try:
+        if not encoded:
+            return None
+        raw = _ub.a2b_base64(str(encoded).encode()).decode()
+        obj = ujson.loads(raw)
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        return None
+
+
+async def _send_remote_command_result(result_payload):
+    try:
+        payload_b64 = _ub.b2a_base64(ujson.dumps(result_payload).encode()).rstrip(b'\n').decode()
+        await _send_chunked('CMD_RESULT', payload_b64)
+    except Exception as e:
+        await log_error(f'send_remote_command_result failed: {e}')
+
+
+async def _apply_remote_command_from_ack(cmd_obj):
+    """Remote helper: apply command received via ACK and emit command result."""
+    if not isinstance(cmd_obj, dict):
+        return
+    cmd_id = cmd_obj.get('id') or cmd_obj.get('job_id')
+    ctype = str(cmd_obj.get('type') or cmd_obj.get('command') or '').strip().lower()
+    payload = cmd_obj.get('payload') if isinstance(cmd_obj.get('payload'), dict) else (
+        cmd_obj.get('params') if isinstance(cmd_obj.get('params'), dict) else (
+            cmd_obj.get('data') if isinstance(cmd_obj.get('data'), dict) else {}
+        )
+    )
+    ok = False
+    result = {'type': ctype}
+    try:
+        if ctype in ('set_var', 'set_setting'):
+            key = str(payload.get('key') or '').strip()
+            if key:
+                persist_custom_settings({key: payload.get('value')})
+                ok = True
+                result['staged'] = True
+                result['key'] = key
+        elif ctype in ('settings_update', 'settings_change') and isinstance(payload, dict):
+            updates = {}
+            for k, v in payload.items():
+                sk = str(k or '').strip()
+                if sk:
+                    updates[sk] = v
+            if updates:
+                persist_custom_settings(updates)
+                ok = True
+                result['staged_count'] = len(updates)
+        elif ctype in ('relay_ctrl', 'toggle_relay'):
+            relay_num = payload.get('relay_num', payload.get('relay', '1'))
+            state = payload.get('state', 'off')
+            runtime = payload.get('runtime', payload.get('duration_s', 0))
+            await toggle_relay(str(relay_num), str(state), str(runtime))
+            ok = True
+            result['executed'] = True
+        else:
+            result['reason'] = 'unsupported_command_type'
+    except Exception as e:
+        ok = False
+        result['reason'] = 'command_exec_error'
+        result['error'] = str(e)
+
+    if cmd_id is not None:
+        await _send_remote_command_result({
+            'id': cmd_id,
+            'job_id': cmd_id,
+            'unit_id': getattr(settings, 'UNIT_ID', ''),
+            'machine_id': get_machine_id(),
+            'ok': bool(ok),
+            'status': 'done' if ok else 'failed',
+            'result': result,
+        })
+
+
+async def _proxy_remote_command_result(remote_uid, payload):
+    """Base helper: proxy remote command execution result to UC/WP."""
+    try:
+        if settings.NODE_TYPE != 'base' or not isinstance(payload, dict):
+            return
+        wp_url = ''
+        headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
+        req_mod = None
+        if '_wp' in globals() and _wp is not None:
+            try:
+                wp_url = str(getattr(_wp, '_current_wp_url', lambda: '')() or '').strip()
+            except Exception:
+                wp_url = ''
+            try:
+                headers = getattr(_wp, '_auth_headers', lambda *_: headers)()
+            except Exception:
+                pass
+            req_mod = getattr(_wp, 'requests', None)
+        if not req_mod:
+            try:
+                import urequests as req_mod
+            except Exception:
+                req_mod = None
+        if not wp_url or not req_mod:
+            return
+
+        body = {
+            'id': payload.get('id') or payload.get('job_id'),
+            'job_id': payload.get('job_id') or payload.get('id'),
+            'unit_id': payload.get('unit_id') or remote_uid,
+            'machine_id': payload.get('machine_id') or '',
+            'ok': bool(payload.get('ok')),
+            'status': payload.get('status') or ('done' if bool(payload.get('ok')) else 'failed'),
+            'result': payload.get('result') if isinstance(payload.get('result'), (dict, list, str, int, float, bool)) else {},
+        }
+        if not body['id']:
+            return
+
+        endpoints = [
+            '/wp-json/tmon/v1/device/command-result',
+            '/wp-json/tmon/v1/device/command-complete',
+            '/wp-json/tmon/v1/device/ack',
+        ]
+        for ep in endpoints:
+            resp = None
+            try:
+                try:
+                    resp = req_mod.post(wp_url.rstrip('/') + ep, json=body, headers=headers, timeout=8)
+                except TypeError:
+                    resp = req_mod.post(wp_url.rstrip('/') + ep, json=body, headers=headers)
+                status = int(getattr(resp, 'status_code', 0) or 0)
+                if status in (200, 201, 202):
+                    return
+            except Exception:
+                pass
+            finally:
+                try:
+                    if resp:
+                        resp.close()
+                except Exception:
+                    pass
+    except Exception:
+        return
+
+
+async def process_remote_command_result(uid, st):
+    try:
+        payload = st.get('data', {}).get('CMD_RESULT')
+        if isinstance(payload, dict):
+            await _proxy_remote_command_result(uid, payload)
+    except Exception as e:
+        await log_error(f"Remote command result processor error for {uid}: {e}")
+    finally:
+        if 'CMD_RESULT' in st.get('types', set()):
+            st['types'].discard('CMD_RESULT')
+        if isinstance(st.get('data'), dict):
+            st['data'].pop('CMD_RESULT', None)
+        if isinstance(st.get('chunks'), dict):
+            st['chunks'].pop('CMD_RESULT', None)
+
+
 async def _send_lora_heartbeat():
     if settings.NODE_TYPE != 'remote':
         return
@@ -1254,6 +1510,17 @@ async def connectLora():
                                 if len(parts) >= 4 and parts[1] == settings.UNIT_ID and parts[2] == 'NEXT':
                                     await debug_print("Remote: ACK received for this node", "REMOTE_NODE")
                                     next_delay = int(parts[3])
+                                    ack_cmd = None
+                                    if len(parts) >= 6:
+                                        i = 4
+                                        while i + 1 < len(parts):
+                                            if parts[i] == 'CMD':
+                                                ack_cmd = _decode_ack_command(parts[i + 1])
+                                                break
+                                            i += 2
+                                    if isinstance(ack_cmd, dict):
+                                        await debug_print("Remote: received command via ACK", "REMOTE_NODE")
+                                        await _apply_remote_command_from_ack(ack_cmd)
                                     last_rx_ts = time.time()
                                     sdata.lora_SigStr = lora.getRSSI() if hasattr(lora, 'getRSSI') else -60
                                     sdata.LORA_CONNECTED = True

@@ -104,7 +104,11 @@ def run_validation(
     settings_endpoint = f"{base}/wp-json/tmon/v1/admin/device/settings"
     enqueue_endpoint = f"{base}/wp-json/tmon-uc/v1/device/command"
     poll_endpoint = f"{base}/wp-json/tmon/v1/device/commands"
-    result_endpoint = f"{base}/wp-json/tmon/v1/device/command-result"
+    result_endpoints = [
+        f"{base}/wp-json/tmon/v1/device/command-result",
+        f"{base}/wp-json/tmon/v1/device/command-complete",
+        f"{base}/wp-json/tmon/v1/device/ack",
+    ]
 
     staged_payload = {
         "unit_id": unit_id,
@@ -170,16 +174,25 @@ def run_validation(
         raise FlowError("queued command was not observed via device poll endpoint")
 
     _print_step("4/5 command result", f"posting completion for command id {command_id}")
-    result = _request_json(
-        "POST",
-        result_endpoint,
-        payload={
-            "id": command_id,
-            "status": "done",
-            "result": {"ok": True, "validator": "flow-script"},
-        },
-    )
-    _assert_status("command result", result.status, [200, 201])
+    result_payload = {
+        "id": command_id,
+        "job_id": command_id,
+        "command_id": command_id,
+        "unit_id": unit_id,
+        "ok": True,
+        "status": "done",
+        "result": {"ok": True, "validator": "flow-script"},
+    }
+    last_status = 0
+    posted_ok = False
+    for endpoint in result_endpoints:
+        result = _request_json("POST", endpoint, payload=result_payload)
+        last_status = result.status
+        if result.status in (200, 201, 202):
+            posted_ok = True
+            break
+    if not posted_ok:
+        raise FlowError(f"command result post failed on all endpoints; last status={last_status}")
 
     _print_step("5/5 queue verify", "re-polling queue to verify command is no longer pending")
     final_poll = _request_json("POST", poll_endpoint, payload={"unit_id": unit_id})
