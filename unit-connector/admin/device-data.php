@@ -368,8 +368,15 @@ if (! function_exists('tmon_uc_device_data_page')) {
 				loadSchema();
 			});
 
-			// Initial schema prefetch in background
-			loadSchema();
+			// Initial populate: auto-load for current selection if available
+			(function(){
+				const initialEl = document.getElementById('tmon-unit-picker');
+				const initialUnit = (initialEl && initialEl.value) ? initialEl.value : (initialEl && initialEl.options && initialEl.options.length ? initialEl.options[0].value : '');
+				if (initialUnit) {
+					if (initialEl && !initialEl.value) initialEl.value = initialUnit;
+					fetchSettings(initialUnit);
+				}
+			})();
 		})();
 		</script>
 		<?php

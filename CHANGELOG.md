@@ -44,6 +44,9 @@ All notable changes to this project will be documented in this file.
 - Firmware: eliminated LoRa airtime congestion and field-data backlog accumulation by enabling key compaction (`FIELD_DATA_COMPACT_KEYS=True`), capping LoRa field-data batches at 3 records (`FIELD_DATA_LORA_MAX_BATCH=3`), immediately trimming delivered records from `field_data.log`, and removing redundant raw state file (`settings.py`, `sdata.py`) uploads over LoRa after field data sends.
 - Unit Connector: fixed PHP error log spam from `tmon_pending_commands_summary_refresh` by gating AJAX diagnostic logging behind `get_option('tmon_uc_debug_ajax')` and skipping routine background polling actions.
 - Unit Connector: fixed Elementor `Attempt to read property "post_status" on null in document.php` warnings by excluding `tmon_custom_code` from Elementor document support and renaming `$post` loop variables to prevent global `$post` collisions on WP admin pages.
+- Unit Connector: fixed broken shortcodes (`[tmon_device_settings]` and `[tmon_device_history]`) on the Device Data page caused by ID selector collisions when multiple components generated conflicting dropdown selectors. Now centralized around the single source of truth (`#tmon-unit-picker`).
+- Unit Connector: fixed Device Data page Applied/Staged JSON status boxes remaining stuck on `{}` until manual dropdown change by triggering an immediate initial load on page start.
+- Unit Connector: added defensive null check in `tmon_uc_receive_field_data` to return clean HTTP 400 when malformed or empty JSON payloads arrive.
 - Removed duplicated settings block (deduplicated settings.py).
 - Hardened async HTTP client in wprest to support host:port and full reads.
 - Made debug/config_persist compatible with MicroPython (removed union type hints).

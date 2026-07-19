@@ -263,6 +263,9 @@ function tmon_uc_rest_export_field_data($request) {
 function tmon_uc_receive_field_data($request) {
     global $wpdb;
     $data = $request->get_json_params();
+    if (!is_array($data) || empty($data)) {
+        return new WP_REST_Response(['status'=>'error','message'=>'Invalid JSON payload'], 400);
+    }
     // Enforce HMAC when configured
     $hsec = tmon_uc_fd_hmac_secret();
     if ($hsec && !tmon_uc_fd_verify_sig($data)) {
