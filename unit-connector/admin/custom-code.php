@@ -9,8 +9,23 @@ add_action('init', function() {
         'menu_icon' => 'dashicons-editor-code',
         // Show under TMON Devices top-level menu
         'show_in_menu' => 'tmon_devices',
+        'elementor' => false,
     ]);
 });
+// Prevent Elementor from attempting to inspect or manage TMON custom code snippets
+add_filter('elementor/utils/is_post_type_support', function($is_supported, $post_type) {
+    if ($post_type === 'tmon_custom_code') {
+        return false;
+    }
+    return $is_supported;
+}, 10, 2);
+
+add_action('elementor/init', function() {
+    if (class_exists('\Elementor\Plugin') && isset(\Elementor\Plugin::$instance->documents)) {
+        \Elementor\Plugin::$instance->documents->remove_post_type_support('tmon_custom_code');
+    }
+});
+
 // Custom Code Management for TMON Admin and Unit Connector
 // Allows users to define, send, and manage custom code snippets for TMON devices
 
@@ -30,14 +45,14 @@ function tmon_custom_code_page() {
     $posts = get_posts($args);
     if ($posts) {
         echo '<table class="widefat"><thead><tr><th>Title</th><th>Devices</th><th>Schedule</th><th>Action</th></tr></thead><tbody>';
-        foreach ($posts as $post) {
-            $devices = get_post_meta($post->ID, 'tmon_devices', true) ?: 'All';
-            $schedule = get_post_meta($post->ID, 'tmon_schedule', true) ?: 'On Demand';
+        foreach ($posts as $custom_code_item) {
+            $devices = get_post_meta($custom_code_item->ID, 'tmon_devices', true) ?: 'All';
+            $schedule = get_post_meta($custom_code_item->ID, 'tmon_schedule', true) ?: 'On Demand';
             echo '<tr>';
-            echo '<td>' . esc_html($post->post_title) . '</td>';
+            echo '<td>' . esc_html($custom_code_item->post_title) . '</td>';
             echo '<td>' . esc_html(is_array($devices) ? implode(", ", $devices) : $devices) . '</td>';
             echo '<td>' . esc_html($schedule) . '</td>';
-            echo '<td><form method="post"><input type="hidden" name="tmon_run_code_id" value="' . esc_attr($post->ID) . '"><button class="button">Send to Devices</button></form></td>';
+            echo '<td><form method="post"><input type="hidden" name="tmon_run_code_id" value="' . esc_attr($custom_code_item->ID) . '"><button class="button">Send to Devices</button></form></td>';
             echo '</tr>';
         }
         echo '</tbody></table>';
@@ -98,14 +113,14 @@ if (!function_exists('tmon_uc_custom_code_page')) {
 		$posts = get_posts($args);
 		if ($posts) {
 			echo '<table class="widefat"><thead><tr><th>Title</th><th>Devices</th><th>Schedule</th><th>Action</th></tr></thead><tbody>';
-			foreach ($posts as $post) {
-				$devices = get_post_meta($post->ID, 'tmon_devices', true) ?: 'All';
-				$schedule = get_post_meta($post->ID, 'tmon_schedule', true) ?: 'On Demand';
+			foreach ($posts as $custom_code_item) {
+				$devices = get_post_meta($custom_code_item->ID, 'tmon_devices', true) ?: 'All';
+				$schedule = get_post_meta($custom_code_item->ID, 'tmon_schedule', true) ?: 'On Demand';
 				echo '<tr>';
-				echo '<td>' . esc_html($post->post_title) . '</td>';
+				echo '<td>' . esc_html($custom_code_item->post_title) . '</td>';
 				echo '<td>' . esc_html(is_array($devices) ? implode(", ", $devices) : $devices) . '</td>';
 				echo '<td>' . esc_html($schedule) . '</td>';
-				echo '<td><form method="post"><input type="hidden" name="tmon_run_code_id" value="' . esc_attr($post->ID) . '"><button class="button">Send to Devices</button></form></td>';
+				echo '<td><form method="post"><input type="hidden" name="tmon_run_code_id" value="' . esc_attr($custom_code_item->ID) . '"><button class="button">Send to Devices</button></form></td>';
 				echo '</tr>';
 			}
 			echo '</tbody></table>';

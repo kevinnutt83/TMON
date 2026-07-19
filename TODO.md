@@ -133,6 +133,7 @@ Unit Connector
 - [x] Update tmon_devices_sdata shortcode table to display device interior temp/humidity/pressure and soil moisture instead of probe-only values.
 - [x] Update tmon_device_history chart datasets to graph device interior temp/humidity/pressure and soil moisture alongside probe data.
 - [x] Widgets/graphs for device data; relay controls; shortcodes polish.
+- [x] Fix PHP error log spam from dashboard widgets / shortcodes (`tmon_pending_commands_summary_refresh`) and prevent Elementor `Attempt to read property "post_status" on null in document.php` warnings by excluding `tmon_custom_code` from Elementor and avoiding global `$post` loop variable collisions.
 
 Docs/QA
 - [ ] Add data flow graphics/screenshots.

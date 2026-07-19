@@ -114,11 +114,11 @@ add_action('admin_init', function(){
 		update_option('tmon_uc_hub_url', $default);
 		error_log("tmon-unit-connector: ensured hub URL is {$default} (was '{$current}').");
 	}
-	// Lightweight AJAX diagnostics to help find failing admin-ajax requests
-	if (defined('DOING_AJAX') && DOING_AJAX) {
+	// Lightweight AJAX diagnostics to help find failing admin-ajax requests (opt-in only, skip noisy polling)
+	if (defined('DOING_AJAX') && DOING_AJAX && get_option('tmon_uc_debug_ajax')) {
 		$act = isset($_REQUEST['action']) ? sanitize_text_field($_REQUEST['action']) : '';
-		if ($act) {
-			// Log only tmon-related requests to avoid noise
+		if ($act && !in_array($act, ['tmon_pending_commands_summary_refresh', 'tmon_device_status_refresh', 'tmon_uc_device_bundle', 'tmon_uc_queue_refresh'], true)) {
+			// Log only tmon-related requests when ajax debugging is enabled
 			if (stripos($act, 'tmon') === 0 || stripos($act, 'tmon_') === 0) {
 				$method = $_SERVER['REQUEST_METHOD'] ?? 'POST';
 				error_log("tmon-unit-connector: AJAX action '{$act}' invoked via {$method}. Refer to admin-ajax.php response for details.");
