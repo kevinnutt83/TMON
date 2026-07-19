@@ -7,6 +7,11 @@ import sdata
 import machine
 import framebuf
 from settings import OLED_SCL_PIN, OLED_SDA_PIN
+try:
+    from diagnostics import get_diagnostics_snapshot
+except Exception:
+    def get_diagnostics_snapshot():
+        return {}
 
 # Globals / state
 _render_task = None
@@ -32,7 +37,7 @@ FLIP_INTERVAL_S = int(getattr(settings, 'OLED_HEADER_FLIP_S', 4))
 RENDER_INTERVAL_S = 0.5
 MAX_TEXT_CHARS = 16
 PAGE_INTERVAL_S = int(getattr(settings, 'OLED_PAGE_FLIP_S', 6))
-PAGE_NAMES = ('Summary', 'Runtime', 'Network')
+PAGE_NAMES = ('Summary', 'Runtime', 'Network', 'LoRa Diag', 'Health')
 
 class SSD1309_I2C(framebuf.FrameBuffer):
     def __init__(self, width, height, i2c, addr=0x3C, external_vcc=False):
@@ -204,6 +209,19 @@ def _page_title(page):
         pass
     return 'Status'
 
+def _age_seconds(ts):
+    try:
+        tsv = int(ts or 0)
+        if tsv <= 0:
+            return None
+        nowv = int(time.time())
+        if nowv <= 0:
+            return None
+        age = nowv - tsv
+        return age if age >= 0 else None
+    except Exception:
+        return None
+
 def _draw_page_marker(o, page, total):
     try:
         if total <= 0:
@@ -255,6 +273,10 @@ def _layout_header_right(vol_w, right_blocks):
 
 def _render_signature(page):
     try:
+        diag = get_diagnostics_snapshot() or {}
+        lora = diag.get('lora', {}) if isinstance(diag, dict) else {}
+        tx = diag.get('transmission', {}) if isinstance(diag, dict) else {}
+        sysh = diag.get('system', {}) if isinstance(diag, dict) else {}
         return (
             page,
             _status_banner_text,
@@ -277,6 +299,12 @@ def _render_signature(page):
             _safe_attr(sdata, 'cur_soil_moisture', None),
             _safe_attr(sdata, 'cpu_temp', None),
             _safe_attr(sdata, 'error_count', None),
+            lora.get('missed_syncs', 0),
+            lora.get('remote_nodes', 0),
+            lora.get('last_heartbeat_ts', 0),
+            tx.get('backlog_size', 0),
+            tx.get('last_successful_upload', 0),
+            sysh.get('last_error', ''),
         )
     except Exception:
         return (page,)
@@ -294,7 +322,7 @@ async def _render_loop(page=0):
                 _show_voltage = not _show_voltage
                 _last_flip_time = nowt
             if nowt - _last_page_flip_time >= PAGE_INTERVAL_S:
-                _page_index = (_page_index + 1) % 3
+                _page_index = (_page_index + 1) % max(1, len(PAGE_NAMES))
                 _last_page_flip_time = nowt
 
             sig = _render_signature(_page_index)
@@ -402,6 +430,10 @@ async def _render_loop(page=0):
             oled.fill_rect(0, BODY_TOP, 128, BODY_HEIGHT, 0)
 
             try:
+                diag = get_diagnostics_snapshot() or {}
+                lora_diag = diag.get('lora', {}) if isinstance(diag, dict) else {}
+                tx_diag = diag.get('transmission', {}) if isinstance(diag, dict) else {}
+                sys_diag = diag.get('system', {}) if isinstance(diag, dict) else {}
                 if _body_override_lines and time.time() < _body_override_until:
                     start_y = BODY_TOP + max(0, (BODY_HEIGHT - len(_body_override_lines) * 8) // 2)
                     for i, line in enumerate(_body_override_lines):
@@ -441,6 +473,27 @@ async def _render_loop(page=0):
                         oled.text(f"L {_safe_attr(sdata, 'lora_SigStr', '-')}", 0, BODY_TOP + 22)
                         node = str(getattr(settings, 'NODE_TYPE', ''))[:12]
                         oled.text(node, 0, BODY_TOP + 32)
+                    elif _page_index == 3:
+                        oled.text("LoRa Diag:", 0, BODY_TOP + 2)
+                        oled.text(f"RSSI {lora_diag.get('rssi', '-')}", 0, BODY_TOP + 12)
+                        oled.text(f"SNR {lora_diag.get('snr', '-')}", 0, BODY_TOP + 22)
+                        oled.text(f"Miss {lora_diag.get('missed_syncs', 0)}", 0, BODY_TOP + 32)
+                        oled.text(f"Rem {lora_diag.get('remote_nodes', 0)}", 64, BODY_TOP + 32)
+                    elif _page_index == 4:
+                        oled.text("Health:", 0, BODY_TOP + 2)
+                        oled.text(f"Mem {sys_diag.get('free_memory', _safe_attr(sdata, 'free_mem', 0))}", 0, BODY_TOP + 12)
+                        oled.text(f"Backlog {tx_diag.get('backlog_size', 0)}", 0, BODY_TOP + 22)
+                        up_age = _age_seconds(tx_diag.get('last_successful_upload', 0))
+                        if up_age is None:
+                            oled.text("Up --", 0, BODY_TOP + 32)
+                        else:
+                            oled.text(f"Up {int(up_age)}s", 0, BODY_TOP + 32)
+                        err_count = int(sys_diag.get('error_count', _safe_attr(sdata, 'error_count', 0)) or 0)
+                        if err_count > 0:
+                            oled.text("ALERT", 80, BODY_TOP + 12)
+                        hb_age = _age_seconds(lora_diag.get('last_heartbeat_ts', 0))
+                        if hb_age is not None and hb_age > int(getattr(settings, 'LORA_HEARTBEAT_INTERVAL_S', 120)) * 3:
+                            oled.text("HB STALE", 64, BODY_TOP + 22)
                     else:
                         pass
             except Exception:

@@ -23,13 +23,23 @@ OTA_BACKUP_DIR = getattr(device_settings, 'OTA_BACKUP_DIR', '/ota/backup') if de
 OTA_MAX_FILE_BYTES = getattr(device_settings, 'OTA_MAX_FILE_BYTES', 256 * 1024) if device_settings else 256 * 1024
 CHUNK_SIZE = getattr(device_settings, 'FIRMWARE_DOWNLOAD_CHUNK_SIZE', 1024) if device_settings else 1024
 
+try:
+    from utils import record_exception
+except Exception:
+    def record_exception(context, exc, status='ERROR'):
+        try:
+            print(f"[{status}] {context}: {exc}")
+        except Exception:
+            pass
+
 # --- New helpers for SHA256 and manifest lookup ---
 def _get_hashlib():
     try:
         import uhashlib as _uh
         import ubinascii as _ub
         return _uh, _ub
-    except Exception:
+    except Exception as e:
+        record_exception('firmware_updater._get_hashlib.uhashlib', e, status='WARN')
         import hashlib as _uh
         import binascii as _ub
         return _uh, _ub
@@ -42,19 +52,23 @@ def compute_file_sha256(path):
             for chunk in iter(lambda: f.read(8192), b''):
                 try:
                     h.update(chunk)
-                except Exception:
+                except Exception as e:
+                    record_exception('firmware_updater.compute_file_sha256.update', e, status='WARN')
                     # some uhashlib variants may behave differently; ignore update errors
                     pass
-    except Exception:
+    except Exception as e:
+        record_exception('firmware_updater.compute_file_sha256.read', e)
         return ''
     try:
         digest = h.digest()
         hexsum = _ub.hexlify(digest).decode().lower()
-    except Exception:
+    except Exception as e:
+        record_exception('firmware_updater.compute_file_sha256.digest', e)
         # fallback: attempt hexdigest or empty
         try:
             hexsum = h.hexdigest().lower()
-        except Exception:
+        except Exception as he:
+            record_exception('firmware_updater.compute_file_sha256.hexdigest', he)
             hexsum = ''
     return hexsum
 
@@ -71,16 +85,18 @@ def fetch_manifest_expected_sha(manifest_url, filename):
             return None
         try:
             mj = r.json()
-        except Exception:
+        except Exception as e:
+            record_exception('firmware_updater.fetch_manifest_expected_sha.resp_json', e, status='WARN')
             import json as _json
             try:
                 mj = _json.loads(getattr(r, 'text', '') or '{}')
-            except Exception:
+            except Exception as je:
+                record_exception('firmware_updater.fetch_manifest_expected_sha.loads', je)
                 mj = {}
         try:
             r.close()
-        except Exception:
-            pass
+        except Exception as e:
+            record_exception('firmware_updater.fetch_manifest_expected_sha.close', e, status='WARN')
         files = mj.get('files', {}) if isinstance(mj, dict) else {}
         if not files:
             return None
@@ -94,8 +110,8 @@ def fetch_manifest_expected_sha(manifest_url, filename):
         for k, v in files.items():
             if _os.path.basename(k) == base:
                 return v.split(':', 1)[1] if isinstance(v, str) and ':' in v else None
-    except Exception:
-        pass
+    except Exception as e:
+        record_exception('firmware_updater.fetch_manifest_expected_sha', e)
     return None
 
 # --- Modified download function: verify against expected or manifest ---
@@ -118,11 +134,12 @@ def download_and_apply_firmware(url, version_hint=None, target_path=None, chunk_
     # Ensure backup dir exists
     try:
         os.makedirs(OTA_BACKUP_DIR, exist_ok=True)
-    except Exception:
+    except Exception as e:
+        record_exception('firmware_updater.download.makedirs', e, status='WARN')
         try:
             os.mkdir(OTA_BACKUP_DIR)
-        except Exception:
-            pass
+        except Exception as ie:
+            record_exception('firmware_updater.download.mkdir', ie, status='WARN')
 
     if not target_path:
         fname = "firmware_{v}.bin".format(v=(version_hint or "latest"))
@@ -140,8 +157,8 @@ def download_and_apply_firmware(url, version_hint=None, target_path=None, chunk_
             if server_expected:
                 expected_sha = server_expected
             manifest_checked = True
-    except Exception:
-        pass
+    except Exception as e:
+        record_exception('firmware_updater.download.fetch_manifest_pre', e, status='WARN')
 
     try:
         resp = requests.get(url, stream=True, timeout=30) if hasattr(requests, 'get') else requests.get(url, timeout=30)
@@ -153,12 +170,13 @@ def download_and_apply_firmware(url, version_hint=None, target_path=None, chunk_
         try:
             body = getattr(resp, 'text', '')[:1024]
             _note = f'HTTP {status} body_snip={body[:512]}'
-        except Exception:
+        except Exception as e:
+            record_exception('firmware_updater.download.http_body_snip', e, status='WARN')
             _note = f'HTTP {status}'
         try:
             resp.close()
-        except Exception:
-            pass
+        except Exception as e:
+            record_exception('firmware_updater.download.http_close', e, status='WARN')
         return {'ok': False, 'error': _note}
 
     total_written = 0
@@ -183,8 +201,8 @@ def download_and_apply_firmware(url, version_hint=None, target_path=None, chunk_
     finally:
         try:
             resp.close()
-        except Exception:
-            pass
+        except Exception as e:
+            record_exception('firmware_updater.download.finally_close', e, status='WARN')
 
     if not os.path.exists(target_path) or os.stat(target_path)[6] == 0:
         return {'ok': False, 'error': 'empty_or_missing', 'path': target_path}
@@ -196,8 +214,8 @@ def download_and_apply_firmware(url, version_hint=None, target_path=None, chunk_
     try:
         import gc
         gc.collect()
-    except Exception:
-        pass
+    except Exception as e:
+        record_exception('firmware_updater.download.gc_after_hash', e, status='WARN')
 
     # If expected_sha not known and manifest_url provided, try fetching manifest now
     if not expected_sha and manifest_url:
@@ -208,8 +226,8 @@ def download_and_apply_firmware(url, version_hint=None, target_path=None, chunk_
             if server_expected:
                 expected_sha = server_expected
             manifest_checked = True
-        except Exception:
-            pass
+        except Exception as e:
+            record_exception('firmware_updater.download.fetch_manifest_post', e, status='WARN')
 
     # Compare if expected present
     if expected_sha:
@@ -227,8 +245,8 @@ def download_and_apply_firmware(url, version_hint=None, target_path=None, chunk_
                     server_expected = fetch_manifest_expected_sha(manifest_url, fname_hint)
                     if server_expected and server_expected.lower() == computed:
                         return {'ok': True, 'path': target_path, 'size': total_written, 'sha256': computed, 'expected_sha': server_expected, 'manifest_checked': True}
-                except Exception:
-                    pass
+                except Exception as e:
+                    record_exception('firmware_updater.download.manifest_recheck', e, status='WARN')
             return {
                 'ok': False,
                 'path': target_path,
@@ -243,8 +261,8 @@ def download_and_apply_firmware(url, version_hint=None, target_path=None, chunk_
     try:
         import gc
         gc.collect()
-    except Exception:
-        pass
+    except Exception as e:
+        record_exception('firmware_updater.download.gc_success', e, status='WARN')
 
     return {'ok': True, 'path': target_path, 'size': total_written, 'sha256': computed, 'expected_sha': (expected_sha or None), 'manifest_checked': bool(manifest_checked)}
 

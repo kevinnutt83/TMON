@@ -41,11 +41,24 @@ except Exception:
 
 checkLogDirectory()
 
+
+def _record_startup_exception(context, exc):
+    msg = f"{context}: {type(exc).__name__}: {exc}"
+    try:
+        sdata.error_count = int(getattr(sdata, 'error_count', 0) or 0) + 1
+        sdata.last_error = msg
+    except Exception:
+        pass
+    try:
+        print(f"[MAIN][WARN] {msg}")
+    except Exception:
+        pass
+
 # Apply any previously applied settings snapshot on boot
 try:
     load_applied_settings_on_boot()
-except Exception:
-    pass
+except Exception as e:
+    _record_startup_exception('load_applied_settings_on_boot', e)
 
 script_start_time = time.ticks_ms()
 
@@ -58,10 +71,10 @@ try:
             try:
                 with open(settings.MACHINE_ID_FILE, 'w') as f:
                     f.write(mid)
-            except Exception:
-                pass
-except Exception:
-    pass
+            except Exception as e:
+                _record_startup_exception('persist_machine_id', e)
+except Exception as e:
+    _record_startup_exception('machine_id_bootstrap', e)
 
 # Load persisted UNIT_ID mapping if available
 try:
@@ -73,8 +86,8 @@ try:
         provisioning_log(f"[BOOT] Loaded persisted UNIT_ID: {settings.UNIT_ID}")
     except Exception:
         print(f"[BOOT] Loaded persisted UNIT_ID: {settings.UNIT_ID}")
-except Exception:
-    pass
+except Exception as e:
+    _record_startup_exception('load_persisted_unit_id', e)
 
 # Load persisted UNIT_Name mapping if available
 try:
@@ -86,28 +99,28 @@ try:
         provisioning_log(f"[BOOT] Loaded persisted UNIT_Name: {settings.UNIT_Name}")
     except Exception:
         print(f"[BOOT] Loaded persisted UNIT_Name: {settings.UNIT_Name}")
-except Exception:
-    pass
+except Exception as e:
+    _record_startup_exception('load_persisted_unit_name', e)
 
 # Load persisted WORDPRESS_API_URL before starting tasks
 try:
     load_persisted_wordpress_api_url()
-except Exception:
-    pass
+except Exception as e:
+    _record_startup_exception('load_persisted_wordpress_api_url', e)
 
 # Load persisted NODE_TYPE if available before starting tasks
 try:
     _nt = load_persisted_node_type()
     if _nt:
         settings.NODE_TYPE = _nt
-except Exception:
-    pass
+except Exception as e:
+    _record_startup_exception('load_persisted_node_type', e)
 
 # Load persisted custom settings that are not part of the staged-settings allowlist.
 try:
     load_persisted_custom_settings()
-except Exception:
-    pass
+except Exception as e:
+    _record_startup_exception('load_persisted_custom_settings', e)
 
 def get_script_runtime():
     now = time.ticks_ms()
@@ -203,12 +216,12 @@ async def first_boot_provision():
             try:
                 with open(flag, 'w') as f:
                     f.write('ok')
-            except Exception:
-                pass
+            except Exception as e:
+                await log_exception('first_boot_provision.write_flag', e)
             try:
                 settings.UNIT_PROVISIONED = True
-            except Exception:
-                pass
+            except Exception as e:
+                await log_exception('first_boot_provision.set_provisioned', e)
             try:
                 resp_json = resp.json()
             except Exception:
@@ -220,8 +233,8 @@ async def first_boot_provision():
                     persist_unit_name(unit_name)
                     settings.UNIT_Name = unit_name
                     await debug_print('first_boot_provision: UNIT_Name persisted', 'PROVISION')
-            except Exception:
-                pass
+            except Exception as e:
+                await log_exception('first_boot_provision.persist_unit_name', e)
             try:
                 new_uid = resp_json.get('unit_id')
                 if new_uid and str(new_uid).strip():
@@ -229,12 +242,12 @@ async def first_boot_provision():
                         settings.UNIT_ID = str(new_uid).strip()
                         persist_unit_id(settings.UNIT_ID)
                         await debug_print('first_boot_provision: UNIT_ID persisted', 'PROVISION')
-            except Exception:
-                pass
+            except Exception as e:
+                await log_exception('first_boot_provision.persist_unit_id', e)
             try:
                 await display_message("Provisioned", 2)
-            except Exception:
-                pass
+            except Exception as e:
+                await log_exception('first_boot_provision.display_provisioned', e)
             try:
                 site_val = (resp_json.get('site_url') or resp_json.get('wordpress_api_url') or '').strip()
                 role_val = (resp_json.get('role') or '').strip()
@@ -243,17 +256,17 @@ async def first_boot_provision():
                     persist_wordpress_api_url(site_val)
                 if role_val:
                     settings.NODE_TYPE = role_val
-            except Exception:
-                pass
+            except Exception as e:
+                await log_exception('first_boot_provision.persist_site_or_role', e)
             try:
                 machine.soft_reset()
-            except Exception:
-                pass
+            except Exception as e:
+                await log_exception('first_boot_provision.soft_reset', e)
         else:
             try:
                 await display_message("Provision Failed", 2)
-            except Exception:
-                pass
+            except Exception as e:
+                await log_exception('first_boot_provision.display_failed', e)
     except Exception as e:
         await log_exception('first_boot_provision', e)
 
@@ -382,8 +395,8 @@ tm.add_task(periodic_diagnostics_task, 'diagnostics', int(getattr(settings, 'DIA
 try:
     if str(getattr(settings, 'NODE_TYPE', '')).lower() == 'base':
         tm.add_task(periodic_wp_sync, 'wp_sync', 300)
-except Exception:
-    pass
+except Exception as e:
+    _record_startup_exception('add_wp_sync_task', e)
 if user_commands_task:
     tm.add_task(user_commands_task, 'user_commands', 0)
 

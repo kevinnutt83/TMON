@@ -66,8 +66,13 @@ async def log(message, level='INFO', category=None):
     try:
         from utils import debug_print  # import late to avoid cycles
         await debug_print(f"[{category or 'GEN'}] {message}", level)
-    except Exception:
+    except Exception as e:
         # Best-effort fallback print without raising
+        try:
+            from utils import record_exception
+            record_exception('debug.log', e, status='WARN')
+        except Exception:
+            pass
         try:
             print(f"[{level}] {category or 'GEN'}: {message}")
         except Exception:

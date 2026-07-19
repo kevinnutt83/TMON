@@ -8,6 +8,20 @@ except Exception:
 
 import os
 
+
+def _record_exception(context, exc):
+    msg = f"{context}: {type(exc).__name__}: {exc}"
+    try:
+        import sdata
+        sdata.error_count = int(getattr(sdata, 'error_count', 0) or 0) + 1
+        sdata.last_error = msg
+    except Exception:
+        pass
+    try:
+        print(f"[CONFIG_PERSIST][ERROR] {msg}")
+    except Exception:
+        pass
+
 def ensure_dir(path):
     try:
         d = path
@@ -27,10 +41,10 @@ def ensure_dir(path):
             except OSError:
                 try:
                     os.mkdir(cur)
-                except Exception:
-                    pass
-    except Exception:
-        pass
+                except Exception as e:
+                    _record_exception('ensure_dir.mkdir', e)
+    except Exception as e:
+        _record_exception('ensure_dir', e)
 
 def write_text(path, text):
     try:
@@ -65,8 +79,10 @@ def write_json_atomic(path, obj):
             f.write(json.dumps(obj))
         try:
             os.remove(path)
-        except Exception:
+        except OSError:
             pass
+        except Exception as e:
+            _record_exception('write_json_atomic.remove_existing', e)
         try:
             os.rename(tmp_path, path)
         except Exception:
@@ -75,10 +91,11 @@ def write_json_atomic(path, obj):
                 f.write(json.dumps(obj))
             try:
                 os.remove(tmp_path)
-            except Exception:
-                pass
+            except Exception as e:
+                _record_exception('write_json_atomic.remove_tmp', e)
         return True
-    except Exception:
+    except Exception as e:
+        _record_exception('write_json_atomic', e)
         return False
 
 def read_json(path, default=None):
@@ -102,9 +119,13 @@ def set_flag(path: str, enabled: bool) -> bool:
             try:
                 os.remove(path)
                 return True
-            except Exception:
+            except OSError:
                 return True
-    except Exception:
+            except Exception as e:
+                _record_exception('set_flag.remove', e)
+                return True
+    except Exception as e:
+        _record_exception('set_flag', e)
         return False
 
 def is_flag_set(path: str) -> bool:

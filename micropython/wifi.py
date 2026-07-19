@@ -69,6 +69,20 @@ except Exception:
 		except Exception:
 			pass
 
+try:
+	from utils import log_exception, record_exception
+except Exception:
+	async def log_exception(context, exc, status='ERROR'):
+		try:
+			await debug_print("{}: {}".format(context, exc), status)
+		except Exception:
+			pass
+	def record_exception(context, exc, status='ERROR'):
+		try:
+			print("[{}] {}: {}".format(status, context, exc))
+		except Exception:
+			pass
+
 # Use getattr to avoid NameError when settings initializes later.
 FIELD_DATA_APP_PASS = getattr(get_settings(), 'FIELD_DATA_APP_PASS', '')
 if not FIELD_DATA_APP_PASS:
@@ -87,8 +101,8 @@ def _should_attempt_connect():
 			# otherwise do not attempt WiFi for provisioned remotes
 			return False
 		# Non-remote: use global ENABLE_WIFI flag
-	except Exception:
-		pass
+	except Exception as e:
+		record_exception('wifi._should_attempt_connect', e, status='WARN')
 	return getattr(s, 'ENABLE_WIFI', True)
 
 def _refresh_rssi(wlan):
@@ -103,7 +117,8 @@ def _refresh_rssi(wlan):
 			except Exception:
 				rssi = 0
 		sdata.wifi_rssi = rssi if isinstance(rssi, int) else 0
-	except Exception:
+	except Exception as e:
+		record_exception('wifi._refresh_rssi', e, status='WARN')
 		sdata.wifi_rssi = 0
 
 async def connectToWifiNetwork():
@@ -113,16 +128,16 @@ async def connectToWifiNetwork():
 		try:
 			wlan = network.WLAN(network.STA_IF)
 			wlan.active(False)
-		except Exception:
-			pass
+		except Exception as e:
+			record_exception('wifi.disable_for_remote', e, status='WARN')
 		sdata.WIFI_CONNECTED = False
 		return False
 	if not _should_attempt_connect():
 		try:
 			wlan = network.WLAN(network.STA_IF)
 			wlan.active(False)
-		except Exception:
-			pass
+		except Exception as e:
+			record_exception('wifi.disable_by_policy', e, status='WARN')
 		sdata.WIFI_CONNECTED = False
 		return False
 	wlan = network.WLAN(network.STA_IF)
@@ -135,8 +150,8 @@ async def connectToWifiNetwork():
 		try:
 			from oled import display_message
 			await display_message("WiFi Connected", 1.5)
-		except Exception:
-			pass
+		except Exception as e:
+			await log_exception('wifi.connectToWifiNetwork.oled_connected', e, status='WARN')
 		return True
 	await debug_print("wifi: scanning", "WIFI")
 	try:
@@ -156,8 +171,8 @@ async def connectToWifiNetwork():
 		try:
 			from oled import display_message
 			await display_message("SSID Not Found", 2)
-		except Exception:
-			pass
+		except Exception as e:
+			await log_exception('wifi.connectToWifiNetwork.oled_ssid_not_found', e, status='WARN')
 		return
 	await debug_print(f"wifi: connect {getattr(s, 'WIFI_SSID', '')}", "WIFI")
 	retries = int(getattr(s, 'WIFI_CONN_RETRIES', 5))
@@ -194,8 +209,8 @@ async def connectToWifiNetwork():
 	try:
 		from oled import display_message
 		await display_message("WiFi Failed", 2)
-	except Exception:
-		pass
+	except Exception as e:
+		await log_exception('wifi.connectToWifiNetwork.oled_failed', e, status='WARN')
 	return False
 
 async def scanToWifiNetwork():
@@ -227,8 +242,8 @@ async def scanToWifiNetwork():
 			else:
 				msg = "No SSIDs"
 			await display_message(msg, 1.5)
-		except Exception:
-			pass
+		except Exception as e:
+			await log_exception('wifi.scanToWifiNetwork.oled', e, status='WARN')
 		return clean
 	except Exception as e:
 		await debug_print(f"wifi: scan error {e}", "ERROR")
@@ -241,8 +256,8 @@ async def showNetworkWIFI():
 		if not wlan.active() or not wlan.isconnected():
 			try:
 				await display_message("WiFi: Not connected", 1.8)
-			except Exception:
-				pass
+			except Exception as e:
+				await log_exception('wifi.showNetworkWIFI.not_connected_oled', e, status='WARN')
 			return
 		try:
 			ssid = getattr(get_settings(), 'WIFI_SSID', '') or ''
@@ -320,8 +335,8 @@ def disable_wifi():
 	try:
 		wlan = network.WLAN(network.STA_IF)
 		wlan.active(False)
-	except Exception:
-		pass
+	except Exception as e:
+		record_exception('wifi.disable_wifi', e, status='WARN')
 	sdata.WIFI_CONNECTED = False
 
 async def wifi_rssi_monitor():
@@ -342,7 +357,8 @@ async def wifi_rssi_monitor():
 			else:
 				sdata.WIFI_CONNECTED = False
 				sdata.wifi_rssi = None
-		except Exception:
+		except Exception as e:
+			record_exception('wifi.wifi_rssi_monitor', e, status='WARN')
 			sdata.WIFI_CONNECTED = False
 			sdata.wifi_rssi = None
 		await asyncio.sleep(interval)

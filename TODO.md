@@ -137,6 +137,8 @@ Docs/QA
 
 Firmware
 - [x] Add atomic staged-settings JSON write/read helpers and use them in settings fetch/apply paths.
+- [x] Add centralized diagnostics snapshot module, structured exception capture in core runtime files, and 5-page OLED diagnostics/health views.
+- [x] Apply second-wave structured exception consistency across remaining runtime modules (WiFi, OTA, settings apply, provisioning, firmware updater, relay/sampling, CLI helpers) with behavior-preserving best-effort logging.
 
 ## Testing Log
 - [x] Provisioned Devices page functional with edit/delete actions

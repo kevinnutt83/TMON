@@ -5,7 +5,7 @@ import settings
 from utils import free_pins_i2c
 import uasyncio as asyncio
 from machine import I2C, Pin, SoftI2C
-from utils import debug_print, log_error
+from utils import debug_print, log_error, log_exception, record_exception
 from tmon import frostwatchCheck, heatwatchCheck, beginFrostOperations, beginHeatOperations, endFrostOperations, endHeatOperations
 import machine
 
@@ -163,8 +163,8 @@ async def _read_bme280(i2c, target="probe"):
             try:
                 if hasattr(sensor, "i2c") and hasattr(sensor.i2c, "deinit"):
                     sensor.i2c.deinit()
-            except:
-                pass
+            except Exception as e:
+                record_exception('_read_bme280.deinit', e, status='WARN')
             sensor.i2c = None
 
 
@@ -174,8 +174,8 @@ async def sampleBME280Interior():
     try:
         from oled import display_message
         await display_message("Sampling Interior Temp", 1)
-    except:
-        pass
+    except Exception as e:
+        await log_exception('sampleBME280Interior.display', e, status='WARN')
 
     i2c = I2C(0, scl=Pin(settings.DEVICE_TEMP_SCL_PIN),
               sda=Pin(settings.DEVICE_TEMP_SDA_PIN), freq=400000)
@@ -188,8 +188,8 @@ async def sampleBME280Probe():
     try:
         from oled import display_message
         await display_message("Sampling Exterior Probe", 1)
-    except:
-        pass
+    except Exception as e:
+        await log_exception('sampleBME280Probe.display', e, status='WARN')
 
     # Probe uses SoftI2C to avoid conflict with OLED on hardware I2C(1)
     i2c = SoftI2C(scl=Pin(settings.BME280_PROBE_SCL_PIN),
@@ -209,8 +209,8 @@ async def sampleSoil():
         try:
             from oled import display_message
             await display_message("Sampling Soil Probe", 1)
-        except Exception:
-            pass
+        except Exception as e:
+            await log_exception('sampleSoil.display', e, status='WARN')
 
         result = await sample_soil_probe()
 
@@ -228,7 +228,6 @@ async def sampleSoil():
             await debug_print("Soil probe returned no valid data", "SOIL")
 
     except Exception as e:
-        from utils import log_exception
         await log_exception("sampleSoil wrapper", e)
     finally:
         _s.sampling_active = False
@@ -241,8 +240,8 @@ async def findLowestTemp(compareTemp, source='local'):
         if sdata.lowest_temp_f == 0 or compareTemp < sdata.lowest_temp_f:
             sdata.lowest_temp_f = compareTemp
             await frostwatchCheck()
-    except Exception:
-        pass
+    except Exception as e:
+        await log_exception('findLowestTemp', e, status='WARN')
 
 async def findLowestBar(compareBar, source='local'):
     try:
@@ -250,8 +249,8 @@ async def findLowestBar(compareBar, source='local'):
             return
         if sdata.lowest_bar == 0 or compareBar < sdata.lowest_bar:
             sdata.lowest_bar = compareBar
-    except Exception:
-        pass
+    except Exception as e:
+        await log_exception('findLowestBar', e, status='WARN')
 
 async def findLowestHumid(compareHumid, source='local'):
     try:
@@ -259,8 +258,8 @@ async def findLowestHumid(compareHumid, source='local'):
             return
         if sdata.lowest_humid == 0 or compareHumid < sdata.lowest_humid:
             sdata.lowest_humid = compareHumid
-    except Exception:
-        pass
+    except Exception as e:
+        await log_exception('findLowestHumid', e, status='WARN')
 
 async def findHighestTemp(compareTemp, source='local'):
     try:
@@ -269,8 +268,8 @@ async def findHighestTemp(compareTemp, source='local'):
         if compareTemp > sdata.highest_temp_f:
             sdata.highest_temp_f = compareTemp
             await heatwatchCheck()
-    except Exception:
-        pass
+    except Exception as e:
+        await log_exception('findHighestTemp', e, status='WARN')
 
 async def findHighestBar(compareBar, source='local'):
     try:
@@ -278,8 +277,8 @@ async def findHighestBar(compareBar, source='local'):
             return
         if compareBar > sdata.highest_bar:
             sdata.highest_bar = compareBar
-    except Exception:
-        pass
+    except Exception as e:
+        await log_exception('findHighestBar', e, status='WARN')
 
 async def findHighestHumid(compareHumid, source='local'):
     try:
@@ -287,8 +286,8 @@ async def findHighestHumid(compareHumid, source='local'):
             return
         if compareHumid > sdata.highest_humid:
             sdata.highest_humid = compareHumid
-    except Exception:
-        pass
+    except Exception as e:
+        await log_exception('findHighestHumid', e, status='WARN')
 
 async def frost_and_heat_watch():
     try:

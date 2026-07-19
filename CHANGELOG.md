@@ -43,6 +43,13 @@ All notable changes to this project will be documented in this file.
 - scripts/validate_wp_endpoints.py: retries, timeout, flexible auth (Bearer or user:pass).
 - Admin UI manifest failure notice: Retry + "Validate endpoints" quick action.
 - OTA manifest verification: support hex/base64 sigs and HMAC-SHA256 using OTA_MANIFEST_HMAC_SECRET; skip manifests that fail verification.
+- Firmware: added centralized `micropython/diagnostics.py` snapshot API for system, LoRa, and transmission health.
+- Firmware: OLED expanded to 5 rotating pages (Summary, Runtime, Network, LoRa Diag, Health) with diagnostics-driven alert indicators.
+- Firmware: replaced key silent exception handlers in `boot.py`, `main.py`, `config_persist.py`, and `engine_controller.py` with structured exception capture/logging.
+- Firmware: added cooperative async yields around staged settings persistence and command loops in `wprest.py`.
+- Firmware: second-wave structured exception consistency pass applied in `wifi.py`, `settings_apply.py`, `provision.py`, `firmware_updater.py`, `ota.py`, `relay.py`, `sampling.py`, `user_commands.py`, `debug.py`, `tmon.py`, and package init.
+- Firmware: added synchronous `record_exception()` helper in `utils.py` for non-async fallback/error paths to keep `sdata.last_error` and `sdata.error_count` aligned with async logging.
+- OTA/WiFi/Provisioning: replaced selected silent fallback catches with best-effort structured warnings while preserving existing runtime behavior.
 
 ## v2.03.0 — YYYY-MM-DD
 - Firmware bumped to v2.03.0 (MicroPython) and manifest updated.

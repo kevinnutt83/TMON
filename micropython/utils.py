@@ -732,6 +732,21 @@ async def log_exception(context, exc, status='ERROR'):
     except Exception:
         pass
 
+
+def record_exception(context, exc, status='ERROR'):
+    """Best-effort synchronous exception recorder for non-async code paths."""
+    msg = format_exception(exc)
+    try:
+        import sdata as _sd
+        _sd.error_count = int(getattr(_sd, 'error_count', 0) or 0) + 1
+        _sd.last_error = f"{context}: {msg}"
+    except Exception:
+        pass
+    try:
+        print(f"[{status}] {context}: {msg}")
+    except Exception:
+        pass
+
 def write_lora_log(message, level='INFO'):
     try:
         ts = time.localtime()

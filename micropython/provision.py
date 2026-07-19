@@ -27,6 +27,15 @@ API_PATHS = getattr(device_settings, 'PROVISION_PATHS', ['/wp-json/tmon/v1/devic
 REQUEST_TIMEOUT = getattr(device_settings, 'HTTP_TIMEOUT_S', 20) if device_settings else 20
 CHUNK_SIZE = getattr(device_settings, 'FIRMWARE_DOWNLOAD_CHUNK_SIZE', 1024) if device_settings else 1024
 
+try:
+    from utils import record_exception
+except Exception:
+    def record_exception(context, exc, status='ERROR'):
+        try:
+            print(f"[{status}] {context}: {exc}")
+        except Exception:
+            pass
+
 def _attempt_endpoint(base_url, endpoint, params=None, json_body=None, timeout=REQUEST_TIMEOUT):
     url = base_url.rstrip("/") + endpoint
     try:
@@ -44,7 +53,8 @@ def _attempt_endpoint(base_url, endpoint, params=None, json_body=None, timeout=R
             return None, 'http_error_%s' % code
         try:
             return resp.json(), None
-        except Exception:
+        except Exception as e:
+            record_exception('provision._attempt_endpoint.resp_json', e, status='WARN')
             try:
                 return json.loads(getattr(resp, 'text', '{}')), None
             except Exception as e:
@@ -56,8 +66,8 @@ def _attempt_endpoint(base_url, endpoint, params=None, json_body=None, timeout=R
         try:
             import gc
             gc.collect()
-        except Exception:
-            pass
+        except Exception as e:
+            record_exception('provision._attempt_endpoint.gc_collect', e, status='WARN')
 
 def fetch_provisioning(unit_id=None, machine_id=None, base_url=None, force=False):
     """
@@ -126,12 +136,14 @@ def fetch_provisioning(unit_id=None, machine_id=None, base_url=None, force=False
 # firmware_updater expected in micropython directory; fallback to no-op
 try:
     from firmware_updater import download_and_apply_firmware
-except Exception:
+except Exception as e:
+    record_exception('provision.import_firmware_updater', e, status='WARN')
     def download_and_apply_firmware(url, version_hint=None, chunk_size=CHUNK_SIZE):
         try:
             from utils import provisioning_log
             provisioning_log(f"No firmware_updater; skipping firmware: {url}")
-        except Exception:
+        except Exception as pe:
+            record_exception('provision.firmware_updater_missing', pe, status='WARN')
             print("No firmware_updater; skipping firmware:", url)
         return True
 
@@ -150,7 +162,8 @@ def apply_settings(settings_doc):
         try:
             from utils import provisioning_log
             provisioning_log(f"Setting NODE_TYPE: {node_type}")
-        except Exception:
+        except Exception as e:
+            record_exception('provision.apply_settings.log_node_type', e, status='WARN')
             print("Setting NODE_TYPE:", node_type)
 
     unit_name = settings_doc.get('UNIT_Name')
@@ -158,7 +171,8 @@ def apply_settings(settings_doc):
         try:
             from utils import provisioning_log
             provisioning_log(f"Setting UNIT_Name: {unit_name}")
-        except Exception:
+        except Exception as e:
+            record_exception('provision.apply_settings.log_unit_name', e, status='WARN')
             print("Setting UNIT_Name:", unit_name)
 
     fw_url = settings_doc.get('FIRMWARE_URL') or settings_doc.get('firmware_url')
@@ -167,7 +181,8 @@ def apply_settings(settings_doc):
         try:
             from utils import provisioning_log
             provisioning_log(f"Firmware requested: {fw_ver} {fw_url}")
-        except Exception:
+        except Exception as e:
+            record_exception('provision.apply_settings.log_firmware_request', e, status='WARN')
             print("Firmware requested:", fw_ver, fw_url)
         try:
             download_and_apply_firmware(fw_url, fw_ver, chunk_size=CHUNK_SIZE)
@@ -175,14 +190,16 @@ def apply_settings(settings_doc):
             try:
                 from utils import provisioning_log
                 provisioning_log(f"Firmware download/apply failed: {e}")
-            except Exception:
+            except Exception as pe:
+                record_exception('provision.apply_settings.log_firmware_fail', pe, status='WARN')
                 print("Firmware download/apply failed:", e)
 
     if settings_doc.get('WIFI_DISABLE_AFTER_PROVISION', False):
         try:
             from utils import provisioning_log
             provisioning_log("Configured to disable WiFi after provisioning (device-specific).")
-        except Exception:
+        except Exception as e:
+            record_exception('provision.apply_settings.log_wifi_disable', e, status='WARN')
             print("Configured to disable WiFi after provisioning (device-specific).")
 
     # NEW: fallback mapping from alternative keys
@@ -191,14 +208,16 @@ def apply_settings(settings_doc):
         try:
             from utils import provisioning_log
             provisioning_log(f"Setting NODE_TYPE (role fallback): {node_type}")
-        except Exception:
+        except Exception as e:
+            record_exception('provision.apply_settings.log_role_fallback', e, status='WARN')
             print("Setting NODE_TYPE (role fallback):", node_type)
     if not unit_name and settings_doc.get('unit_name'):
         unit_name = settings_doc.get('unit_name')
         try:
             from utils import provisioning_log
             provisioning_log(f"Setting UNIT_Name (unit_name fallback): {unit_name}")
-        except Exception:
+        except Exception as e:
+            record_exception('provision.apply_settings.log_unit_name_fallback', e, status='WARN')
             print("Setting UNIT_Name (unit_name fallback):", unit_name)
     # Persist mapped fields to settings module
     try:
@@ -209,8 +228,8 @@ def apply_settings(settings_doc):
                 from utils import persist_unit_id
                 _s.UNIT_ID = str(settings_doc.get('unit_id'))
                 persist_unit_id(_s.UNIT_ID)
-            except Exception:
-                pass
+            except Exception as e:
+                record_exception('provision.apply_settings.persist_unit_id', e, status='WARN')
         if settings_doc.get('plan'): _s.PLAN = settings_doc.get('plan')
         if settings_doc.get('site_url') or settings_doc.get('wordpress_api_url'):
             _s.WORDPRESS_API_URL = settings_doc.get('site_url') or settings_doc.get('wordpress_api_url')
@@ -218,16 +237,16 @@ def apply_settings(settings_doc):
                 path = getattr(_s, 'WORDPRESS_API_URL_FILE', _s.LOG_DIR + '/wordpress_api_url.txt')
                 with open(path, 'w') as f:
                     f.write(_s.WORDPRESS_API_URL)
-            except Exception:
-                pass
+            except Exception as e:
+                record_exception('provision.apply_settings.persist_wordpress_api_url', e, status='WARN')
         # Persist unit name via utils to maintain consistent behavior
         if unit_name:
             try:
                 from utils import persist_unit_name
                 persist_unit_name(unit_name)
                 _s.UNIT_Name = unit_name
-            except Exception:
-                pass
+            except Exception as e:
+                record_exception('provision.apply_settings.persist_unit_name', e, status='WARN')
         # If role -> persist node type and if remote, optionally disable WiFi
         if node_type:
             try:
@@ -237,19 +256,19 @@ def apply_settings(settings_doc):
                 if str(node_type).lower() == 'remote' and settings_doc.get('WIFI_DISABLE_AFTER_PROVISION', False):
                     try:
                         _s.ENABLE_WIFI = False
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-    except Exception:
-        pass
+                    except Exception as e:
+                        record_exception('provision.apply_settings.disable_wifi_remote', e, status='WARN')
+            except Exception as e:
+                record_exception('provision.apply_settings.persist_node_type', e, status='WARN')
+    except Exception as e:
+        record_exception('provision.apply_settings.settings_persist', e)
 
     # NEW: GC after applying/persisting provisioning settings
     try:
         import gc
         gc.collect()
-    except Exception:
-        pass
+    except Exception as e:
+        record_exception('provision.apply_settings.gc_collect', e, status='WARN')
 
     # Additional device-specific settings application here
     return True

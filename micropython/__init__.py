@@ -10,6 +10,11 @@ from . import firmware_updater as firmware_updater
 # Attempt to import settings module to make `from micropython import settings` available
 try:
     from . import settings as settings
-except Exception:
+except Exception as e:
     # If settings not present, leave as None — calling code should handle missing settings
+    try:
+        from .utils import record_exception
+        record_exception('micropython.__init__.settings_import', e, status='WARN')
+    except Exception:
+        pass
     settings = None

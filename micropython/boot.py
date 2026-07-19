@@ -9,7 +9,7 @@
 
 from wifi import connectToWifiNetwork
 import settings
-from utils import flash_led
+from utils import flash_led, log_exception
 import uasyncio as asyncio
 from oled import display_message
 
@@ -19,7 +19,8 @@ async def boot():
     try:
         from utils import provisioning_log
         provisioning_log(fw_msg)
-    except Exception:
+    except Exception as e:
+        await log_exception('boot.provisioning_log', e)
         print(fw_msg)
     await display_message("Booting TMON Device", 3)
     # If remote node, try to load persisted next sync time
@@ -35,8 +36,8 @@ async def boot():
                         settings.nextLoraSync = int(obj['next'])
             except OSError:
                 pass
-    except Exception:
-        pass
+    except Exception as e:
+        await log_exception('boot.load_remote_next_sync', e)
     # Only connect to WiFi when enabled. For remotes, allow connect if not yet provisioned and policy allows it.
     try:
         node_type = getattr(settings, 'NODE_TYPE', None)
@@ -59,7 +60,8 @@ async def boot():
                 inet_ok = False
                 try:
                     inet_ok = await check_internet_connection()
-                except Exception:
+                except Exception as e:
+                    await log_exception('boot.check_internet_connection', e)
                     inet_ok = False
                 if inet_ok:
                     try:
@@ -71,14 +73,15 @@ async def boot():
                         if isinstance(prov, dict) and prov:
                             try:
                                 provision.apply_settings(prov)
-                            except Exception:
-                                pass
-                    except Exception:
+                            except Exception as e:
+                                await log_exception('boot.apply_settings', e)
+                    except Exception as e:
+                        await log_exception('boot.first_boot_provision', e)
                         # keep boot resilient on any errors
                         pass
-            except Exception:
-                pass
-    except Exception:
-        pass
+            except Exception as e:
+                await log_exception('boot.early_provisioning', e)
+    except Exception as e:
+        await log_exception('boot', e)
 
 asyncio.run(boot())

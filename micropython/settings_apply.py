@@ -13,7 +13,7 @@ except Exception:
 
 import settings
 from config_persist import read_json, read_json_safe, write_json, write_json_atomic
-from utils import debug_print, persist_suspension_state, load_persisted_custom_settings
+from utils import debug_print, persist_suspension_state, load_persisted_custom_settings, record_exception, log_exception
 # NEW: GC helper
 from utils import maybe_gc
 
@@ -99,7 +99,8 @@ def _can_apply_wifi_credentials():
             return True
         # For remotes, only if not yet provisioned
         return not bool(getattr(settings, 'UNIT_PROVISIONED', False))
-    except Exception:
+    except Exception as e:
+        record_exception('settings_apply._can_apply_wifi_credentials', e, status='WARN')
         return False
 
 def _apply_key(k, v):
@@ -108,8 +109,8 @@ def _apply_key(k, v):
             setattr(settings, k, bool(_to_bool(v)))
             try:
                 persist_suspension_state(getattr(settings, k))
-            except Exception:
-                pass
+            except Exception as e:
+                record_exception('settings_apply._apply_key.persist_suspension_state', e, status='WARN')
             return True
         # general allowlist
         if k in ALLOWLIST:
@@ -126,24 +127,25 @@ def _apply_key(k, v):
                             from wifi import disable_wifi
                             disable_wifi()
                             settings.ENABLE_WIFI = False
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
+                        except Exception as e:
+                            record_exception('settings_apply._apply_key.disable_wifi', e, status='WARN')
+                except Exception as e:
+                    record_exception('settings_apply._apply_key.persist_node_type', e, status='WARN')
             # Special handling: WORDPRESS_API_URL should be persisted for device
             if k == 'WORDPRESS_API_URL':
                 try:
                     from utils import persist_wordpress_api_url
                     persist_wordpress_api_url(coerced)
-                except Exception:
-                    pass
+                except Exception as e:
+                    record_exception('settings_apply._apply_key.persist_wordpress_api_url', e, status='WARN')
             return True
         # sensitive items
         if k in SENSITIVE and _can_apply_wifi_credentials():
             coerced = SENSITIVE[k](v)
             setattr(settings, k, coerced)
             return True
-    except Exception:
+    except Exception as e:
+        record_exception('settings_apply._apply_key', e)
         return False
     return False
 
@@ -153,8 +155,8 @@ def _filter_and_apply(incoming: dict):
         try:
             if _apply_key(k, v):
                 applied[k] = getattr(settings, k)
-        except Exception:
-            pass
+        except Exception as e:
+            record_exception(f'settings_apply._filter_and_apply.{k}', e, status='WARN')
     return applied
 
 def load_applied_settings_on_boot():
@@ -165,8 +167,8 @@ def load_applied_settings_on_boot():
             _filter_and_apply(data)
             try:
                 load_persisted_custom_settings()
-            except Exception:
-                pass
+            except Exception as e:
+                record_exception('settings_apply.load_applied_settings_on_boot.load_custom_settings', e, status='WARN')
             # If NODE_TYPE is remote, proactively disable WiFi on boot
             try:
                 if getattr(settings, 'NODE_TYPE', '').lower() == 'remote':
@@ -174,17 +176,17 @@ def load_applied_settings_on_boot():
                         from wifi import disable_wifi
                         disable_wifi()
                         settings.ENABLE_WIFI = False
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+                    except Exception as e:
+                        record_exception('settings_apply.load_applied_settings_on_boot.disable_wifi', e, status='WARN')
+            except Exception as e:
+                record_exception('settings_apply.load_applied_settings_on_boot.remote_wifi_policy', e, status='WARN')
         # NEW: GC after boot-time apply snapshot
         try:
             maybe_gc("settings_apply_boot", min_interval_ms=2000, mem_free_below=55 * 1024)
         except Exception:
             pass
-    except Exception:
-        pass
+    except Exception as e:
+        record_exception('settings_apply.load_applied_settings_on_boot', e)
 
 async def apply_staged_settings_once():
     staged_path = getattr(settings, 'REMOTE_SETTINGS_STAGED_FILE', '/logs/remote_settings.staged.json')
@@ -295,15 +297,15 @@ async def apply_staged_settings_once():
                         else:
                             # best-effort only; log failure
                             await debug_print(f'Failed to confirm staged command {job_id}', 'WARN')
-                except Exception:
-                    pass
+                except Exception as e:
+                    await log_exception('settings_apply.apply_staged_settings_once.confirm_command', e, status='WARN')
             # Append audit entry for applied settings + command confirms
             try:
                 _append_staged_audit(getattr(settings, 'UNIT_ID', ''), 'apply', {'applied_keys': list(applied.keys()), 'commands_confirmed': confirmed, 'added': meta.get('added_keys',[]), 'changed': meta.get('changed_keys',[]), 'ignored': meta.get('ignored_keys',[])})
             except Exception:
                 pass
-        except Exception:
-            pass
+        except Exception as e:
+            await log_exception('settings_apply.apply_staged_settings_once.command_confirm_block', e, status='WARN')
 
         try:
             msg = 'Settings applied: ' \
@@ -324,10 +326,10 @@ async def apply_staged_settings_once():
                 for k, v in prev.items():
                     try:
                         setattr(settings, k, v)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+                    except Exception as ie:
+                        record_exception(f'settings_apply.rollback.{k}', ie, status='WARN')
+        except Exception as re:
+            record_exception('settings_apply.rollback', re, status='WARN')
         await debug_print('Settings: apply failed, rollback executed: %s' % e, 'ERROR')
         return False
 
@@ -336,8 +338,8 @@ async def settings_apply_loop(interval_s: int = 60):
     while True:
         try:
             await apply_staged_settings_once()
-        except Exception:
-            pass
+        except Exception as e:
+            await log_exception('settings_apply.settings_apply_loop', e)
         try:
             import uasyncio as _a
             await _a.sleep(int(interval_s))

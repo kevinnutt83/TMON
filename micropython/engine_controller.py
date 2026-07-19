@@ -8,12 +8,26 @@ import settings
 import sdata
 from utils import debug_print
 
+
+def _record_exception(context, exc):
+    msg = f"{context}: {type(exc).__name__}: {exc}"
+    try:
+        sdata.error_count = int(getattr(sdata, 'error_count', 0) or 0) + 1
+        sdata.last_error = msg
+    except Exception:
+        pass
+    try:
+        print(f"[ENGINE][ERROR] {msg}")
+    except Exception:
+        pass
+
 # Build UARTs lazily to allow re-init
 
 def _build_uart(idx, tx_pin, rx_pin):
     try:
         return UART(idx, baudrate=settings.COMM_BAUD, parity=settings.COMM_PARITY, stop=settings.COMM_STOP_BITS, tx=Pin(tx_pin), rx=Pin(rx_pin))
     except Exception as e:
+        _record_exception(f'_build_uart({idx})', e)
         try:
             asyncio.create_task(debug_print(f"UART init failed ({idx}): {e}", "ERROR"))
         except Exception:
@@ -60,7 +74,8 @@ def _read_holding(uart, dev_addr, start_addr, num_regs):
 
         _, _, byteCount = struct.unpack('>BBB', response[:3])
         return struct.unpack('>' + 'H' * (byteCount // 2), response[3:])
-    except Exception:
+    except Exception as e:
+        _record_exception('_read_holding', e)
         return None
 
 
@@ -74,7 +89,8 @@ def _write_single_coil(uart, dev_addr, coil_addr, turn_on):
         uart.write(payload)
         time.sleep_ms(100)
         return True
-    except Exception:
+    except Exception as e:
+        _record_exception('_write_single_coil', e)
         return False
 
 
@@ -134,8 +150,9 @@ async def reset_rs485():
         uart1 = _build_uart(1, settings.CH1_TX_PIN, settings.CH1_RX_PIN)
         uart2 = _build_uart(2, settings.CH2_TX_PIN, settings.CH2_RX_PIN)
         await debug_print("RS485 reset", "debugRS485")
-    except Exception:
-        pass
+    except Exception as e:
+        _record_exception('reset_rs485', e)
+        await debug_print(f"RS485 reset failed: {e}", "ERROR")
 
 
 async def engine_loop():
@@ -151,6 +168,7 @@ async def engine_loop():
                 await poll_engine(devIdx)
             await asyncio.sleep(settings.ENGINE_POLL_INTERVAL_S)
         except Exception as e:
+            _record_exception('engine_loop', e)
             try:
                 await debug_print(f"engine_loop error: {e}", "ERROR")
             except Exception:

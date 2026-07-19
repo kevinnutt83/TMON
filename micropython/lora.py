@@ -584,6 +584,7 @@ async def handle_incoming_packet(msg):
     await debug_print(f"Base RX: {msg_str[:120]}...", "BASE_NODE")
     last_rx_ts = time.time()
     sdata.lora_SigStr = lora.getRSSI() if hasattr(lora, 'getRSSI') else -60
+    sdata.lora_snr = lora.getSNR() if hasattr(lora, 'getSNR') else 0
     sdata.LORA_CONNECTED = True
 
     # Lightweight parse → queue (unchanged)
@@ -1523,6 +1524,7 @@ async def connectLora():
                                         await _apply_remote_command_from_ack(ack_cmd)
                                     last_rx_ts = time.time()
                                     sdata.lora_SigStr = lora.getRSSI() if hasattr(lora, 'getRSSI') else -60
+                                    sdata.lora_snr = lora.getSNR() if hasattr(lora, 'getSNR') else 0
                                     sdata.LORA_CONNECTED = True
                                     await ensure_lora_listening()
                                     await asyncio.sleep(0.5)

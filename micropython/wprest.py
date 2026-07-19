@@ -36,6 +36,11 @@ from utils import (
 from config_persist import read_json_safe, write_json_atomic
 import settings
 import os
+try:
+    from diagnostics import get_diagnostics_snapshot
+except Exception:
+    def get_diagnostics_snapshot():
+        return {}
 
 WORDPRESS_API_URL = getattr(settings, 'WORDPRESS_API_URL', '')
 WORDPRESS_USERNAME = getattr(settings, 'WORDPRESS_USERNAME', None)
@@ -699,17 +704,26 @@ async def send_diagnostics_to_wp(extra=None):
             import sdata as _sd
         except Exception:
             _sd = None
+        diag = get_diagnostics_snapshot() or {}
+        dsys = diag.get('system', {}) if isinstance(diag, dict) else {}
+        dlora = diag.get('lora', {}) if isinstance(diag, dict) else {}
+        dtx = diag.get('transmission', {}) if isinstance(diag, dict) else {}
         payload = {
             'unit_id': getattr(settings, 'UNIT_ID', ''),
             'machine_id': get_machine_id() or '',
             'node_type': getattr(settings, 'NODE_TYPE', ''),
             'firmware_version': getattr(settings, 'FIRMWARE_VERSION', ''),
-            'uptime_s': int(getattr(_sd, 'script_runtime', 0) if _sd else 0),
-            'free_mem': int(getattr(_sd, 'free_mem', 0) if _sd else 0),
+            'uptime_s': int(dsys.get('uptime_s', getattr(_sd, 'script_runtime', 0) if _sd else 0) or 0),
+            'free_mem': int(dsys.get('free_memory', getattr(_sd, 'free_mem', 0) if _sd else 0) or 0),
             'wifi_rssi': getattr(_sd, 'wifi_rssi', None) if _sd else None,
-            'lora_rssi': getattr(_sd, 'lora_SigStr', None) if _sd else None,
-            'error_count': int(getattr(_sd, 'error_count', 0) if _sd else 0),
-            'last_error': str(getattr(_sd, 'last_error', '') if _sd else ''),
+            'lora_rssi': dlora.get('rssi', getattr(_sd, 'lora_SigStr', None) if _sd else None),
+            'lora_snr': dlora.get('snr', getattr(_sd, 'lora_snr', None) if _sd else None),
+            'lora_missed_syncs': int(dlora.get('missed_syncs', 0) or 0),
+            'lora_last_heartbeat_ts': int(dlora.get('last_heartbeat_ts', 0) or 0),
+            'error_count': int(dsys.get('error_count', getattr(_sd, 'error_count', 0) if _sd else 0) or 0),
+            'last_error': str(dsys.get('last_error', getattr(_sd, 'last_error', '') if _sd else '')),
+            'backlog_size': int(dtx.get('backlog_size', 0) or 0),
+            'last_successful_upload': int(dtx.get('last_successful_upload', 0) or 0),
             'rest_error': get_last_rest_error(),
             'extra': extra or {},
         }
@@ -808,6 +822,8 @@ async def fetch_settings_from_wp():
                     staged_path = getattr(settings, 'REMOTE_SETTINGS_STAGED_FILE', '/logs/remote_settings.staged.json')
                     _ = _uj
                     write_json_atomic(staged_path, staged)
+                    if asyncio:
+                        await asyncio.sleep_ms(5)
                     _mark_rest_success()
                     await debug_print(f'fetch_settings_from_wp: staged settings fetched via {p}', 'INFO')
                     return True
@@ -873,8 +889,8 @@ async def _post_command_result(job_id, status='done', result=None):
             code = int(getattr(resp, 'status_code', 0) or 0)
             if code in (200, 201, 202):
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            await log_exception('_post_command_result', e)
         finally:
             try:
                 if resp:
@@ -1018,8 +1034,12 @@ async def poll_device_commands():
             for k, v in staged_updates.items():
                 current[k] = v
             write_json_atomic(staged_path, current)
+            if asyncio:
+                await asyncio.sleep_ms(5)
             try:
                 persist_custom_settings(staged_updates)
+                if asyncio:
+                    await asyncio.sleep_ms(5)
             except Exception:
                 pass
             await debug_print(f'poll_device_commands: staged {len(staged_updates)} set_var updates', 'INFO')

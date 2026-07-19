@@ -8,6 +8,7 @@ import machine
 import sdata
 import settings
 from utils import debug_print
+from utils import log_exception, record_exception
 
 # Internal state per relay: start time and scheduled task
 _relay_tasks = {}
@@ -16,24 +17,28 @@ _relay_start_ts = {}
 def _relay_enabled(n: int) -> bool:
     try:
         return bool(getattr(settings, f'ENABLE_RELAY{n}', False))
-    except Exception:
+    except Exception as e:
+        record_exception('_relay_enabled', e, status='WARN')
         return False
 
 def _relay_pin(n: int):
     try:
         pin_num = getattr(settings, f'RELAY_PIN{n}')
         return machine.Pin(pin_num, machine.Pin.OUT)
-    except Exception:
+    except Exception as e:
+        record_exception('_relay_pin', e)
         return None
 
 def _relay_runtime_cap_s(n: int, requested_s: int) -> int:
     try:
         base_min = int(getattr(settings, 'RELAY_SAFETY_MAX_RUNTIME_MIN', 1440))
-    except Exception:
+    except Exception as e:
+        record_exception('_relay_runtime_cap_s.base', e, status='WARN')
         base_min = 1440
     try:
         override = int(getattr(settings, 'RELAY_RUNTIME_LIMITS', {}).get(int(n), base_min))
-    except Exception:
+    except Exception as e:
+        record_exception('_relay_runtime_cap_s.override', e, status='WARN')
         override = base_min
     cap_s = max(0, min(requested_s, override * 60))
     return cap_s
@@ -41,15 +46,15 @@ def _relay_runtime_cap_s(n: int, requested_s: int) -> int:
 def _set_sdata_on(n: int, on: bool):
     try:
         setattr(sdata, f'relay{n}_on', bool(on))
-    except Exception:
-        pass
+    except Exception as e:
+        record_exception('_set_sdata_on.state', e, status='WARN')
     # Initialize runtime counters in sdata
     try:
         key = f'relay{n}_runtime_s'
         if not hasattr(sdata, key):
             setattr(sdata, key, 0)
-    except Exception:
-        pass
+    except Exception as e:
+        record_exception('_set_sdata_on.runtime_key', e, status='WARN')
 
 async def _runtime_tracker(n: int):
     key = f'relay{n}_runtime_s'
@@ -58,8 +63,8 @@ async def _runtime_tracker(n: int):
         try:
             cur = getattr(sdata, key, 0)
             setattr(sdata, key, int(cur) + 1)
-        except Exception:
-            pass
+        except Exception as e:
+            record_exception('_runtime_tracker', e, status='WARN')
         await asyncio.sleep(1)
 
 async def toggle_relay(relay_num, state, runtime):
@@ -100,8 +105,8 @@ async def toggle_relay(relay_num, state, runtime):
             if t:
                 try:
                     t.cancel()
-                except Exception:
-                    pass
+                except Exception as e:
+                    record_exception('toggle_relay.cancel_task', e, status='WARN')
                 _relay_tasks[n] = None
             return
 
@@ -123,12 +128,12 @@ async def toggle_relay(relay_num, state, runtime):
             _set_sdata_on(n, True)
             try:
                 _relay_tasks[n] = asyncio.create_task(_runtime_tracker(n))
-            except Exception:
-                pass
+            except Exception as e:
+                await log_exception('toggle_relay.create_runtime_task', e, status='WARN')
             await asyncio.sleep(limit_s)
             pin.value(0)
             _set_sdata_on(n, False)
             await debug_print(f"Relay {n} reverted after {limit_s}s", "COMMAND")
 
     except Exception as e:
-        await debug_print(f"Error in toggle_relay: {str(e)}", "ERROR")
+        await log_exception('toggle_relay', e)

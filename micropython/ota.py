@@ -17,37 +17,39 @@ except Exception:
         asyncio = None
 
 async def _sleep(seconds):
-	"""Robust async sleep: prefer event loop sleep, fall back to blocking sleep."""
-	try:
-		if 'asyncio' in globals() and asyncio:
-			await asyncio.sleep(seconds)
-			return
-	except Exception:
-		pass
-	# Try common async variants dynamically
-	try:
-		import uasyncio as _u
-		await _u.sleep(seconds)
-		return
-	except Exception:
-		pass
-	try:
-		import asyncio as _a
-		await _a.sleep(seconds)
-		return
-	except Exception:
-		pass
-	# Last-resort blocking sleep to avoid NameError during retries
-	try:
-		import utime as _t
-		_t.sleep(seconds)
-	except Exception:
-		try:
-			import time as _t
-			_t.sleep(seconds)
-		except Exception:
-			# give up silently
-			pass
+    """Robust async sleep: prefer event loop sleep, fall back to blocking sleep."""
+    try:
+        if 'asyncio' in globals() and asyncio:
+            await asyncio.sleep(seconds)
+            return
+    except Exception as e:
+        record_exception('ota._sleep.asyncio_sleep', e, status='WARN')
+    # Try common async variants dynamically
+    try:
+        import uasyncio as _u
+        await _u.sleep(seconds)
+        return
+    except Exception as e:
+        record_exception('ota._sleep.uasyncio_sleep', e, status='WARN')
+    try:
+        import asyncio as _a
+        await _a.sleep(seconds)
+        return
+    except Exception as e:
+        record_exception('ota._sleep.asyncio_import_sleep', e, status='WARN')
+    # Last-resort blocking sleep to avoid NameError during retries
+    try:
+        import utime as _t
+        _t.sleep(seconds)
+    except Exception as e:
+        record_exception('ota._sleep.utime_sleep', e, status='WARN')
+        try:
+            import time as _t
+            _t.sleep(seconds)
+        except Exception as ie:
+            record_exception('ota._sleep.time_sleep', ie, status='WARN')
+            # give up silently
+            pass
 
 import settings
 from config_persist import write_text
@@ -56,6 +58,7 @@ from utils import debug_print
 from utils import maybe_gc
 from utils import format_exception
 from utils import log_exception
+from utils import record_exception
 import ujson as json
 import os
 import binascii as _binascii
@@ -72,13 +75,14 @@ def _ensure_dir(path: str):
         if d and d != path and d != '.':
             try:
                 os.stat(d)
-            except Exception:
+            except Exception as e:
+                record_exception('ota._ensure_dir.stat', e, status='WARN')
                 try:
                     os.mkdir(d)
-                except Exception:
-                    pass
-    except Exception:
-        pass
+                except Exception as ie:
+                    record_exception('ota._ensure_dir.mkdir', ie, status='WARN')
+    except Exception as e:
+        record_exception('ota._ensure_dir', e, status='WARN')
 
 def _normalize_version(s: str) -> str:
     if not s:
@@ -143,16 +147,17 @@ def _write_debug_artifact(name, data_bytes):
         dbg_dir = getattr(settings, 'LOG_DIR', '/logs')
         try:
             os.stat(dbg_dir)
-        except Exception:
+        except Exception as e:
+            record_exception('ota._write_debug_artifact.stat_log_dir', e, status='WARN')
             try:
                 os.mkdir(dbg_dir)
-            except Exception:
-                pass
+            except Exception as ie:
+                record_exception('ota._write_debug_artifact.mkdir_log_dir', ie, status='WARN')
         path = dbg_dir.rstrip('/') + '/' + name
         with open(path, 'wb') as wf:
             wf.write(data_bytes)
-    except Exception:
-        pass
+    except Exception as e:
+        record_exception('ota._write_debug_artifact', e, status='WARN')
 
 async def apply_pending_update():
     """If OTA_PENDING_FILE exists, fetch manifest and apply allowed files.
@@ -170,7 +175,8 @@ async def apply_pending_update():
         try:
             with open(pending_file, 'r') as f:
                 target_ver = _normalize_version(f.read())
-        except Exception:
+        except Exception as e:
+            record_exception('ota.apply_pending_update.read_pending', e, status='WARN')
             return False
         base_url = getattr(settings, 'OTA_FIRMWARE_BASE_URL', '')
         if not base_url or not requests:
@@ -531,19 +537,19 @@ async def apply_pending_update():
         # Success: update version and clear pending
         try:
             settings.FIRMWARE_VERSION = target_ver
-        except Exception:
-            pass
+        except Exception as e:
+            record_exception('ota.apply_pending_update.set_version', e, status='WARN')
         try:
             os.remove(pending_file)
-        except Exception:
-            pass
+        except Exception as e:
+            record_exception('ota.apply_pending_update.clear_pending', e, status='WARN')
         await debug_print('OTA: apply completed', 'OTA')
         # Reboot device after OTA files are downloaded and applied
         try:
             from machine import soft_reset
             soft_reset()
-        except Exception:
-            pass
+        except Exception as e:
+            record_exception('ota.apply_pending_update.soft_reset', e, status='WARN')
         # NEW: GC after OTA apply completes (before returning to loops)
         try:
             maybe_gc("ota_apply_done", min_interval_ms=1000, mem_free_below=60 * 1024)

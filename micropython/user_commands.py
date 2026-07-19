@@ -14,7 +14,7 @@ try:
 except ImportError:
     uselect = None
 
-from utils import debug_print, persist_custom_setting, persist_node_type, persist_unit_name, persist_wordpress_api_url, persist_suspension_state
+from utils import debug_print, persist_custom_setting, persist_node_type, persist_unit_name, persist_wordpress_api_url, persist_suspension_state, record_exception, log_exception
 
 # Non-blocking stdin poller
 _poller = None
@@ -26,8 +26,8 @@ def _init_poller():
         try:
             _poller = uselect.poll()
             _poller.register(sys.stdin, uselect.POLLIN)
-        except Exception:
-            pass
+        except Exception as e:
+            record_exception('user_commands._init_poller', e, status='WARN')
 
 def _print_prompt():
     sys.stdout.write("TMON> ")
@@ -56,8 +56,8 @@ def _poll_stdin():
             else:
                 _input_buf += ch
                 sys.stdout.write(ch)
-    except Exception:
-        pass
+    except Exception as e:
+        record_exception('user_commands._poll_stdin', e, status='WARN')
     return None
 
 
@@ -76,7 +76,7 @@ async def user_commands_task():
                 await process_command(line)
                 _print_prompt()
         except Exception as e:
-            await debug_print(f"User commands error: {e}", "ERROR")
+            await log_exception('user_commands.user_commands_task', e)
         await asyncio.sleep(0.1)
 
 

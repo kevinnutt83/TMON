@@ -1,7 +1,7 @@
 # TMON Verion 2.00.1d - Main module for TMON MicroPython firmware: defines core async tasks for frostwatch and heatwatch checks and operations. This module is responsible for orchestrating the main functionality of the device, including sensor sampling, LoRa communication, field data uploads, command polling, OTA updates, and display updates. It also includes a first-boot provisioning check-in to the TMON Admin hub. The tasks are designed to run periodically with error handling and GC management to ensure stable operation on resource-constrained hardware.
 
 # Firmware Version: v2.06.0
-from utils import debug_print
+from utils import debug_print, record_exception
 import settings
 import sdata
 import utime as time
@@ -10,8 +10,8 @@ import utime as time
 try:
     import gc
     gc.collect()
-except Exception:
-    pass
+except Exception as e:
+    record_exception('tmon.gc_init', e, status='WARN')
 
 async def frostwatchCheck():
     # Only run checks when enabled; preserves existing calls/variables while fixing control flow.

@@ -127,7 +127,7 @@
 
 **Test Steps:**
 1. [ ] Header shows time, WiFi/LoRa status, voltage
-2. [ ] Multi-page display cycles through: Summary, Runtime, Network pages
+2. [ ] Multi-page display cycles through: Summary, Runtime, Network, LoRa Diag, Health pages
 3. [ ] Status banner appears for INFO/WARN/ERROR messages (non-blocking)
 4. [ ] Page marker dots shown at bottom
 5. [ ] Display times out after inactivity (DEBUG_DISPLAY=False)
@@ -136,6 +136,20 @@
 - Pages flip every `OLED_PAGE_FLIP_S` seconds
 - Banners persist for configured duration, then clear
 - OLED update loop doesn't block async tasks
+
+### Observability & Exception Paths
+
+**Test Steps:**
+1. [ ] Trigger controlled failures for WiFi scan/connect, OTA pending-file read, and provisioning endpoint fallback.
+2. [ ] Verify `sdata.error_count` increments and `sdata.last_error` updates with context-rich messages.
+3. [ ] Confirm diagnostics payload includes system health, LoRa health, and transmission stats after error events.
+4. [ ] Validate OLED Health/LoRa Diag pages reflect degraded states (missed syncs, RSSI/SNR, error metadata).
+5. [ ] Confirm command/settings loops continue operating after recoverable exceptions.
+
+**Expected Behavior:**
+- Recoverable exceptions are captured via structured logging paths (async `log_exception` or sync `record_exception`).
+- No silent task death in WiFi, settings-apply, OTA apply loop, provisioning helpers, relay runtime tracking, or user CLI polling.
+- Device remains responsive and resumes normal loop cadence after transient failures.
 
 ### OTA Firmware Update
 
