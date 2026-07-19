@@ -21,6 +21,15 @@ MicroPython-based firmware for TMON environmental monitoring devices supporting 
 | `wifi` | WiFi-only node (no LoRa). Uses WiFi for telemetry, commands, and OTA. |
 | `remote` | LoRa-only device that syncs with a base station; does not perform HTTP calls after provisioning. |
 
+### Remote Deep Sleep Mode (Battery Nodes)
+- `NODE_TYPE=remote` now runs a wake-cycle flow optimized for battery nodes.
+- On wake, the node disables WiFi, samples sensors, records telemetry, transmits over LoRa, persists next sync time, and enters deep sleep.
+- Sync persistence is stored at `LORA_NEXT_SYNC_FILE` (default `/logs/lora_next_sync.txt`).
+- Base and `wifi` roles continue using the full async scheduler in `main.py`.
+- Remote nodes now wait briefly for base ACK (`ACK:<UID>:NEXT:<seconds>`) after field-data sends and persist that server-driven timing when available.
+- Sleep interval is voltage-adaptive for low-battery protection using configurable thresholds and multipliers.
+- Optional external wake pin fallback is supported for service/recovery flows.
+
 ## Key Features
 
 ### Provisioning & Registration
@@ -84,6 +93,7 @@ micropython/
 ├── wprest.py            # WordPress REST API client
 ├── oled.py              # OLED display driver and rendering
 ├── sampling.py          # Sensor sampling routines
+├── remote_node.py       # Remote deep-sleep wake-cycle orchestration
 ├── relay.py             # Relay control with safety caps
 ├── ota.py               # OTA update scaffolding
 ├── provision.py         # Provisioning client
@@ -122,6 +132,13 @@ micropython/
 - `LORA_HMAC_ENABLED` / `LORA_HMAC_SECRET` — Frame authentication
 - `LORA_ENCRYPT_ENABLED` / `LORA_ENCRYPT_SECRET` — Payload encryption
 - `LORA_SYNC_WINDOW` / `LORA_SLOT_SPACING_S` — Sync scheduling
+- `LORA_NEXT_SYNC_FILE` — Persisted remote next-sync epoch used across deep sleep reboots
+- `REMOTE_ACK_WAIT_S` — Seconds remote waits for base ACK NEXT timing after send
+- `REMOTE_DEEPSLEEP_MIN_S` / `REMOTE_DEEPSLEEP_MAX_S` — Bounds for computed deep sleep duration
+- `REMOTE_BATTERY_LOW_V` / `REMOTE_BATTERY_CRITICAL_V` — Voltage thresholds for adaptive sleep scaling
+- `REMOTE_SLEEP_MULTIPLIER_LOW` / `REMOTE_SLEEP_MULTIPLIER_CRITICAL` — Sleep scale multipliers under low/critical voltage
+- `REMOTE_EXT_WAKE_PIN` / `REMOTE_EXT_WAKE_LEVEL` — Optional external wake source for timer+pin wake fallback
+- `REMOTE_EXT_WAKE_RECOVERY_DISABLE_SLEEP` — If true and wake is external, stay awake for service/recovery
 
 ### Sensors
 - `ENABLE_sensorBME280` / `ENABLE_sensorDHT11` — Sensor enables

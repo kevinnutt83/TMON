@@ -34,6 +34,12 @@ All notable changes to this project will be documented in this file.
 - Misc metadata consistency updates across micropython/ modules.
 
 ## Unreleased
+- Firmware: added battery remote deep-sleep mode (`NODE_TYPE=remote`) with wake-cycle flow (sample -> record -> LoRa send -> persisted next sync -> `machine.deepsleep()`).
+- Firmware: added `LORA_NEXT_SYNC_FILE` setting and `utils` helpers (`load_next_lora_sync`, `persist_next_lora_sync`) for sync persistence across deep sleep resets.
+- OTA: added `remote_node.py` to `OTA_FILES_ALLOWLIST`.
+- Firmware: field-testing power hardening for remotes: base now ACKs field-data bursts with `NEXT` delay and remotes persist server-driven sync timing when available.
+- Firmware: field-testing battery controls added for remotes (voltage-adaptive sleep bounds and low/critical multipliers).
+- Firmware: optional EXT wake fallback/recovery controls added for maintenance wake scenarios.
 - Removed duplicated settings block (deduplicated settings.py).
 - Hardened async HTTP client in wprest to support host:port and full reads.
 - Made debug/config_persist compatible with MicroPython (removed union type hints).

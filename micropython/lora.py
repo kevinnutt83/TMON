@@ -463,6 +463,24 @@ async def process_remote_field_data(uid, st):
             if merged_records:
                 stage_remote_field_data(uid, merged_records)
                 await debug_print(f"Staged {len(merged_records)} remote field records from {uid}", "BASE_NODE")
+
+                # ACK remote field-data burst with NEXT delay so battery remotes
+                # can persist scheduler timing without waiting for full TS/SETTINGS/SDATA cycle.
+                next_delay = calculate_next_delay(uid)
+                now = time.time()
+                if uid not in settings.REMOTE_NODE_INFO:
+                    settings.REMOTE_NODE_INFO[uid] = {}
+                settings.REMOTE_NODE_INFO[uid]['next_expected'] = now + next_delay
+                settings.REMOTE_NODE_INFO[uid]['missed_syncs'] = 0
+                save_remote_node_info()
+
+                try:
+                    ack_msg = f"ACK:{uid}:NEXT:{next_delay}"
+                    ack_msg = await _secure_message(ack_msg, remote_uid=uid)
+                    await _send_with_retry(ack_msg.encode())
+                    await debug_print(f"Sent FIELD_DATA ACK with next delay {next_delay}s to {uid}", "BASE_NODE")
+                except Exception as ack_e:
+                    await log_error(f"FIELD_DATA ACK send error to {uid}: {ack_e}")
     except Exception as e:
         await log_error(f"Remote field data processor error for {uid}: {e}")
     finally:
@@ -937,6 +955,36 @@ async def send_remote_state_files(files):
     except Exception as e:
         await log_error(f'send_remote_state_files failed: {e}')
         return False
+
+
+async def wait_for_next_sync_ack(timeout_s=8):
+    """Remote helper: wait briefly for ACK:<uid>:NEXT:<seconds> from base."""
+    if str(getattr(settings, 'NODE_TYPE', 'base')).lower() != 'remote':
+        return None
+    try:
+        timeout_s = max(1, int(timeout_s))
+    except Exception:
+        timeout_s = 8
+
+    end_ts = time.time() + timeout_s
+    while time.time() < end_ts:
+        try:
+            if lora and hasattr(lora, '_events') and (lora._events() & lora.RX_DONE):
+                msg, err = lora.recv()
+                if err == 0 and msg:
+                    msg_str = msg.rstrip(b'\x00').decode()
+                    msg_str = await _unsecure_message(msg_str)
+                    if msg_str and msg_str.startswith('ACK:'):
+                        parts = msg_str.split(':')
+                        if len(parts) >= 4 and parts[1] == settings.UNIT_ID and parts[2] == 'NEXT':
+                            try:
+                                return max(10, int(parts[3]))
+                            except Exception:
+                                return None
+        except Exception:
+            pass
+        await asyncio.sleep_ms(50)
+    return None
 
 
 async def _fetch_remote_pending_command(remote_unit_id, remote_machine_id=None):

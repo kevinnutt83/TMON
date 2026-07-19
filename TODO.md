@@ -118,6 +118,8 @@ Admin
 
 Firmware
 - [x] Acknowledge unsupported command types in poll loop to avoid infinite re-delivery churn.
+- [x] Add battery remote deep-sleep mode: remote wake -> sample -> LoRa send -> persist next sync -> deep sleep.
+- [x] Add field-testing hardening for battery remotes: ACK-driven next sync persistence, voltage-adaptive deep sleep, and optional EXT wake recovery fallback.
 - [x] Add COMMAND_ACK_UNSUPPORTED setting and staged-apply support.
 - [x] Reduce command polling blocking: add cooperative yields in WP command/result loops and local per-poll command caps.
 - [x] Make command polling cadence configurable with jitter/timeouts (COMMANDS_POLL_INTERVAL_S, COMMANDS_POLL_JITTER_S, COMMANDS_RESULT_TIMEOUT_S).

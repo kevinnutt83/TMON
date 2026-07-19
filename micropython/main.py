@@ -407,5 +407,13 @@ async def main():
     # Run all other periodic tasks
     await tm.run()
 
-# Start the asyncio event loop
-asyncio.run(main())
+# Start remote deep-sleep mode for battery remotes; keep scheduler for base/wifi nodes.
+if str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'remote':
+    try:
+        from remote_node import run_remote_deep_sleep
+        run_remote_deep_sleep()
+    except Exception as e:
+        _record_startup_exception('run_remote_deep_sleep', e)
+        asyncio.run(main())
+else:
+    asyncio.run(main())

@@ -823,6 +823,31 @@ def load_persisted_node_type():
     except Exception:
         return None
 
+
+def persist_next_lora_sync(epoch_s):
+    try:
+        checkLogDirectory()
+        v = int(epoch_s)
+        path = getattr(settings, 'LORA_NEXT_SYNC_FILE', settings.LOG_DIR + '/lora_next_sync.txt')
+        write_text(path, str(v))
+    except Exception:
+        pass
+
+
+def load_next_lora_sync(default=None):
+    try:
+        checkLogDirectory()
+        path = getattr(settings, 'LORA_NEXT_SYNC_FILE', settings.LOG_DIR + '/lora_next_sync.txt')
+        raw = read_text(path, None)
+        if raw is None:
+            return default
+        raw = str(raw).strip()
+        if not raw:
+            return default
+        return int(raw)
+    except Exception:
+        return default
+
 # --- unit name persistence (restored) ---
 def persist_unit_name(unit_name: str):
     try:
@@ -1994,6 +2019,8 @@ __all__ = [
     'start_background_tasks',
     'persist_node_type',
     'load_persisted_node_type',
+    'persist_next_lora_sync',
+    'load_next_lora_sync',
     'persist_unit_name',
     'load_persisted_unit_name',
     'send_field_data_log',
