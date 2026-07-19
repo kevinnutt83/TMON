@@ -80,22 +80,22 @@
     "lora.py": "sha256:2a80be367cf0c92527b3b46c58ba4279b2f7ed49596b0e2543601a4034cd8d96",
     "main.py": "sha256:e47a26c4f8589b560f8e07ca583c0ebaa403a42273072e09201f5d7f6b57e335",
     "oled.py": "sha256:77d605d1d2ed36431022918f3442f6f4d4f1ef5e0ff74eb4bc5bd5a93d0ddbac",
-    "ota.py": "sha256:2bab7a5b231976c62bf5cda79d0ced835e1b55e85f50f81ae1141f58d61edbc9",
+    "ota.py": "sha256:29375504616668933770424cb7c50435bba5b8ca6116d725f9bd2b7acbf29cae",
     "provision.py": "sha256:29a5c2bc2e515d84db5bbbf3dc897175605f1ca19d1d73c84fcffe92ae466354",
     "pwd": "sha256:297e576419d84aa22dee16809eee78b46ce48faf467fc616b80f57363eac6a97",
     "relay.py": "sha256:bae3c21760931150ae4613f0bdc00e892d511c0df4b5cd8810d9a067c0ced3a7",
     "remote_node.py": "sha256:3bbf81db950a4e1b800a81d368d27d3323b59c2848508543886c8d9094e283bd",
     "sampling.py": "sha256:fe7f9b769a9a3c5b64f16720d15f25f427473f9f42ba8ab932b353632d1b0198",
     "sdata.py": "sha256:79005d091059a50d820f8457573aa03c6c53b5f2c97d311b5f39e9627ee9b49a",
-    "settings.py": "sha256:2a27aabe943340e8a038feaf46405935d2862aa50649cda0dc9cbf1291802e27",
+    "settings.py": "sha256:e956b16b801ce39eac88b4bb3bc83bd3ed9c424e45e60b77e682e41c28c79ecf",
     "settings_apply.py": "sha256:fcc3c9da90e8deda25791047115108db524a72cb8ec1b069bc84a5167101e5f7",
     "tmon.py": "sha256:32ba520a96ffdfd76578521e545340190550478022428e07fe6770528a7276ee",
     "user_commands.py": "sha256:f279c1e752a4657dfbbe61c57d4040289a13d880f60606ec85b2dfd6cca2d450",
     "utils.py": "sha256:52349c87f1e2aef18a30d73c5ce4234598bdd55a8290b9b7741faccc172f2a4f",
-    "version.txt": "sha256:a24aa380788de2913e408476516da0517000daa4dceeeb395b6dc628e6d05f4a",
+    "version.txt": "sha256:ffc54800e7bc7e2266a6deb4f256dfb9348b6f8125be4f36d83c73bd955bf6d2",
     "wifi.py": "sha256:9a75bef1a3d61f8fa93dc90567a342aeba452cb15f859dd6fc6a08e1f70045ae",
     "wprest.py": "sha256:5f28dbda586badf578ebbdb016dfc0ed36c80d3af5567071f45c01dd5afbd2f2"
   },
   "name": "tmon-micropython",
-  "version": "v2.00.2w"
+  "version": "v2.00.2x"
 }

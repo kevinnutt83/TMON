@@ -124,6 +124,7 @@ Firmware
 - [x] Add COMMAND_ACK_UNSUPPORTED setting and staged-apply support.
 - [x] Reduce command polling blocking: add cooperative yields in WP command/result loops and local per-poll command caps.
 - [x] Make command polling cadence configurable with jitter/timeouts (COMMANDS_POLL_INTERVAL_S, COMMANDS_POLL_JITTER_S, COMMANDS_RESULT_TIMEOUT_S).
+- [x] Fix LoRa airtime congestion and field-data accumulation: enable `FIELD_DATA_COMPACT_KEYS`, cap LoRa batches via `FIELD_DATA_LORA_MAX_BATCH=3`, trim `field_data.log` immediately on batch delivery, and remove redundant raw state file uploads.
 
 Unit Connector
 - [x] Update field-data-api.php $flatten to include device interior sensors (cur_device_temp_f/c, cur_device_humid, cur_device_bar_pres), soil sensors (cur_soil_moisture, cur_soil_temp_c/f), engine data, CPU temp, runtime metrics, and diagnostics.

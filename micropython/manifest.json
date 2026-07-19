@@ -87,15 +87,15 @@
     "remote_node.py": "sha256:3bbf81db950a4e1b800a81d368d27d3323b59c2848508543886c8d9094e283bd",
     "sampling.py": "sha256:fe7f9b769a9a3c5b64f16720d15f25f427473f9f42ba8ab932b353632d1b0198",
     "sdata.py": "sha256:79005d091059a50d820f8457573aa03c6c53b5f2c97d311b5f39e9627ee9b49a",
-    "settings.py": "sha256:e956b16b801ce39eac88b4bb3bc83bd3ed9c424e45e60b77e682e41c28c79ecf",
+    "settings.py": "sha256:ffb74936bf7290c95db47ce74694295e135a1200ae444f160d28199223a14c65",
     "settings_apply.py": "sha256:fcc3c9da90e8deda25791047115108db524a72cb8ec1b069bc84a5167101e5f7",
     "tmon.py": "sha256:32ba520a96ffdfd76578521e545340190550478022428e07fe6770528a7276ee",
     "user_commands.py": "sha256:f279c1e752a4657dfbbe61c57d4040289a13d880f60606ec85b2dfd6cca2d450",
-    "utils.py": "sha256:52349c87f1e2aef18a30d73c5ce4234598bdd55a8290b9b7741faccc172f2a4f",
-    "version.txt": "sha256:ffc54800e7bc7e2266a6deb4f256dfb9348b6f8125be4f36d83c73bd955bf6d2",
+    "utils.py": "sha256:696456104b3e8bb0ab3e5c4e85069e82266ab1d9c36c6aa1a67b3be32e724342",
+    "version.txt": "sha256:61cb8a28262f9c7f8c0b6829ff0c1f701bb68cadb27e162ac68082effac8aea2",
     "wifi.py": "sha256:9a75bef1a3d61f8fa93dc90567a342aeba452cb15f859dd6fc6a08e1f70045ae",
     "wprest.py": "sha256:5f28dbda586badf578ebbdb016dfc0ed36c80d3af5567071f45c01dd5afbd2f2"
   },
   "name": "tmon-micropython",
-  "version": "v2.00.2x"
+  "version": "v2.00.2y"
 }

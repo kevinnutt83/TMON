@@ -246,6 +246,7 @@ def _get_adaptive_batch_size(default_batch):
         min_batch = max(1, int(getattr(settings, 'FIELD_DATA_MIN_BATCH', 5)))
     except Exception:
         min_batch = 5
+    min_batch = min(min_batch, max(1, int(default_batch)))
 
     try:
         mem_low = int(getattr(settings, 'FIELD_DATA_MEM_LOW_WATERMARK', 40 * 1024))
@@ -281,6 +282,7 @@ def _update_adaptive_batch_size(default_batch, delivered):
         min_batch = max(1, int(getattr(settings, 'FIELD_DATA_MIN_BATCH', 5)))
     except Exception:
         min_batch = 5
+    min_batch = min(min_batch, max(1, int(default_batch)))
 
     try:
         cap = max(min_batch, int(default_batch))
@@ -1533,10 +1535,10 @@ async def send_field_data_via_lora():
             batch = []
             batch_indices = []
             try:
-                batch_default = int(getattr(settings, 'FIELD_DATA_MAX_BATCH', 10))
+                batch_default = int(getattr(settings, 'FIELD_DATA_LORA_MAX_BATCH', 3))
                 batch_size = _get_adaptive_batch_size(batch_default)
             except Exception:
-                batch_default = 10
+                batch_default = 3
                 batch_size = _get_adaptive_batch_size(batch_default)
 
             for idx, raw in enumerate(raw_lines):
@@ -1626,6 +1628,23 @@ async def send_field_data_via_lora():
                         acked_indices.update(idx_list)
                         await debug_print(f'sfd_lora: batch {bi+1} delivered', 'DEBUG')
                         _update_adaptive_batch_size(batch_default, True)
+                        # Immediately rewrite field_data.log so delivered records are removed even if subsequent batches fail
+                        try:
+                            with open(settings.FIELD_DATA_LOG, 'wb') as f:
+                                for idx, raw in enumerate(raw_lines):
+                                    if idx not in acked_indices:
+                                        try:
+                                            f.write(raw)
+                                        except Exception:
+                                            pass
+                                    if asyncio and idx and idx % 40 == 0:
+                                        try:
+                                            await asyncio.sleep_ms(1)
+                                        except Exception:
+                                            pass
+                            await debug_print(f'sfd_lora: trimmed {len(acked_indices)} delivered lines', 'DEBUG')
+                        except Exception as e:
+                            await debug_print(f'sfd_lora: trim err: {e}', 'ERROR')
                         break
 
                     await debug_print(f'sfd_lora: batch {bi+1} att{attempt} failed, retry', 'WARN')
@@ -1644,54 +1663,6 @@ async def send_field_data_via_lora():
                         await asyncio.sleep_ms(1)
                     except Exception:
                         pass
-
-            # Rewrite field_data.log excluding acked lines
-            if acked_indices:
-                try:
-                    with open(settings.FIELD_DATA_LOG, 'wb') as f:
-                        for idx, raw in enumerate(raw_lines):
-                            if idx not in acked_indices:
-                                try:
-                                    f.write(raw)
-                                except Exception:
-                                    pass
-                            if asyncio and idx and idx % 40 == 0:
-                                try:
-                                    await asyncio.sleep_ms(1)
-                                except Exception:
-                                    pass
-                    await debug_print(f'sfd_lora: trimmed {len(acked_indices)} delivered lines', 'DEBUG')
-                except Exception as e:
-                    await debug_print(f'sfd_lora: trim err: {e}', 'ERROR')
-
-            # After field data, best-effort send settings.py and sdata.py snapshots
-            try:
-                files = {}
-                for name in ('settings.py', 'sdata.py'):
-                    for path in (name, '/' + name):
-                        try:
-                            with open(path, 'rb') as fh:
-                                files[name] = fh.read()
-                                break
-                        except Exception:
-                            continue
-                if files:
-                    ok = False
-                    try:
-                        try:
-                            ok = await send_remote_state_files(files)
-                        except TypeError:
-                            ok = bool(send_remote_state_files(files))
-                    except Exception as e:
-                        await debug_print(f'sfd_lora: state files exc {e}', 'ERROR')
-                        ok = False
-                    await debug_print(
-                        'sfd_lora: state files sent' if ok else 'sfd_lora: state files send failed',
-                        'INFO' if ok else 'WARN'
-                    )
-            except Exception:
-                # State-file sending is best-effort; ignore errors
-                pass
         except Exception as e:
             await debug_print(f'sfd_lora: outer exc {e}', 'ERROR')
 
