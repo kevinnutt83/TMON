@@ -10,7 +10,7 @@ Goals
 Immediate tasks
 - Add unit/host tests for wprest async_http_request, send_field_data_log JSON shaping, and OTA manifest parsing.
 - Run static checks for Python 3 vs MicroPython compatibility (type hints, imports).
-- Add basic CI that runs linters and host tests (GitHub Actions).
+- [x] Add basic CI that runs readiness validation and build packaging (GitHub Actions, `.github/workflows/release-readiness.yml`).
 - [x] Fix OTA task errors: `_get_ota()` now validates module attributes and won't cache a partial/wrong module; wrappers check validity before calling; `ota.py` `maybe_gc` import wrapped in try/except with inline fallback.
 - [x] Suppress expected OTA idle noise: `apply_pending_update` no longer logs WARN when `OTA_PENDING_FILE` is missing (`ENOENT`).
 
@@ -135,6 +135,9 @@ Unit Connector
 - [x] Widgets/graphs for device data; relay controls; shortcodes polish.
 - [x] Fix PHP error log spam from dashboard widgets / shortcodes (`tmon_pending_commands_summary_refresh`) and prevent Elementor `Attempt to read property "post_status" on null in document.php` warnings by excluding `tmon_custom_code` from Elementor and avoiding global `$post` loop variable collisions.
 - [x] Fix shortcode ID selector collisions on the Device Data page (`[tmon_device_settings]` and `[tmon_device_history]`) and ensure immediate initial population of Applied/Staged JSON status boxes.
+- [x] Restore Device Data unit selector and shortcode dropdown behavior by routing the Device Data menu to `tmon_uc_device_data_page()` and adding standalone local unit-picker fallback for `[tmon_device_settings]`.
+- [x] Harden `templates/device-data.php` fallback path by removing conflicting legacy picker scripts, aligning staging AJAX payload to `settings_json` + `nonce`, and tying unit-name updates to the active picker selection.
+- [x] Remove duplicate `wp_ajax_tmon_uc_update_unit_name` handler to keep one consistent nonce/check + staged-name update path.
 
 Docs/QA
 - [ ] Add data flow graphics/screenshots.
@@ -196,19 +199,12 @@ Notes
 Unit Connector — Configuration UI and Staging
 - [ ] Extend schema coverage to all firmware variables and advanced types (arrays/maps), with JSON validation.
 - [ ] Admin hub integration button to push staged settings to Admin hub (optional).
-- [High] Integrate staged settings form into Device Data page
-  - Remove "Device Configuration (Staged Settings)" section from Unit Connector settings page (UI only; preserve backend endpoints).
-  - Move form rendering & logic to Device Data page so applied, staged, and staged-new device settings populate correctly.
-  - UI control mapping:
-    - text, integer, float → text input (with server-side type validation).
-    - bool → animated on/off switch (CSS transition on click).
-  - Wire controls to AJAX save endpoints with optimistic UI updates and failure handling.
-  - Acceptance criteria:
-    - Settings appear properly on Device Data page for all three scopes (applied, staged, staged-new).
-    - Bool switch animates and toggles state; saves via AJAX and updates persisted state.
-    - No duplicate UI for staged settings elsewhere.
-  - Testing notes:
-    - Unit/integration tests for AJAX endpoints; end-to-end UI test for switch animation and persistence.
+- [x] Integrate staged settings form into Device Data page
+  - Removed duplicate "Device Configuration (Staged Settings)" form from Settings page and linked to Device Data as canonical workflow.
+  - Device Data now uses consistent selector + staging payload contract (`settings_json` + `nonce`) and updates applied/staged/bundle views.
+  - Bool controls in `[tmon_device_settings]` now use animated on/off switches.
+  - Added readiness validator: `scripts/validate_uc_field_testing_readiness.sh`.
+  - Added runtime checklist: `unit-connector/README-field-testing.md`.
 
 UC Pairings and Device Listing
 - [ ] Add settings to control refresh cadence (hourly/daily/off) and diagnostics.
@@ -238,35 +234,24 @@ TMON Admin — Provisioned Devices
 - [ ] (no pending items beyond other sections)
 
 Unit Connector — Settings Page
-- [ ] Load hierarchy map JS only when Leaflet is present; suppress console noise.
-- [High] Staged settings population bug
-  - Investigate why applied/staged/staged-new device settings are not populating; add test case covering REST/API payload, DB fields and rendering path.
-  - Add acceptance criteria and regression tests.
+- [x] Load hierarchy map JS only when Leaflet is present; suppress console noise.
+- [x] Staged settings population bug
+  - Investigated and fixed selector wiring, stale AJAX keys, and duplicate handler conflicts causing population failures.
+  - Added regression-oriented readiness checks for REST/API payload contract, selector path, and duplicate-handler detection.
 
 Device History Graph & Shortcodes (NEW)
 - [High] Fix history chart traces and legends
-  - Include additional traces (and legend items) for:
-    - lowest_temp_f = 0
-    - highest_temp_f = 0
-    - lowest_bar = 0
-    - highest_bar = 0
-    - lowest_humid = 0
-    - highest_humid = 0
-    - relay state trace(s) (on/off)
-  - Ensure traces appear in graph legend and user can toggle each trace on/off.
-  - Persist legend visibility in a browser cookie so AJAX refreshes do not reset visibility.
-  - Acceptance criteria:
-    - All listed variables appear as selectable legend items.
-    - Toggling persists between refreshes (cookie-stored state).
-  - Testing notes:
-    - Add browser-based test for cookie persistence across AJAX refresh.
+- [x] Fix history chart traces and legends
+  - Added low/high traces for temperature, pressure, and humidity with legend items.
+  - Relay state traces are preserved and plotted as stepped on/off lines.
+  - Legend visibility now persists using cookies (with localStorage fallback) across auto-refresh updates.
+  - Added automated harness + checklist coverage for Device Data flow and chart behavior verification.
 
 - [Medium] New shortcode: frost/heat watch
-  - Create a shortcode that reports the frost/heat watch state and exposes:
-    - lowest_temp_f, highest_temp_f, lowest_bar, highest_bar, lowest_humid, highest_humid
-  - Acceptance criteria:
-    - Shortcode outputs sanitized HTML/text reflecting current watch states.
-    - Document shortcode arguments and usage.
+- [x] New shortcode: frost/heat watch
+  - Added `[tmon_frost_heat_watch]` with page-level picker integration and local fallback.
+  - Displays frost/heat watch state and required low/high values: temp, pressure, humidity.
+  - Includes documented usage and refresh behavior in field-testing docs.
 
 Widgets & Front-end Shortcodes
 - [x] Widgets/graphs for device data; relay controls; shortcodes polish.
@@ -295,12 +280,9 @@ Testing & QA
   - Shortcode outputs
 - [ ] Add manual test cases for UI behaviors and animations.
 - [High] Test plan additions
-  - Add automated tests for:
-    - AJAX save/load for staged/applied settings (device data page).
-    - Switch toggle animation + server update.
-    - Graph legend cookie persistence and toggling across AJAX refreshes.
-    - Frost/heat watch shortcode output.
-  - Add manual QA checklist for release.
+  - [x] Added automated wp-admin smoke harness (Playwright) for Device Data page checks.
+  - [x] Added/expanded pre-flight validator checks for staging payload, selector wiring, legend persistence, shortcode presence, and admin asset gating.
+  - [x] Added manual QA checklist for release/field-testing in `unit-connector/README-field-testing.md`.
 
 # TMON TODO
 

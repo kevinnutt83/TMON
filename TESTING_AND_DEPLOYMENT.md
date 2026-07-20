@@ -247,6 +247,29 @@
 
 ## Phase 4: Live Environment Deployment Steps
 
+### Distribution Build (Automated)
+
+1. Build release artifacts from repository root:
+   - `scripts/build_release_artifacts.sh`
+2. Optional custom tag:
+   - `scripts/build_release_artifacts.sh 20260720-rc1`
+3. Output location:
+   - `dist/<tag>/`
+4. Produced artifacts:
+   - `unit-connector-<tag>.zip`
+   - `tmon-admin-<tag>.zip`
+   - `micropython-<tag>.zip`
+   - `SHA256SUMS.txt`
+
+### CI Readiness Gate
+
+- Workflow file: `.github/workflows/release-readiness.yml`
+- Triggered on push to `main`, pull requests, and manual dispatch.
+- Runs:
+  - `scripts/validate_uc_field_testing_readiness.sh`
+  - `scripts/build_release_artifacts.sh`
+- Uploads built artifacts as `tmon-release-artifacts` in workflow artifacts.
+
 ### Pre-Deployment
 
 1. [ ] **Backup Data**

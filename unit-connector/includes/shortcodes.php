@@ -621,8 +621,34 @@ add_shortcode('tmon_device_history', function($atts) {
 		let chart = null;
 		let lastData = null;
 
+        function getCookie(name) {
+            try {
+                const needle = name + "=";
+                const parts = document.cookie ? document.cookie.split(';') : [];
+                for (let i = 0; i < parts.length; i++) {
+                    const c = parts[i].trim();
+                    if (c.indexOf(needle) === 0) {
+                        return decodeURIComponent(c.substring(needle.length));
+                    }
+                }
+            } catch(e) {}
+            return null;
+        }
+
+        function setCookie(name, value, days) {
+            try {
+                const maxAge = Math.max(1, Number(days || 30)) * 24 * 60 * 60;
+                document.cookie = name + "=" + encodeURIComponent(value) + "; path=/; max-age=" + maxAge + "; SameSite=Lax";
+            } catch(e) {}
+        }
+
         function loadLegendState() {
             try {
+                const cookieRaw = getCookie(legendKey);
+                if (cookieRaw) return JSON.parse(cookieRaw);
+            } catch(e) {}
+            try {
+                // Backward compatibility with prior localStorage-only persistence.
                 const raw = localStorage.getItem(legendKey);
                 return raw ? JSON.parse(raw) : {};
             } catch(e) {
@@ -630,12 +656,25 @@ add_shortcode('tmon_device_history', function($atts) {
             }
         }
 
-        function saveLegendState(ds) {
-            try {
-                const state = {};
-                (ds || []).forEach(function(d){
-                    if (d && d.label) state[d.label] = !!d.hidden;
+        function collectLegendState(input) {
+            const state = {};
+            if (!input) return state;
+            if (input.data && Array.isArray(input.data.datasets) && typeof input.isDatasetVisible === 'function') {
+                input.data.datasets.forEach(function(d, i){
+                    if (d && d.label) state[d.label] = !input.isDatasetVisible(i);
                 });
+                return state;
+            }
+            (input || []).forEach(function(d){
+                if (d && d.label) state[d.label] = !!d.hidden;
+            });
+            return state;
+        }
+
+        function saveLegendState(input) {
+            try {
+                const state = collectLegendState(input);
+                setCookie(legendKey, JSON.stringify(state), 30);
                 localStorage.setItem(legendKey, JSON.stringify(state));
             } catch(e) {}
         }
@@ -713,6 +752,12 @@ add_shortcode('tmon_device_history', function($atts) {
 				const devHumid = pts.map(p => (p && typeof p.device_humid !== 'undefined') ? p.device_humid : null);
 				const devBar = pts.map(p => (p && typeof p.device_bar !== 'undefined') ? p.device_bar : null);
 				const soilMoisture = pts.map(p => (p && typeof p.soil_moisture !== 'undefined') ? p.soil_moisture : null);
+                const lowTempF = pts.map(p => (p && Object.prototype.hasOwnProperty.call(p, 'lowest_temp_f')) ? p.lowest_temp_f : null);
+                const highTempF = pts.map(p => (p && Object.prototype.hasOwnProperty.call(p, 'highest_temp_f')) ? p.highest_temp_f : null);
+                const lowBar = pts.map(p => (p && Object.prototype.hasOwnProperty.call(p, 'lowest_bar')) ? p.lowest_bar : null);
+                const highBar = pts.map(p => (p && Object.prototype.hasOwnProperty.call(p, 'highest_bar')) ? p.highest_bar : null);
+                const lowHumid = pts.map(p => (p && Object.prototype.hasOwnProperty.call(p, 'lowest_humid')) ? p.lowest_humid : null);
+                const highHumid = pts.map(p => (p && Object.prototype.hasOwnProperty.call(p, 'highest_humid')) ? p.highest_humid : null);
 
 				const relayNums = Array.isArray(data.enabled_relays) && data.enabled_relays.length ? data.enabled_relays : detectRelaysFromPoints(pts);
 				const relayColors = ["#6c757d","#95a5a6","#34495e","#7f8c8d","#95a5a6","#2d3436","#636e72","#99a3ad"];
@@ -735,15 +780,21 @@ add_shortcode('tmon_device_history', function($atts) {
                 const datasets = [
                     { label: "Probe Temp (F)", data: temp, borderColor: "#e67e22", fill:false, yAxisID: "y1", pointRadius: 0, cubicInterpolationMode: 'monotone' },
                     { label: "Device Temp (F)", data: devTemp, borderColor: "#d35400", borderDash: [4,2], fill:false, yAxisID: "y1", pointRadius: 0, cubicInterpolationMode: 'monotone' },
+                    { label: "Lowest Temp (F)", data: lowTempF, borderColor: "#f5b041", borderDash: [3,3], fill:false, yAxisID: "y1", pointRadius: 0, cubicInterpolationMode: 'monotone', hidden: true },
+                    { label: "Highest Temp (F)", data: highTempF, borderColor: "#af601a", borderDash: [3,3], fill:false, yAxisID: "y1", pointRadius: 0, cubicInterpolationMode: 'monotone', hidden: true },
                     { label: "Probe Humidity (%)", data: humid, borderColor: "#3498db", fill:false, yAxisID: "y2", pointRadius: 0, cubicInterpolationMode: 'monotone' },
                     { label: "Device Humidity (%)", data: devHumid, borderColor: "#2980b9", borderDash: [4,2], fill:false, yAxisID: "y2", pointRadius: 0, cubicInterpolationMode: 'monotone' },
+                    { label: "Lowest Humidity (%)", data: lowHumid, borderColor: "#5dade2", borderDash: [3,3], fill:false, yAxisID: "y2", pointRadius: 0, cubicInterpolationMode: 'monotone', hidden: true },
+                    { label: "Highest Humidity (%)", data: highHumid, borderColor: "#1f618d", borderDash: [3,3], fill:false, yAxisID: "y2", pointRadius: 0, cubicInterpolationMode: 'monotone', hidden: true },
                     { label: "Probe Pressure (hPa)", data: bar, borderColor: "#2ecc71", fill:false, yAxisID: "y3", pointRadius: 0, cubicInterpolationMode: 'monotone' },
                     { label: "Device Pressure (hPa)", data: devBar, borderColor: "#27ae60", borderDash: [4,2], fill:false, yAxisID: "y3", pointRadius: 0, cubicInterpolationMode: 'monotone' },
+                    { label: "Lowest Pressure (hPa)", data: lowBar, borderColor: "#58d68d", borderDash: [3,3], fill:false, yAxisID: "y3", pointRadius: 0, cubicInterpolationMode: 'monotone', hidden: true },
+                    { label: "Highest Pressure (hPa)", data: highBar, borderColor: "#1e8449", borderDash: [3,3], fill:false, yAxisID: "y3", pointRadius: 0, cubicInterpolationMode: 'monotone', hidden: true },
                     { label: "Voltage (V)", data: volt, borderColor: "#9b59b6", fill:false, yAxisID: "y4", pointRadius: 0, cubicInterpolationMode: 'monotone' },
                     { label: "Soil Moisture", data: soilMoisture, borderColor: "#795548", fill:false, yAxisID: "y2", pointRadius: 0, cubicInterpolationMode: 'monotone' }
                 ].concat(relayDatasets);
 
-                const persistedLegend = loadLegendState();
+                const persistedLegend = Object.assign({}, loadLegendState(), collectLegendState(chart));
                 datasets.forEach(function(ds){
                     if (ds && ds.label && Object.prototype.hasOwnProperty.call(persistedLegend, ds.label)) {
                         ds.hidden = !!persistedLegend[ds.label];
@@ -768,7 +819,7 @@ add_shortcode('tmon_device_history', function($atts) {
                                     const meta = ci.getDatasetMeta(idx);
                                     meta.hidden = meta.hidden === null ? !ci.data.datasets[idx].hidden : null;
                                     ci.update();
-                                    saveLegendState(ci.data.datasets);
+                                    saveLegendState(ci);
                                 }
                             }
                         },
@@ -788,10 +839,10 @@ add_shortcode('tmon_device_history', function($atts) {
                     chart.data.labels = labels;
                     chart.data.datasets = datasets;
                     chart.update('active'); // animate the transition
-                    saveLegendState(chart.data.datasets);
+                    saveLegendState(chart);
                 } else {
                     chart = new Chart(ctx, cfg);
-                    saveLegendState(chart.data.datasets);
+                    saveLegendState(chart);
                 }
             }).catch(err=>{
                 console.error("TMON history fetch error", err);
@@ -832,6 +883,130 @@ add_shortcode('tmon_device_history', function($atts) {
 	})();
     </script>
     <?php
+    echo '</div>';
+    return ob_get_clean();
+});
+
+// [tmon_frost_heat_watch refresh_s="30"]
+// Shows frost/heat watch status and low/high probe ranges for the selected unit.
+add_shortcode('tmon_frost_heat_watch', function($atts) {
+    $a = shortcode_atts([
+        'refresh_s' => '30',
+    ], $atts);
+    $refresh = max(0, intval($a['refresh_s']));
+    $devices = tmon_uc_list_feature_devices('sample');
+    if (empty($devices)) {
+        return '<em>No provisioned devices found for this feature.</em>';
+    }
+
+    $default_unit = $devices[0]['unit_id'];
+    $select_id = 'tmon-watch-select-' . wp_generate_password(6, false, false);
+    $box_id = 'tmon-watch-box-' . wp_generate_password(6, false, false);
+    $ajax_root = esc_js(rest_url());
+
+    ob_start();
+    echo '<div class="tmon-watch-widget">';
+    echo '<label class="screen-reader-text" for="'.$select_id.'">Device</label>';
+    echo '<select id="'.$select_id.'" class="tmon-watch-select">';
+    foreach ($devices as $d) {
+        $sel = selected($default_unit, $d['unit_id'], false);
+        echo '<option value="'.esc_attr($d['unit_id']).'" '.$sel.'>'.esc_html($d['label']).'</option>';
+    }
+    echo '</select>';
+    echo '<div id="'.$box_id.'" style="margin-top:8px;"><em>Loading...</em></div>';
+    echo '<style>
+    .tmon-watch-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin-top:8px}
+    .tmon-watch-card{border:1px solid #dcdcde;border-radius:8px;padding:8px;background:#fff}
+    .tmon-watch-k{font-size:12px;color:#50575e}
+    .tmon-watch-v{font-size:16px;font-weight:600}
+    .tmon-watch-pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px}
+    .tmon-watch-on{background:#fbeaea;color:#8a2424}
+    .tmon-watch-off{background:#eaf7ee;color:#1f6b37}
+    </style>';
+    $watch_script = <<<'JS'
+(function(){
+    var localSelect = document.getElementById("%SELECT_ID%");
+    var external = document.getElementById("tmon-unit-picker");
+    if (external) { try { localSelect.style.display = "none"; } catch(e){} }
+    var select = external || localSelect;
+    var box = document.getElementById("%BOX_ID%");
+    var base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : "%AJAX_ROOT%".replace(/\/$/, "");
+
+    function truthy(v){
+        if (typeof v === 'boolean') return v;
+        if (typeof v === 'number') return v !== 0;
+        if (typeof v === 'string') {
+            var s = v.trim().toLowerCase();
+            return ['1','true','yes','on','active'].indexOf(s) >= 0;
+        }
+        return false;
+    }
+
+    function pick(obj, keys){
+        for (var i = 0; i < keys.length; i++) {
+            var k = keys[i];
+            if (obj && Object.prototype.hasOwnProperty.call(obj, k)) return obj[k];
+        }
+        return null;
+    }
+
+    function fmt(v){
+        if (v === null || typeof v === 'undefined' || v === '') return 'N/A';
+        return String(v);
+    }
+
+    function statePill(active){
+        return active
+            ? '<span class="tmon-watch-pill tmon-watch-on">ACTIVE</span>'
+            : '<span class="tmon-watch-pill tmon-watch-off">INACTIVE</span>';
+    }
+
+    function render(unit){
+        if (!unit) { box.innerHTML = '<em>Select a unit.</em>'; return; }
+        fetch(base + "/tmon/v1/device/sdata?unit_id=" + encodeURIComponent(unit))
+            .then(function(r){ return r.json(); })
+            .then(function(resp){
+                var d = (resp && resp.data) ? resp.data : {};
+                var frostActive = truthy(pick(d, ['frostwatch_active']));
+                var heatActive = truthy(pick(d, ['heatwatch_active']));
+                var lowTemp = pick(d, ['lowest_temp_f']);
+                var highTemp = pick(d, ['highest_temp_f']);
+                var lowBar = pick(d, ['lowest_bar']);
+                var highBar = pick(d, ['highest_bar']);
+                var lowHumid = pick(d, ['lowest_humid']);
+                var highHumid = pick(d, ['highest_humid']);
+
+                box.innerHTML = '' +
+                    '<div class="tmon-watch-grid">' +
+                        '<div class="tmon-watch-card"><div class="tmon-watch-k">Frostwatch</div><div class="tmon-watch-v">' + statePill(frostActive) + '</div></div>' +
+                        '<div class="tmon-watch-card"><div class="tmon-watch-k">Heatwatch</div><div class="tmon-watch-v">' + statePill(heatActive) + '</div></div>' +
+                        '<div class="tmon-watch-card"><div class="tmon-watch-k">Lowest Temp (F)</div><div class="tmon-watch-v">' + fmt(lowTemp) + '</div></div>' +
+                        '<div class="tmon-watch-card"><div class="tmon-watch-k">Highest Temp (F)</div><div class="tmon-watch-v">' + fmt(highTemp) + '</div></div>' +
+                        '<div class="tmon-watch-card"><div class="tmon-watch-k">Lowest Pressure (hPa)</div><div class="tmon-watch-v">' + fmt(lowBar) + '</div></div>' +
+                        '<div class="tmon-watch-card"><div class="tmon-watch-k">Highest Pressure (hPa)</div><div class="tmon-watch-v">' + fmt(highBar) + '</div></div>' +
+                        '<div class="tmon-watch-card"><div class="tmon-watch-k">Lowest Humidity (%)</div><div class="tmon-watch-v">' + fmt(lowHumid) + '</div></div>' +
+                        '<div class="tmon-watch-card"><div class="tmon-watch-k">Highest Humidity (%)</div><div class="tmon-watch-v">' + fmt(highHumid) + '</div></div>' +
+                    '</div>';
+            })
+            .catch(function(){
+                box.innerHTML = '<em>Error loading frost/heat watch data.</em>';
+            });
+    }
+
+    select.addEventListener('change', function(){ render(select.value); });
+    render(select.value);
+    var refreshMs = %REFRESH_MS%;
+    if (refreshMs > 0) {
+        setInterval(function(){ render(select.value); }, refreshMs);
+    }
+})();
+JS;
+    $watch_script = str_replace(
+        ['%SELECT_ID%', '%BOX_ID%', '%AJAX_ROOT%', '%REFRESH_MS%'],
+        [esc_js($select_id), esc_js($box_id), esc_js(rest_url()), ($refresh * 1000)],
+        $watch_script
+    );
+    echo '<script>'.$watch_script.'</script>';
     echo '</div>';
     return ob_get_clean();
 });
@@ -1194,7 +1369,16 @@ add_shortcode('tmon_device_settings', function($atts = array()){
 	ob_start();
 	?>
 	<div id="tmon-device-settings" class="tmon-device-settings">
-		<p><em>Use the page-level Unit selector (id="tmon-unit-picker") to select a device. The settings panel will follow that selection.</em></p>
+        <p><em>Use the page-level Unit selector when present; otherwise use the local unit dropdown below.</em></p>
+        <p id="tmon_ds_unit_row">
+            <label for="tmon_ds_unit"><strong>Unit</strong></label><br>
+            <select id="tmon_ds_unit" class="regular-text" style="max-width:360px;">
+                <option value="">-- choose unit --</option>
+                <?php foreach ($devices as $uid => $label): ?>
+                    <option value="<?php echo esc_attr($uid); ?>"><?php echo esc_html($label); ?></option>
+                <?php endforeach; ?>
+            </select>
+        </p>
 		<button id="tmon_ds_load" class="button">Load</button>
 
 		<div id="tmon_ds_form" style="margin-top:12px; display:none;">
@@ -1208,23 +1392,77 @@ add_shortcode('tmon_device_settings', function($atts = array()){
 			</form>
 		</div>
 	</div>
-
-	<!-- Ensure a global 'picker' variable exists (null when no page-level picker is present) -->
-	<script>var picker = (document && typeof document.getElementById === 'function') ? document.getElementById('tmon-unit-picker') || null : null;</script>
+    <style>
+        /* Animated toggle used by bool settings in the staged settings editor */
+        .tmon-switch {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 24px;
+            vertical-align: middle;
+        }
+        .tmon-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        .tmon-switch-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: #a7aaad;
+            transition: .2s;
+            border-radius: 24px;
+        }
+        .tmon-switch-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: #fff;
+            transition: .2s;
+            border-radius: 50%;
+        }
+        .tmon-switch input:checked + .tmon-switch-slider {
+            background-color: #2271b1;
+        }
+        .tmon-switch input:checked + .tmon-switch-slider:before {
+            transform: translateX(20px);
+        }
+        .tmon-switch-state {
+            display: inline-block;
+            margin-left: 8px;
+            color: #50575e;
+            font-size: 12px;
+            vertical-align: middle;
+            min-width: 30px;
+        }
+    </style>
 
 	<!-- Expose a REST nonce as a fallback when wp.apiSettings.nonce is not available -->
 	<script>var TMON_REST_NONCE = '<?php echo esc_js(wp_create_nonce('wp_rest')); ?>';</script>
 
 	<script>
 	(function(){
-		// Use the canonical page-level picker (id="tmon-unit-picker") only.
-		// We rely on the global `picker` var defined above to avoid ReferenceError.
-		var external = (typeof picker !== 'undefined' && picker) ? picker : (document.getElementById ? document.getElementById('tmon-unit-picker') : null);
+        // Prefer the page-level picker on Device Data page, otherwise use local shortcode picker.
+        var external = document.getElementById ? document.getElementById('tmon-unit-picker') : null;
+        var local = document.getElementById('tmon_ds_unit');
+        var localRow = document.getElementById('tmon_ds_unit_row');
+        var activeSelect = external || local;
  		var btnLoad = document.getElementById('tmon_ds_load');
  		var formWrap = document.getElementById('tmon_ds_form');
  		var fields = document.getElementById('tmon_ds_fields');
  		var status = document.getElementById('tmon_ds_status');
  		var saveBtn = document.getElementById('tmon_ds_save');
+
+        if (external && localRow) {
+            localRow.style.display = 'none';
+        }
  
  		// Keep an inline, local SCHEMA identical to what the UI expects
  		var SCHEMA = [
@@ -1254,11 +1492,24 @@ add_shortcode('tmon_device_settings', function($atts = array()){
  				row.appendChild(label);
 
  				if (f.type === 'bool') {
- 					var chk = document.createElement('input');
- 					chk.type = 'checkbox';
- 					chk.name = f.key;
- 					chk.checked = !!v;
- 					row.appendChild(chk);
+                    var sw = document.createElement('label');
+                    sw.className = 'tmon-switch';
+                    var chk = document.createElement('input');
+                    chk.type = 'checkbox';
+                    chk.name = f.key;
+                    chk.checked = !!v;
+                    var slider = document.createElement('span');
+                    slider.className = 'tmon-switch-slider';
+                    sw.appendChild(chk);
+                    sw.appendChild(slider);
+                    row.appendChild(sw);
+                    var state = document.createElement('span');
+                    state.className = 'tmon-switch-state';
+                    state.textContent = chk.checked ? 'On' : 'Off';
+                    chk.addEventListener('change', function(){
+                        state.textContent = chk.checked ? 'On' : 'Off';
+                    });
+                    row.appendChild(state);
  				} else if (f.type === 'select') {
  					var sel = document.createElement('select');
  					sel.name = f.key;
@@ -1300,29 +1551,27 @@ add_shortcode('tmon_device_settings', function($atts = array()){
  			}).catch(function(){ status.textContent = 'Load failed'; });
  		}
 
- 		// If no page-level picker, disable controls and show a hint.
- 		// We intentionally do NOT clone or create a picker here — the admin should provide the canonical selector.
- 		if (!external) {
- 			if (status) status.textContent = 'Page-level unit selector (id=\"tmon-unit-picker\") not found; add it to use this panel.';
+        if (!activeSelect) {
+            if (status) status.textContent = 'No unit selector found for settings panel.';
  			if (btnLoad) btnLoad.disabled = true;
  			if (saveBtn) saveBtn.disabled = true;
  			return;
  		}
 
- 		// Auto-load when picker changes
- 		external.addEventListener('change', function(){ loadVals(external.value); });
+        // Auto-load when picker changes
+        activeSelect.addEventListener('change', function(){ loadVals(activeSelect.value); });
 
- 		// Load button uses the page-level picker
+        // Load button uses the active selector
  		if (btnLoad) btnLoad.addEventListener('click', function(e){
  			e.preventDefault();
- 			var unit = external.value;
+            var unit = activeSelect.value;
  			if (!unit) { alert('Choose a unit'); return; }
  			loadVals(unit);
  		});
 
  		// Initial populate: auto-load for current selection if available
  		(function(){
- 			var initial = (external && external.value) ? external.value : (external && external.options && external.options.length ? external.options[0].value : null);
+            var initial = (activeSelect && activeSelect.value) ? activeSelect.value : (activeSelect && activeSelect.options && activeSelect.options.length ? activeSelect.options[0].value : null);
  			if (initial) loadVals(initial);
  		})();
 
@@ -1330,7 +1579,7 @@ add_shortcode('tmon_device_settings', function($atts = array()){
  		if (saveBtn) saveBtn.addEventListener('click', function(e){
  			e.preventDefault();
  			status.textContent = 'Saving...';
- 			var unit = external.value;
+            var unit = activeSelect.value;
  			if (!unit) { alert('Choose a unit'); status.textContent = ''; return; }
  			var payload = { unit_id: unit, settings: {} };
  			SCHEMA.forEach(function(f){
@@ -1519,21 +1768,6 @@ function tmon_uc_get_settings_handler() {
 }
 }
 add_action('wp_ajax_tmon_uc_get_settings', 'tmon_uc_get_settings_handler', 10);
-
-// AJAX: Update unit name
-// Removed duplicate anonymous handler to avoid parsing issues and duplicate registration.
-// The named handler `tmon_uc_update_unit_name_direct` is registered earlier and should be used instead.
-
-// AJAX: Update unit name
-add_action('wp_ajax_tmon_uc_update_unit_name', function() {
-    check_admin_referer('tmon_uc_device_data');
-    if (!current_user_can('manage_options')) wp_send_json_error();
-    $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
-    $unit_name = sanitize_text_field($_POST['unit_name'] ?? '');
-    global $wpdb;
-    $wpdb->update($wpdb->prefix.'tmon_devices', ['unit_name'=>$unit_name], ['unit_id'=>$unit_id]);
-    wp_send_json_success();
-});
 
 // AJAX: Delete a pending command by id
 add_action('wp_ajax_tmon_pending_commands_delete', function() {

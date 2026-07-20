@@ -1,0 +1,39 @@
+name: Release Readiness
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  validate-and-package:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+
+      - name: Ensure scripts are executable
+        run: |
+          chmod +x scripts/validate_uc_field_testing_readiness.sh
+          chmod +x scripts/build_release_artifacts.sh
+
+      - name: Run readiness validation
+        run: scripts/validate_uc_field_testing_readiness.sh
+
+      - name: Build release artifacts
+        run: scripts/build_release_artifacts.sh ci-${{ github.run_number }}-${{ github.sha }}
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tmon-release-artifacts
+          path: dist/
+          if-no-files-found: error

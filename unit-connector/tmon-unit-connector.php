@@ -51,8 +51,11 @@ function tmon_unit_connector_enqueue_assets($hook = '') {
         wp_localize_script( 'tmon-unit-connector', 'tmon_uc_ajax', array( 'ajaxurl' => admin_url( 'admin-ajax.php' ) ) );
         // Also provide a simple global for legacy code paths if needed.
         wp_add_inline_script( 'tmon-unit-connector', 'window.tmon_uc_ajaxurl = window.ajaxurl || (window.tmon_uc_ajax && window.tmon_uc_ajax.ajaxurl) || "";', 'before' );
-        wp_enqueue_script('tmon-hierarchy-js', plugin_dir_url(__FILE__) . 'assets/tmon-hierarchy.js', array('jquery'), null, true);
-        wp_enqueue_style('tmon-hierarchy-css', plugin_dir_url(__FILE__) . 'assets/tmon-hierarchy.css');
+        // Load hierarchy map assets only on the hierarchy admin page.
+        if (is_string($hook) && strpos($hook, 'tmon-hierarchy') !== false) {
+            wp_enqueue_script('tmon-hierarchy-js', plugin_dir_url(__FILE__) . 'assets/tmon-hierarchy.js', array('jquery'), null, true);
+            wp_enqueue_style('tmon-hierarchy-css', plugin_dir_url(__FILE__) . 'assets/tmon-hierarchy.css');
+        }
     } else {
         // Frontend: minimal, user-facing CSS only
         wp_enqueue_style( 'tmon-user', TMON_UNIT_CONNECTOR_URL . 'assets/tmon-user.css', [], TMON_UNIT_CONNECTOR_VERSION );

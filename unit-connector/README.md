@@ -45,8 +45,13 @@ See `/wp-json/tmon/v1/` for REST endpoints.
 - [tmon_active_units] — List active (not suspended) devices with last_seen.
 - [tmon_device_sdata unit_id="..."] — Latest sdata fields in a friendly table.
 - [tmon_device_history unit_id="..." hours="24"] — 24h Chart.js history for a device.
+- [tmon_frost_heat_watch refresh_s="30"] — Frost/heat watch status and low/high temperature, pressure, humidity values.
 - [tmon_claim_device] — Logged-in users can submit a claim for a device by Unit ID and Machine ID. Claims are reviewed/approved in tmon-admin.
 - [tmon_device_list], [tmon_device_status] — Hierarchical list and status table. If firmware enables relays (ENABLE_RELAY1..8), authorized users see inline relay controls with runtime and scheduling.
+
+History chart notes
+- Additional low/high trace lines are available in the legend for temperature, pressure, and humidity.
+- Legend visibility persists across refreshes using browser cookie state (with localStorage fallback).
 
 ### Examples
 Add these shortcodes to any Page or Post:
@@ -58,6 +63,7 @@ Add these shortcodes to any Page or Post:
 - Device details (replace with your unit_id):
 	- `[tmon_device_sdata unit_id="UNIT123"]`
 	- `[tmon_device_history unit_id="UNIT123" hours="24"]`
+	- `[tmon_frost_heat_watch refresh_s="30"]`
 - Customer device claiming (requires login):
 	- `[tmon_claim_device]`
 

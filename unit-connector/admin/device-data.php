@@ -383,17 +383,4 @@ if (! function_exists('tmon_uc_device_data_page')) {
 	}
 }
 
-// Register submenu page in admin (only when in admin context)
-if ( is_admin() && ! has_action( 'admin_menu', 'tmon_uc_register_device_data_menu' ) ) {
-	add_action('admin_menu', 'tmon_uc_register_device_data_menu');
-	function tmon_uc_register_device_data_menu() {
-		add_submenu_page(
-			'tmon-uc',                          // parent slug (assumed)
-			__('Device Data', 'tmon'),         // page title
-			__('Device Data', 'tmon'),         // menu title
-			'manage_options',                  // capability
-			'tmon-uc-device-data',             // menu slug
-			'tmon_uc_device_data_page'         // callback
-		);
-	}
-}
+// Device Data submenu registration is centralized in admin/menu.php.

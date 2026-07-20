@@ -1,0 +1,3 @@
+52b517e8591cbab1867c46ebee011f5f8af441e007403092ae272b46fad71182  ./micropython-deploy-smoke.zip
+985822029a8c45b8cc61f0726436f6ce6587c65ffa059cd4b12eba081b002775  ./tmon-admin-deploy-smoke.zip
+fd8161f85d99ee7fd6eb22d5b3573d876cdc3a5f3d5c706ab1ae944b3449b8ec  ./unit-connector-deploy-smoke.zip
