@@ -147,6 +147,8 @@ Unit Connector
   - Added compatibility shortcodes for `tmon_relay_on`, `tmon_relay_off`, `tmon_relay_toggle`, and `tmon_relay_controls` that queue relay commands via the existing AJAX pipeline.
   - Hardened Device Data unit-name picker null handling and made Hierarchy accessible to admins even when custom caps are missing.
   - Added safer Leaflet loading for the hierarchy page and guarded the WordPress auto-update checker with package fallback + debug logging.
+- [x] Clean up Unit Connector wiki menu registration to remove the duplicate `Wiki` submenu entry and keep only `UC Wiki`.
+- [x] Guard `get_post()` and `get_post_status()` calls in the Starter Page admin check to prevent syntax/runtime errors during status evaluation.
 
 Docs/QA
 - [ ] Add data flow graphics/screenshots.

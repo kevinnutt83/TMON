@@ -5,7 +5,7 @@ add_action('admin_menu', function() {
     add_submenu_page('tmon_devices', 'Starter Page', 'Starter Page', 'manage_options', 'tmon-starter', function(){
         if (!current_user_can('manage_options')) { wp_die('Insufficient permissions'); }
         $starter_id = intval(get_option('tmon_starter_page_id', 0));
-        $exists = $starter_id && get_post($starter_id) && get_post_status($starter_id);
+        $exists = $starter_id && function_exists('get_post') && get_post($starter_id) && function_exists('get_post_status') && get_post_status($starter_id);
         $create_url = wp_nonce_url(admin_url('admin-post.php?action=tmon_create_starter_page'), 'tmon_create_starter_page');
         echo '<div class="wrap"><h1>TMON Starter Page</h1>';
         if ($exists) {
