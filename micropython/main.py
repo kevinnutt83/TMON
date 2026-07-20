@@ -373,6 +373,9 @@ async def periodic_diagnostics_task():
                 await log_exception('periodic_diagnostics_task', e)
         await asyncio.sleep(interval)
 
+
+node_role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
+
 # ========================== TASK SETUP ==========================
 tm = TaskManager()
 tm.add_task(first_boot_provision, 'first_boot_provision', 0)
@@ -411,7 +414,6 @@ async def main():
     await tm.run()
 
 # Start remote deep-sleep mode for battery remotes; keep scheduler for base/wifi nodes.
-node_role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
 try:
     from utils import provisioning_log
     provisioning_log(f"[BOOT] NODE_TYPE={node_role}")
