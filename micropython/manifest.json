@@ -78,7 +78,7 @@
     "lib/urequests-0.8.0.dist-info/RECORD": "sha256:03b7e2f4f5c2948e320a3e75f2454634b765c8c4413d7a7e6f2bdc94da3e2146",
     "lib/urequests.py": "sha256:2bee6a73926682d278a23c52d1c598290c82391372e40615b6075cda5583efcd",
     "lora.py": "sha256:7943d74dbd1f07acd4c1b492376876aa423d9efb0172eecfc81469427268ea2e",
-    "main.py": "sha256:c53a93a7ee5cc91c2328f3b8f10a35e35990b72395d89445b7b2871e4e92574a",
+    "main.py": "sha256:dcb46a0f0254dcb298db6dfb21bff1258de6a53587d288e6a3bc0e8c2c28f74d",
     "oled.py": "sha256:77d605d1d2ed36431022918f3442f6f4d4f1ef5e0ff74eb4bc5bd5a93d0ddbac",
     "ota.py": "sha256:29375504616668933770424cb7c50435bba5b8ca6116d725f9bd2b7acbf29cae",
     "provision.py": "sha256:29a5c2bc2e515d84db5bbbf3dc897175605f1ca19d1d73c84fcffe92ae466354",
@@ -87,15 +87,15 @@
     "remote_node.py": "sha256:3bbf81db950a4e1b800a81d368d27d3323b59c2848508543886c8d9094e283bd",
     "sampling.py": "sha256:fe7f9b769a9a3c5b64f16720d15f25f427473f9f42ba8ab932b353632d1b0198",
     "sdata.py": "sha256:79005d091059a50d820f8457573aa03c6c53b5f2c97d311b5f39e9627ee9b49a",
-    "settings.py": "sha256:44257a4f1a403d19d5985733d6a302a6c4c65e6a342d7ae16a2e187514db00b7",
-    "settings_apply.py": "sha256:86c064ad73397db2cbb7e780dd24ac9a850d8b81bad692d9cae8628d7bfcee0c",
+    "settings.py": "sha256:f7296397c4fc6f5e3c31139cba48849a30eb239e831a46d9a70d1fc0f4af2af2",
+    "settings_apply.py": "sha256:6d4603e5b3161321056eed0b0d49abbc3686a98c1a5de4266ad182c11d3ff124",
     "tmon.py": "sha256:32ba520a96ffdfd76578521e545340190550478022428e07fe6770528a7276ee",
     "user_commands.py": "sha256:f279c1e752a4657dfbbe61c57d4040289a13d880f60606ec85b2dfd6cca2d450",
     "utils.py": "sha256:696456104b3e8bb0ab3e5c4e85069e82266ab1d9c36c6aa1a67b3be32e724342",
-    "version.txt": "sha256:076de28f82c6008a25280f30f5ff4c82fb978c3792843d14577a63b452602aa9",
+    "version.txt": "sha256:9c83fd6cd5d87f0a54327cc2615fe48f59d4a5e692ae584e81ee295398eea21e",
     "wifi.py": "sha256:9a75bef1a3d61f8fa93dc90567a342aeba452cb15f859dd6fc6a08e1f70045ae",
-    "wprest.py": "sha256:5f28dbda586badf578ebbdb016dfc0ed36c80d3af5567071f45c01dd5afbd2f2"
+    "wprest.py": "sha256:6e03061cc3a6918bdfdb4657b45719a54f4b21ec30b6517002efd4b90cdcc07b"
   },
   "name": "tmon-micropython",
-  "version": "v2.00.2z"
+  "version": "v2.00.3a"
 }
