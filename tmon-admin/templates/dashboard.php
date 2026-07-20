@@ -19,7 +19,8 @@ echo ' <tbody id="tmon-rot-body"><tr><td colspan="4"><em>Loading…</em></td></t
 echo '</table>';
 
 // Inline JS using WP REST URL for admin field data
-echo '<script>(function(){
+$rotation_js = <<<'JS'
+<script>(function(){
 	function restBase(){ try { return (wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : (window.location.origin||"")+"/wp-json"; } catch(e){ return (window.location.origin||"")+"/wp-json"; } }
 	async function loadRotation(){
 		const hours = parseInt(document.getElementById("tmon-rot-hours").value||"12",10);
@@ -36,7 +37,7 @@ echo '<script>(function(){
 				// prefer created_at, else timestamp/time
 				const tsStr = r.created_at || r.timestamp || r.time || null;
 				if (!uid || !tsStr) continue;
-				const t = new Date(tsStr.toString().replace(' ', 'T')).getTime();
+				const t = new Date(tsStr.toString().replace(" ", "T")).getTime();
 				if (!t || t < cutoff) continue;
 				if (!series.has(uid)) series.set(uid, []);
 				series.get(uid).push(t);
@@ -65,7 +66,9 @@ echo '<script>(function(){
 	}
 	document.getElementById("tmon-rot-refresh").addEventListener("click", loadRotation);
 	loadRotation();
-})();</script>';
+})();</script>
+JS;
+echo $rotation_js;
 
 echo '</div>';
 ?>

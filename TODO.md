@@ -238,6 +238,11 @@ Unit Connector — Settings Page
 - [x] Staged settings population bug
   - Investigated and fixed selector wiring, stale AJAX keys, and duplicate handler conflicts causing population failures.
   - Added regression-oriented readiness checks for REST/API payload contract, selector path, and duplicate-handler detection.
+- [x] Fix starter/shortcode runtime regressions
+  - `tmon_device_settings` now falls back to local `tmon_devices` rows when provisioned-options helpers are empty.
+  - Feature-device detection now accepts compact interior/soil telemetry keys (`dt_f`, `dh`, `db`, `sm`) and connectivity-only payloads.
+  - Claim shortcode now posts to local `/wp-json/tmon/v1/device/first-checkin` to avoid browser CORS failures.
+  - Field-data ingest now flattens nested `sdata` / `data` objects so charts and sdata views populate expected fields.
 
 Device History Graph & Shortcodes (NEW)
 - [High] Fix history chart traces and legends

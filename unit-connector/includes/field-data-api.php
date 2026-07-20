@@ -406,6 +406,14 @@ function tmon_uc_receive_field_data($request) {
 
     foreach ($records as $rec) {
         if (!is_array($rec)) continue;
+        // Some firmware/build variants nest telemetry inside sdata/data objects.
+        // Merge those keys into the active record so downstream charts/tables read consistent fields.
+        if (isset($rec['sdata']) && is_array($rec['sdata'])) {
+            $rec = array_merge($rec, $rec['sdata']);
+        }
+        if (isset($rec['data']) && is_array($rec['data'])) {
+            $rec = array_merge($rec, $rec['data']);
+        }
         $rec = array_merge(array_filter($envelope_defaults, static function($value) {
             return $value !== null && $value !== '';
         }), $rec);

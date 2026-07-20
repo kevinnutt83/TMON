@@ -59,7 +59,8 @@
       let j = null;
       try{ j = await r.json(); } catch(e){}
       if (r.ok && j && j.status === 'ok'){
-        result.textContent = 'Claim submitted. ID: ' + j.id;
+        const rid = j.id ? (' ID: ' + j.id) : '';
+        result.textContent = 'Claim submitted.' + rid;
         form.reset();
       } else {
         const msg = (j && (j.message || j.code)) || ('HTTP ' + r.status);

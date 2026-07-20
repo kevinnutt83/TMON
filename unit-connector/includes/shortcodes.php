@@ -294,16 +294,32 @@ function tmon_uc_device_supports_feature($settings, $latest, $feature) {
     $flags = [];
     if (is_array($settings)) $flags = array_merge($flags, $settings);
     if (is_array($latest)) $flags = array_merge($flags, $latest);
+    $has_any_telemetry = false;
+    foreach ([
+        't_f','t_c','hum','bar','cur_temp_f','cur_temp_c','cur_humid','cur_bar_pres',
+        'dt_f','dt_c','dh','db','cur_device_temp_f','cur_device_temp_c','cur_device_humid','cur_device_bar_pres',
+        'sm','st_f','st_c','cur_soil_moisture','cur_soil_temp_f','cur_soil_temp_c',
+        'v','sys_voltage','wifi_rssi','lora_SigStr','WAN_CONNECTED','WIFI_CONNECTED','LORA_CONNECTED'
+    ] as $k) {
+        if (array_key_exists($k, $flags)) {
+            $has_any_telemetry = true;
+            break;
+        }
+    }
     $has_sample = tmon_uc_truthy_flag($flags['SAMPLE_TEMP'] ?? null)
         || tmon_uc_truthy_flag($flags['SAMPLE_HUMID'] ?? null)
         || tmon_uc_truthy_flag($flags['SAMPLE_BAR'] ?? null)
-        || isset($flags['t_f']) || isset($flags['cur_temp_f']);
+        || isset($flags['t_f']) || isset($flags['cur_temp_f'])
+        || isset($flags['dt_f']) || isset($flags['cur_device_temp_f'])
+        || isset($flags['dh']) || isset($flags['cur_device_humid'])
+        || isset($flags['db']) || isset($flags['cur_device_bar_pres'])
+        || isset($flags['sm']) || isset($flags['cur_soil_moisture']);
     $has_engine = tmon_uc_truthy_flag($flags['ENGINE_ENABLED'] ?? null)
         || tmon_uc_truthy_flag($flags['USE_RS485'] ?? null)
         || isset($flags['engine1_speed_rpm']) || isset($flags['engine2_speed_rpm']);
     if (in_array($feature, ['engine', 'eng'], true)) return $has_engine;
-    if (in_array($feature, ['sample', 'sampling', 'env', 'environment'], true)) return $has_sample;
-    return $has_sample || $has_engine || empty($feature);
+    if (in_array($feature, ['sample', 'sampling', 'env', 'environment'], true)) return $has_sample || $has_any_telemetry;
+    return $has_sample || $has_engine || $has_any_telemetry || empty($feature);
 }}
 
 // Build a list of provisioned devices filtered by feature support
@@ -322,6 +338,15 @@ function tmon_uc_list_feature_devices($feature = 'sample') {
                 $tmp = json_decode($fd['data'], true);
                 if (is_array($tmp)) $latest = $tmp;
             }
+        }
+        if (!is_array($latest)) {
+            $latest = [];
+        }
+        if (isset($latest['sdata']) && is_array($latest['sdata'])) {
+            $latest = array_merge($latest, $latest['sdata']);
+        }
+        if (isset($latest['data']) && is_array($latest['data'])) {
+            $latest = array_merge($latest, $latest['data']);
         }
         if (!tmon_uc_device_supports_feature($settings, $latest, $feature)) continue;
         $label = $r['unit_name'] ? ($r['unit_name'] . ' (' . $r['unit_id'] . ')') : $r['unit_id'];
@@ -1082,11 +1107,11 @@ add_shortcode('tmon_devices_sdata', function($atts){
         if ($fd) {
             $d = json_decode($fd['data'], true);
             if (is_array($d)) {
-                $device_temp = $d['cur_device_temp_f'] ?? '';
-                $device_humid = $d['cur_device_humid'] ?? '';
-                $device_bar = $d['cur_device_bar_pres'] ?? '';
+                $device_temp = $d['cur_device_temp_f'] ?? ($d['dt_f'] ?? '');
+                $device_humid = $d['cur_device_humid'] ?? ($d['dh'] ?? '');
+                $device_bar = $d['cur_device_bar_pres'] ?? ($d['db'] ?? '');
                 $volt = $d['v'] ?? ($d['sys_voltage'] ?? '');
-                $soil = $d['cur_soil_moisture'] ?? '';
+                $soil = $d['cur_soil_moisture'] ?? ($d['sm'] ?? '');
             }
         }
         $out .= '<tr>'
@@ -1212,9 +1237,8 @@ add_shortcode('tmon_claim_device', function($atts) {
     $plugin_main = dirname(__DIR__) . '/tmon-unit-connector.php';
     $js_url   = plugins_url('assets/claim.js', $plugin_main);
     $css_url  = plugins_url('assets/claim.css', $plugin_main);
-    // Prefer hub claim endpoint if defined
-    $hub = defined('TMON_ADMIN_HUB_URL') ? TMON_ADMIN_HUB_URL : get_option('tmon_admin_hub_url', '');
-    $rest_endpoint = $hub ? rtrim($hub, '/') . '/wp-json/tmon-admin/v1/claim' : esc_url_raw( rest_url('tmon-admin/v1/claim') );
+    // Use local UC claim route to avoid browser CORS; server-side route proxies confirmation to Admin hub.
+    $rest_endpoint = esc_url_raw( rest_url('tmon/v1/device/first-checkin') );
     wp_enqueue_script('tmon-claim', $js_url, array(), '1.0', true);
     wp_localize_script('tmon-claim', 'TMON_CLAIM', array('nonce'=>wp_create_nonce('wp_rest'),'restUrl'=>$rest_endpoint));
     wp_enqueue_style('tmon-claim', $css_url, array(), '1.0');
@@ -1366,10 +1390,22 @@ add_shortcode('tmon_device_settings', function($atts = array()){
 			foreach ($opt as $u => $m) { $devices[$u] = $u; }
 		}
 	}
+    if (empty($devices)) {
+        global $wpdb;
+        $rows = $wpdb->get_results("SELECT unit_id, unit_name FROM {$wpdb->prefix}tmon_devices ORDER BY unit_name ASC, unit_id ASC", ARRAY_A);
+        if (is_array($rows)) {
+            foreach ($rows as $r) {
+                $uid = isset($r['unit_id']) ? (string) $r['unit_id'] : '';
+                if ($uid === '') continue;
+                $uname = isset($r['unit_name']) ? (string) $r['unit_name'] : '';
+                $devices[$uid] = $uname ? ($uid . ' - ' . $uname) : $uid;
+            }
+        }
+    }
 	ob_start();
 	?>
 	<div id="tmon-device-settings" class="tmon-device-settings">
-        <p><em>Use the page-level Unit selector when present; otherwise use the local unit dropdown below.</em></p>
+        <p><em>Select a unit below, or use the shared page selector when available.</em></p>
         <p id="tmon_ds_unit_row">
             <label for="tmon_ds_unit"><strong>Unit</strong></label><br>
             <select id="tmon_ds_unit" class="regular-text" style="max-width:360px;">
