@@ -99,6 +99,33 @@ def crc16_ccitt(data, poly=0x1021, init=0xFFFF):
 def _format_crc(crc):
     return f"{crc:04X}"
 
+
+def _extract_lora_network_fields(msg_str):
+    net = None
+    password = None
+    try:
+        for part in str(msg_str).split(','):
+            if part.startswith('NET:'):
+                net = part[4:]
+            elif part.startswith('PASS:'):
+                password = part[5:]
+    except Exception:
+        pass
+    return net, password
+
+
+def _base_network_matches(msg_str):
+    expected_name = str(getattr(settings, 'LORA_NETWORK_NAME', '') or '').strip()
+    expected_pass = str(getattr(settings, 'LORA_NETWORK_PASSWORD', '') or '').strip()
+    if not expected_name and not expected_pass:
+        return True
+    net_name, net_pass = _extract_lora_network_fields(msg_str)
+    if expected_name and net_name != expected_name:
+        return False
+    if expected_pass and net_pass != expected_pass:
+        return False
+    return True
+
 # ===================== MICROPYTHON-COMPATIBLE QUEUE =====================
 class SimpleQueue:
     def __init__(self, maxsize=10):
@@ -591,8 +618,9 @@ async def handle_incoming_packet(msg):
     msg_str = msg.rstrip(b'\x00').decode()
 
     # EARLY FILTER: ignore packets from wrong network
-    if "NET:" in msg_str and "PASS:" in msg_str:
-        if f"NET:{settings.LORA_NETWORK_NAME}" not in msg_str or f"PASS:{settings.LORA_NETWORK_PASSWORD}" not in msg_str:
+    if str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'base':
+        if not _base_network_matches(msg_str):
+            await debug_print('LoRa packet rejected due to network mismatch', 'WARN')
             return
 
     msg_str = await _unsecure_message(msg_str)

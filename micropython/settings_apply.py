@@ -85,6 +85,8 @@ ALLOWLIST = {
     'NODE_TYPE': _to_str,
     'UNIT_Name': _to_str,
     'WORDPRESS_API_URL': _to_str,
+    'LORA_NETWORK_NAME': _to_str,
+    'LORA_NETWORK_PASSWORD': _to_str,
 }
 
 # WiFi credentials are sensitive; only allow if explicitly permitted and on base or unprovisioned

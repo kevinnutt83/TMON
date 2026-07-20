@@ -142,6 +142,10 @@ Unit Connector
   - Expanded diagnostics skip logic to suppress routine `tmon_pending_commands_*`, `tmon_device_status_*`, `tmon_uc_device_*`, and `tmon_uc_queue_*` polling actions.
   - Normalized AJAX action parsing with `sanitize_key(wp_unslash(...))` to avoid false-positive logging.
   - Reworked pending summary auto-refresh scripts to use structured POST requests with encoded values to avoid inline parse edge cases.
+- [x] Restore relay control shortcodes and harden Device Data / hierarchy pages
+  - Added compatibility shortcodes for `tmon_relay_on`, `tmon_relay_off`, `tmon_relay_toggle`, and `tmon_relay_controls` that queue relay commands via the existing AJAX pipeline.
+  - Hardened Device Data unit-name picker null handling and made Hierarchy accessible to admins even when custom caps are missing.
+  - Added safer Leaflet loading for the hierarchy page and guarded the WordPress auto-update checker with package fallback + debug logging.
 
 Docs/QA
 - [ ] Add data flow graphics/screenshots.

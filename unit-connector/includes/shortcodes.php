@@ -1309,6 +1309,110 @@ add_shortcode('tmon_claim_device', function($atts) {
     return ob_get_clean();
 });
 
+if (!function_exists('tmon_uc_render_relay_shortcode')) {
+    function tmon_uc_render_relay_shortcode($state, $atts = array()) {
+        $atts = shortcode_atts(array(
+            'unit_id' => '',
+            'relay' => '1',
+            'label' => '',
+            'runtime_min' => '0',
+            'schedule_at' => '',
+        ), $atts);
+
+        $can_control = current_user_can('manage_options') || current_user_can('edit_tmon_units');
+        $unit_id = sanitize_text_field((string) $atts['unit_id']);
+        $relay = max(1, min(8, intval($atts['relay'])));
+        $label = $atts['label'] !== '' ? sanitize_text_field((string) $atts['label']) : strtoupper($state) . ' Relay ' . $relay;
+        $runtime_min = max(0, intval($atts['runtime_min']));
+        $schedule_at = sanitize_text_field((string) $atts['schedule_at']);
+        $nonce = wp_create_nonce('tmon_uc_relay');
+        $ajax_url = admin_url('admin-ajax.php');
+
+        if (!$can_control) {
+            return '<div class="tmon-relay-shortcode"><em>Relay controls require device control permission.</em></div>';
+        }
+
+        if ($unit_id === '') {
+            return '<div class="tmon-relay-shortcode"><em>Provide a unit_id attribute or use a page with the shared unit selector.</em></div>';
+        }
+
+        $widget_id = 'tmon-relay-' . wp_generate_password(6, false, false);
+        ob_start();
+        ?>
+        <div id="<?php echo esc_attr($widget_id); ?>" class="tmon-relay-shortcode" data-unit="<?php echo esc_attr($unit_id); ?>" data-relay="<?php echo esc_attr($relay); ?>" data-state="<?php echo esc_attr($state); ?>" data-nonce="<?php echo esc_attr($nonce); ?>" data-runtime-min="<?php echo esc_attr($runtime_min); ?>" data-schedule-at="<?php echo esc_attr($schedule_at); ?>">
+            <button type="button" class="button button-primary tmon-relay-shortcode-btn"><?php echo esc_html($label); ?></button>
+            <span class="tmon-relay-shortcode-status" style="margin-left:8px;"></span>
+        </div>
+        <script>
+        (function(){
+            var wrap = document.getElementById(<?php echo wp_json_encode($widget_id); ?>);
+            if (!wrap) return;
+            var btn = wrap.querySelector('.tmon-relay-shortcode-btn');
+            var status = wrap.querySelector('.tmon-relay-shortcode-status');
+            var ajaxUrl = <?php echo wp_json_encode($ajax_url); ?>;
+            function setStatus(text, isError) {
+                if (!status) return;
+                status.textContent = text || '';
+                status.style.color = isError ? '#b00' : '#1e7e34';
+            }
+            function post(data) {
+                return fetch(ajaxUrl, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'},
+                    body: new URLSearchParams(data).toString()
+                }).then(function(r){ return r.json(); });
+            }
+            btn.addEventListener('click', function(){
+                var payload = {
+                    action: 'tmon_uc_relay_command',
+                    nonce: wrap.getAttribute('data-nonce') || '',
+                    unit_id: wrap.getAttribute('data-unit') || '',
+                    relay_num: wrap.getAttribute('data-relay') || '1',
+                    state: wrap.getAttribute('data-state') || 'on',
+                    runtime_min: wrap.getAttribute('data-runtime-min') || '0',
+                    schedule_at: wrap.getAttribute('data-schedule-at') || ''
+                };
+                btn.disabled = true;
+                setStatus('Sending...', false);
+                post(payload).then(function(res){
+                    if (res && res.success) {
+                        var data = res.data || {};
+                        setStatus(data.scheduled ? 'Scheduled' : 'Queued', false);
+                    } else {
+                        var msg = (res && res.data && res.data.message) ? res.data.message : 'Command failed';
+                        setStatus(msg, true);
+                    }
+                }).catch(function(){
+                    setStatus('Network error', true);
+                }).finally(function(){
+                    btn.disabled = false;
+                });
+            });
+        })();
+        </script>
+        <?php
+        return ob_get_clean();
+    }
+}
+
+add_shortcode('tmon_relay_on', function($atts){ return tmon_uc_render_relay_shortcode('on', $atts); });
+add_shortcode('tmon_relay_off', function($atts){ return tmon_uc_render_relay_shortcode('off', $atts); });
+add_shortcode('tmon_relay_toggle', function($atts){ return tmon_uc_render_relay_shortcode('toggle', $atts); });
+add_shortcode('tmon_relay_controls', function($atts){
+    $atts = shortcode_atts(array('unit_id' => '', 'relay' => '1'), $atts);
+    $unit_id = sanitize_text_field((string) $atts['unit_id']);
+    if ($unit_id === '') {
+        return '<em>Provide a unit_id attribute for relay controls.</em>';
+    }
+    $relay = max(1, min(8, intval($atts['relay'])));
+    return '<div class="tmon-relay-shortcuts">'
+        . tmon_uc_render_relay_shortcode('on', array('unit_id' => $unit_id, 'relay' => $relay, 'label' => 'Relay ' . $relay . ' On'))
+        . tmon_uc_render_relay_shortcode('off', array('unit_id' => $unit_id, 'relay' => $relay, 'label' => 'Relay ' . $relay . ' Off'))
+        . tmon_uc_render_relay_shortcode('toggle', array('unit_id' => $unit_id, 'relay' => $relay, 'label' => 'Relay ' . $relay . ' Toggle'))
+        . '</div>';
+});
+
 // [tmon_active_units]
 add_shortcode('tmon_active_units', function($atts) {
     global $wpdb;
@@ -1941,6 +2045,9 @@ add_action('wp_ajax_tmon_pending_commands_refresh', function(){
 
 // Summary refresh (dashboard/shortcode)
 add_action('wp_ajax_tmon_pending_commands_summary_refresh', function(){
+	if (strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') {
+		wp_send_json_error(['message' => 'POST required'], 405);
+	}
     check_ajax_referer('tmon_pending_cmds');
     if (!current_user_can('manage_options') && !current_user_can('edit_tmon_units')) wp_send_json_error(['message'=>'forbidden'], 403);
     global $wpdb;

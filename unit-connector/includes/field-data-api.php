@@ -29,6 +29,14 @@ add_action('rest_api_init', function() {
             'hours' => array('required' => false),
         ),
     ));
+    register_rest_route('tmon/v1', '/device/history-yoy', array(
+        'methods' => 'GET',
+        'callback' => 'tmon_uc_get_device_history_yoy',
+        'permission_callback' => '__return_true',
+        'args' => array(
+            'unit_id' => array('required' => true),
+        ),
+    ));
 
     register_rest_route('tmon/v1', '/device/sdata', array(
         'methods' => 'GET',
@@ -647,6 +655,11 @@ function tmon_uc_get_device_history($request) {
     sort($enabled_relays);
     $enabled_relays = array_values(array_unique($enabled_relays));
     return rest_ensure_response(['status' => 'ok', 'unit_id' => $unit_id, 'hours' => $hours, 'enabled_relays' => $enabled_relays, 'points' => $points]);
+}
+
+function tmon_uc_get_device_history_yoy($request) {
+    $request->set_param('hours', 24 * 365);
+    return tmon_uc_get_device_history($request);
 }
 
 function tmon_uc_get_device_sdata($request) {

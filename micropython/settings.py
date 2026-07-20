@@ -49,7 +49,7 @@ FIELD_DATA_MEM_LOW_WATERMARK = 40 * 1024
 UNIT_ID = "None"
 UNIT_Name = "No Device Name"
 NODE_TYPE = 'base'
-FIRMWARE_VERSION = "v2.00.2y"
+FIRMWARE_VERSION = "v2.00.2z"
 
 # ============================================================
 # BOOTSTRAP CREDENTIALS (Required for First-Boot Provisioning)

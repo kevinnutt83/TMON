@@ -112,20 +112,41 @@ add_filter('site_transient_update_plugins', function($transient) {
     if (!$repo) return $transient; // disabled until configured, e.g., define('TMON_UC_GITHUB_REPO','org/repo');
     $plugin_slug = plugin_basename(__FILE__);
     $github_api_url = 'https://api.github.com/repos/' . $repo . '/releases/latest';
+    if (defined('WP_DEBUG') && WP_DEBUG) {
+        error_log('tmon-unit-connector: checking updates from ' . $github_api_url);
+    }
     $response = wp_remote_get($github_api_url, [
+        'timeout' => 15,
+        'redirection' => 3,
         'headers' => [ 'Accept' => 'application/vnd.github.v3+json', 'User-Agent' => 'WordPress' ]
     ]);
-    if (is_wp_error($response)) return $transient;
+    if (is_wp_error($response)) {
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log('tmon-unit-connector: update check failed: ' . $response->get_error_message());
+        }
+        return $transient;
+    }
     $release = json_decode(wp_remote_retrieve_body($response));
-    if (empty($release->tag_name)) return $transient;
+    if (empty($release->tag_name)) {
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log('tmon-unit-connector: update check returned no tag_name for ' . $repo);
+        }
+        return $transient;
+    }
     $plugin_data = get_plugin_data(__FILE__);
     if (version_compare($plugin_data['Version'], ltrim($release->tag_name, 'v'), '<')) {
+        $package = '';
+        if (!empty($release->assets) && is_array($release->assets) && !empty($release->assets[0]->browser_download_url)) {
+            $package = $release->assets[0]->browser_download_url;
+        } elseif (!empty($release->zipball_url)) {
+            $package = $release->zipball_url;
+        }
         $transient->response[$plugin_slug] = (object) [
             'slug' => $plugin_slug,
             'plugin' => $plugin_slug,
             'new_version' => ltrim($release->tag_name, 'v'),
             'url' => $release->html_url,
-            'package' => $release->assets[0]->browser_download_url ?? '',
+            'package' => $package,
         ];
     }
     return $transient;

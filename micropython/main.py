@@ -379,7 +379,8 @@ tm.add_task(first_boot_provision, 'first_boot_provision', 0)
 if settings.SAMPLE_TEMP or getattr(settings, 'SAMPLE_HUMID', False) or getattr(settings, 'SAMPLE_BAR', False):
     tm.add_task(sample_task, 'sample', 30)
 tm.add_task(periodic_field_data_task, 'field_data', settings.FIELD_DATA_SEND_INTERVAL)
-tm.add_task(periodic_command_poll_task, 'command_poll', 10)
+if node_role != 'remote':
+    tm.add_task(periodic_command_poll_task, 'command_poll', 10)
 tm.add_task(check_for_update, 'ota_check', 3600)
 tm.add_task(apply_pending_update, 'ota_apply', settings.OTA_APPLY_INTERVAL_S)
 if settings.ENABLE_OLED:
@@ -387,13 +388,15 @@ if settings.ENABLE_OLED:
 tm.add_task(settings_apply_loop, 'settings_apply', 60)
 if engine_loop:
     tm.add_task(engine_loop, 'engine', settings.ENGINE_POLL_INTERVAL_S)
-tm.add_task(wifi_rssi_monitor, 'wifi_rssi', settings.WIFI_SIGNAL_SAMPLE_INTERVAL_S)
+if node_role != 'remote':
+    tm.add_task(wifi_rssi_monitor, 'wifi_rssi', settings.WIFI_SIGNAL_SAMPLE_INTERVAL_S)
 tm.add_task(periodic_provision_check, 'provision_check', settings.PROVISION_CHECK_INTERVAL_S)
 tm.add_task(check_missed_syncs, 'missed_syncs', 60)
-tm.add_task(periodic_diagnostics_task, 'diagnostics', int(getattr(settings, 'DIAGNOSTIC_SEND_INTERVAL_S', 300)))
+if node_role != 'remote':
+    tm.add_task(periodic_diagnostics_task, 'diagnostics', int(getattr(settings, 'DIAGNOSTIC_SEND_INTERVAL_S', 300)))
 # If running as base and WP sync helpers are available, schedule the periodic WP sync
 try:
-    if str(getattr(settings, 'NODE_TYPE', '')).lower() == 'base':
+    if node_role == 'base':
         tm.add_task(periodic_wp_sync, 'wp_sync', 300)
 except Exception as e:
     _record_startup_exception('add_wp_sync_task', e)
@@ -408,7 +411,14 @@ async def main():
     await tm.run()
 
 # Start remote deep-sleep mode for battery remotes; keep scheduler for base/wifi nodes.
-if str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'remote':
+node_role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
+try:
+    from utils import provisioning_log
+    provisioning_log(f"[BOOT] NODE_TYPE={node_role}")
+except Exception:
+    pass
+
+if node_role == 'remote':
     try:
         from remote_node import run_remote_deep_sleep
         run_remote_deep_sleep()

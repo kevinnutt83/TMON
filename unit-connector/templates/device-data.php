@@ -105,7 +105,7 @@ $name_nonce = wp_create_nonce('tmon_uc_nonce');
     var updatedEl = document.getElementById('tmon-device-updated');
 
     function updateNameInputFromPicker() {
-        var opt = picker.options[picker.selectedIndex];
+        var opt = (picker && picker.options && picker.selectedIndex >= 0) ? picker.options[picker.selectedIndex] : null;
         if (nameInput) nameInput.value = opt ? (opt.getAttribute('data-unit-name') || '') : '';
         if (nameStatus) nameStatus.textContent = '';
     }
