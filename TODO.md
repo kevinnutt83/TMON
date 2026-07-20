@@ -1,6 +1,7 @@
 # TMON Consolidated TODO & Notes
 
 Goals
+- [x] Fix diagnostics upload warning path: `send_diagnostics_to_wp` now respects `ENABLE_DIAGNOSTICS_UPLOAD` and retries the auth modes accepted by UC/Admin diagnostics endpoints.
 - Finish deduplication and cleanup in firmware (settings, utils, networking).
 - Validate all WordPress REST endpoints end-to-end (Admin ↔ UC ↔ device).
 - Add CI/host-side tests for networking, manifest parsing, and OTA flows.

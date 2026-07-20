@@ -75,6 +75,7 @@ ALLOWLIST = {
     'DIAGNOSTIC_RETRY_BASE_S': _to_int,
     'DIAGNOSTIC_FAILURE_STREAK': _to_int,
     'DIAGNOSTIC_FAILURE_COOLDOWN_S': _to_int,
+    'ENABLE_DIAGNOSTICS_UPLOAD': _to_bool,
     'COMMANDS_POLL_INTERVAL_S': _to_int,
     'COMMANDS_POLL_JITTER_S': _to_float,
     'COMMANDS_MAX_PER_POLL': _to_int,

@@ -34,6 +34,7 @@ All notable changes to this project will be documented in this file.
 - Misc metadata consistency updates across micropython/ modules.
 
 ## Unreleased
+- Firmware: diagnostics uploads now honor `ENABLE_DIAGNOSTICS_UPLOAD` and cycle through admin/hub/read/basic/no-auth headers before falling back, with the last failed path/auth mode logged for troubleshooting.
 - Firmware: added battery remote deep-sleep mode (`NODE_TYPE=remote`) with wake-cycle flow (sample -> record -> LoRa send -> persisted next sync -> `machine.deepsleep()`).
 - Firmware: added `LORA_NEXT_SYNC_FILE` setting and `utils` helpers (`load_next_lora_sync`, `persist_next_lora_sync`) for sync persistence across deep sleep resets.
 - OTA: added `remote_node.py` to `OTA_FILES_ALLOWLIST`.

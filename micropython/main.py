@@ -366,6 +366,9 @@ async def periodic_diagnostics_task():
         if not is_provisioned():
             await asyncio.sleep(2)
             continue
+        if not bool(getattr(settings, 'ENABLE_DIAGNOSTICS_UPLOAD', True)):
+            await asyncio.sleep(interval)
+            continue
         if send_diagnostics_to_wp and not getattr(settings, 'DEVICE_SUSPENDED', False):
             try:
                 await send_diagnostics_to_wp()
