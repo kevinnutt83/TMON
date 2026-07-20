@@ -224,21 +224,37 @@ add_action('wp_dashboard_setup', function(){
         echo '</tbody></table>';
         // Auto-refresh widget body (admin only)
         $widget_nonce = wp_create_nonce('tmon_pending_cmds');
-        $ajaxurl = esc_js(admin_url('admin-ajax.php'));
+        $ajaxurl = admin_url('admin-ajax.php');
+        $widget_ajax = wp_json_encode($ajaxurl);
+        $widget_nonce_js = wp_json_encode($widget_nonce);
         echo "<script>
         (function(){
             var tbl = document.getElementById('tmon-cmd-summary-table');
-            if (!tbl) return;
+            if (!tbl) { return; }
+            var ajaxurl = {$widget_ajax};
+            var nonce = {$widget_nonce_js};
             function refresh(){
-                fetch('{$ajaxurl}?action=tmon_pending_commands_summary_refresh&_wpnonce={$widget_nonce}')
-                    .then(r=>r.json()).then(function(res){
-                        if (res && res.success && res.data && res.data.html) {
-                            var tb = tbl.tBodies[0];
-                            if (tb) tb.innerHTML = res.data.html;
+                var body = new URLSearchParams();
+                body.append('action', 'tmon_pending_commands_summary_refresh');
+                body.append('_wpnonce', nonce);
+                fetch(ajaxurl, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'},
+                    body: body.toString()
+                }).then(function(r){
+                    return r.json();
+                }).then(function(res){
+                    if (res && res.success && res.data && res.data.html) {
+                        var tb = tbl.tBodies[0];
+                        if (tb) {
+                            tb.innerHTML = res.data.html;
                         }
-                    }).catch(function(e){ console.error('summary refresh error', e); });
+                    }
+                }).catch(function(e){
+                    console.error('summary refresh error', e);
+                });
             }
-            // initial refresh and periodic
             refresh();
             setInterval(refresh, 30000);
         })();
@@ -255,7 +271,7 @@ add_shortcode('tmon_pending_commands_summary', function($atts){
     $rows = $wpdb->get_results("SELECT device_id, COUNT(*) as pending, MAX(created_at) as last_created FROM {$wpdb->prefix}tmon_device_commands WHERE executed_at IS NULL GROUP BY device_id ORDER BY pending DESC LIMIT 10", ARRAY_A);
     $table_id = 'tmon-pending-summary-' . wp_generate_password(6,false,false);
     $nonce = wp_create_nonce('tmon_pending_cmds');
-    $ajaxurl = esc_js(admin_url('admin-ajax.php'));
+    $ajaxurl = admin_url('admin-ajax.php');
     $out = '<table id="'.esc_attr($table_id).'" class="widefat"><thead><tr><th>Unit</th><th>Pending</th><th>Last Created</th></tr></thead><tbody>';
     foreach ($rows as $r) {
         $last = '';
@@ -274,8 +290,32 @@ add_shortcode('tmon_pending_commands_summary', function($atts){
     }
     if (empty($rows)) $out .= '<tr><td colspan="3"><em>No pending commands</em></td></tr>';
     $out .= '</tbody></table>';
-    // Inline JS to auto-refresh the summary table
-    $out .= '<script>(function(){var t=document.getElementById("'.esc_js($table_id).'"); if(!t) return; function r(){ fetch("'.$ajaxurl.'?action=tmon_pending_commands_summary_refresh&_wpnonce='.$nonce.'").then(r=>r.json()).then(function(s){ if(s && s.success && s.data && s.data.html){ t.tBodies[0].innerHTML = s.data.html; } }).catch(e=>console.error("summary refresh",e)); } r(); setInterval(r,'.intval($refresh_s*1000).');})();</script>';
+    // Inline JS to auto-refresh the summary table.
+    $table_js = wp_json_encode($table_id);
+    $ajax_js = wp_json_encode($ajaxurl);
+    $nonce_js = wp_json_encode($nonce);
+    $refresh_ms = intval($refresh_s * 1000);
+    $out .= "<script>(function(){\n"
+        . "var t = document.getElementById(" . $table_js . ");\n"
+        . "if (!t) { return; }\n"
+        . "var ajaxurl = " . $ajax_js . ";\n"
+        . "var nonce = " . $nonce_js . ";\n"
+        . "function refresh(){\n"
+        . "  var body = new URLSearchParams();\n"
+        . "  body.append('action', 'tmon_pending_commands_summary_refresh');\n"
+        . "  body.append('_wpnonce', nonce);\n"
+        . "  fetch(ajaxurl, { method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/x-www-form-urlencoded; charset=UTF-8'}, body: body.toString() })\n"
+        . "    .then(function(r){ return r.json(); })\n"
+        . "    .then(function(s){\n"
+        . "      if (s && s.success && s.data && s.data.html && t.tBodies && t.tBodies[0]) {\n"
+        . "        t.tBodies[0].innerHTML = s.data.html;\n"
+        . "      }\n"
+        . "    })\n"
+        . "    .catch(function(e){ console.error('summary refresh', e); });\n"
+        . "}\n"
+        . "refresh();\n"
+        . "setInterval(refresh, " . $refresh_ms . ");\n"
+        . "})();</script>";
     return $out;
 });
 

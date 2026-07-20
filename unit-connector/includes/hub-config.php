@@ -116,11 +116,34 @@ add_action('admin_init', function(){
 	}
 	// Lightweight AJAX diagnostics to help find failing admin-ajax requests (opt-in only, skip noisy polling)
 	if (defined('DOING_AJAX') && DOING_AJAX && get_option('tmon_uc_debug_ajax')) {
-		$act = isset($_REQUEST['action']) ? sanitize_text_field($_REQUEST['action']) : '';
-		if ($act && !in_array($act, ['tmon_pending_commands_summary_refresh', 'tmon_device_status_refresh', 'tmon_uc_device_bundle', 'tmon_uc_queue_refresh'], true)) {
-			// Log only tmon-related requests when ajax debugging is enabled
-			if (stripos($act, 'tmon') === 0 || stripos($act, 'tmon_') === 0) {
-				$method = $_SERVER['REQUEST_METHOD'] ?? 'POST';
+		$act_raw = isset($_REQUEST['action']) ? wp_unslash($_REQUEST['action']) : '';
+		$act = is_string($act_raw) ? sanitize_key($act_raw) : '';
+		$skip = array(
+			'tmon_pending_commands_summary_refresh',
+			'tmon_device_status_refresh',
+			'tmon_uc_device_bundle',
+			'tmon_uc_queue_refresh',
+		);
+		$skip_prefixes = array(
+			'tmon_pending_commands_',
+			'tmon_device_status_',
+			'tmon_uc_device_',
+			'tmon_uc_queue_',
+		);
+		$is_skipped = in_array($act, $skip, true);
+		if (!$is_skipped) {
+			foreach ($skip_prefixes as $prefix) {
+				if (strpos($act, $prefix) === 0) {
+					$is_skipped = true;
+					break;
+				}
+			}
+		}
+
+		if ($act && !$is_skipped) {
+			// Log only tmon-related requests when ajax debugging is enabled.
+			if (strpos($act, 'tmon') === 0 || strpos($act, 'tmon_') === 0) {
+				$method = isset($_SERVER['REQUEST_METHOD']) ? sanitize_text_field(wp_unslash($_SERVER['REQUEST_METHOD'])) : 'POST';
 				error_log("tmon-unit-connector: AJAX action '{$act}' invoked via {$method}. Refer to admin-ajax.php response for details.");
 			}
 		}

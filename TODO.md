@@ -138,6 +138,10 @@ Unit Connector
 - [x] Restore Device Data unit selector and shortcode dropdown behavior by routing the Device Data menu to `tmon_uc_device_data_page()` and adding standalone local unit-picker fallback for `[tmon_device_settings]`.
 - [x] Harden `templates/device-data.php` fallback path by removing conflicting legacy picker scripts, aligning staging AJAX payload to `settings_json` + `nonce`, and tying unit-name updates to the active picker selection.
 - [x] Remove duplicate `wp_ajax_tmon_uc_update_unit_name` handler to keep one consistent nonce/check + staged-name update path.
+- [x] Harden pending-commands summary polling + AJAX diagnostics filter
+  - Expanded diagnostics skip logic to suppress routine `tmon_pending_commands_*`, `tmon_device_status_*`, `tmon_uc_device_*`, and `tmon_uc_queue_*` polling actions.
+  - Normalized AJAX action parsing with `sanitize_key(wp_unslash(...))` to avoid false-positive logging.
+  - Reworked pending summary auto-refresh scripts to use structured POST requests with encoded values to avoid inline parse edge cases.
 
 Docs/QA
 - [ ] Add data flow graphics/screenshots.
