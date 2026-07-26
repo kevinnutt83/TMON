@@ -14,14 +14,41 @@ import random
 
 from config_persist import write_text, read_json, set_flag, is_flag_set, write_json, write_json_atomic, read_text
 
-# Persistent backlog file for unsent field data
-FIELD_DATA_BACKLOG = settings.LOG_DIR + '/field_data_backlog.log'
-UNIT_ID_FILE = settings.UNIT_ID_FILE if hasattr(settings, 'UNIT_ID_FILE') else (settings.LOG_DIR + '/unit_id.txt')
-SUSPENDED_FLAG = getattr(settings, 'DEVICE_SUSPENDED_FILE', settings.LOG_DIR + '/suspended.flag')
+# Runtime storage helpers for SD/internal log root resolution.
+def _current_log_dir():
+    try:
+        from sdcard_storage import get_log_dir
+        d = get_log_dir()
+        if d:
+            return d
+    except Exception:
+        pass
+    return settings.LOG_DIR
 
-ERROR_LOG_FILE = getattr(settings, 'ERROR_LOG_FILE', '/logs/lora_errors.log')
-PROVISION_LOG_FILE = getattr(settings, 'LOG_DIR', '/logs') + '/provisioning.log'
-CUSTOM_SETTINGS_FILE = getattr(settings, 'CUSTOM_SETTINGS_FILE', getattr(settings, 'LOG_DIR', '/logs') + '/custom_settings.json')
+
+def _refresh_storage_paths():
+    global FIELD_DATA_BACKLOG, UNIT_ID_FILE, SUSPENDED_FLAG
+    global ERROR_LOG_FILE, PROVISION_LOG_FILE, CUSTOM_SETTINGS_FILE
+    d = _current_log_dir().rstrip('/')
+    try:
+        settings.LOG_DIR = d
+    except Exception:
+        pass
+    FIELD_DATA_BACKLOG = d + '/field_data_backlog.log'
+    UNIT_ID_FILE = settings.UNIT_ID_FILE if hasattr(settings, 'UNIT_ID_FILE') else (d + '/unit_id.txt')
+    SUSPENDED_FLAG = getattr(settings, 'DEVICE_SUSPENDED_FILE', d + '/suspended.flag')
+    ERROR_LOG_FILE = getattr(settings, 'ERROR_LOG_FILE', d + '/lora_errors.log')
+    PROVISION_LOG_FILE = d + '/provisioning.log'
+    CUSTOM_SETTINGS_FILE = getattr(settings, 'CUSTOM_SETTINGS_FILE', d + '/custom_settings.json')
+
+# Persistent backlog file for unsent field data
+FIELD_DATA_BACKLOG = ''
+UNIT_ID_FILE = ''
+SUSPENDED_FLAG = ''
+ERROR_LOG_FILE = ''
+PROVISION_LOG_FILE = ''
+CUSTOM_SETTINGS_FILE = ''
+_refresh_storage_paths()
 
 _CUSTOM_SETTINGS_MANAGED = set(getattr(settings, 'STAGED_SETTINGS_KEYS_ALLOW', [])) | set(getattr(settings, 'STAGED_SETTINGS_KEYS_DENY', [])) | {
     'MACHINE_ID',
@@ -77,12 +104,13 @@ def enforce_log_caps(path: str):
 
 def checkLogDirectory():
     """Create log directory (idempotent)."""
+    _refresh_storage_paths()
     try:
         from config_persist import ensure_dir
-        ensure_dir(getattr(settings, 'LOG_DIR', '/logs'))
+        ensure_dir(_current_log_dir())
     except Exception:
         try:
-            d = getattr(settings, 'LOG_DIR', '/logs')
+            d = _current_log_dir()
             try:
                 os.stat(d)
             except Exception:
@@ -1148,7 +1176,28 @@ def _compact_field_record(record):
         'error_count': 'ec',
     }
 
-    def _keep_val(v):
+    device_enabled = bool(
+        getattr(settings, 'SAMPLE_DEVICE_TEMP', False)
+        or getattr(settings, 'SAMPLE_DEVICE_HUMID', False)
+        or getattr(settings, 'SAMPLE_DEVICE_BAR', False)
+    )
+    probe_enabled = bool(
+        getattr(settings, 'SAMPLE_PROBE_TEMP', False)
+        or getattr(settings, 'SAMPLE_PROBE_HUMID', False)
+        or getattr(settings, 'SAMPLE_PROBE_BAR', False)
+        or getattr(settings, 'SAMPLE_TEMP', False)
+        or getattr(settings, 'SAMPLE_HUMID', False)
+        or getattr(settings, 'SAMPLE_BAR', False)
+    )
+    force_keep = set()
+    if device_enabled:
+        force_keep.update(['device_temp_c', 'device_temp_f', 'device_humid', 'device_bar'])
+    if probe_enabled:
+        force_keep.update(['probe_temp_c', 'probe_temp_f', 'probe_humid', 'probe_bar'])
+
+    def _keep_val(k, v):
+        if k in force_keep:
+            return True
         if not skip_defaults:
             return True
         if v is None or v == '':
@@ -1163,7 +1212,7 @@ def _compact_field_record(record):
 
     compact = {}
     for k, v in record.items():
-        if not _keep_val(v):
+        if not _keep_val(k, v):
             continue
         nk = key_map.get(k, k)
         compact[nk] = v
@@ -1181,6 +1230,32 @@ def record_field_data():
 
     if getattr(settings, 'NODE_TYPE', 'base') not in ('base', 'remote', 'wifi'):
         return
+
+    device_enabled = bool(
+        getattr(settings, 'SAMPLE_DEVICE_TEMP', False)
+        or getattr(settings, 'SAMPLE_DEVICE_HUMID', False)
+        or getattr(settings, 'SAMPLE_DEVICE_BAR', False)
+    )
+    probe_enabled = bool(
+        getattr(settings, 'SAMPLE_PROBE_TEMP', False)
+        or getattr(settings, 'SAMPLE_PROBE_HUMID', False)
+        or getattr(settings, 'SAMPLE_PROBE_BAR', False)
+        or getattr(settings, 'SAMPLE_TEMP', False)
+        or getattr(settings, 'SAMPLE_HUMID', False)
+        or getattr(settings, 'SAMPLE_BAR', False)
+    )
+
+    if device_enabled:
+        entry['device_temp_c'] = entry.get('cur_device_temp_c', None)
+        entry['device_temp_f'] = entry.get('cur_device_temp_f', None)
+        entry['device_humid'] = entry.get('cur_device_humid', None)
+        entry['device_bar'] = entry.get('cur_device_bar_pres', None)
+
+    if probe_enabled:
+        entry['probe_temp_c'] = entry.get('cur_temp_c', None)
+        entry['probe_temp_f'] = entry.get('cur_temp_f', None)
+        entry['probe_humid'] = entry.get('cur_humid', None)
+        entry['probe_bar'] = entry.get('cur_bar_pres', None)
 
     try:
         from utils import led_status_flash
@@ -1935,7 +2010,7 @@ def stage_remote_files(remote_unit_id, files):
         if not files or not remote_unit_id:
             return
 
-        root = getattr(settings, 'LOG_DIR', '/logs').rstrip('/') + '/remotes/' + str(remote_unit_id)
+        root = _current_log_dir().rstrip('/') + '/remotes/' + str(remote_unit_id)
 
         try:
             import uos as _os
@@ -1944,7 +2019,7 @@ def stage_remote_files(remote_unit_id, files):
 
         # Ensure /logs/remotes and /logs/remotes/<unit_id> exist
         try:
-            base_dir = getattr(settings, 'LOG_DIR', '/logs').rstrip('/') + '/remotes'
+            base_dir = _current_log_dir().rstrip('/') + '/remotes'
             try:
                 _os.stat(base_dir)
             except Exception:

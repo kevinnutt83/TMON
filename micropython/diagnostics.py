@@ -22,7 +22,12 @@ def _safe_attr(obj, name, default=None):
 
 def _backlog_size():
     try:
-        path = getattr(settings, 'LOG_DIR', '/logs') + '/field_data_backlog.log'
+        path = settings.LOG_DIR + '/field_data_backlog.log'
+        try:
+            from sdcard_storage import get_log_dir
+            path = get_log_dir().rstrip('/') + '/field_data_backlog.log'
+        except Exception:
+            pass
         with open(path, 'r') as f:
             n = 0
             for _ in f:
@@ -41,7 +46,7 @@ def _last_upload_ts():
     except Exception:
         pass
     try:
-        p = getattr(settings, 'FIELD_DATA_DELIVERED_LOG', '/logs/field_data.delivered.log')
+        p = getattr(settings, 'FIELD_DATA_DELIVERED_LOG', settings.LOG_DIR + '/field_data.delivered.log')
         st = os.stat(p)
         # MicroPython stat tuple index 7 is mtime on most ports.
         if isinstance(st, (tuple, list)) and len(st) > 7:

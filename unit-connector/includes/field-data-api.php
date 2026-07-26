@@ -302,15 +302,19 @@ function tmon_uc_receive_field_data($request) {
         $out['temp_c']    = isset($rec['t_c']) ? $rec['t_c'] : ($rec['cur_temp_c'] ?? null);
         $out['humidity']  = isset($rec['hum']) ? $rec['hum'] : ($rec['cur_humid'] ?? null);
         $out['pressure']  = isset($rec['bar']) ? $rec['bar'] : ($rec['cur_bar_pres'] ?? null);
+        $out['probe_temp_f'] = $rec['probe_temp_f'] ?? ($rec['t_f'] ?? ($rec['cur_temp_f'] ?? null));
+        $out['probe_temp_c'] = $rec['probe_temp_c'] ?? ($rec['t_c'] ?? ($rec['cur_temp_c'] ?? null));
+        $out['probe_humid']  = $rec['probe_humid'] ?? ($rec['hum'] ?? ($rec['cur_humid'] ?? null));
+        $out['probe_bar']    = $rec['probe_bar'] ?? ($rec['bar'] ?? ($rec['cur_bar_pres'] ?? null));
         $out['voltage_v'] = isset($rec['v']) ? $rec['v'] : ($rec['sys_voltage'] ?? null);
         $out['wifi_rssi'] = $rec['wifi_rssi'] ?? null;
         $out['lora_rssi'] = $rec['lora_SigStr'] ?? null;
         $out['free_mem']  = isset($rec['fm']) ? $rec['fm'] : ($rec['free_mem'] ?? null);
         // Device interior sensor fields
-        $out['device_temp_f']   = $rec['dt_f'] ?? ($rec['cur_device_temp_f'] ?? null);
-        $out['device_temp_c']   = $rec['dt_c'] ?? ($rec['cur_device_temp_c'] ?? null);
-        $out['device_humid']    = $rec['dh'] ?? ($rec['cur_device_humid'] ?? null);
-        $out['device_bar_pres'] = $rec['db'] ?? ($rec['cur_device_bar_pres'] ?? null);
+        $out['device_temp_f']   = $rec['device_temp_f'] ?? ($rec['dt_f'] ?? ($rec['cur_device_temp_f'] ?? null));
+        $out['device_temp_c']   = $rec['device_temp_c'] ?? ($rec['dt_c'] ?? ($rec['cur_device_temp_c'] ?? null));
+        $out['device_humid']    = $rec['device_humid'] ?? ($rec['dh'] ?? ($rec['cur_device_humid'] ?? null));
+        $out['device_bar_pres'] = $rec['device_bar'] ?? ($rec['db'] ?? ($rec['cur_device_bar_pres'] ?? null));
         // Soil sensor fields
         $out['soil_moisture']   = $rec['sm'] ?? ($rec['cur_soil_moisture'] ?? null);
         $out['soil_temp_c']     = $rec['st_c'] ?? ($rec['cur_soil_temp_c'] ?? null);
@@ -625,13 +629,13 @@ function tmon_uc_get_device_history($request) {
         $points[] = [
             // expose ISO timestamps in site-local time for charting/labels
             't' => date_i18n(DATE_ISO8601, tmon_uc_mysql_to_local_timestamp($r['created_at'])),
-            'temp_f' => $d['t_f'] ?? ($d['cur_temp_f'] ?? null),
-            'humid' => $d['hum'] ?? ($d['cur_humid'] ?? null),
-            'bar' => $d['bar'] ?? ($d['cur_bar_pres'] ?? null),
+            'temp_f' => $d['probe_temp_f'] ?? ($d['t_f'] ?? ($d['cur_temp_f'] ?? null)),
+            'humid' => $d['probe_humid'] ?? ($d['hum'] ?? ($d['cur_humid'] ?? null)),
+            'bar' => $d['probe_bar'] ?? ($d['bar'] ?? ($d['cur_bar_pres'] ?? null)),
             'volt' => $d['v'] ?? ($d['sys_voltage'] ?? null),
-            'device_temp_f' => $d['dt_f'] ?? ($d['cur_device_temp_f'] ?? null),
-            'device_humid' => $d['dh'] ?? ($d['cur_device_humid'] ?? null),
-            'device_bar' => $d['db'] ?? ($d['cur_device_bar_pres'] ?? null),
+            'device_temp_f' => $d['device_temp_f'] ?? ($d['dt_f'] ?? ($d['cur_device_temp_f'] ?? null)),
+            'device_humid' => $d['device_humid'] ?? ($d['dh'] ?? ($d['cur_device_humid'] ?? null)),
+            'device_bar' => $d['device_bar'] ?? ($d['db'] ?? ($d['cur_device_bar_pres'] ?? null)),
             'soil_moisture' => $d['sm'] ?? ($d['cur_soil_moisture'] ?? null),
             'soil_temp_f' => $d['st_f'] ?? ($d['cur_soil_temp_f'] ?? null),
             'cpu_temp' => $d['cpu'] ?? ($d['cpu_temp'] ?? null),
@@ -676,15 +680,15 @@ function tmon_uc_get_device_sdata($request) {
         'Machine ID' => $data['machine_id'] ?? null,
         'Node Type' => $data['NODE_TYPE'] ?? ($data['node_type'] ?? null),
         // Probe sensors
-        'Probe Temp (F)' => $data['t_f'] ?? ($data['cur_temp_f'] ?? null),
-        'Probe Temp (C)' => $data['t_c'] ?? ($data['cur_temp_c'] ?? null),
-        'Probe Humidity (%)' => $data['hum'] ?? ($data['cur_humid'] ?? null),
-        'Probe Pressure (hPa)' => $data['bar'] ?? ($data['cur_bar_pres'] ?? null),
+        'Probe Temp (F)' => $data['probe_temp_f'] ?? ($data['t_f'] ?? ($data['cur_temp_f'] ?? null)),
+        'Probe Temp (C)' => $data['probe_temp_c'] ?? ($data['t_c'] ?? ($data['cur_temp_c'] ?? null)),
+        'Probe Humidity (%)' => $data['probe_humid'] ?? ($data['hum'] ?? ($data['cur_humid'] ?? null)),
+        'Probe Pressure (hPa)' => $data['probe_bar'] ?? ($data['bar'] ?? ($data['cur_bar_pres'] ?? null)),
         // Device interior sensors
-        'Device Temp (F)' => $data['dt_f'] ?? ($data['cur_device_temp_f'] ?? null),
-        'Device Temp (C)' => $data['dt_c'] ?? ($data['cur_device_temp_c'] ?? null),
-        'Device Humidity (%)' => $data['dh'] ?? ($data['cur_device_humid'] ?? null),
-        'Device Pressure (hPa)' => $data['db'] ?? ($data['cur_device_bar_pres'] ?? null),
+        'Device Temp (F)' => $data['device_temp_f'] ?? ($data['dt_f'] ?? ($data['cur_device_temp_f'] ?? null)),
+        'Device Temp (C)' => $data['device_temp_c'] ?? ($data['dt_c'] ?? ($data['cur_device_temp_c'] ?? null)),
+        'Device Humidity (%)' => $data['device_humid'] ?? ($data['dh'] ?? ($data['cur_device_humid'] ?? null)),
+        'Device Pressure (hPa)' => $data['device_bar'] ?? ($data['db'] ?? ($data['cur_device_bar_pres'] ?? null)),
         // Soil sensors
         'Soil Moisture' => $data['sm'] ?? ($data['cur_soil_moisture'] ?? null),
         'Soil Temp (C)' => $data['st_c'] ?? ($data['cur_soil_temp_c'] ?? null),

@@ -131,7 +131,7 @@ _provision_warned = False
 def is_provisioned():
     global _provision_warned
     try:
-        flag = getattr(settings, 'PROVISIONED_FLAG_FILE', '/logs/provisioned.flag')
+        flag = getattr(settings, 'PROVISIONED_FLAG_FILE', settings.LOG_DIR + '/provisioned.flag')
         wp_url = str(getattr(settings, 'WORDPRESS_API_URL', '')).strip()
         if wp_url:
             return True
@@ -185,7 +185,7 @@ async def first_boot_provision():
     try:
         flag = settings.PROVISIONED_FLAG_FILE
     except Exception:
-        flag = '/logs/provisioned.flag'
+        flag = settings.LOG_DIR + '/provisioned.flag'
     already = False
     try:
         if os.stat(flag):

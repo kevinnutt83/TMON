@@ -74,6 +74,8 @@ Notes
 ## Updated Next Actions (Scope-aligned)
 
 Firmware (Micropython)
+- [x] Replace hard-coded log path fallbacks with runtime storage-aware path resolution (SD/internal flash).
+- [x] Ensure dual-sensor field-data completeness (probe + device keys) across LoRa and HTTP payloads.
 - [x] Add persistence helpers for custom vars changed via set_var.
 - [ ] Base <-> Remote LoRa envelopes with HMAC + replay protection; optional encryption.
 - [x] Fix OLED stack overflow: removed _make_driver_class wrapper, separated init_display from __init__, removed redundant _load_imports calls, cached driver class.

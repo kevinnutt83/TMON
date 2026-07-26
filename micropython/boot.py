@@ -26,7 +26,7 @@ async def boot():
         from sdcard_storage import try_mount_sd
         try_mount_sd()
     except Exception as e:
-        await log_exception('boot.provisioning_log', e)
+        await log_exception('boot.try_mount_sd', e)
         pass
     await display_message("Booting TMON Device", 3)
     # If remote node, try to load persisted next sync time

@@ -8,6 +8,33 @@ from utils import debug_print
 _sd_mounted = False
 _sd_root = "/sd"
 
+
+def _rewrite_settings_paths(old_dir, new_dir):
+    """Rewrite settings path strings when log storage root changes."""
+    if not old_dir or not new_dir or old_dir == new_dir:
+        return
+    old_prefix = old_dir.rstrip('/') + '/'
+    new_prefix = new_dir.rstrip('/') + '/'
+    try:
+        for name in dir(settings):
+            if name.startswith('__'):
+                continue
+            try:
+                value = getattr(settings, name)
+            except Exception:
+                continue
+            if not isinstance(value, str):
+                continue
+            try:
+                if value == old_dir:
+                    setattr(settings, name, new_dir)
+                elif value.startswith(old_prefix):
+                    setattr(settings, name, new_prefix + value[len(old_prefix):])
+            except Exception:
+                pass
+    except Exception:
+        pass
+
 def try_mount_sd():
     """Attempt to mount SD card. Returns True on success."""
     global _sd_mounted
@@ -31,7 +58,14 @@ def try_mount_sd():
             except OSError:
                 pass
 
+        old_dir = settings.LOG_DIR
         _sd_mounted = True
+        new_dir = _sd_root + "/logs"
+        try:
+            settings.LOG_DIR = new_dir
+        except Exception:
+            pass
+        _rewrite_settings_paths(old_dir, new_dir)
         debug_print("SD card mounted successfully", "STORAGE")
         return True
     except Exception as e:
@@ -44,7 +78,7 @@ def get_log_dir():
     """Return the correct log directory (SD if available, otherwise internal)."""
     if _sd_mounted:
         return _sd_root + "/logs"
-    return getattr(settings, "LOG_DIR", "/logs")
+    return settings.LOG_DIR
 
 
 def is_sd_active():

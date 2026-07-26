@@ -114,12 +114,16 @@ def _extract_lora_network_fields(msg_str):
     return net, password
 
 
-def _base_network_matches(msg_str):
+def _base_network_matches(msg_str, strict=False):
     expected_name = str(getattr(settings, 'LORA_NETWORK_NAME', '') or '').strip()
     expected_pass = str(getattr(settings, 'LORA_NETWORK_PASSWORD', '') or '').strip()
     if not expected_name and not expected_pass:
         return True
     net_name, net_pass = _extract_lora_network_fields(msg_str)
+    # Some frame types (e.g., chunked TYPE frames) do not carry NET/PASS inline.
+    # In non-strict mode we allow these frames and rely on LoRa HMAC/auth.
+    if not strict and net_name is None and net_pass is None:
+        return True
     if expected_name and net_name != expected_name:
         return False
     if expected_pass and net_pass != expected_pass:
@@ -175,7 +179,7 @@ async def log_error(error_msg):
         return
     last_lora_error_ts = ts
     log_line = f"{ts}: {error_msg}\n"
-    error_log_file = getattr(settings, 'ERROR_LOG_FILE', '/logs/lora_errors.log')
+    error_log_file = getattr(settings, 'ERROR_LOG_FILE', settings.LOG_DIR + '/lora_errors.log')
     try:
         async with file_lock:
             with open(error_log_file, 'a') as f:
@@ -300,7 +304,7 @@ command_handlers = {
     "toggle_relay": toggle_relay,
 }
 
-REMOTE_NODE_INFO_FILE = getattr(settings, 'LOG_DIR', '/logs') + '/remote_node_info.json'
+REMOTE_NODE_INFO_FILE = getattr(settings, 'REMOTE_NODE_INFO_FILE', settings.LOG_DIR + '/remote_node_info.json')
 
 def load_remote_node_info():
     try:
@@ -393,7 +397,7 @@ async def process_remote_burst(uid, st):
         if None not in (uid, remote_runtime, remote_script_runtime, temp_c, temp_f, bar, humid):
             base_ts = time.time()
             log_line = f"{base_ts},{uid},{remote_ts},{remote_runtime},{remote_script_runtime},{temp_c},{temp_f},{bar},{humid}\n"
-            log_file = getattr(settings, 'LOG_FILE', '/logs/lora.log')
+            log_file = getattr(settings, 'LOG_FILE', settings.LOG_DIR + '/lora.log')
             async with file_lock:
                 with open(log_file, 'a') as f:
                     f.write(log_line)
@@ -640,15 +644,16 @@ async def handle_incoming_packet(msg):
     global last_rx_ts
     msg_str = msg.rstrip(b'\x00').decode()
 
-    # EARLY FILTER: ignore packets from wrong network
-    if str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'base':
-        if not _base_network_matches(msg_str):
-            await debug_print('LoRa packet rejected due to network mismatch', 'WARN')
-            return
-
     msg_str = await _unsecure_message(msg_str)
     if not msg_str:
         return
+
+    # Validate network membership after decryption so secure envelopes can be checked.
+    if str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'base':
+        strict_net_check = msg_str.startswith('T:')
+        if not _base_network_matches(msg_str, strict=strict_net_check):
+            await debug_print('LoRa packet rejected due to network mismatch', 'WARN')
+            return
 
     await debug_print(f"Base RX: {msg_str[:120]}...", "BASE_NODE")
     last_rx_ts = time.time()
@@ -697,6 +702,14 @@ async def handle_incoming_packet(msg):
                 parsed_data['bar'] = value
             elif key == 'H':
                 parsed_data['humid'] = value
+            elif key == 'DTC':
+                parsed_data['device_temp_c'] = value
+            elif key == 'DTF':
+                parsed_data['device_temp_f'] = value
+            elif key == 'DB':
+                parsed_data['device_bar'] = value
+            elif key == 'DH':
+                parsed_data['device_humid'] = value
 
     elif msg_str.startswith('TYPE:'):
         parts = msg_str.split(',')
@@ -1424,7 +1437,7 @@ async def handle_ota_job(job):
             return
 
         # Start a background worker to perform the blocking download
-        result_file = getattr(settings, 'LOG_DIR', '/logs').rstrip('/') + f'/ota_job_{job_id or "temp"}.result.json'
+        result_file = settings.LOG_DIR.rstrip('/') + f'/ota_job_{job_id or "temp"}.result.json'
 
         def _ota_worker():
             try:
@@ -1493,7 +1506,7 @@ async def handle_ota_job(job):
                     except Exception:
                         pass
                     if isinstance(j, dict) and j.get('ok'):
-                        pending_file = getattr(settings, 'OTA_PENDING_FILE', None) or (getattr(settings, 'LOG_DIR', '/logs').rstrip('/') + '/ota_pending.flag')
+                        pending_file = getattr(settings, 'OTA_PENDING_FILE', None) or (settings.LOG_DIR.rstrip('/') + '/ota_pending.flag')
                         job_end_ts = time.time()
                         duration = job_end_ts - job_start_ts
                         try:
@@ -1615,7 +1628,16 @@ async def connectLora():
                     await debug_print("Remote: starting full check-in (periodic)", "REMOTE_NODE")
                     await display_message("TX Data...", 0.8)
                     ts = time.time()
-                    data_str = f"T:{ts},U:{settings.UNIT_ID},M:{get_machine_id()},NET:{getattr(settings,'LORA_NETWORK_NAME','tmon')},PASS:{getattr(settings,'LORA_NETWORK_PASSWORD','12345')},C:{getattr(settings,'COMPANY','')},S:{getattr(settings,'SITE','')},Z:{getattr(settings,'ZONE','')},K:{getattr(settings,'CLUSTER','')},R:{sdata.loop_runtime},SR:{sdata.script_runtime},TC:{sdata.cur_temp_c},TF:{sdata.cur_temp_f},B:{sdata.cur_bar_pres},H:{sdata.cur_humid}"
+                    data_str = (
+                        f"T:{ts},U:{settings.UNIT_ID},M:{get_machine_id()},"
+                        f"NET:{getattr(settings,'LORA_NETWORK_NAME','tmon')},PASS:{getattr(settings,'LORA_NETWORK_PASSWORD','12345')},"
+                        f"C:{getattr(settings,'COMPANY','')},S:{getattr(settings,'SITE','')},Z:{getattr(settings,'ZONE','')},K:{getattr(settings,'CLUSTER','')},"
+                        f"R:{sdata.loop_runtime},SR:{sdata.script_runtime},"
+                        f"TC:{getattr(sdata,'cur_temp_c',None)},TF:{getattr(sdata,'cur_temp_f',None)},"
+                        f"B:{getattr(sdata,'cur_bar_pres',None)},H:{getattr(sdata,'cur_humid',None)},"
+                        f"DTC:{getattr(sdata,'cur_device_temp_c',None)},DTF:{getattr(sdata,'cur_device_temp_f',None)},"
+                        f"DB:{getattr(sdata,'cur_device_bar_pres',None)},DH:{getattr(sdata,'cur_device_humid',None)}"
+                    )
                     data_str = await _secure_message(data_str)
                     await _send_with_retry(data_str.encode())
                     await ensure_lora_listening()

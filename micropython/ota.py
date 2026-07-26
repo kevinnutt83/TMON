@@ -117,7 +117,7 @@ async def check_for_update():
                 except Exception:
                     pass
                 try:
-                    write_text(getattr(settings, 'OTA_PENDING_FILE', '/logs/ota_pending.flag'), remote_ver)
+                    write_text(getattr(settings, 'OTA_PENDING_FILE', settings.LOG_DIR + '/ota_pending.flag'), remote_ver)
                 except Exception:
                     pass
             else:
@@ -144,7 +144,7 @@ async def check_for_update():
 # Helper: write debug artifact
 def _write_debug_artifact(name, data_bytes):
     try:
-        dbg_dir = getattr(settings, 'LOG_DIR', '/logs')
+        dbg_dir = settings.LOG_DIR
         try:
             os.stat(dbg_dir)
         except Exception as e:
@@ -171,7 +171,7 @@ async def apply_pending_update():
     - On failure: restore from backup when configured
     """
     try:
-        pending_file = getattr(settings, 'OTA_PENDING_FILE', '/logs/ota_pending.flag')
+        pending_file = getattr(settings, 'OTA_PENDING_FILE', settings.LOG_DIR + '/ota_pending.flag')
         try:
             with open(pending_file, 'r') as f:
                 target_ver = _normalize_version(f.read())
@@ -261,7 +261,7 @@ async def apply_pending_update():
                             pass
                         # persist manifest for analysis
                         try:
-                            mpath = getattr(settings, 'LOG_DIR','/logs').rstrip('/') + '/ota_manifest.json'
+                            mpath = settings.LOG_DIR.rstrip('/') + '/ota_manifest.json'
                             with open(mpath, 'w') as mf:
                                 mf.write(json.dumps(manifest, indent=2))
                             await debug_print(f'OTA: manifest saved to {mpath}', 'OTA')
@@ -386,7 +386,7 @@ async def apply_pending_update():
                         continue
 
                     # stream download to temp file and compute sha256
-                    tmp_path = getattr(settings, 'LOG_DIR', '/logs').rstrip('/') + f'/ota_tmp_{name}'
+                    tmp_path = settings.LOG_DIR.rstrip('/') + f'/ota_tmp_{name}'
                     final_path = name  # apply path
                     h = _uh.sha256()
                     total = 0

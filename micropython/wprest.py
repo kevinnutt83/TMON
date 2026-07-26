@@ -832,7 +832,7 @@ async def fetch_settings_from_wp():
                         import ujson as _uj
                     except Exception:
                         _uj = json
-                    staged_path = getattr(settings, 'REMOTE_SETTINGS_STAGED_FILE', '/logs/remote_settings.staged.json')
+                    staged_path = getattr(settings, 'REMOTE_SETTINGS_STAGED_FILE', settings.LOG_DIR + '/remote_settings.staged.json')
                     _ = _uj
                     write_json_atomic(staged_path, staged)
                     if asyncio:
@@ -1040,7 +1040,7 @@ async def poll_device_commands():
                 await asyncio.sleep_ms(1)
 
         if staged_updates:
-            staged_path = getattr(settings, 'REMOTE_SETTINGS_STAGED_FILE', '/logs/remote_settings.staged.json')
+            staged_path = getattr(settings, 'REMOTE_SETTINGS_STAGED_FILE', settings.LOG_DIR + '/remote_settings.staged.json')
             current = read_json_safe(staged_path, {})
             if not isinstance(current, dict):
                 current = {}

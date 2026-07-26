@@ -163,7 +163,7 @@ def _filter_and_apply(incoming: dict):
     return applied
 
 def load_applied_settings_on_boot():
-    path = getattr(settings, 'REMOTE_SETTINGS_APPLIED_FILE', '/logs/remote_settings.applied.json')
+    path = getattr(settings, 'REMOTE_SETTINGS_APPLIED_FILE', settings.LOG_DIR + '/remote_settings.applied.json')
     try:
         data = read_json_safe(path, None)
         if isinstance(data, dict):
@@ -192,11 +192,11 @@ def load_applied_settings_on_boot():
         record_exception('settings_apply.load_applied_settings_on_boot', e)
 
 async def apply_staged_settings_once():
-    staged_path = getattr(settings, 'REMOTE_SETTINGS_STAGED_FILE', '/logs/remote_settings.staged.json')
-    applied_path = getattr(settings, 'REMOTE_SETTINGS_APPLIED_FILE', '/logs/remote_settings.applied.json')
+    staged_path = getattr(settings, 'REMOTE_SETTINGS_STAGED_FILE', settings.LOG_DIR + '/remote_settings.staged.json')
+    applied_path = getattr(settings, 'REMOTE_SETTINGS_APPLIED_FILE', settings.LOG_DIR + '/remote_settings.applied.json')
     try:
         # If no global staged file, check per-unit staged file written by UC/base
-        unit_staged = getattr(settings, 'LOG_DIR', '/logs') + '/device_settings-' + str(getattr(settings, 'UNIT_ID', '')) + '.json'
+        unit_staged = settings.LOG_DIR + '/device_settings-' + str(getattr(settings, 'UNIT_ID', '')) + '.json'
         staged = None
         try:
             staged = read_json(staged_path, None)
@@ -228,7 +228,7 @@ async def apply_staged_settings_once():
             if hasattr(settings, k):
                 prev_snapshot[k] = getattr(settings, k)
         try:
-            write_json_atomic(getattr(settings,'REMOTE_SETTINGS_PREV_FILE','/logs/remote_settings.prev.json'), prev_snapshot)
+            write_json_atomic(getattr(settings,'REMOTE_SETTINGS_PREV_FILE', settings.LOG_DIR + '/remote_settings.prev.json'), prev_snapshot)
         except Exception:
             pass
         applied = _filter_and_apply(staged)
@@ -324,7 +324,7 @@ async def apply_staged_settings_once():
     except Exception as e:
         # Rollback to previous snapshot
         try:
-            prev = read_json(getattr(settings,'REMOTE_SETTINGS_PREV_FILE','/logs/remote_settings.prev.json'), {})
+            prev = read_json(getattr(settings,'REMOTE_SETTINGS_PREV_FILE', settings.LOG_DIR + '/remote_settings.prev.json'), {})
             if isinstance(prev, dict):
                 for k, v in prev.items():
                     try:
