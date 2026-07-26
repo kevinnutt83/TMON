@@ -729,6 +729,9 @@ async def process_remote_burst(uid, st):
     remote_fw_version = None
     ota_session_id = None
 
+    ack_delay = None
+    ack_msg = None
+
     if 'TS' in st['types']:
         data = st['data']['TS']
         remote_ts = data.get('remote_ts')
@@ -755,7 +758,36 @@ async def process_remote_burst(uid, st):
             })
             save_remote_node_info()
 
-        if None not in (uid, remote_runtime, remote_script_runtime, temp_c, temp_f, bar, humid):
+    if uid:
+        ack_delay = calculate_next_delay(uid)
+        ack_msg = f"ACK:{uid}:NEXT:{ack_delay}"
+        try:
+            ota_session_hint = _remote_lora_ota_jobs.get(uid)
+            if isinstance(ota_session_hint, dict) and ota_session_hint.get('session'):
+                ack_msg += f":OTA:{ota_session_hint.get('session')}:VER:{getattr(settings, 'FIRMWARE_VERSION', '')}"
+        except Exception:
+            pass
+
+        now = time.time()
+        if uid not in settings.REMOTE_NODE_INFO:
+            settings.REMOTE_NODE_INFO[uid] = {}
+        settings.REMOTE_NODE_INFO[uid]['next_expected'] = now + ack_delay
+        settings.REMOTE_NODE_INFO[uid]['missed_syncs'] = 0
+        save_remote_node_info()
+
+        try:
+            ack_msg = await _secure_message(ack_msg, remote_uid=uid)
+            await _send_with_retry(ack_msg.encode())
+            await debug_print(f"Sent ACK with next delay {ack_delay}s to {uid}", "BASE_NODE")
+            try:
+                from oled import display_message
+                await display_message("ACK Sent", 0.5)
+            except Exception:
+                pass
+        except Exception as ack_e:
+            await log_error(f"ACK send error to {uid}: {ack_e}")
+
+    if None not in (uid, remote_runtime, remote_script_runtime, temp_c, temp_f, bar, humid):
             base_ts = time.time()
             log_line = f"{base_ts},{uid},{remote_ts},{remote_runtime},{remote_script_runtime},{temp_c},{temp_f},{bar},{humid}\n"
             log_file = getattr(settings, 'LOG_FILE', settings.LOG_DIR + '/lora.log')
@@ -800,33 +832,19 @@ async def process_remote_burst(uid, st):
         sdata_dict = st['data']['SDATA']
         stage_remote_field_data(uid, [sdata_dict])
 
-    next_delay = calculate_next_delay(uid)
-    now = time.time()
-    if uid not in settings.REMOTE_NODE_INFO:
-        settings.REMOTE_NODE_INFO[uid] = {}
-    settings.REMOTE_NODE_INFO[uid]['next_expected'] = now + next_delay
-    settings.REMOTE_NODE_INFO[uid]['missed_syncs'] = 0
-    save_remote_node_info()
-
     # SEND ACK (optionally piggyback one pending command for this remote)
     try:
         pending_cmd = await _fetch_remote_pending_command(uid, remote_machine_id)
-        ack_msg = f"ACK:{uid}:NEXT:{next_delay}"
         if isinstance(pending_cmd, dict):
             cmd_blob = _encode_ack_command(pending_cmd)
             if cmd_blob:
                 ack_msg += f":CMD:{cmd_blob}"
-        if ota_session_id:
-            ack_msg += f":OTA:{ota_session_id}:VER:{getattr(settings, 'FIRMWARE_VERSION', '')}"
         ack_msg = await _secure_message(ack_msg, remote_uid=uid)
         await _send_with_retry(ack_msg.encode())
         if isinstance(pending_cmd, dict):
             await debug_print(f"Sent ACK+CMD to {uid} (cmd_id={pending_cmd.get('id')})", "BASE_NODE")
         elif ota_session_id:
             await debug_print(f"Sent ACK+OTA hint to {uid}", "BASE_NODE")
-        else:
-            await debug_print(f"Sent ACK with next delay {next_delay}s to {uid}", "BASE_NODE")
-        await display_message("ACK Sent", 0.5)
     except Exception as ack_e:
         await log_error(f"ACK send error to {uid}: {ack_e}")
 
@@ -886,14 +904,6 @@ async def process_remote_field_data(uid, st):
                 merged_records.append(merged)
 
             if merged_records:
-                # Stage the data for later upload to Unit Connector
-                try:
-                    stage_remote_field_data(uid, merged_records)
-                    await debug_print(f"Staged {len(merged_records)} remote field records from {uid}", "BASE_NODE")
-                except Exception as stage_e:
-                    await log_error(f"stage_remote_field_data error for {uid}: {stage_e}")
-
-                # Calculate next delay and update tracking
                 next_delay = calculate_next_delay(uid)
                 now = time.time()
                 if uid not in settings.REMOTE_NODE_INFO:
@@ -905,7 +915,7 @@ async def process_remote_field_data(uid, st):
                 except Exception:
                     pass
 
-                # ----- Send the ACK -----
+                # Send ACK immediately so the remote can decide whether to sleep.
                 try:
                     ack_msg = f"ACK:{uid}:NEXT:{next_delay}"
                     ack_msg = await _secure_message(ack_msg, remote_uid=uid)
@@ -918,6 +928,13 @@ async def process_remote_field_data(uid, st):
                         pass
                 except Exception as ack_e:
                     await log_error(f"FIELD_DATA ACK send error to {uid}: {ack_e}")
+
+                # Stage after ACK so the radio window is not blocked by local IO.
+                try:
+                    stage_remote_field_data(uid, merged_records)
+                    await debug_print(f"Staged {len(merged_records)} remote field records from {uid}", "BASE_NODE")
+                except Exception as stage_e:
+                    await log_error(f"stage_remote_field_data error for {uid}: {stage_e}")
 
     except Exception as e:
         await log_error(f"Remote field data processor error for {uid}: {e}")
@@ -1325,6 +1342,11 @@ async def _send_with_retry(data, retries=6):
             delay += random.uniform(0, base_delay)
             await asyncio.sleep(delay)
     await debug_print("TX failed after retries", "WARN")
+    try:
+        await hard_reset_lora()
+        await init_lora()
+    except Exception as e:
+        await log_error(f"TX recovery failed: {e}")
 
 async def _wait_tx_done(timeout=30):
     global lora

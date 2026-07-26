@@ -3,7 +3,7 @@
   "files": {
     "README.md": "sha256:b5aa39b318842625dc9358d7e3c85fad0941f6e9c95a1100552d24be63277d04",
     "__init__.py": "sha256:b75dc07aa721a48de6cbc8f7f65736a826e2a07a1a7788ba67748adbd4c75f8a",
-    "__pycache__/lora.cpython-312.pyc": "sha256:6b510823301d03a3b6594e227e47be8836734e1b9c4eaa574ef1fc2ed1fb7e92",
+    "__pycache__/lora.cpython-312.pyc": "sha256:4d9a95151994ae2e0722786a442c0c730a3eaa61e8a235b36fa473f88e869314",
     "__pycache__/main.cpython-312.pyc": "sha256:9a3b4b232defdc7a6129bbd671823762ddf2553483d2991c761afa4694b519c6",
     "__pycache__/settings.cpython-312.pyc": "sha256:9afdae25c1bf937e49cc95ba366fd09e893e8200655d95e38df1dfa24c97f8ce",
     "__pycache__/settings_apply.cpython-312.pyc": "sha256:700abb820ba3df6c0a9d5da47f72f5314dfa4b86e923f37b7e5985ee5615a1d9",
@@ -82,9 +82,9 @@
     "lib/urequests-0.8.0.dist-info/METADATA": "sha256:16de209a11095a53d245d475ee471b3e8ad197efce30ffcf8d6ae18018e07016",
     "lib/urequests-0.8.0.dist-info/RECORD": "sha256:03b7e2f4f5c2948e320a3e75f2454634b765c8c4413d7a7e6f2bdc94da3e2146",
     "lib/urequests.py": "sha256:2bee6a73926682d278a23c52d1c598290c82391372e40615b6075cda5583efcd",
-    "lora.py": "sha256:a0fe6a8c3aa99224abf89d6c33eaaaf4584feccbb8c92d674c576e8f2568d170",
+    "lora.py": "sha256:0319815622ec02017d23eafb3895787592e8224fed3000e8aeb758c6468bfd90",
     "main.py": "sha256:cda161c836ed2dbcaf8aca252cee2ee598ef8dc12e76e27eba330d3c5c654cf8",
-    "manifest.json.bak": "sha256:271e1e24cb6501cc750b5a8331264fe115526efbe9dfde87d6ed9a7f9da0b512",
+    "manifest.json.bak": "sha256:d2322997b440dd0eb095e83a7f298ba20526127b791d67dea90c43d8d6f696a6",
     "oled.py": "sha256:8c1ac526103e22c5dc15cf69b9be42c3e8fdb6779b4dc9e6edc66d59753c0bf7",
     "ota.py": "sha256:f31973960c9d560a463fa05413261dc03f54198c39ad178c9e122618ac20c731",
     "provision.py": "sha256:29a5c2bc2e515d84db5bbbf3dc897175605f1ca19d1d73c84fcffe92ae466354",
@@ -94,15 +94,15 @@
     "sampling.py": "sha256:95d435f4ab82eb3db0cb2da17f79ef1843db18a5d1317872b0c1f87aa1bf857a",
     "sdata.py": "sha256:79005d091059a50d820f8457573aa03c6c53b5f2c97d311b5f39e9627ee9b49a",
     "sdcard_storage.py": "sha256:6ad688d2f162d51bfc5189381ad4e5f04ed0b5c5996d936ab33093e289f07e60",
-    "settings.py": "sha256:be29b2abce8b7010f76fc20bca9f014a667f28bb3d8dfba3cf4be70f26a69d72",
+    "settings.py": "sha256:fe90ef6dca68b74ba9a3770513c6a788c32ffabff72a2bf14a940cc4339a2e7e",
     "settings_apply.py": "sha256:4d33ab81e9eb5d4b433529dd41914435e986f6b6104f344e39aa66021b16d013",
     "tmon.py": "sha256:32ba520a96ffdfd76578521e545340190550478022428e07fe6770528a7276ee",
     "user_commands.py": "sha256:5f80506bc5b6fa2108dced0973288074dccffc7a091ae5cb7f6a73fa2041b744",
     "utils.py": "sha256:bb6f6c1c170315429e4c9a592244ecebe9b59e1f698c888fe8997626dd79c8d4",
-    "version.txt": "sha256:cf0108eed77d4a40008986b4deaefd13bd220ed2477ae8a1e3ec495ac749b47e",
+    "version.txt": "sha256:cd77d0412048984f450d7e297fb5264a37576f1972592794ae481161de8d34b4",
     "wifi.py": "sha256:9a75bef1a3d61f8fa93dc90567a342aeba452cb15f859dd6fc6a08e1f70045ae",
     "wprest.py": "sha256:3a787096bf6f6507e519e46ad17385d10fdf8348a85a11af20a7fc3a9e46b010"
   },
   "name": "tmon-micropython",
-  "version": "v2.00.4a"
+  "version": "v2.00.4b"
 }
