@@ -159,6 +159,111 @@ def _write_debug_artifact(name, data_bytes):
     except Exception as e:
         record_exception('ota._write_debug_artifact', e, status='WARN')
 
+
+async def _apply_lora_staged_update_if_present(pending_file, target_ver):
+    """Apply LoRa-staged OTA files when present, using same apply/backup semantics."""
+    manifest_path = getattr(
+        settings,
+        'LORA_OTA_STAGE_MANIFEST_FILE',
+        settings.LOG_DIR.rstrip('/') + '/lora_ota_staged_manifest.json'
+    )
+    try:
+        with open(manifest_path, 'r') as mf:
+            staged = json.loads(mf.read())
+    except Exception:
+        return None
+
+    files = staged.get('files') if isinstance(staged, dict) else None
+    if not isinstance(files, list) or not files:
+        return False
+
+    backup_dir = getattr(settings, 'OTA_BACKUP_DIR', '/ota/backup')
+    if getattr(settings, 'OTA_BACKUP_ENABLED', True):
+        try:
+            os.stat(backup_dir)
+        except Exception:
+            try:
+                os.makedirs(backup_dir)
+            except Exception:
+                try:
+                    os.mkdir(backup_dir)
+                except Exception:
+                    pass
+
+    await debug_print(f"OTA: applying {len(files)} staged LoRa files", 'OTA')
+
+    for row in files:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get('name') or '').strip()
+        staged_path = str(row.get('staged_path') or '').strip()
+        expected = str(row.get('sha256') or '').strip().lower()
+        if not name or not staged_path:
+            return False
+
+        try:
+            with open(staged_path, 'rb') as sf:
+                blob = sf.read()
+        except Exception as e:
+            await log_exception(f'ota.lora_stage.read:{name}', e)
+            return False
+
+        try:
+            import uhashlib as _uh
+            _h = _uh.sha256()
+            _h.update(blob)
+            got = _binascii.hexlify(_h.digest()).decode().lower()
+        except Exception:
+            got = ''
+        if expected and got != expected:
+            await debug_print(f'OTA: staged hash mismatch for {name}', 'ERROR')
+            return False
+
+        try:
+            _ensure_dir(name)
+            if getattr(settings, 'OTA_BACKUP_ENABLED', True):
+                try:
+                    with open(name, 'rb') as cur:
+                        _ensure_dir(backup_dir.rstrip('/') + '/' + name)
+                        with open(backup_dir.rstrip('/') + '/' + name, 'wb') as bf:
+                            bf.write(cur.read())
+                except Exception:
+                    pass
+            with open(name, 'wb') as wf:
+                wf.write(blob)
+        except Exception as e:
+            await log_exception(f'ota.lora_stage.write:{name}', e)
+            return False
+
+    try:
+        settings.FIRMWARE_VERSION = str(staged.get('version') or target_ver or getattr(settings, 'FIRMWARE_VERSION', ''))
+    except Exception:
+        pass
+
+    # Cleanup staged artifacts and pending flag.
+    for row in files:
+        if isinstance(row, dict):
+            try:
+                os.remove(str(row.get('staged_path') or ''))
+            except Exception:
+                pass
+    try:
+        os.remove(manifest_path)
+    except Exception:
+        pass
+    try:
+        os.remove(pending_file)
+    except Exception:
+        pass
+
+    await debug_print('OTA: staged LoRa apply completed', 'OTA')
+    try:
+        from machine import soft_reset
+        soft_reset()
+    except Exception:
+        pass
+    return True
+
 async def apply_pending_update():
     """If OTA_PENDING_FILE exists, fetch manifest and apply allowed files.
     Steps:
@@ -184,6 +289,17 @@ async def apply_pending_update():
             if not enoent:
                 record_exception('ota.apply_pending_update.read_pending', e, status='WARN')
             return False
+
+        # Prefer local LoRa-staged package when present.
+        try:
+            lora_applied = await _apply_lora_staged_update_if_present(pending_file, target_ver)
+            if lora_applied is True:
+                return True
+            if lora_applied is False:
+                await debug_print('OTA: LoRa staged manifest present but invalid; fallback to HTTP OTA', 'WARN')
+        except Exception as e:
+            await log_exception('ota.apply_pending_update.lora_stage', e)
+
         base_url = getattr(settings, 'OTA_FIRMWARE_BASE_URL', '')
         if not base_url or not requests:
             await debug_print('OTA: no base URL or requests unavailable', 'ERROR')

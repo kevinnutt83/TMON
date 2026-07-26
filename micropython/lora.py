@@ -164,6 +164,364 @@ lora_rx_queue = SimpleQueue(maxsize=10)
 tx_counter = 0
 rx_counter = 0
 remote_counters = {}
+_lora_ota_cache = {'version': None, 'files': None}
+_remote_lora_ota_jobs = {}
+_remote_ota_rx = {
+    'chunks': {},
+    'session': None,
+    'version': None,
+    'files': {},
+    'received': {},
+}
+
+
+def _safe_int(v, default=0):
+    try:
+        return int(v)
+    except Exception:
+        return int(default)
+
+
+def _version_key(ver):
+    try:
+        s = str(ver or '').strip().lower()
+        if s.startswith('v'):
+            s = s[1:]
+        nums = []
+        token = ''
+        for ch in s:
+            if ch.isdigit():
+                token += ch
+            else:
+                if token:
+                    nums.append(int(token))
+                    token = ''
+        if token:
+            nums.append(int(token))
+        while len(nums) < 3:
+            nums.append(0)
+        return tuple(nums[:4])
+    except Exception:
+        return (0, 0, 0, 0)
+
+
+def _is_newer_version(remote_ver, local_ver):
+    try:
+        return _version_key(str(local_ver or '')) > _version_key(str(remote_ver or ''))
+    except Exception:
+        return False
+
+
+def _sha256_hex(data):
+    try:
+        h = uhashlib.sha256()
+        h.update(data)
+        return _ub.hexlify(h.digest()).decode().lower()
+    except Exception:
+        return ''
+
+
+def _read_local_firmware_files():
+    """Read local firmware files for LoRa OTA push and return metadata list."""
+    base_ver = str(getattr(settings, 'FIRMWARE_VERSION', '') or '').strip()
+    if _lora_ota_cache.get('version') == base_ver and isinstance(_lora_ota_cache.get('files'), list):
+        return _lora_ota_cache.get('files')
+
+    allow = getattr(settings, 'OTA_FILES_ALLOWLIST', []) or []
+    files = []
+    for rel in allow:
+        name = str(rel or '').strip()
+        if not name:
+            continue
+        raw = None
+        candidates = [
+            name,
+            './' + name,
+            '/workspaces/TMON/micropython/' + name,
+        ]
+        for fp in candidates:
+            try:
+                with open(fp, 'rb') as rf:
+                    raw = rf.read()
+                if raw is not None:
+                    break
+            except Exception:
+                raw = None
+        if raw is None:
+            continue
+        files.append({
+            'name': name,
+            'sha256': _sha256_hex(raw),
+            'data_b64': _ub.b2a_base64(raw).rstrip(b'\n').decode(),
+        })
+
+    _lora_ota_cache['version'] = base_ver
+    _lora_ota_cache['files'] = files
+    return files
+
+
+def _stage_remote_lora_ota_job(remote_uid, remote_ver):
+    """Prepare a LoRa OTA push job when base firmware is newer than remote."""
+    if str(getattr(settings, 'NODE_TYPE', 'base')).lower() != 'base':
+        return None
+    if not bool(getattr(settings, 'ENABLE_LORA_OTA', True)):
+        return None
+    base_ver = str(getattr(settings, 'FIRMWARE_VERSION', '') or '').strip()
+    if not base_ver or not _is_newer_version(remote_ver, base_ver):
+        return None
+
+    files = _read_local_firmware_files()
+    if not files:
+        return None
+
+    sess = f"{remote_uid}:{int(time.time())}"
+    _remote_lora_ota_jobs[str(remote_uid)] = {
+        'session': sess,
+        'version': base_ver,
+        'remote_version': str(remote_ver or ''),
+        'files': files,
+        'sent': False,
+    }
+    return sess
+
+
+async def _send_lora_ota_job(remote_uid):
+    """Send staged LoRa OTA package to a specific remote using chunked TYPE frames."""
+    uid = str(remote_uid or '')
+    job = _remote_lora_ota_jobs.get(uid)
+    if not isinstance(job, dict) or job.get('sent'):
+        return False
+
+    files = job.get('files') or []
+    if not files:
+        return False
+
+    session = str(job.get('session') or '')
+    version = str(job.get('version') or '')
+    retries = max(1, _safe_int(getattr(settings, 'LORA_OTA_MAX_RETRIES', 3), 3))
+    chunk_len = max(96, _safe_int(getattr(settings, 'LORA_OTA_CHUNK_SIZE', 180), 180))
+
+    meta = {
+        'session': session,
+        'version': version,
+        'count': len(files),
+        'files': [{'name': f.get('name'), 'sha256': f.get('sha256')} for f in files],
+    }
+    meta_b64 = _ub.b2a_base64(ujson.dumps(meta).encode()).rstrip(b'\n').decode()
+    await _send_chunked('LORA_OTA_META', meta_b64, target_uid=uid, chunk_len=chunk_len)
+    await asyncio.sleep(0.3)
+
+    for f in files:
+        payload = {
+            'session': session,
+            'version': version,
+            'name': f.get('name'),
+            'sha256': f.get('sha256'),
+            'data_b64': f.get('data_b64'),
+        }
+        payload_b64 = _ub.b2a_base64(ujson.dumps(payload).encode()).rstrip(b'\n').decode()
+
+        sent_ok = False
+        for _ in range(retries):
+            try:
+                await _send_chunked('LORA_OTA_FILE', payload_b64, target_uid=uid, chunk_len=chunk_len)
+                sent_ok = True
+                break
+            except Exception:
+                await asyncio.sleep(0.5)
+        if not sent_ok:
+            await log_error(f'lora ota send failed file={f.get("name")} uid={uid}')
+            return False
+        await asyncio.sleep(0.25)
+
+    apply_msg = {
+        'session': session,
+        'version': version,
+        'count': len(files),
+    }
+    apply_b64 = _ub.b2a_base64(ujson.dumps(apply_msg).encode()).rstrip(b'\n').decode()
+    await _send_chunked('LORA_OTA_APPLY', apply_b64, target_uid=uid, chunk_len=chunk_len)
+    job['sent'] = True
+    return True
+
+
+def _reset_remote_ota_rx():
+    _remote_ota_rx['chunks'] = {}
+    _remote_ota_rx['session'] = None
+    _remote_ota_rx['version'] = None
+    _remote_ota_rx['files'] = {}
+    _remote_ota_rx['received'] = {}
+
+
+def _ensure_dir(path):
+    try:
+        d = path.rsplit('/', 1)[0]
+        if d and d != path:
+            try:
+                os.stat(d)
+            except Exception:
+                os.mkdir(d)
+    except Exception:
+        pass
+
+
+def _remote_ota_stage_root():
+    return settings.LOG_DIR.rstrip('/') + '/lora_ota_stage'
+
+
+def _remote_ota_stage_path(session, rel_name):
+    safe = str(rel_name or '').replace('/', '__')
+    return _remote_ota_stage_root() + '/' + str(session) + '__' + safe
+
+
+def _remote_parse_type_message(msg_str):
+    parts = str(msg_str).split(',')
+    msg_type = None
+    uid = None
+    data_b64 = None
+    chunk = None
+    for p in parts:
+        if p.startswith('TYPE:'):
+            msg_type = p[5:]
+        elif p.startswith('UID:'):
+            uid = p[4:]
+        elif p.startswith('DATA:'):
+            data_b64 = p[5:]
+        elif p.startswith('CHUNK:'):
+            chunk = p[6:]
+    return msg_type, uid, chunk, data_b64
+
+
+def _remote_decode_json_b64(data_b64):
+    raw = _ub.a2b_base64(str(data_b64).encode())
+    return ujson.loads(raw.decode())
+
+
+async def _remote_handle_lora_ota_payload(msg_type, payload):
+    if not isinstance(payload, dict):
+        return False
+
+    if msg_type == 'LORA_OTA_META':
+        session = str(payload.get('session') or '')
+        files = payload.get('files') if isinstance(payload.get('files'), list) else []
+        expected = {}
+        for row in files:
+            if not isinstance(row, dict):
+                continue
+            n = str(row.get('name') or '').strip()
+            h = str(row.get('sha256') or '').strip().lower()
+            if n and h:
+                expected[n] = h
+        _remote_ota_rx['session'] = session
+        _remote_ota_rx['version'] = str(payload.get('version') or '')
+        _remote_ota_rx['files'] = expected
+        _remote_ota_rx['received'] = {}
+        return True
+
+    if msg_type == 'LORA_OTA_FILE':
+        session = str(payload.get('session') or '')
+        if not session or session != str(_remote_ota_rx.get('session') or ''):
+            return False
+        name = str(payload.get('name') or '').strip()
+        expected_sha = str(payload.get('sha256') or '').strip().lower()
+        blob_b64 = payload.get('data_b64')
+        if not name or not expected_sha or not blob_b64:
+            return False
+        raw = _ub.a2b_base64(str(blob_b64).encode())
+        got_sha = _sha256_hex(raw)
+        if got_sha != expected_sha:
+            await log_error(f'remote ota sha mismatch {name}')
+            return False
+        staged_path = _remote_ota_stage_path(session, name)
+        _ensure_dir(staged_path)
+        with open(staged_path, 'wb') as wf:
+            wf.write(raw)
+        _remote_ota_rx['received'][name] = {
+            'sha256': expected_sha,
+            'staged_path': staged_path,
+        }
+        return True
+
+    if msg_type == 'LORA_OTA_APPLY':
+        session = str(payload.get('session') or '')
+        if not session or session != str(_remote_ota_rx.get('session') or ''):
+            return False
+        expected = _remote_ota_rx.get('files') if isinstance(_remote_ota_rx.get('files'), dict) else {}
+        received = _remote_ota_rx.get('received') if isinstance(_remote_ota_rx.get('received'), dict) else {}
+        for fname, fsha in expected.items():
+            row = received.get(fname) if isinstance(received, dict) else None
+            if not isinstance(row, dict) or str(row.get('sha256') or '').lower() != str(fsha or '').lower():
+                await log_error(f'remote ota missing file {fname}')
+                return False
+
+        manifest_path = getattr(settings, 'LORA_OTA_STAGE_MANIFEST_FILE', settings.LOG_DIR.rstrip('/') + '/lora_ota_staged_manifest.json')
+        manifest = {
+            'session': session,
+            'version': str(payload.get('version') or _remote_ota_rx.get('version') or ''),
+            'files': [
+                {
+                    'name': n,
+                    'sha256': row.get('sha256'),
+                    'staged_path': row.get('staged_path'),
+                }
+                for n, row in received.items()
+            ],
+        }
+        _ensure_dir(manifest_path)
+        with open(manifest_path, 'w') as mf:
+            mf.write(ujson.dumps(manifest))
+
+        pending_file = getattr(settings, 'OTA_PENDING_FILE', settings.LOG_DIR.rstrip('/') + '/ota_pending.flag')
+        _ensure_dir(pending_file)
+        with open(pending_file, 'w') as pf:
+            pf.write(str(manifest.get('version') or 'lora-ota'))
+
+        await debug_print('Remote LoRa OTA staged; rebooting to apply.', 'OTA')
+        await asyncio.sleep(0.4)
+        try:
+            machine.soft_reset()
+        except Exception:
+            try:
+                machine.reset()
+            except Exception:
+                pass
+        return True
+
+    return False
+
+
+async def _remote_handle_lora_ota_wire_message(msg_str):
+    msg_type, uid, chunk_info, data_b64 = _remote_parse_type_message(msg_str)
+    my_uid = str(getattr(settings, 'UNIT_ID', '') or '')
+    if not msg_type or uid != my_uid:
+        return False
+    if not msg_type.startswith('LORA_OTA_'):
+        return False
+
+    base_type = msg_type[:-6] if msg_type.endswith('_CHUNK') else msg_type
+    if msg_type.endswith('_CHUNK'):
+        try:
+            cn, total = map(int, str(chunk_info or '0/0').split('/'))
+        except Exception:
+            return False
+        if base_type not in _remote_ota_rx['chunks']:
+            _remote_ota_rx['chunks'][base_type] = {'total': total, 'parts': {}}
+        _remote_ota_rx['chunks'][base_type]['parts'][cn] = data_b64
+        slot = _remote_ota_rx['chunks'][base_type]
+        if len(slot['parts']) < total:
+            return True
+        if not all(i in slot['parts'] for i in range(total)):
+            return True
+        assembled_b64 = ''.join(slot['parts'][i] for i in range(total))
+        try:
+            del _remote_ota_rx['chunks'][base_type]
+        except Exception:
+            pass
+        payload = _remote_decode_json_b64(assembled_b64)
+        return await _remote_handle_lora_ota_payload(base_type, payload)
+
+    payload = _remote_decode_json_b64(data_b64)
+    return await _remote_handle_lora_ota_payload(base_type, payload)
 
 async def display_message(msg, duration=1.5):
     try:
@@ -368,6 +726,8 @@ async def process_remote_burst(uid, st):
     """Called immediately after FULL burst (TS+SETTINGS+SDATA) OR after idle timeout"""
     await debug_print(f"Processing complete burst for {uid} (background)", "BASE_NODE")
     remote_machine_id = None
+    remote_fw_version = None
+    ota_session_id = None
 
     if 'TS' in st['types']:
         data = st['data']['TS']
@@ -390,7 +750,8 @@ async def process_remote_burst(uid, st):
             settings.REMOTE_NODE_INFO[uid].update({
                 'COMPANY': remote_company, 'SITE': remote_site,
                 'ZONE': remote_zone, 'CLUSTER': remote_cluster,
-                'MACHINE_ID': remote_machine_id
+                'MACHINE_ID': remote_machine_id,
+                'last_temp_f': temp_f,
             })
             save_remote_node_info()
 
@@ -420,6 +781,20 @@ async def process_remote_burst(uid, st):
     if 'SETTINGS' in st['types']:
         settings_dict = st['data']['SETTINGS']
         stage_remote_files(uid, {'settings.py': ujson.dumps(settings_dict).encode()})
+        try:
+            remote_fw_version = str(settings_dict.get('FIRMWARE_VERSION') or '').strip()
+        except Exception:
+            remote_fw_version = None
+
+    try:
+        ota_session_id = _stage_remote_lora_ota_job(uid, remote_fw_version)
+        if ota_session_id:
+            await debug_print(
+                f"LoRa OTA staged for {uid}: {remote_fw_version} -> {getattr(settings, 'FIRMWARE_VERSION', '')}",
+                "OTA"
+            )
+    except Exception as ota_stage_e:
+        await log_error(f"LoRa OTA stage error for {uid}: {ota_stage_e}")
 
     if 'SDATA' in st['types']:
         sdata_dict = st['data']['SDATA']
@@ -441,15 +816,25 @@ async def process_remote_burst(uid, st):
             cmd_blob = _encode_ack_command(pending_cmd)
             if cmd_blob:
                 ack_msg += f":CMD:{cmd_blob}"
+        if ota_session_id:
+            ack_msg += f":OTA:{ota_session_id}:VER:{getattr(settings, 'FIRMWARE_VERSION', '')}"
         ack_msg = await _secure_message(ack_msg, remote_uid=uid)
         await _send_with_retry(ack_msg.encode())
         if isinstance(pending_cmd, dict):
             await debug_print(f"Sent ACK+CMD to {uid} (cmd_id={pending_cmd.get('id')})", "BASE_NODE")
+        elif ota_session_id:
+            await debug_print(f"Sent ACK+OTA hint to {uid}", "BASE_NODE")
         else:
             await debug_print(f"Sent ACK with next delay {next_delay}s to {uid}", "BASE_NODE")
         await display_message("ACK Sent", 0.5)
     except Exception as ack_e:
         await log_error(f"ACK send error to {uid}: {ack_e}")
+
+    if ota_session_id:
+        try:
+            await _send_lora_ota_job(uid)
+        except Exception as ota_send_e:
+            await log_error(f"LoRa OTA send error to {uid}: {ota_send_e}")
 
     # Proxy HTTP calls AFTER ACK
     if 'TS' in st['types'] and remote_machine_id:
@@ -495,6 +880,9 @@ async def process_remote_field_data(uid, st):
                 merged.update(record)
                 if not merged.get('unit_id'):
                     merged['unit_id'] = uid
+                merged['node_type'] = merged.get('node_type') or merged.get('NODE_TYPE') or 'remote'
+                merged['ingested_via'] = 'lora_base'
+                merged['remote_unit_id'] = uid
                 merged_records.append(merged)
 
             if merged_records:
@@ -965,12 +1353,18 @@ def calculate_next_delay(node_id):
     delay = sync_rate + stagger_seed + jitter
     return max(60, delay)
 
-async def _send_chunked(msg_type, full_b64):
-    max_b64_chunk_len = 100 if getattr(settings, 'LORA_ENCRYPT_ENABLED', False) else 160
+async def _send_chunked(msg_type, full_b64, target_uid=None, chunk_len=None):
+    max_b64_chunk_len = _safe_int(chunk_len, 0)
+    if max_b64_chunk_len <= 0:
+        max_b64_chunk_len = 100 if getattr(settings, 'LORA_ENCRYPT_ENABLED', False) else 160
+    target = str(target_uid or getattr(settings, 'UNIT_ID', ''))
     b64_len = len(full_b64)
     if b64_len <= max_b64_chunk_len:
-        data_str = f"TYPE:{msg_type},UID:{settings.UNIT_ID},DATA:{full_b64}"
-        data_str = await _secure_message(data_str)
+        data_str = f"TYPE:{msg_type},UID:{target},DATA:{full_b64}"
+        if str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'base':
+            data_str = await _secure_message(data_str, remote_uid=target)
+        else:
+            data_str = await _secure_message(data_str)
         await _send_with_retry(data_str.encode())
     else:
         num_chunks = (b64_len + max_b64_chunk_len - 1) // max_b64_chunk_len
@@ -978,8 +1372,11 @@ async def _send_chunked(msg_type, full_b64):
             chunk_start = i * max_b64_chunk_len
             chunk_end = chunk_start + max_b64_chunk_len
             chunk_b64 = full_b64[chunk_start:chunk_end]
-            data_str = f"TYPE:{msg_type}_CHUNK,UID:{settings.UNIT_ID},CHUNK:{i}/{num_chunks},DATA:{chunk_b64}"
-            data_str = await _secure_message(data_str)
+            data_str = f"TYPE:{msg_type}_CHUNK,UID:{target},CHUNK:{i}/{num_chunks},DATA:{chunk_b64}"
+            if str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'base':
+                data_str = await _secure_message(data_str, remote_uid=target)
+            else:
+                data_str = await _secure_message(data_str)
             await _send_with_retry(data_str.encode())
             await asyncio.sleep(random.uniform(0.08, 0.25))
         await asyncio.sleep(0.5)  # final pause so base can finish processing last chunk
@@ -1234,6 +1631,23 @@ async def _apply_remote_command_from_ack(cmd_obj):
             await toggle_relay(str(relay_num), str(state), str(runtime))
             ok = True
             result['executed'] = True
+        elif ctype in ('suspend', 'resume', 'set_suspend'):
+            try:
+                from utils import persist_suspension_state
+                if ctype == 'resume':
+                    new_state = False
+                elif ctype == 'suspend':
+                    new_state = True
+                else:
+                    new_state = bool(payload.get('enabled', payload.get('suspended', True)))
+                settings.DEVICE_SUSPENDED = bool(new_state)
+                persist_suspension_state(settings.DEVICE_SUSPENDED)
+                ok = True
+                result['device_suspended'] = bool(settings.DEVICE_SUSPENDED)
+            except Exception as se:
+                ok = False
+                result['reason'] = 'suspend_command_error'
+                result['error'] = str(se)
         else:
             result['reason'] = 'unsupported_command_type'
     except Exception as e:
@@ -1592,6 +2006,8 @@ async def connectLora():
     if settings.NODE_TYPE == 'remote':
         sync_rate = getattr(settings, 'LORA_SYNC_RATE', 300)
         response_timeout = 20   # shortened to reduce crosstalk window
+        ota_wait_deadline = 0
+        awaiting_ota_session = None
     else:
         sync_rate = 10
         response_timeout = 30
@@ -1625,6 +2041,8 @@ async def connectLora():
                     last_heartbeat_ts = current_time
 
                 if state == STATE_IDLE:
+                    awaiting_ota_session = None
+                    ota_wait_deadline = 0
                     await debug_print("Remote: starting full check-in (periodic)", "REMOTE_NODE")
                     await display_message("TX Data...", 0.8)
                     ts = time.time()
@@ -1670,12 +2088,17 @@ async def connectLora():
                                     await debug_print("Remote: ACK received for this node", "REMOTE_NODE")
                                     next_delay = int(parts[3])
                                     ack_cmd = None
+                                    ack_ota_session = None
+                                    ack_ota_ver = None
                                     if len(parts) >= 6:
                                         i = 4
                                         while i + 1 < len(parts):
                                             if parts[i] == 'CMD':
                                                 ack_cmd = _decode_ack_command(parts[i + 1])
-                                                break
+                                            elif parts[i] == 'OTA':
+                                                ack_ota_session = parts[i + 1]
+                                            elif parts[i] == 'VER':
+                                                ack_ota_ver = parts[i + 1]
                                             i += 2
                                     if isinstance(ack_cmd, dict):
                                         await debug_print("Remote: received command via ACK", "REMOTE_NODE")
@@ -1684,6 +2107,17 @@ async def connectLora():
                                     sdata.lora_SigStr = lora.getRSSI() if hasattr(lora, 'getRSSI') else -60
                                     sdata.lora_snr = lora.getSNR() if hasattr(lora, 'getSNR') else 0
                                     sdata.LORA_CONNECTED = True
+                                    if ack_ota_session:
+                                        _reset_remote_ota_rx()
+                                        awaiting_ota_session = ack_ota_session
+                                        ota_wait_deadline = time.time() + max(30, int(getattr(settings, 'REMOTE_ACK_WAIT_S', 8)) + 120)
+                                        await debug_print(
+                                            f"Remote: OTA window opened session={ack_ota_session} ver={ack_ota_ver}",
+                                            "OTA"
+                                        )
+                                        await ensure_lora_listening()
+                                        await asyncio.sleep(0.1)
+                                        continue
                                     await ensure_lora_listening()
                                     await asyncio.sleep(0.5)
                                     state = STATE_IDLE
@@ -1692,9 +2126,29 @@ async def connectLora():
                                     continue
                                 else:
                                     await debug_print("Ignored ACK for different UID", "REMOTE_NODE")
+                            elif msg_str and msg_str.startswith('TYPE:') and awaiting_ota_session:
+                                handled = False
+                                try:
+                                    handled = await _remote_handle_lora_ota_wire_message(msg_str)
+                                except Exception as ota_rx_e:
+                                    await log_error(f"remote ota rx error: {ota_rx_e}")
+                                    handled = False
+                                if handled:
+                                    last_rx_ts = time.time()
+                                    await ensure_lora_listening()
+                                    await asyncio.sleep(0.05)
+                                    continue
                         await ensure_lora_listening()
 
-                    if time.time() - start_wait > response_timeout:
+                    if awaiting_ota_session and ota_wait_deadline and time.time() > ota_wait_deadline:
+                        await debug_print("Remote: OTA window timeout; continuing normal schedule", "WARN")
+                        awaiting_ota_session = None
+                        ota_wait_deadline = 0
+                        state = STATE_IDLE
+                        await asyncio.sleep(2)
+                        continue
+
+                    if (not awaiting_ota_session) and (time.time() - start_wait > response_timeout):
                         retry_count += 1
                         await debug_print(f"Remote: no ACK (retry {retry_count}/{max_retries_per_cycle})", "WARN")
                         if retry_count < max_retries_per_cycle:

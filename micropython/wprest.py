@@ -1025,6 +1025,28 @@ async def poll_device_commands():
                     await debug_print(f'poll_device_commands: relay command failed: {re}', 'ERROR')
                     if cmd_id is not None:
                         confirm_items.append((cmd_id, 'failed', {'reason': 'relay_command_error'}))
+            elif ctype in ('suspend', 'resume', 'set_suspend'):
+                try:
+                    from utils import persist_suspension_state
+                    if ctype == 'resume':
+                        new_state = False
+                    elif ctype == 'suspend':
+                        new_state = True
+                    else:
+                        new_state = bool(payload.get('enabled', payload.get('suspended', True)))
+                    settings.DEVICE_SUSPENDED = bool(new_state)
+                    persist_suspension_state(settings.DEVICE_SUSPENDED)
+                    handled_any = True
+                    if cmd_id is not None:
+                        confirm_items.append((cmd_id, 'done', {
+                            'executed': True,
+                            'type': ctype,
+                            'device_suspended': bool(settings.DEVICE_SUSPENDED),
+                        }))
+                except Exception as se:
+                    await debug_print(f'poll_device_commands: suspend command failed: {se}', 'ERROR')
+                    if cmd_id is not None:
+                        confirm_items.append((cmd_id, 'failed', {'reason': 'suspend_command_error'}))
             else:
                 await debug_print(f'poll_device_commands: unsupported command type {ctype}', 'WARN')
                 if cmd_id is not None and bool(getattr(settings, 'COMMAND_ACK_UNSUPPORTED', True)):

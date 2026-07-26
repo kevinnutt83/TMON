@@ -291,38 +291,64 @@ async def findHighestHumid(compareHumid, source='local'):
 
 async def frost_and_heat_watch():
     try:
+        temps_f = []
+        try:
+            local_f = getattr(sdata, 'cur_temp_f', None)
+            if isinstance(local_f, (int, float)):
+                temps_f.append(float(local_f))
+        except Exception:
+            pass
+        try:
+            remotes = getattr(settings, 'REMOTE_NODE_INFO', {}) or {}
+            for _, node in remotes.items():
+                if not isinstance(node, dict):
+                    continue
+                rf = node.get('last_temp_f')
+                if isinstance(rf, (int, float)):
+                    temps_f.append(float(rf))
+                else:
+                    try:
+                        temps_f.append(float(rf))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        min_temp_f = min(temps_f) if temps_f else getattr(sdata, 'cur_temp_f', 0)
+        max_temp_f = max(temps_f) if temps_f else getattr(sdata, 'cur_temp_f', 0)
+
         if getattr(settings, 'ENABLE_FROSTWATCH', False):
-            if sdata.cur_temp_f < getattr(settings, 'FROSTWATCH_ACTIVE_TEMP', 70):
+            if min_temp_f < getattr(settings, 'FROSTWATCH_ACTIVE_TEMP', 70):
                 sdata.frostwatch_active = True
             else:
                 sdata.frostwatch_active = False
-            if sdata.cur_temp_f < getattr(settings, 'FROSTWATCH_ALERT_TEMP', 42):
+            if min_temp_f < getattr(settings, 'FROSTWATCH_ALERT_TEMP', 42):
                 sdata.frost = True
             else:
                 sdata.frost = False
             if not sdata.frost_act:
-                if sdata.cur_temp_f < getattr(settings, 'FROSTWATCH_ACTION_TEMP', 38):
+                if min_temp_f < getattr(settings, 'FROSTWATCH_ACTION_TEMP', 38):
                     sdata.frost_act = True
                     await beginFrostOperations()
             else:
-                if sdata.cur_temp_f > getattr(settings, 'FROSTWATCH_STANDDOWN_TEMP', 40):
+                if min_temp_f > getattr(settings, 'FROSTWATCH_STANDDOWN_TEMP', 40):
                     sdata.frost_act = False
                     await endFrostOperations()
         if getattr(settings, 'ENABLE_HEATWATCH', False):
-            if sdata.cur_temp_f > getattr(settings, 'HEATWATCH_ACTIVE_TEMP', 90):
+            if max_temp_f > getattr(settings, 'HEATWATCH_ACTIVE_TEMP', 90):
                 sdata.heatwatch_active = True
             else:
                 sdata.heatwatch_active = False
-            if sdata.cur_temp_f > getattr(settings, 'HEATWATCH_ALERT_TEMP', 100):
+            if max_temp_f > getattr(settings, 'HEATWATCH_ALERT_TEMP', 100):
                 sdata.heat = True
             else:
                 sdata.heat = False
             if not sdata.heat_act:
-                if sdata.cur_temp_f > getattr(settings, 'HEATWATCH_ACTION_TEMP', 110):
+                if max_temp_f > getattr(settings, 'HEATWATCH_ACTION_TEMP', 110):
                     sdata.heat_act = True
                     await beginHeatOperations()
             else:
-                if sdata.cur_temp_f < getattr(settings, 'HEATWATCH_STANDDOWN_TEMP', 105):
+                if max_temp_f < getattr(settings, 'HEATWATCH_STANDDOWN_TEMP', 105):
                     sdata.heat_act = False
                     await endHeatOperations()
     except Exception as e:

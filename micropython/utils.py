@@ -1883,6 +1883,16 @@ async def periodic_provision_check():
                                 settings.UNIT_PROVISIONED = True
                             except Exception:
                                 pass
+                            try:
+                                import wprest as _w
+                                fetcher = getattr(_w, 'fetch_settings_from_wp', None)
+                                if fetcher:
+                                    if asyncio and asyncio.iscoroutinefunction(fetcher):
+                                        await fetcher()
+                                    else:
+                                        fetcher()
+                            except Exception:
+                                pass
                             if not _provision_reboot_guard_written:
                                 reboot_needed = True
                                 try:
