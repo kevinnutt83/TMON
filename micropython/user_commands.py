@@ -1,6 +1,11 @@
-# TMON v2.06.0 - User Commands Module (rewritten for current firmware)
+# TMON v2.06.x - User Commands Module (updated)
 # Non-blocking async CLI that cooperates with LoRa and all other tasks.
 # Uses uselect.poll() on sys.stdin so input never blocks the event loop.
+#
+# New in this version:
+# - pins command (show pin assignments)
+# - config command (key configuration summary)
+# - Expanded contextual help system
 
 import uasyncio as asyncio
 import settings
@@ -14,7 +19,16 @@ try:
 except ImportError:
     uselect = None
 
-from utils import debug_print, persist_custom_setting, persist_node_type, persist_unit_name, persist_wordpress_api_url, persist_suspension_state, record_exception, log_exception
+from utils import (
+    debug_print,
+    persist_custom_setting,
+    persist_node_type,
+    persist_unit_name,
+    persist_wordpress_api_url,
+    persist_suspension_state,
+    record_exception,
+    log_exception,
+)
 
 # Non-blocking stdin poller
 _poller = None
@@ -99,6 +113,8 @@ async def process_command(command):
         'debug': handle_debug_command,
         'relay': handle_relay_command,
         'info': handle_info_command,
+        'pins': handle_pins_command,        # NEW
+        'config': handle_config_command,    # NEW
     }
 
     handler = handlers.get(action)
@@ -107,6 +123,10 @@ async def process_command(command):
     else:
         print(f"Unknown command: {action}. Type 'help' for available commands.")
 
+
+# ---------------------------------------------------------------------------
+# Command Handlers
+# ---------------------------------------------------------------------------
 
 async def handle_set_command(parts):
     """set var <name> <value> - Set a settings variable."""
@@ -335,22 +355,97 @@ async def handle_info_command(parts):
     print("------------------------")
 
 
-async def handle_help_command(parts=None):
-    """help - Show available commands."""
-    help_message = """
+async def handle_pins_command(parts):
+    """pins - Show current pin assignments."""
+    print("--- Pin Assignments ---")
+    pin_list = [
+        ("DEVICE_TEMP_SCL", "DEVICE_TEMP_SCL_PIN"),
+        ("DEVICE_TEMP_SDA", "DEVICE_TEMP_SDA_PIN"),
+        ("PROBE_SCL", "BME280_PROBE_SCL_PIN"),
+        ("PROBE_SDA", "BME280_PROBE_SDA_PIN"),
+        ("OLED_SCL", "OLED_SCL_PIN"),
+        ("OLED_SDA", "OLED_SDA_PIN"),
+        ("RELAY1", "RELAY_PIN1"),
+        ("RELAY2", "RELAY_PIN2"),
+        ("RELAY3", "RELAY_PIN3"),
+        ("RELAY4", "RELAY_PIN4"),
+        ("RELAY5", "RELAY_PIN5"),
+        ("RELAY6", "RELAY_PIN6"),
+        ("RELAY7", "RELAY_PIN7"),
+        ("RELAY8", "RELAY_PIN8"),
+        ("SYS_VOLTAGE", "SYS_VOLTAGE_PIN"),
+        ("LED", "LED_PIN"),
+        ("SOIL_PROBE", "SOIL_PROBE_PIN"),
+        ("SPI_CLK", "CLK_PIN"),
+        ("SPI_MOSI", "MOSI_PIN"),
+        ("SPI_MISO", "MISO_PIN"),
+        ("SPI_CS", "CS_PIN"),
+        ("LORA_IRQ", "IRQ_PIN"),
+        ("LORA_RST", "RST_PIN"),
+        ("LORA_BUSY", "BUSY_PIN"),
+    ]
+    for label, attr in pin_list:
+        val = getattr(settings, attr, None)
+        print(f"  {label:18} : {val}")
+    print("-----------------------")
+    print("Use 'set var <PIN_NAME> <gpio>' to change a pin (most are allowed).")
+    print("Example: set var RELAY_PIN3 19")
+
+
+async def handle_config_command(parts):
+    """config - Show key configuration summary."""
+    print("--- Key Configuration ---")
+    print(f"  NODE_TYPE                 : {settings.NODE_TYPE}")
+    print(f"  ENABLE_WIFI               : {settings.ENABLE_WIFI}")
+    print(f"  ENABLE_LORA               : {settings.ENABLE_LORA}")
+    print(f"  ENABLE_OLED               : {settings.ENABLE_OLED}")
+    print(f"  ENABLE_DEVICE_BME280      : {getattr(settings, 'ENABLE_DEVICE_BME280', False)}")
+    print(f"  ENABLE_PROBE_BME280       : {getattr(settings, 'ENABLE_PROBE_BME280', False)}")
+    print(f"  SAMPLE_DEVICE_TEMP        : {getattr(settings, 'SAMPLE_DEVICE_TEMP', False)}")
+    print(f"  SAMPLE_PROBE_TEMP         : {getattr(settings, 'SAMPLE_PROBE_TEMP', False)}")
+    print(f"  LORA_SYNC_RATE            : {getattr(settings, 'LORA_SYNC_RATE', 300)}")
+    print(f"  REQUIRE_SYNC_BEFORE_SLEEP : {getattr(settings, 'REMOTE_REQUIRE_SUCCESSFUL_SYNC_BEFORE_SLEEP', True)}")
+    print(f"  FAILED_SYNC_RETRY_S       : {getattr(settings, 'REMOTE_FAILED_SYNC_RETRY_S', 45)}")
+    print(f"  ENABLE_SDCARD             : {getattr(settings, 'ENABLE_SDCARD', False)}")
+    print(f"  DEVICE_SUSPENDED          : {getattr(settings, 'DEVICE_SUSPENDED', False)}")
+    print("-------------------------")
+
+
+async def handle_help_command(parts):
+    """Expanded contextual help."""
+    if len(parts) <= 1:
+        print("""
 Available commands:
-  set var <name> <value>           - Set a settings variable
-  see var <name>                   - View a settings or sdata variable
-  status                           - Show device status overview
-  info                             - Show device info and features
-  relay <1-8> <on|off> [runtime_s] - Control a relay
-  sdata [var_name]                 - Show sdata variables (all or specific)
-  debug <flag> <on|off>            - Toggle a debug flag
-  reboot [delay_s]                 - Reboot the device
-  file list <directory>            - List files in a directory
-  file read <file_path>            - Read a file
-  file delete <file_path>          - Delete a file
-  file create <file_path>          - Create an empty file
-  help                             - Show this help message
-"""
-    print(help_message)
+  help [command]                 - Show this help or detailed help for a command
+  status                         - Full device status overview
+  info                           - Feature overview (enabled modules)
+  config                         - Key configuration summary
+  pins                           - Show all important pin assignments
+  set var <name> <value>         - Set a settings variable
+  see var <name>                 - View a settings or sdata variable
+  sdata [var]                    - Show all or one sdata variable
+  relay <1-8> <on|off> [secs]    - Control a relay
+  debug <flag> <on|off>          - Toggle a debug flag
+  file <list|read|delete|create> <path>
+  reboot [delay]                 - Reboot the device
+
+Type 'help <command>' for detailed usage and examples.
+""")
+        return
+
+    cmd = parts[1].lower()
+    details = {
+        "help": "help [command]\n  Shows the command list or detailed help for a specific command.",
+        "status": "status\n  Displays unit ID, name, node type, firmware, connectivity,\n  both temperatures, humidity, pressure, voltage, memory, errors and relay states.",
+        "info": "info\n  Shows which major features are currently enabled or disabled.",
+        "config": "config\n  Shows the most important configuration values currently in effect\n  (node type, sensors, sleep behaviour, etc.).",
+        "pins": "pins\n  Lists all important GPIO pin assignments used by the firmware.\n  You can change most of them with:\n    set var RELAY_PIN3 19",
+        "set": "set var <name> <value>\n  Changes a settings variable.\n  Restricted variables (MACHINE_ID, UNIT_PROVISIONED, etc.) cannot be changed.\n  Example: set var ENABLE_OLED true",
+        "see": "see var <name>\n  Displays the current value of a settings or sdata variable.\n  Example: see var UNIT_Name",
+        "sdata": "sdata [var_name]\n  With no argument shows all sdata variables.\n  With a name shows only that variable.",
+        "relay": "relay <1-8> <on|off> [runtime_s]\n  Turns a relay on or off.\n  Optional runtime_s limits how long the relay stays on (in seconds).\n  Example: relay 1 on 300     # on for 5 minutes",
+        "debug": "debug <flag> <on|off>\n  Toggles a debug flag (DEBUG, DEBUG_LORA, DEBUG_SAMPLING, etc.).\n  Example: debug LORA on",
+        "file": "file <list|read|delete|create> <path>\n  Basic file system operations.\n  Examples:\n    file list /logs\n    file read /logs/lora.log",
+        "reboot": "reboot [delay_s]\n  Reboots the device immediately or after a delay in seconds.",
+    }
+    print(details.get(cmd, f"No detailed help available for '{cmd}'.\nType 'help' for the full list of commands."))

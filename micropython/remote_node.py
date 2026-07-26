@@ -1,4 +1,5 @@
 # Remote node deep-sleep cycle runner for battery-powered LoRa remotes.
+# UPDATED: Deep sleep is now conditional on successful LoRa sync + field data transmission.
 
 import gc
 import machine
@@ -128,6 +129,10 @@ def _is_external_wake_event():
 
 
 async def _run_remote_cycle_once():
+    """
+    Returns:
+        (sleep_s, sync_success)
+    """
     try:
         from wifi import disable_wifi
         disable_wifi()
@@ -137,45 +142,74 @@ async def _run_remote_cycle_once():
     await sampleEnviroment()
     record_field_data()
 
-    if not await init_lora():
-        raise RuntimeError('remote_sleep: LoRa init failed')
-    await ensure_lora_listening()
-    await send_field_data_via_lora()
+    sync_success = False
+    next_epoch = None
 
-    now_epoch = _now_epoch()
-    ack_wait_s = max(2, _safe_int(getattr(settings, 'REMOTE_ACK_WAIT_S', 8), 8))
-    next_delay = await wait_for_next_sync_ack(timeout_s=ack_wait_s)
-    if isinstance(next_delay, int) and next_delay > 0:
-        next_epoch = now_epoch + next_delay
-        await debug_print(f"remote_sleep: ACK next delay {next_delay}s", "REMOTE_NODE")
-    else:
-        next_epoch = _compute_next_sync_epoch(now_epoch)
+    try:
+        if not await init_lora():
+            raise RuntimeError('remote_sleep: LoRa init failed')
+
+        await ensure_lora_listening()
+        await send_field_data_via_lora()
+
+        now_epoch = _now_epoch()
+        ack_wait_s = max(2, _safe_int(getattr(settings, 'REMOTE_ACK_WAIT_S', 8), 8))
+        next_delay = await wait_for_next_sync_ack(timeout_s=ack_wait_s)
+
+        if isinstance(next_delay, int) and next_delay > 0:
+            next_epoch = now_epoch + next_delay
+            sync_success = True
+            await debug_print(f"remote_sleep: ACK received, next delay {next_delay}s", "REMOTE_NODE")
+        else:
+            # No valid ACK – treat as failed sync
+            next_epoch = _compute_next_sync_epoch(now_epoch)
+            sync_success = False
+            await debug_print("remote_sleep: No valid ACK – sync failed", "REMOTE_NODE")
+
+    except Exception as e:
+        await debug_print(f"remote_sleep: LoRa cycle error: {e}", "ERROR")
+        sync_success = False
+        next_epoch = _compute_next_sync_epoch(_now_epoch())
+
+    # Always persist a next sync time
+    if next_epoch is None:
+        next_epoch = _compute_next_sync_epoch(_now_epoch())
     persist_next_lora_sync(next_epoch)
 
+    # Calculate sleep duration
+    now_epoch = _now_epoch()
     sleep_s = max(15, next_epoch - now_epoch)
     sys_v = update_sys_voltage()
     sleep_s = _apply_voltage_adaptive_sleep(sleep_s, sys_v)
-    await debug_print(f"remote_sleep: next wake in {sleep_s}s", "REMOTE_NODE")
-    return sleep_s
+
+    return sleep_s, sync_success
 
 
 def run_remote_deep_sleep():
     sleep_s = max(30, _safe_int(getattr(settings, 'LORA_SYNC_RATE', 300), 300))
+    sync_success = False
+
     try:
-        sleep_s = _safe_int(asyncio.run(_run_remote_cycle_once()), sleep_s)
+        result = asyncio.run(_run_remote_cycle_once())
+        if isinstance(result, tuple) and len(result) == 2:
+            sleep_s, sync_success = result
+        else:
+            sleep_s = _safe_int(result, sleep_s)
+            sync_success = False
     except Exception as exc:
         try:
             asyncio.run(log_exception('remote_node.run_remote_deep_sleep', exc))
         except Exception:
             pass
-        retry_base = max(30, _safe_int(getattr(settings, 'LORA_RETRY_BASE_DELAY_S', 2), 2) * 10)
-        sleep_s = retry_base
+        sync_success = False
+        sleep_s = max(30, _safe_int(getattr(settings, 'REMOTE_FAILED_SYNC_RETRY_S', 45), 45))
 
     try:
         gc.collect()
     except Exception:
         pass
 
+    # External wake configuration
     ext_cfg = _configure_ext_wake()
     if ext_cfg:
         try:
@@ -185,11 +219,34 @@ def run_remote_deep_sleep():
 
     if _is_external_wake_event() and bool(getattr(settings, 'REMOTE_EXT_WAKE_RECOVERY_DISABLE_SLEEP', False)):
         try:
-            asyncio.run(debug_print("remote_sleep: external wake recovery mode active; skipping deepsleep", "WARN"))
+            asyncio.run(debug_print("remote_sleep: external wake recovery mode – skipping deepsleep", "WARN"))
         except Exception:
             pass
         while True:
             time.sleep(5)
+
+    # ========== KEY CHANGE: Only deep sleep on successful sync ==========
+    require_success = bool(getattr(settings, 'REMOTE_REQUIRE_SUCCESSFUL_SYNC_BEFORE_SLEEP', True))
+
+    if require_success and not sync_success:
+        # Failed sync → short retry sleep only
+        retry_s = max(15, _safe_int(getattr(settings, 'REMOTE_FAILED_SYNC_RETRY_S', 45), 45))
+        try:
+            asyncio.run(debug_print(f"remote_sleep: Sync FAILED – short retry sleep {retry_s}s", "WARN"))
+        except Exception:
+            pass
+        try:
+            machine.deepsleep(int(retry_s * 1000))
+        except Exception:
+            while True:
+                time.sleep(5)
+        return
+
+    # Successful sync → normal deep sleep
+    try:
+        asyncio.run(debug_print(f"remote_sleep: Sync OK – deep sleep {sleep_s}s", "REMOTE_NODE"))
+    except Exception:
+        pass
 
     try:
         machine.deepsleep(int(max(5, sleep_s) * 1000))

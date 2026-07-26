@@ -459,8 +459,13 @@ async def process_remote_burst(uid, st):
 
 
 async def process_remote_field_data(uid, st):
+    """
+    Process a fully assembled FIELD_DATA payload from a remote node,
+    stage the records, and send an ACK with the next sync delay.
+    """
     try:
         payload = st.get('data', {}).get('FIELD_DATA')
+
         defaults = {}
         if isinstance(payload, dict) and 'data' in payload:
             records = payload.get('data')
@@ -484,40 +489,58 @@ async def process_remote_field_data(uid, st):
                     continue
                 merged = dict(defaults)
                 merged.update(record)
-                if 'unit_id' not in merged or not merged.get('unit_id'):
+                if not merged.get('unit_id'):
                     merged['unit_id'] = uid
                 merged_records.append(merged)
-            if merged_records:
-                stage_remote_field_data(uid, merged_records)
-                await debug_print(f"Staged {len(merged_records)} remote field records from {uid}", "BASE_NODE")
 
-                # ACK remote field-data burst with NEXT delay so battery remotes
-                # can persist scheduler timing without waiting for full TS/SETTINGS/SDATA cycle.
+            if merged_records:
+                # Stage the data for later upload to Unit Connector
+                try:
+                    stage_remote_field_data(uid, merged_records)
+                    await debug_print(f"Staged {len(merged_records)} remote field records from {uid}", "BASE_NODE")
+                except Exception as stage_e:
+                    await log_error(f"stage_remote_field_data error for {uid}: {stage_e}")
+
+                # Calculate next delay and update tracking
                 next_delay = calculate_next_delay(uid)
                 now = time.time()
                 if uid not in settings.REMOTE_NODE_INFO:
                     settings.REMOTE_NODE_INFO[uid] = {}
                 settings.REMOTE_NODE_INFO[uid]['next_expected'] = now + next_delay
                 settings.REMOTE_NODE_INFO[uid]['missed_syncs'] = 0
-                save_remote_node_info()
+                try:
+                    save_remote_node_info()
+                except Exception:
+                    pass
 
+                # ----- Send the ACK -----
                 try:
                     ack_msg = f"ACK:{uid}:NEXT:{next_delay}"
                     ack_msg = await _secure_message(ack_msg, remote_uid=uid)
                     await _send_with_retry(ack_msg.encode())
                     await debug_print(f"Sent FIELD_DATA ACK with next delay {next_delay}s to {uid}", "BASE_NODE")
+                    try:
+                        from oled import display_message
+                        await display_message("ACK Sent", 0.8)
+                    except Exception:
+                        pass
                 except Exception as ack_e:
                     await log_error(f"FIELD_DATA ACK send error to {uid}: {ack_e}")
+
     except Exception as e:
         await log_error(f"Remote field data processor error for {uid}: {e}")
-    finally:
-        if 'FIELD_DATA' in st.get('types', set()):
-            st['types'].discard('FIELD_DATA')
-        if isinstance(st.get('data'), dict):
-            st['data'].pop('FIELD_DATA', None)
-        if isinstance(st.get('chunks'), dict):
-            st['chunks'].pop('FIELD_DATA', None)
 
+    finally:
+        # Clean up state for this burst
+        try:
+            if 'FIELD_DATA' in st.get('types', set()):
+                st['types'].discard('FIELD_DATA')
+            if isinstance(st.get('data'), dict):
+                st['data'].pop('FIELD_DATA', None)
+            if isinstance(st.get('chunks'), dict):
+                st['chunks'].pop('FIELD_DATA', None)
+        except Exception:
+            pass
 
 async def process_remote_state_files(uid, st):
     try:
@@ -985,35 +1008,72 @@ async def send_remote_state_files(files):
         return False
 
 
-async def wait_for_next_sync_ack(timeout_s=8):
-    """Remote helper: wait briefly for ACK:<uid>:NEXT:<seconds> from base."""
+async def wait_for_next_sync_ack(timeout_s=None):
+    """
+    Remote helper: wait for ACK:<uid>:NEXT:<seconds> from base.
+    Returns the next delay in seconds, or None on timeout / failure.
+    """
     if str(getattr(settings, 'NODE_TYPE', 'base')).lower() != 'remote':
         return None
+
+    if timeout_s is None:
+        timeout_s = getattr(settings, 'REMOTE_ACK_WAIT_S', 90)
     try:
-        timeout_s = max(1, int(timeout_s))
+        timeout_s = max(15, int(timeout_s))
     except Exception:
-        timeout_s = 8
+        timeout_s = 90
 
     end_ts = time.time() + timeout_s
+    my_uid = str(getattr(settings, 'UNIT_ID', ''))
+
+    await debug_print(f"Waiting for ACK (timeout {timeout_s}s) ...", "REMOTE_NODE")
+
     while time.time() < end_ts:
         try:
-            if lora and hasattr(lora, '_events') and (lora._events() & lora.RX_DONE):
-                msg, err = lora.recv()
-                if err == 0 and msg:
+            if lora is None:
+                await asyncio.sleep_ms(100)
+                continue
+
+            # Try to receive a packet
+            try:
+                # Prefer non-blocking style receive if available
+                if hasattr(lora, 'recv'):
+                    msg, err = lora.recv(0)
+                else:
+                    msg, err = None, -1
+            except TypeError:
+                # Some drivers don't accept the timeout argument
+                try:
+                    msg, err = lora.recv()
+                except Exception:
+                    msg, err = None, -1
+            except Exception:
+                msg, err = None, -1
+
+            if err == 0 and msg:
+                try:
                     msg_str = msg.rstrip(b'\x00').decode()
                     msg_str = await _unsecure_message(msg_str)
-                    if msg_str and msg_str.startswith('ACK:'):
-                        parts = msg_str.split(':')
-                        if len(parts) >= 4 and parts[1] == settings.UNIT_ID and parts[2] == 'NEXT':
-                            try:
-                                return max(10, int(parts[3]))
-                            except Exception:
-                                return None
+                except Exception:
+                    msg_str = None
+
+                if msg_str and msg_str.startswith('ACK:'):
+                    parts = msg_str.split(':')
+                    # Expected format: ACK:<uid>:NEXT:<seconds>
+                    if len(parts) >= 4 and parts[1] == my_uid and parts[2] == 'NEXT':
+                        try:
+                            delay = max(10, int(parts[3]))
+                            await debug_print(f"ACK received – next sync in {delay}s", "REMOTE_NODE")
+                            return delay
+                        except Exception:
+                            pass
         except Exception:
             pass
-        await asyncio.sleep_ms(50)
-    return None
 
+        await asyncio.sleep_ms(80)
+
+    await debug_print("ACK wait timed out", "REMOTE_NODE")
+    return None
 
 async def _fetch_remote_pending_command(remote_unit_id, remote_machine_id=None):
     """Base helper: fetch one queued command for a remote unit from UC/WP."""
