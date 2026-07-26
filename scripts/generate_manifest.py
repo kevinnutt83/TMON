@@ -20,18 +20,6 @@ MP_DIR = os.path.join(REPO_ROOT, 'micropython')
 MANIFEST_PATH = os.path.join(MP_DIR, 'manifest.json')
 SIG_PATH = MANIFEST_PATH + '.sig'
 
-SKIP_DIR_NAMES = {
-    '.git',
-    '__pycache__',
-}
-
-SKIP_FILE_SUFFIXES = (
-    '~',
-    '.bak',
-    '.pyc',
-    '.pyo',
-)
-
 def sha256_hex(path):
     h = hashlib.sha256()
     with open(path, 'rb') as f:
@@ -42,20 +30,16 @@ def sha256_hex(path):
 def build_manifest(version=None):
     files = {}
     for root, dirs, filenames in os.walk(MP_DIR):
-        # skip cache/hidden directories so transient host artifacts do not enter OTA manifests
-        dirs[:] = [
-            d for d in dirs
-            if d not in SKIP_DIR_NAMES and not d.startswith('.')
-        ]
+        # skip .git and other hidden directories
+        if '.git' in root.split(os.sep):
+            continue
         for fn in filenames:
             rel = os.path.relpath(os.path.join(root, fn), MP_DIR)
             # skip manifest files (we compute them)
             if rel in ('manifest.json', os.path.basename(SIG_PATH)):
                 continue
-            # Skip hidden/temp/cache/backup files
-            if rel.startswith('.') or fn.startswith('.'):
-                continue
-            if rel.endswith(SKIP_FILE_SUFFIXES):
+            # Skip editor temp/backups
+            if rel.endswith('~') or rel.startswith('.'):
                 continue
             path = os.path.join(root, fn)
             files[rel.replace('\\','/')] = 'sha256:' + sha256_hex(path)
