@@ -205,7 +205,7 @@ LORA_NEXT_SYNC = 100
 LORA_SYNC_RATE = 300
 LORA_SYNC_WINDOW = 2
 LORA_NEXT_SYNC_FILE = LOG_DIR + '/lora_next_sync.txt'
-REMOTE_ACK_WAIT_S = 8
+# Must cover the full chunked send + base-side assembly/ACK window before a remote sleeps.
 REMOTE_DEEPSLEEP_MIN_S = 15
 REMOTE_DEEPSLEEP_MAX_S = 1800
 REMOTE_BATTERY_LOW_V = 3.45

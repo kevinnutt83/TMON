@@ -11,6 +11,7 @@ Goals
 Immediate tasks
 - Add unit/host tests for wprest async_http_request, send_field_data_log JSON shaping, and OTA manifest parsing.
 - Run static checks for Python 3 vs MicroPython compatibility (type hints, imports).
+- Increase remote LoRa ACK wait window so remotes do not deep-sleep before the base confirms the final chunked batch.
 - [x] Add basic CI that runs readiness validation and build packaging (GitHub Actions, `.github/workflows/release-readiness.yml`).
 - [x] Fix OTA task errors: `_get_ota()` now validates module attributes and won't cache a partial/wrong module; wrappers check validity before calling; `ota.py` `maybe_gc` import wrapped in try/except with inline fallback.
 - [x] Suppress expected OTA idle noise: `apply_pending_update` no longer logs WARN when `OTA_PENDING_FILE` is missing (`ENOENT`).
