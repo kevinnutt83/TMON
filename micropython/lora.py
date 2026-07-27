@@ -1060,7 +1060,7 @@ async def base_packet_processor():
             # Cleanup old partial bursts (prevent memory leak) - safe even if keys were popped in process_remote_burst
             chunks_dict = st.get('chunks', {})
             for t in list(chunks_dict):
-                if current_time - st.get('last_rx', 0) > 30:
+                if current_time - st.get('last_rx', 0) > 60:
                     del chunks_dict[t]
                     await debug_print(f"Discarded partial {t} chunks for {uid} (timeout)", "BASE_NODE")
 
@@ -1073,77 +1073,89 @@ async def base_packet_processor():
 
 async def check_incomplete_bursts():
     """
-    If we have received any chunks from a remote but have not completed
-    the set within a short window, send an ACK anyway so the remote
-    is not left hanging.
+    Aggressively force an ACK when a FIELD_DATA burst is incomplete.
+    This prevents the remote from waiting forever for a full assembly that
+    will never happen because some chunks were lost.
     """
-    await debug_print("Incomplete-burst checker started", "BASE_NODE")
+    await debug_print("Incomplete-burst checker started (aggressive)", "BASE_NODE")
 
     while True:
         try:
             now = time.time()
             info = getattr(settings, 'REMOTE_NODE_INFO', {})
+
             for uid, st in list(info.items()):
                 if not isinstance(st, dict):
                     continue
 
                 chunks = st.get('chunks', {})
-                field_chunks = chunks.get('FIELD_DATA')
-                if not field_chunks:
+                field_chunks = chunks.get('FIELD_DATA') if isinstance(chunks, dict) else None
+
+                if not isinstance(field_chunks, dict) or not field_chunks:
                     continue
 
-                first_ts = st.get('chunk_first_ts', 0)
-                last_ts = st.get('last_chunk_ts', first_ts)
-                total = st.get('chunk_total', 0)
+                first_ts = float(st.get('chunk_first_ts', 0) or 0)
+                last_ts = float(st.get('last_chunk_ts', first_ts) or 0)
+                total = int(st.get('chunk_total', 0) or 0)
                 have = len(field_chunks)
 
-                # Trigger conditions (any one is enough):
-                # 1. We have been receiving for > 25 seconds
-                # 2. We have received at least 50% of the chunks and 15 s have passed
-                # 3. No new chunk for > 12 seconds
                 age = now - first_ts if first_ts else 0
                 silent = now - last_ts if last_ts else 0
 
+                # ---------- Trigger conditions (any one is enough) ----------
                 should_ack = False
                 reason = ""
 
-                if age > 25:
+                # 1. Absolute age > 20 seconds
+                if age > 20:
                     should_ack = True
-                    reason = f"age {age:.0f}s"
-                elif have >= max(1, total // 2) and age > 15:
-                    should_ack = True
-                    reason = f"partial {have}/{total} after {age:.0f}s"
-                elif silent > 12 and have > 0:
+                    reason = f"age {age:.0f}s (have {have}/{total})"
+
+                # 2. No new chunk for > 8 seconds and we have at least one
+                elif silent > 8 and have > 0:
                     should_ack = True
                     reason = f"silent {silent:.0f}s (have {have}/{total})"
 
-                if should_ack:
-                    await debug_print(f"Forcing ACK for {uid} ({reason})", "BASE_NODE")
+                # 3. We already have >= 70% of the chunks and 12 s have passed
+                elif total > 0 and have >= max(1, int(total * 0.7)) and age > 12:
+                    should_ack = True
+                    reason = f"partial {have}/{total} after {age:.0f}s"
 
+                if not should_ack:
+                    continue
+
+                # ---------- Send forced ACK ----------
+                await debug_print(f"Forcing ACK for {uid} - {reason}", "BASE_NODE")
+
+                try:
                     next_delay = calculate_next_delay(uid)
+                    ack_msg = f"ACK:{uid}:NEXT:{next_delay}"
+                    ack_msg = await _secure_message(ack_msg, remote_uid=uid)
+                    await _safe_send(ack_msg.encode(), remote_uid=uid)
+                    await debug_print(
+                        f"Sent forced ACK to {uid} (next={next_delay}s)", "BASE_NODE"
+                    )
                     try:
-                        ack_msg = f"ACK:{uid}:NEXT:{next_delay}"
-                        ack_msg = await _secure_message(ack_msg, remote_uid=uid)
-                        await _send_with_retry(ack_msg.encode())
-                        await debug_print(f"Sent forced ACK (next={next_delay}s) to {uid}", "BASE_NODE")
-                        try:
-                            from oled import display_message
-                            await display_message("Force ACK", 0.8)
-                        except Exception:
-                            pass
-                    except Exception as e:
-                        await log_error(f"Forced ACK error for {uid}: {e}")
+                        from oled import display_message
+                        await display_message("Force ACK", 0.7)
+                    except Exception:
+                        pass
+                except Exception as e:
+                    await log_error(f"Forced ACK send error for {uid}: {e}")
 
-                    # Clear the incomplete burst so we don't keep re-ACKing
+                # Clear the incomplete burst so we don't keep re-sending
+                try:
                     st['chunks'].pop('FIELD_DATA', None)
-                    st.pop('chunk_first_ts', None)
-                    st.pop('last_chunk_ts', None)
-                    st.pop('chunk_total', None)
+                except Exception:
+                    pass
+                st.pop('chunk_first_ts', None)
+                st.pop('last_chunk_ts', None)
+                st.pop('chunk_total', None)
 
         except Exception as e:
             await log_error(f"check_incomplete_bursts error: {e}")
 
-        await asyncio.sleep(4)
+        await asyncio.sleep(3)
 
 async def handle_incoming_packet(msg):
     global last_rx_ts, last_lora_activity_ts
