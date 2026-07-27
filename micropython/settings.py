@@ -132,7 +132,7 @@ SOIL_PROBE_PIN = 8
 
 # ===================== Remote Deep Sleep Control =====================
 REMOTE_REQUIRE_SUCCESSFUL_SYNC_BEFORE_SLEEP = True
-REMOTE_ACK_WAIT_S = 90
+REMOTE_ACK_WAIT_S = 70
 REMOTE_FAILED_SYNC_RETRY_S = 45
 
 # ===================== SD Card Support =====================
