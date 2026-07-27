@@ -132,8 +132,8 @@ SOIL_PROBE_PIN = 8
 
 # ===================== Remote Deep Sleep Control =====================
 REMOTE_REQUIRE_SUCCESSFUL_SYNC_BEFORE_SLEEP = True
-REMOTE_ACK_WAIT_S = 70
-REMOTE_FAILED_SYNC_RETRY_S = 45
+REMOTE_ACK_WAIT_S = 45
+REMOTE_FAILED_SYNC_RETRY_S = 60
 
 # ===================== SD Card Support =====================
 ENABLE_SDCARD = False
@@ -466,5 +466,5 @@ REST_HEADER_CONFIRM = 'X-TMON-CONFIRM'
 
 # Additions for LoRa OTA
 LORA_MAX_PACKET_SIZE = 240
-LORA_CHUNK_SIZE = 160
+LORA_CHUNK_SIZE = 120
 OTA_TEMP_FILE = '/ota_temp.py'

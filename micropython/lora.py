@@ -1009,7 +1009,18 @@ async def base_packet_processor():
                     st['chunks'][orig_type] = {}
                 try:
                     cn, total = map(int, packet.get('chunk_info', '0/0').split('/'))
-                    if orig_type not in st['chunks'] or not st['chunks'][orig_type]:
+
+                    # New burst detection: remote restarted chunking from 0, clear stale partials.
+                    if cn == 0 and st.get('chunks', {}).get(orig_type):
+                        st['chunks'][orig_type] = {}
+                        st['chunk_first_ts'] = time.time()
+                        await debug_print(f"New burst detected for {uid} - cleared old chunks", "BASE_NODE")
+
+                    if orig_type not in st.get('chunks', {}):
+                        st.setdefault('chunks', {})[orig_type] = {}
+                        st['chunk_first_ts'] = time.time()
+
+                    if not st['chunks'][orig_type]:
                         st['chunk_first_ts'] = time.time()
                     st['last_chunk_ts'] = time.time()
                     st['chunk_total'] = total
@@ -1072,90 +1083,49 @@ async def base_packet_processor():
 
 
 async def check_incomplete_bursts():
-    """
-    Aggressively force an ACK when a FIELD_DATA burst is incomplete.
-    This prevents the remote from waiting forever for a full assembly that
-    will never happen because some chunks were lost.
-    """
-    await debug_print("Incomplete-burst checker started (aggressive)", "BASE_NODE")
-
+    await debug_print("Incomplete-burst checker started (FORCE v3)", "BASE_NODE")
     while True:
         try:
             now = time.time()
             info = getattr(settings, 'REMOTE_NODE_INFO', {})
-
             for uid, st in list(info.items()):
                 if not isinstance(st, dict):
                     continue
-
-                chunks = st.get('chunks', {})
-                field_chunks = chunks.get('FIELD_DATA') if isinstance(chunks, dict) else None
-
+                field_chunks = (st.get('chunks') or {}).get('FIELD_DATA')
                 if not isinstance(field_chunks, dict) or not field_chunks:
                     continue
 
-                first_ts = float(st.get('chunk_first_ts', 0) or 0)
-                last_ts = float(st.get('last_chunk_ts', first_ts) or 0)
-                total = int(st.get('chunk_total', 0) or 0)
-                have = len(field_chunks)
-
-                age = now - first_ts if first_ts else 0
-                silent = now - last_ts if last_ts else 0
-
-                # ---------- Trigger conditions (any one is enough) ----------
-                should_ack = False
-                reason = ""
-
-                # 1. Absolute age > 20 seconds
-                if age > 20:
-                    should_ack = True
-                    reason = f"age {age:.0f}s (have {have}/{total})"
-
-                # 2. No new chunk for > 8 seconds and we have at least one
-                elif silent > 8 and have > 0:
-                    should_ack = True
-                    reason = f"silent {silent:.0f}s (have {have}/{total})"
-
-                # 3. We already have >= 70% of the chunks and 12 s have passed
-                elif total > 0 and have >= max(1, int(total * 0.7)) and age > 12:
-                    should_ack = True
-                    reason = f"partial {have}/{total} after {age:.0f}s"
-
-                if not should_ack:
+                last_ts = float(st.get('last_chunk_ts') or 0)
+                if last_ts == 0:
                     continue
 
-                # ---------- Send forced ACK ----------
-                await debug_print(f"Forcing ACK for {uid} - {reason}", "BASE_NODE")
+                silent = now - last_ts
 
-                try:
-                    next_delay = calculate_next_delay(uid)
-                    ack_msg = f"ACK:{uid}:NEXT:{next_delay}"
-                    ack_msg = await _secure_message(ack_msg, remote_uid=uid)
-                    await _safe_send(ack_msg.encode(), remote_uid=uid)
+                # Force ACK after only 5 seconds of silence.
+                if silent >= 5:
+                    have = len(field_chunks)
+                    total = int(st.get('chunk_total') or 0)
                     await debug_print(
-                        f"Sent forced ACK to {uid} (next={next_delay}s)", "BASE_NODE"
+                        f"FORCING ACK {uid} after {silent:.0f}s silence "
+                        f"(have {have}/{total})", "BASE_NODE"
                     )
                     try:
-                        from oled import display_message
-                        await display_message("Force ACK", 0.7)
-                    except Exception:
-                        pass
-                except Exception as e:
-                    await log_error(f"Forced ACK send error for {uid}: {e}")
+                        next_delay = calculate_next_delay(uid)
+                        ack_msg = f"ACK:{uid}:NEXT:{next_delay}"
+                        ack_msg = await _secure_message(ack_msg, remote_uid=uid)
+                        await _safe_send(ack_msg.encode(), remote_uid=uid)
+                        await debug_print(f"Sent FORCED ACK to {uid}", "BASE_NODE")
+                    except Exception as e:
+                        await log_error(f"Forced ACK error: {e}")
 
-                # Clear the incomplete burst so we don't keep re-sending
-                try:
-                    st['chunks'].pop('FIELD_DATA', None)
-                except Exception:
-                    pass
-                st.pop('chunk_first_ts', None)
-                st.pop('last_chunk_ts', None)
-                st.pop('chunk_total', None)
-
+                    # Clear so we don't keep firing
+                    st.get('chunks', {}).pop('FIELD_DATA', None)
+                    st.pop('chunk_first_ts', None)
+                    st.pop('last_chunk_ts', None)
+                    st.pop('chunk_total', None)
         except Exception as e:
-            await log_error(f"check_incomplete_bursts error: {e}")
-
-        await asyncio.sleep(3)
+            await log_error(f"check_incomplete_bursts: {e}")
+        await asyncio.sleep(2)
 
 async def handle_incoming_packet(msg):
     global last_rx_ts, last_lora_activity_ts
@@ -2540,10 +2510,14 @@ async def connectLora():
                             continue
                         else:
                             failure_count += 1
-                            backoff_base = getattr(settings, 'LORA_RETRY_BASE_DELAY_S', 2)
-                            max_backoff = getattr(settings, 'LORA_MAX_BACKOFF_S', 90)
-                            sleep_time = min(max_backoff, backoff_base * (2 ** failure_count))
-                            sleep_time += random.uniform(0, backoff_base)
+                            configured_retry = _safe_int(getattr(settings, 'REMOTE_FAILED_SYNC_RETRY_S', 0), 0)
+                            if configured_retry > 0:
+                                sleep_time = configured_retry + random.uniform(0, max(2, configured_retry * 0.1))
+                            else:
+                                backoff_base = getattr(settings, 'LORA_RETRY_BASE_DELAY_S', 2)
+                                max_backoff = getattr(settings, 'LORA_MAX_BACKOFF_S', 90)
+                                sleep_time = min(max_backoff, backoff_base * (2 ** failure_count))
+                                sleep_time += random.uniform(0, backoff_base)
                             state = STATE_IDLE
                             await asyncio.sleep(max(10, sleep_time))
                             retry_count = 0
