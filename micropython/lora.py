@@ -1266,10 +1266,7 @@ def _format_crc(crc_val):
 
 
 async def _secure_message(msg_str, remote_uid=None):
-    """
-    Add CNT + HMAC (and optional encryption) to a message.
-    remote_uid is required when the base is sending to a specific remote.
-    """
+    """Add CNT/HMAC metadata using a pipe-separated envelope."""
     global tx_counter
 
     if not getattr(settings, 'LORA_HMAC_ENABLED', False):
@@ -1311,15 +1308,15 @@ async def _secure_message(msg_str, remote_uid=None):
         to_hmac = encrypted + counter_bytes
         hmac_val = hmac_sha256(secret, to_hmac)
         hmac_hex = _ub.hexlify(hmac_val).decode()[:getattr(settings, 'LORA_HMAC_TRUNCATE', 16)]
-        secure_msg = f"ENC:{enc_b64},CNT:{counter},HMAC:{hmac_hex}"
+        secure_msg = f"ENC:{enc_b64}|CNT:{counter}|HMAC:{hmac_hex}"
     else:
         to_hmac = msg_str.encode() + counter_str.encode()
         hmac_val = hmac_sha256(secret, to_hmac)
         hmac_hex = _ub.hexlify(hmac_val).decode()[:getattr(settings, 'LORA_HMAC_TRUNCATE', 16)]
-        secure_msg = msg_str + f",CNT:{counter},HMAC:{hmac_hex}"
+        secure_msg = msg_str + f"|CNT:{counter}|HMAC:{hmac_hex}"
 
     if crc_hex is not None:
-        secure_msg += f",CRC:{crc_hex}"
+        secure_msg += f"|CRC:{crc_hex}"
 
     if counter % 5 == 0:
         _save_counters()
@@ -1328,10 +1325,7 @@ async def _secure_message(msg_str, remote_uid=None):
 
 
 async def _unsecure_message(msg_str, remote_uid=None):
-    """
-    Verify HMAC and anti-replay counter.
-    Returns the original message string or None if verification fails.
-    """
+    """Verify HMAC/CRC and replay window for pipe-separated secure envelopes."""
     if not getattr(settings, 'LORA_HMAC_ENABLED', False):
         return msg_str
 
@@ -1345,9 +1339,17 @@ async def _unsecure_message(msg_str, remote_uid=None):
     enc_b64 = None
     original_msg = msg_str
 
+    if '|CNT:' in msg_str or '|HMAC:' in msg_str:
+        meta_sep = '|'
+    elif ',CNT:' in msg_str or ',HMAC:' in msg_str:
+        meta_sep = ','
+    else:
+        # Default for new format when metadata is incomplete/corrupt.
+        meta_sep = '|'
+
     if msg_str.startswith('ENC:'):
         is_enc = True
-        parts = msg_str.split(',')
+        parts = msg_str.split(meta_sep)
         for p in parts:
             if p.startswith('ENC:'):
                 enc_b64 = p[4:]
@@ -1361,14 +1363,16 @@ async def _unsecure_message(msg_str, remote_uid=None):
             elif p.startswith('CRC:'):
                 crc_hex = p[4:]
     else:
-        if ',CNT:' not in msg_str or ',HMAC:' not in msg_str:
+        cnt_marker = f'{meta_sep}CNT:'
+        hmac_marker = f'{meta_sep}HMAC:'
+        if cnt_marker not in msg_str or hmac_marker not in msg_str:
             if getattr(settings, 'LORA_HMAC_REJECT_UNSIGNED', True):
                 await log_error('Invalid secure format (no CNT/HMAC)')
                 return None
             return msg_str
 
         try:
-            parts = msg_str.split(',')
+            parts = msg_str.split(meta_sep)
             message_parts = []
             for p in parts:
                 if p.startswith('CNT:'):
@@ -1382,7 +1386,7 @@ async def _unsecure_message(msg_str, remote_uid=None):
                     crc_hex = p[4:]
                 else:
                     message_parts.append(p)
-            original_msg = ','.join(message_parts)
+            original_msg = meta_sep.join(message_parts)
         except Exception:
             return None
 

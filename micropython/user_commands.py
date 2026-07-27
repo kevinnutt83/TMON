@@ -13,6 +13,7 @@ import sdata
 import machine
 import uos as os
 import sys
+import ubinascii as _ub
 
 try:
     import uselect
@@ -115,6 +116,7 @@ async def process_command(command):
         'info': handle_info_command,
         'pins': handle_pins_command,        # NEW
         'config': handle_config_command,    # NEW
+        'hmactest': handle_hmactest_command,
     }
 
     handler = handlers.get(action)
@@ -411,6 +413,37 @@ async def handle_config_command(parts):
     print("-------------------------")
 
 
+async def handle_hmactest_command(parts):
+    """hmactest [message] - Print deterministic HMAC digest for cross-device verification."""
+    if len(parts) > 1:
+        message = ' '.join(parts[1:])
+    else:
+        message = 'TMON_HMAC_TEST'
+
+    secret = getattr(settings, 'LORA_HMAC_SECRET', '') or ''
+    if not secret:
+        print('LORA_HMAC_SECRET is empty')
+        return
+
+    try:
+        from lora import hmac_sha256
+        digest = hmac_sha256(secret, message)
+        full_hex = _ub.hexlify(digest).decode()
+        trunc = int(getattr(settings, 'LORA_HMAC_TRUNCATE', 16))
+        trunc_hex = full_hex[:max(1, trunc)]
+
+        print('--- HMAC Test ---')
+        print(f'Message     : {message}')
+        print(f'Secret len  : {len(secret)}')
+        print(f'Truncate    : {trunc}')
+        print(f'HMAC full   : {full_hex}')
+        print(f'HMAC trunc  : {trunc_hex}')
+        print('Use same message on base and remote; HMAC values must match exactly.')
+        print('-----------------')
+    except Exception as e:
+        print(f'hmactest failed: {e}')
+
+
 async def handle_help_command(parts):
     """Expanded contextual help."""
     if len(parts) <= 1:
@@ -421,6 +454,7 @@ Available commands:
   info                           - Feature overview (enabled modules)
   config                         - Key configuration summary
   pins                           - Show all important pin assignments
+    hmactest [message]             - Show deterministic LoRa HMAC digest
   set var <name> <value>         - Set a settings variable
   see var <name>                 - View a settings or sdata variable
   sdata [var]                    - Show all or one sdata variable
@@ -440,6 +474,7 @@ Type 'help <command>' for detailed usage and examples.
         "info": "info\n  Shows which major features are currently enabled or disabled.",
         "config": "config\n  Shows the most important configuration values currently in effect\n  (node type, sensors, sleep behaviour, etc.).",
         "pins": "pins\n  Lists all important GPIO pin assignments used by the firmware.\n  You can change most of them with:\n    set var RELAY_PIN3 19",
+        "hmactest": "hmactest [message]\n  Computes LoRa HMAC for a fixed message using current LORA_HMAC_SECRET.\n  Run on both base and remote; both outputs must match.\n  Default message: TMON_HMAC_TEST",
         "set": "set var <name> <value>\n  Changes a settings variable.\n  Restricted variables (MACHINE_ID, UNIT_PROVISIONED, etc.) cannot be changed.\n  Example: set var ENABLE_OLED true",
         "see": "see var <name>\n  Displays the current value of a settings or sdata variable.\n  Example: see var UNIT_Name",
         "sdata": "sdata [var_name]\n  With no argument shows all sdata variables.\n  With a name shows only that variable.",

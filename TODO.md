@@ -16,6 +16,7 @@ Immediate tasks
 - Require base ACK before trimming remote `field_data.log`, and append delivered remote records to local `data_history.log`.
 - Add fast retry when persisted remote next-sync is already overdue.
 - Stop aggressive LoRa watchdog resets from interrupting in-flight chunk reception; refresh activity timestamp on every RX path.
+- Switch LoRa secure metadata envelope to pipe-separated fields and add CLI `hmactest` parity check.
 - [x] Add basic CI that runs readiness validation and build packaging (GitHub Actions, `.github/workflows/release-readiness.yml`).
 - [x] Fix OTA task errors: `_get_ota()` now validates module attributes and won't cache a partial/wrong module; wrappers check validity before calling; `ota.py` `maybe_gc` import wrapped in try/except with inline fallback.
 - [x] Suppress expected OTA idle noise: `apply_pending_update` no longer logs WARN when `OTA_PENDING_FILE` is missing (`ENOENT`).
