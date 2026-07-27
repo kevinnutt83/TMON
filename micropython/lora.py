@@ -985,6 +985,56 @@ async def process_remote_state_files(uid, st):
         if isinstance(st.get('chunks'), dict):
             st['chunks'].pop('STATE_FILES', None)
 
+
+async def _maybe_force_ack_on_silence():
+    """Force ACK inline from the packet processor when FIELD_DATA chunk flow goes silent."""
+    now = time.time()
+    silence_limit = float(getattr(settings, 'LORA_SESSION_SILENCE_ACK_S', 5) or 5)
+    info = getattr(settings, 'REMOTE_NODE_INFO', {})
+
+    for uid, st in list(info.items()):
+        if not isinstance(st, dict):
+            continue
+        field_chunks = (st.get('chunks') or {}).get('FIELD_DATA')
+        if not isinstance(field_chunks, dict) or not field_chunks:
+            continue
+
+        last_ts = float(st.get('last_chunk_ts') or 0)
+        if last_ts == 0:
+            continue
+
+        silent = now - last_ts
+        if silent < silence_limit:
+            continue
+
+        have = len(field_chunks)
+        total = int(st.get('chunk_total') or 0)
+        await debug_print(
+            f"Silence ACK {uid} after {silent:.0f}s (have {have}/{total})", "BASE_NODE"
+        )
+        try:
+            next_delay = calculate_next_delay(uid)
+            ack_msg = f"ACK:{uid}:NEXT:{next_delay}"
+            ack_msg = await _secure_message(ack_msg, remote_uid=uid)
+            await _safe_send(ack_msg.encode(), remote_uid=uid)
+            await debug_print(f"Sent silence ACK to {uid}", "BASE_NODE")
+            try:
+                from oled import display_message
+                await display_message("ACK", 0.6)
+            except Exception:
+                pass
+        except Exception as e:
+            await log_error(f"Silence ACK error {uid}: {e}")
+
+        try:
+            st['chunks'].pop('FIELD_DATA', None)
+        except Exception:
+            pass
+        st.pop('chunk_first_ts', None)
+        st.pop('last_chunk_ts', None)
+        st.pop('chunk_total', None)
+        st.pop('session_active', None)
+
 async def base_packet_processor():
     global last_lora_activity_ts
     while True:
@@ -1002,6 +1052,26 @@ async def base_packet_processor():
             st = settings.REMOTE_NODE_INFO[uid]
 
             orig_type = packet_type[:-6] if packet_type.endswith('_CHUNK') else packet_type
+            if packet_type == 'HELLO':
+                remote_uid = str(parsed_data or uid or '').strip()
+                await debug_print(f"HELLO from {remote_uid}", "BASE_NODE")
+                try:
+                    ready = f"READY:{remote_uid}"
+                    ready = await _secure_message(ready, remote_uid=remote_uid)
+                    await _safe_send(ready.encode(), remote_uid=remote_uid)
+                    await debug_print(f"Sent READY to {remote_uid}", "BASE_NODE")
+                except Exception as e:
+                    await log_error(f"READY send error: {e}")
+
+                st['session_active'] = True
+                st['chunk_first_ts'] = time.time()
+                st['last_chunk_ts'] = time.time()
+                st['last_rx'] = current_time
+                lora_rx_queue.task_done()
+                await _maybe_force_ack_on_silence()
+                gc.collect()
+                continue
+
             if packet_type.endswith('_CHUNK'):
                 if 'chunks' not in st:
                     st['chunks'] = {}
@@ -1075,6 +1145,7 @@ async def base_packet_processor():
                     del chunks_dict[t]
                     await debug_print(f"Discarded partial {t} chunks for {uid} (timeout)", "BASE_NODE")
 
+            await _maybe_force_ack_on_silence()
             lora_rx_queue.task_done()
             gc.collect()
         except Exception as e:
@@ -1142,6 +1213,8 @@ async def handle_incoming_packet(msg):
                 if p.startswith('U:'):
                     uid_hint = p[2:].strip()
                     break
+            if uid_hint is None and msg_str.startswith('HELLO:'):
+                uid_hint = msg_str.split('|', 1)[0].split(':', 1)[1].strip()
         except Exception:
             uid_hint = None
 
@@ -1212,6 +1285,14 @@ async def handle_incoming_packet(msg):
                 parsed_data['device_bar'] = value
             elif key == 'DH':
                 parsed_data['device_humid'] = value
+
+    elif msg_str.startswith('HELLO:'):
+        packet_type = 'HELLO'
+        try:
+            remote_uid = msg_str.split(':', 1)[1].strip()
+        except Exception:
+            remote_uid = None
+        parsed_data = remote_uid
 
     elif msg_str.startswith('TYPE:'):
         parts = msg_str.split(',')
@@ -1812,6 +1893,46 @@ async def wait_for_next_sync_ack(timeout_s=None, expected_batch_id=None):
     await debug_print("ACK wait timed out", "REMOTE_NODE")
     return None
 
+
+async def send_hello_and_wait_ready():
+    """Remote greeting: announce a transfer session and wait briefly for READY."""
+    if str(getattr(settings, 'NODE_TYPE', 'base')).lower() != 'remote':
+        return False
+
+    uid = str(getattr(settings, 'UNIT_ID', '') or '')
+    hello = f"HELLO:{uid}"
+    try:
+        secured = await _secure_message(hello)
+        await _safe_send(secured.encode())
+        await ensure_lora_listening()
+        await debug_print("Sent HELLO", "REMOTE_NODE")
+    except Exception as e:
+        await debug_print(f"HELLO send failed: {e}", "WARN")
+        return False
+
+    timeout = _safe_int(getattr(settings, 'LORA_HELLO_TIMEOUT_S', 8), 8)
+    timeout = max(2, timeout)
+    end_ts = time.time() + timeout
+    while time.time() < end_ts:
+        try:
+            if lora is None:
+                await asyncio.sleep_ms(100)
+                continue
+
+            msg, err = lora.recv(0) if hasattr(lora, 'recv') else (None, -1)
+            if err == 0 and msg:
+                raw = msg.rstrip(b'\x00').decode()
+                clear = await _unsecure_message(raw)
+                if clear and clear.startswith("READY:") and uid in clear:
+                    await debug_print("Received READY from base", "REMOTE_NODE")
+                    return True
+        except Exception:
+            pass
+        await asyncio.sleep_ms(100)
+
+    await debug_print("No READY received - continuing anyway", "WARN")
+    return False
+
 async def _fetch_remote_pending_command(remote_unit_id, remote_machine_id=None):
     """Base helper: fetch one queued command for a remote unit from UC/WP."""
     try:
@@ -2392,6 +2513,7 @@ async def connectLora():
                     awaiting_ota_session = None
                     ota_wait_deadline = 0
                     await debug_print("Remote: starting full check-in (periodic)", "REMOTE_NODE")
+                    await send_hello_and_wait_ready()
                     await display_message("TX Data...", 0.8)
                     ts = time.time()
                     data_str = (

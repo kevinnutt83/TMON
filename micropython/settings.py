@@ -132,8 +132,10 @@ SOIL_PROBE_PIN = 8
 
 # ===================== Remote Deep Sleep Control =====================
 REMOTE_REQUIRE_SUCCESSFUL_SYNC_BEFORE_SLEEP = True
-REMOTE_ACK_WAIT_S = 45
+REMOTE_ACK_WAIT_S = 50
 REMOTE_FAILED_SYNC_RETRY_S = 60
+LORA_HELLO_TIMEOUT_S = 8
+LORA_SESSION_SILENCE_ACK_S = 5
 
 # ===================== SD Card Support =====================
 ENABLE_SDCARD = False
