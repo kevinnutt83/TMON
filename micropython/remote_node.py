@@ -150,11 +150,18 @@ async def _run_remote_cycle_once():
             raise RuntimeError('remote_sleep: LoRa init failed')
 
         await ensure_lora_listening()
-        await send_field_data_via_lora()
+        ack_delay_hint = await send_field_data_via_lora()
 
         now_epoch = _now_epoch()
         ack_wait_s = max(2, _safe_int(getattr(settings, 'REMOTE_ACK_WAIT_S', 8), 8))
-        next_delay = await wait_for_next_sync_ack(timeout_s=ack_wait_s)
+        if isinstance(ack_delay_hint, int) and ack_delay_hint > 0:
+            next_delay = ack_delay_hint
+            await debug_print(
+                f"remote_sleep: using ACK hint from field-data send ({next_delay}s)",
+                "REMOTE_NODE"
+            )
+        else:
+            next_delay = await wait_for_next_sync_ack(timeout_s=ack_wait_s)
 
         if isinstance(next_delay, int) and next_delay > 0:
             next_epoch = now_epoch + next_delay
@@ -231,6 +238,14 @@ def run_remote_deep_sleep():
     if require_success and not sync_success:
         # Failed sync → short retry sleep only
         retry_s = max(15, _safe_int(getattr(settings, 'REMOTE_FAILED_SYNC_RETRY_S', 45), 45))
+        try:
+            due_epoch = load_next_lora_sync(default=None)
+            now_epoch = _now_epoch()
+            if isinstance(due_epoch, int) and due_epoch <= now_epoch:
+                retry_s = min(retry_s, 5)
+                asyncio.run(debug_print("remote_sleep: next sync overdue - fast retry", "WARN"))
+        except Exception:
+            pass
         try:
             asyncio.run(debug_print(f"remote_sleep: Sync FAILED – short retry sleep {retry_s}s", "WARN"))
         except Exception:

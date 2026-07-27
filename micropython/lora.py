@@ -873,8 +873,10 @@ async def process_remote_field_data(uid, st):
         payload = st.get('data', {}).get('FIELD_DATA')
 
         defaults = {}
+        batch_id = None
         if isinstance(payload, dict) and 'data' in payload:
             records = payload.get('data')
+            batch_id = payload.get('batch_id')
             defaults = {
                 'unit_id': payload.get('unit_id') or uid,
                 'machine_id': payload.get('machine_id'),
@@ -917,9 +919,20 @@ async def process_remote_field_data(uid, st):
                 # Send ACK immediately so the remote can decide whether to sleep.
                 try:
                     ack_msg = f"ACK:{uid}:NEXT:{next_delay}"
+                    if batch_id:
+                        ack_msg += f":BID:{batch_id}"
                     ack_msg = await _secure_message(ack_msg, remote_uid=uid)
                     await _send_with_retry(ack_msg.encode())
-                    await debug_print(f"Sent FIELD_DATA ACK with next delay {next_delay}s to {uid}", "BASE_NODE")
+                    if batch_id:
+                        await debug_print(
+                            f"Sent FIELD_DATA ACK to {uid} next={next_delay}s bid={batch_id}",
+                            "BASE_NODE"
+                        )
+                    else:
+                        await debug_print(
+                            f"Sent FIELD_DATA ACK with next delay {next_delay}s to {uid}",
+                            "BASE_NODE"
+                        )
                     try:
                         from oled import display_message
                         await display_message("ACK Sent", 0.8)
@@ -1594,9 +1607,10 @@ async def send_remote_state_files(files):
         return False
 
 
-async def wait_for_next_sync_ack(timeout_s=None):
+async def wait_for_next_sync_ack(timeout_s=None, expected_batch_id=None):
     """
     Remote helper: wait for ACK:<uid>:NEXT:<seconds> from base.
+    When expected_batch_id is provided, only ACKs with matching BID are accepted.
     Returns the next delay in seconds, or None on timeout / failure.
     """
     if str(getattr(settings, 'NODE_TYPE', 'base')).lower() != 'remote':
@@ -1647,6 +1661,23 @@ async def wait_for_next_sync_ack(timeout_s=None):
                     parts = msg_str.split(':')
                     # Expected format: ACK:<uid>:NEXT:<seconds>
                     if len(parts) >= 4 and parts[1] == my_uid and parts[2] == 'NEXT':
+                        ack_bid = None
+                        if len(parts) >= 6:
+                            i = 4
+                            while i + 1 < len(parts):
+                                if parts[i] == 'BID':
+                                    ack_bid = parts[i + 1]
+                                    break
+                                i += 2
+
+                        if expected_batch_id is not None and str(ack_bid or '') != str(expected_batch_id):
+                            await debug_print(
+                                f"ACK BID mismatch; expected {expected_batch_id}, got {ack_bid}",
+                                "WARN"
+                            )
+                            await asyncio.sleep_ms(20)
+                            continue
+
                         try:
                             delay = max(10, int(parts[3]))
                             await debug_print(f"ACK received – next sync in {delay}s", "REMOTE_NODE")

@@ -1554,9 +1554,13 @@ async def send_field_data_via_lora():
     """Send field_data.log to base node over LoRa from a remote node.
 
     Uses a similar batching/retry strategy as send_field_data_log, but sends
-    via LoRa instead of HTTP. As each batch is confirmed by the base, the
-    corresponding lines are removed from FIELD_DATA_LOG to avoid duplicates.
+    via LoRa instead of HTTP. A batch is only treated as delivered after an
+    explicit base ACK is observed, then corresponding lines are removed from
+    FIELD_DATA_LOG to avoid duplicates.
     After field data, best-effort send settings.py and sdata.py snapshots.
+
+    Returns:
+        int|None: next-sync delay (seconds) extracted from base ACK, if seen.
     """
     # Only remotes participate in LoRa forwarding
     try:
@@ -1589,10 +1593,12 @@ async def send_field_data_via_lora():
 
     # LoRa helpers must be implemented in lora.py (remote ↔ base transport)
     try:
-        from lora import send_remote_field_data_batch, send_remote_state_files
+        from lora import send_remote_field_data_batch, send_remote_state_files, wait_for_next_sync_ack
     except Exception as e:
         await debug_print(f'sfd_lora: lora helpers missing: {e}', 'ERROR')
-        return
+        return None
+
+    ack_next_delay_hint = None
 
     async with _send_field_data_lock:
         try:
@@ -1663,8 +1669,15 @@ async def send_field_data_via_lora():
                 field_data_max_backoff = 60
 
             for bi, (data_batch, idx_list) in enumerate(batches):
+                try:
+                    batch_epoch = int(time.time())
+                except Exception:
+                    batch_epoch = 0
+                batch_id = f"{getattr(settings, 'UNIT_ID', '')}-{batch_epoch}-{bi}"
+
                 payload = {
                     'unit_id': getattr(settings, 'UNIT_ID', ''),
+                    'batch_id': batch_id,
                     'data': data_batch,
                 }
                 try:
@@ -1689,20 +1702,58 @@ async def send_field_data_via_lora():
                         gc.collect()
                     except Exception:
                         pass
+                    sent_ok = False
                     try:
                         # Support both async and sync implementations of the helper
                         try:
-                            delivered = await send_remote_field_data_batch(payload)
+                            sent_ok = await send_remote_field_data_batch(payload)
                         except TypeError:
-                            delivered = bool(send_remote_field_data_batch(payload))
+                            sent_ok = bool(send_remote_field_data_batch(payload))
                     except Exception as e:
-                        delivered = False
+                        sent_ok = False
                         await debug_print(f'sfd_lora: send err att{attempt}: {e}', 'ERROR')
+
+                    if sent_ok:
+                        try:
+                            ack_timeout = max(10, int(getattr(settings, 'REMOTE_ACK_WAIT_S', 90)))
+                        except Exception:
+                            ack_timeout = 90
+                        try:
+                            ack_delay = await wait_for_next_sync_ack(
+                                timeout_s=ack_timeout,
+                                expected_batch_id=batch_id
+                            )
+                        except Exception:
+                            ack_delay = None
+                        if isinstance(ack_delay, int) and ack_delay > 0:
+                            delivered = True
+                            ack_next_delay_hint = ack_delay
+                            await debug_print(
+                                f'sfd_lora: base ACK confirmed batch {bi+1}, next={ack_delay}s',
+                                'DEBUG'
+                            )
+                        else:
+                            delivered = False
+                            await debug_print(
+                                f'sfd_lora: no ACK confirmation for batch {bi+1} attempt {attempt}',
+                                'WARN'
+                            )
 
                     if delivered:
                         acked_indices.update(idx_list)
                         await debug_print(f'sfd_lora: batch {bi+1} delivered', 'DEBUG')
                         _update_adaptive_batch_size(batch_default, True)
+                        # Preserve delivered records in history before trimming current log.
+                        try:
+                            with open(settings.DATA_HISTORY_LOG, 'ab') as hist:
+                                for line_idx in idx_list:
+                                    if 0 <= line_idx < len(raw_lines):
+                                        try:
+                                            hist.write(raw_lines[line_idx])
+                                        except Exception:
+                                            pass
+                        except Exception as e:
+                            await debug_print(f'sfd_lora: history append err: {e}', 'ERROR')
                         # Immediately rewrite field_data.log so delivered records are removed even if subsequent batches fail
                         try:
                             with open(settings.FIELD_DATA_LOG, 'wb') as f:
@@ -1740,6 +1791,8 @@ async def send_field_data_via_lora():
                         pass
         except Exception as e:
             await debug_print(f'sfd_lora: outer exc {e}', 'ERROR')
+
+    return ack_next_delay_hint
 
 async def periodic_field_data_send():
     while True:
