@@ -1126,7 +1126,8 @@ async def base_packet_processor():
                 st['data'][packet_type] = parsed_data
                 st['last_rx'] = current_time
 
-            if orig_type == 'FIELD_DATA' and not handled_field_data:
+            # Only process FIELD_DATA after it is fully assembled (or non-chunk payload).
+            if orig_type == 'FIELD_DATA' and ('FIELD_DATA' in st.get('types', set())) and not handled_field_data:
                 await process_remote_field_data(uid, st)
             elif orig_type == 'CMD_RESULT':
                 await process_remote_command_result(uid, st)
@@ -1644,7 +1645,7 @@ async def _send_with_retry(data, retries=6):
     for att in range(retries):
         try:
             await ensure_lora_listening()
-            if hasattr(lora, 'cad'):
+            if bool(getattr(settings, 'LORA_ENABLE_CAD', False)) and hasattr(lora, 'cad'):
                 for cad_try in range(3):
                     if not lora.cad(getattr(settings, 'CAD_SYMBOLS', 3)):
                         break
@@ -1692,7 +1693,7 @@ async def _safe_send(data: bytes, remote_uid=None):
         await log_error(f"_safe_send error: {e}")
         return False
 
-async def _wait_tx_done(timeout=30):
+async def _wait_tx_done(timeout=5):
     global lora
     if lora is None:
         return False
@@ -1704,9 +1705,14 @@ async def _wait_tx_done(timeout=30):
         except Exception:
             pass
         await asyncio.sleep(0.01)
+    await debug_print("TX timeout - forcing radio recovery", "WARN")
     await log_error("TX timeout")
     lora = None
     await hard_reset_lora()
+    try:
+        await init_lora()
+    except Exception as e:
+        await log_error(f"TX timeout recovery init failed: {e}")
     return False
 
 def calculate_next_delay(node_id):

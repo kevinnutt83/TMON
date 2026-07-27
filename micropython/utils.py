@@ -1675,57 +1675,34 @@ async def send_field_data_via_lora():
                     batch_epoch = 0
                 batch_id = f"{getattr(settings, 'UNIT_ID', '')}-{batch_epoch}-{bi}"
 
-                # Keep LoRa burst payload minimal to reduce chunk count and improve delivery reliability.
+                # Keep LoRa burst payload very small to reduce chunk count and improve delivery reliability.
                 minimal_records = []
                 for row in data_batch:
                     if not isinstance(row, dict):
                         continue
                     minimal_records.append({
-                        'unit_id': getattr(settings, 'UNIT_ID', ''),
-                        'node_type': 'remote',
                         'ts': row.get('timestamp') or row.get('ts') or batch_epoch,
-                        'firmware_version': getattr(settings, 'FIRMWARE_VERSION', ''),
-                        'sys_voltage': row.get('sys_voltage'),
-                        'cur_temp_f': row.get('cur_temp_f'),
-                        'cur_device_temp_f': row.get('cur_device_temp_f'),
-                        'cur_humid': row.get('cur_humid'),
-                        'cur_bar_pres': row.get('cur_bar_pres'),
-                        'lora_SigStr': row.get('lora_SigStr'),
-                        'free_mem': row.get('free_mem'),
+                        'v': row.get('sys_voltage'),
+                        't': row.get('cur_temp_f') if row.get('cur_temp_f') is not None else row.get('cur_device_temp_f'),
+                        'h': row.get('cur_humid'),
+                        'rssi': row.get('lora_SigStr'),
                     })
                 if not minimal_records:
                     minimal_records = [{
-                        'unit_id': getattr(settings, 'UNIT_ID', ''),
-                        'node_type': 'remote',
                         'ts': batch_epoch,
-                        'firmware_version': getattr(settings, 'FIRMWARE_VERSION', ''),
-                        'sys_voltage': getattr(sdata, 'sys_voltage', None),
-                        'cur_temp_f': getattr(sdata, 'cur_temp_f', None),
-                        'cur_device_temp_f': getattr(sdata, 'cur_device_temp_f', None),
-                        'cur_humid': getattr(sdata, 'cur_humid', None),
-                        'cur_bar_pres': getattr(sdata, 'cur_bar_pres', None),
-                        'lora_SigStr': getattr(sdata, 'lora_SigStr', None),
-                        'free_mem': getattr(sdata, 'free_mem', None),
+                        'v': getattr(sdata, 'sys_voltage', None),
+                        't': getattr(sdata, 'cur_temp_f', None) if getattr(sdata, 'cur_temp_f', None) is not None else getattr(sdata, 'cur_device_temp_f', None),
+                        'h': getattr(sdata, 'cur_humid', None),
+                        'rssi': getattr(sdata, 'lora_SigStr', None),
                     }]
 
                 payload = {
                     'unit_id': getattr(settings, 'UNIT_ID', ''),
                     'batch_id': batch_id,
                     'node_type': 'remote',
+                    'fw': getattr(settings, 'FIRMWARE_VERSION', ''),
                     'data': minimal_records,
                 }
-                try:
-                    payload['machine_id'] = get_machine_id()
-                except Exception:
-                    pass
-                try:
-                    payload['firmware_version'] = getattr(settings, 'FIRMWARE_VERSION', '')
-                except Exception:
-                    pass
-                try:
-                    payload['node_type'] = getattr(settings, 'NODE_TYPE', '')
-                except Exception:
-                    pass
 
                 delivered = False
                 delay = base_delay

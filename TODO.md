@@ -24,6 +24,9 @@ Immediate tasks
 - [x] Tune remote ACK/retry timing for field stability: `REMOTE_ACK_WAIT_S=45`, `REMOTE_FAILED_SYNC_RETRY_S=60`, `LORA_CHUNK_SIZE=120`.
 - [x] Add LoRa HELLO/READY session greeting (`HELLO:<uid>` / `READY:<uid>`) before remote burst send.
 - [x] Add inline base processor silence ACK path (`LORA_SESSION_SILENCE_ACK_S=5`) so ACK does not rely only on background checker scheduling.
+- [x] Fix premature partial FIELD_DATA cleanup path in packet processor so chunk state survives until assembly/ACK decision.
+- [x] Test-tune LoRa transport: `_wait_tx_done` timeout 5s + immediate radio re-init recovery, disable CAD by default, `LORA_CHUNK_SIZE=100`, `REMOTE_ACK_WAIT_S=40`, `LORA_MAX_RETRIES=4`.
+- [x] Shrink remote LoRa field payload keys to essential telemetry (`ts`, `v`, `t`, `h`, `rssi`) with top-level `unit_id`, `batch_id`, `node_type`, `fw`.
 - [x] Add basic CI that runs readiness validation and build packaging (GitHub Actions, `.github/workflows/release-readiness.yml`).
 - [x] Fix OTA task errors: `_get_ota()` now validates module attributes and won't cache a partial/wrong module; wrappers check validity before calling; `ota.py` `maybe_gc` import wrapped in try/except with inline fallback.
 - [x] Suppress expected OTA idle noise: `apply_pending_update` no longer logs WARN when `OTA_PENDING_FILE` is missing (`ENOENT`).
