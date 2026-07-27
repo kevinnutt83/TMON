@@ -776,7 +776,7 @@ async def process_remote_burst(uid, st):
 
         try:
             ack_msg = await _secure_message(ack_msg, remote_uid=uid)
-            await _send_with_retry(ack_msg.encode())
+            await _safe_send(ack_msg.encode(), remote_uid=uid)
             await debug_print(f"Sent ACK with next delay {ack_delay}s to {uid}", "BASE_NODE")
             try:
                 from oled import display_message
@@ -831,21 +831,16 @@ async def process_remote_burst(uid, st):
         sdata_dict = st['data']['SDATA']
         stage_remote_field_data(uid, [sdata_dict])
 
-    # SEND ACK (optionally piggyback one pending command for this remote)
+    # Keep ACK minimal for reliability; command piggyback is intentionally deferred.
     try:
         pending_cmd = await _fetch_remote_pending_command(uid, remote_machine_id)
         if isinstance(pending_cmd, dict):
-            cmd_blob = _encode_ack_command(pending_cmd)
-            if cmd_blob:
-                ack_msg += f":CMD:{cmd_blob}"
-        ack_msg = await _secure_message(ack_msg, remote_uid=uid)
-        await _send_with_retry(ack_msg.encode())
-        if isinstance(pending_cmd, dict):
-            await debug_print(f"Sent ACK+CMD to {uid} (cmd_id={pending_cmd.get('id')})", "BASE_NODE")
-        elif ota_session_id:
-            await debug_print(f"Sent ACK+OTA hint to {uid}", "BASE_NODE")
-    except Exception as ack_e:
-        await log_error(f"ACK send error to {uid}: {ack_e}")
+            await debug_print(
+                f"Deferred ACK command piggyback for {uid} (cmd_id={pending_cmd.get('id')})",
+                "BASE_NODE"
+            )
+    except Exception as cmd_hint_e:
+        await log_error(f"Pending command check error for {uid}: {cmd_hint_e}")
 
     if ota_session_id:
         try:
@@ -922,7 +917,7 @@ async def process_remote_field_data(uid, st):
                     if batch_id:
                         ack_msg += f":BID:{batch_id}"
                     ack_msg = await _secure_message(ack_msg, remote_uid=uid)
-                    await _send_with_retry(ack_msg.encode())
+                    await _safe_send(ack_msg.encode(), remote_uid=uid)
                     if batch_id:
                         await debug_print(
                             f"Sent FIELD_DATA ACK to {uid} next={next_delay}s bid={batch_id}",
@@ -1094,7 +1089,7 @@ async def check_incomplete_bursts():
                         try:
                             ack_msg = f"ACK:{uid}:NEXT:{next_delay}"
                             ack_msg = await _secure_message(ack_msg, remote_uid=uid)
-                            await _send_with_retry(ack_msg.encode())
+                            await _safe_send(ack_msg.encode(), remote_uid=uid)
                             await debug_print(f"Sent timeout ACK to {uid}", "BASE_NODE")
                         except Exception as e:
                             await log_error(f"Timeout ACK error: {e}")
@@ -1537,8 +1532,9 @@ async def _send_with_retry(data, retries=6):
     global lora
     if lora is None or not hasattr(lora, 'send'):
         return
-    if len(data) > 255:
-        await log_error(f"Payload too large: {len(data)}")
+    max_size = int(getattr(settings, 'LORA_MAX_PACKET_SIZE', 240))
+    if len(data) > max_size:
+        await log_error(f"Payload too large: {len(data)} (max {max_size})")
         return
     base_delay = getattr(settings, 'LORA_RETRY_BASE_DELAY_S', 2)
     max_backoff = getattr(settings, 'LORA_MAX_BACKOFF_S', 90)
@@ -1573,6 +1569,26 @@ async def _send_with_retry(data, retries=6):
     except Exception as e:
         await log_error(f"TX recovery failed: {e}")
 
+
+async def _safe_send(data: bytes, remote_uid=None):
+    """
+    Enforce maximum packet size before transmitting.
+    Returns True on success, False on failure.
+    """
+    max_size = int(getattr(settings, 'LORA_MAX_PACKET_SIZE', 240))
+
+    if len(data) > max_size:
+        await log_error(f"Payload too large: {len(data)} (max {max_size})")
+        # Last-resort truncation (should be avoided by chunking logic)
+        data = data[:max_size]
+
+    try:
+        await _send_with_retry(data)
+        return True
+    except Exception as e:
+        await log_error(f"_safe_send error: {e}")
+        return False
+
 async def _wait_tx_done(timeout=30):
     global lora
     if lora is None:
@@ -1601,36 +1617,56 @@ def calculate_next_delay(node_id):
     return max(60, delay)
 
 async def _send_chunked(msg_type, full_b64, target_uid=None, chunk_len=None):
+    max_size = int(getattr(settings, 'LORA_MAX_PACKET_SIZE', 240))
     max_b64_chunk_len = _safe_int(chunk_len, 0)
     if max_b64_chunk_len <= 0:
-        configured = _safe_int(getattr(settings, 'LORA_CHUNK_SIZE', 0), 0)
-        if configured > 0:
-            max_b64_chunk_len = configured
-        else:
-            max_b64_chunk_len = 100 if getattr(settings, 'LORA_ENCRYPT_ENABLED', False) else 160
+        configured = _safe_int(getattr(settings, 'LORA_CHUNK_SIZE', 160), 160)
+        max_b64_chunk_len = max(48, configured)
+
     target = str(target_uid or getattr(settings, 'UNIT_ID', ''))
     b64_len = len(full_b64)
-    if b64_len <= max_b64_chunk_len:
-        data_str = f"TYPE:{msg_type},UID:{target},DATA:{full_b64}"
-        if str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'base':
-            data_str = await _secure_message(data_str, remote_uid=target)
+
+    for split_try in range(5):
+        if b64_len <= max_b64_chunk_len:
+            num_chunks = 1
         else:
-            data_str = await _secure_message(data_str)
-        await _send_with_retry(data_str.encode())
-    else:
-        num_chunks = (b64_len + max_b64_chunk_len - 1) // max_b64_chunk_len
+            num_chunks = (b64_len + max_b64_chunk_len - 1) // max_b64_chunk_len
+
+        oversized = False
         for i in range(num_chunks):
             chunk_start = i * max_b64_chunk_len
-            chunk_end = chunk_start + max_b64_chunk_len
+            chunk_end = min(b64_len, chunk_start + max_b64_chunk_len)
             chunk_b64 = full_b64[chunk_start:chunk_end]
-            data_str = f"TYPE:{msg_type}_CHUNK,UID:{target},CHUNK:{i}/{num_chunks},DATA:{chunk_b64}"
-            if str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'base':
-                data_str = await _secure_message(data_str, remote_uid=target)
+
+            if num_chunks == 1:
+                data_str = f"TYPE:{msg_type},UID:{target},DATA:{chunk_b64}"
             else:
-                data_str = await _secure_message(data_str)
-            await _send_with_retry(data_str.encode())
-            await asyncio.sleep(random.uniform(0.08, 0.25))
-        await asyncio.sleep(0.5)  # final pause so base can finish processing last chunk
+                data_str = f"TYPE:{msg_type}_CHUNK,UID:{target},CHUNK:{i}/{num_chunks},DATA:{chunk_b64}"
+
+            if str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'base':
+                secured = await _secure_message(data_str, remote_uid=target)
+            else:
+                secured = await _secure_message(data_str)
+
+            secured_bytes = secured.encode()
+            if len(secured_bytes) > max_size:
+                await log_error(
+                    f"Secured chunk too large: {len(secured_bytes)} (max {max_size}); shrinking chunk size"
+                )
+                max_b64_chunk_len = max(48, int(max_b64_chunk_len * 0.8))
+                oversized = True
+                break
+
+            await _safe_send(secured_bytes)
+            if num_chunks > 1:
+                await asyncio.sleep(random.uniform(0.08, 0.25))
+
+        if not oversized:
+            if num_chunks > 1:
+                await asyncio.sleep(0.5)
+            return
+
+    await log_error(f"Unable to fit chunked payload under max packet size for {msg_type}")
 
 
 async def send_remote_field_data_batch(payload):
@@ -2031,7 +2067,7 @@ async def _send_lora_heartbeat():
         payload_b64 = _ub.b2a_base64(ujson.dumps(payload).encode()).rstrip(b'\n').decode()
         msg_str = f"TYPE:HEARTBEAT,UID:{settings.UNIT_ID},DATA:{payload_b64}"
         msg_str = await _secure_message(msg_str)
-        await _send_with_retry(msg_str.encode())
+        await _safe_send(msg_str.encode())
         await debug_print("LoRa heartbeat sent", "LORA")
     except Exception as e:
         await log_error(f"Heartbeat send error: {e}")
@@ -2347,7 +2383,7 @@ async def connectLora():
                         f"DB:{getattr(sdata,'cur_device_bar_pres',None)},DH:{getattr(sdata,'cur_device_humid',None)}"
                     )
                     data_str = await _secure_message(data_str)
-                    await _send_with_retry(data_str.encode())
+                    await _safe_send(data_str.encode())
                     await ensure_lora_listening()
                     await asyncio.sleep(random.uniform(1.0, 2.0))
 

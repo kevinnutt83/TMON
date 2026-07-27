@@ -18,6 +18,7 @@ Immediate tasks
 - Stop aggressive LoRa watchdog resets from interrupting in-flight chunk reception; refresh activity timestamp on every RX path.
 - Switch LoRa secure metadata envelope to pipe-separated fields and add CLI `hmactest` parity check.
 - Reduce remote LoRa field payload to essential keys, use larger chunk size, and add base timeout-ACK recovery for incomplete FIELD_DATA bursts.
+- Enforce SX1262-safe packet ceiling (`LORA_MAX_PACKET_SIZE`) with safe send wrapper and adaptive chunk-size fallback for secured payload overhead.
 - [x] Add basic CI that runs readiness validation and build packaging (GitHub Actions, `.github/workflows/release-readiness.yml`).
 - [x] Fix OTA task errors: `_get_ota()` now validates module attributes and won't cache a partial/wrong module; wrappers check validity before calling; `ota.py` `maybe_gc` import wrapped in try/except with inline fallback.
 - [x] Suppress expected OTA idle noise: `apply_pending_update` no longer logs WARN when `OTA_PENDING_FILE` is missing (`ENOENT`).
