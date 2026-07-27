@@ -30,6 +30,7 @@ Immediate tasks
 - [x] Implement controlled LoRa session protocol: `HELLO -> READY:CHUNKSZ -> FIELD_DATA_CHUNK* -> END -> FINAL ACK`, plus session-silence fallback ACK and stage-by-stage diagnostics.
 - [x] Harden HELLO/READY delivery: 3x HELLO retry, continuous RX wait for READY, READY includes `BASE` + `CHUNKSZ`, explicit READY TX success logging.
 - [x] Persist remote/base pairing and sync schedule: base stores `base_uid`, `last_hello_ts`, `next_expected`, `last_sync_ts`; remote stores `PAIRED_BASE_UID` + `/logs/paired_base.txt`.
+- [x] Unify LoRa hub-role behavior: when `ENABLE_LORA` is true, both `base` and `wifi` nodes run the same LoRa hub logic (READY/ACK handling, OTA staging, command/result proxying, sync watchers, WP sync helpers).
 - [x] Add basic CI that runs readiness validation and build packaging (GitHub Actions, `.github/workflows/release-readiness.yml`).
 - [x] Fix OTA task errors: `_get_ota()` now validates module attributes and won't cache a partial/wrong module; wrappers check validity before calling; `ota.py` `maybe_gc` import wrapped in try/except with inline fallback.
 - [x] Suppress expected OTA idle noise: `apply_pending_update` no longer logs WARN when `OTA_PENDING_FILE` is missing (`ENOENT`).
