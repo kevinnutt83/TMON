@@ -1593,7 +1593,7 @@ async def send_field_data_via_lora():
 
     # LoRa helpers must be implemented in lora.py (remote ↔ base transport)
     try:
-        from lora import send_remote_field_data_batch, send_remote_state_files, wait_for_next_sync_ack
+        from lora import send_field_data_controlled
     except Exception as e:
         await debug_print(f'sfd_lora: lora helpers missing: {e}', 'ERROR')
         return None
@@ -1713,45 +1713,28 @@ async def send_field_data_via_lora():
                         gc.collect()
                     except Exception:
                         pass
-                    sent_ok = False
                     try:
-                        # Support both async and sync implementations of the helper
-                        try:
-                            sent_ok = await send_remote_field_data_batch(payload)
-                        except TypeError:
-                            sent_ok = bool(send_remote_field_data_batch(payload))
+                        ack_delay = await send_field_data_controlled(payload)
                     except Exception as e:
-                        sent_ok = False
+                        ack_delay = None
                         await debug_print(f'sfd_lora: send err att{attempt}: {e}', 'ERROR')
 
-                    if sent_ok:
-                        try:
-                            ack_timeout = max(10, int(getattr(settings, 'REMOTE_ACK_WAIT_S', 90)))
-                        except Exception:
-                            ack_timeout = 90
-                        try:
-                            ack_delay = await wait_for_next_sync_ack(
-                                timeout_s=ack_timeout,
-                                expected_batch_id=batch_id
-                            )
-                        except Exception:
-                            ack_delay = None
-                        if isinstance(ack_delay, int) and ack_delay > 0:
-                            delivered = True
-                            ack_next_delay_hint = ack_delay
-                            await debug_print(
-                                f'sfd_lora: base ACK confirmed batch {bi+1}, next={ack_delay}s',
-                                'DEBUG'
-                            )
-                        else:
-                            delivered = False
-                            await debug_print(
-                                f'sfd_lora: no ACK confirmation for batch {bi+1} attempt {attempt}',
-                                'WARN'
-                            )
-                            # Avoid immediate flood-retry loops after ACK timeout.
-                            await debug_print('ACK timeout - backing off before next full burst', 'REMOTE_NODE')
-                            await asyncio.sleep(30)
+                    if isinstance(ack_delay, int) and ack_delay > 0:
+                        delivered = True
+                        ack_next_delay_hint = ack_delay
+                        await debug_print(
+                            f'sfd_lora: base ACK confirmed batch {bi+1}, next={ack_delay}s',
+                            'DEBUG'
+                        )
+                    else:
+                        delivered = False
+                        await debug_print(
+                            f'sfd_lora: no ACK confirmation for batch {bi+1} attempt {attempt}',
+                            'WARN'
+                        )
+                        # Avoid immediate flood-retry loops after ACK timeout.
+                        await debug_print('ACK timeout - backing off before next full burst', 'REMOTE_NODE')
+                        await asyncio.sleep(30)
 
                     if delivered:
                         acked_indices.update(idx_list)

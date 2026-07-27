@@ -986,14 +986,41 @@ async def process_remote_state_files(uid, st):
             st['chunks'].pop('STATE_FILES', None)
 
 
+async def _send_final_ack(remote_uid, batch_id=None, reason=''):
+    """Send a final ACK to a remote and include optional batch marker."""
+    try:
+        next_delay = calculate_next_delay(remote_uid)
+        ack_msg = f"ACK:{remote_uid}:NEXT:{next_delay}"
+        if batch_id:
+            ack_msg += f":BID:{batch_id}"
+        ack_msg = await _secure_message(ack_msg, remote_uid=remote_uid)
+        await _safe_send(ack_msg.encode(), remote_uid=remote_uid)
+        if reason:
+            await debug_print(
+                f"FINAL ACK sent to {remote_uid} (next={next_delay}s, reason={reason})",
+                "BASE_NODE"
+            )
+        else:
+            await debug_print(
+                f"FINAL ACK sent to {remote_uid} (next={next_delay}s)",
+                "BASE_NODE"
+            )
+        return next_delay
+    except Exception as e:
+        await log_error(f"Final ACK error for {remote_uid}: {e}")
+        return None
+
+
 async def _maybe_force_ack_on_silence():
     """Force ACK inline from the packet processor when FIELD_DATA chunk flow goes silent."""
     now = time.time()
-    silence_limit = float(getattr(settings, 'LORA_SESSION_SILENCE_ACK_S', 5) or 5)
+    silence_limit = float(getattr(settings, 'LORA_SESSION_SILENCE_S', 4) or 4)
     info = getattr(settings, 'REMOTE_NODE_INFO', {})
 
     for uid, st in list(info.items()):
         if not isinstance(st, dict):
+            continue
+        if not bool(st.get('session_active')):
             continue
         field_chunks = (st.get('chunks') or {}).get('FIELD_DATA')
         if not isinstance(field_chunks, dict) or not field_chunks:
@@ -1009,22 +1036,16 @@ async def _maybe_force_ack_on_silence():
 
         have = len(field_chunks)
         total = int(st.get('chunk_total') or 0)
+        batch_id = st.get('batch_id')
         await debug_print(
             f"Silence ACK {uid} after {silent:.0f}s (have {have}/{total})", "BASE_NODE"
         )
+        await _send_final_ack(uid, batch_id=batch_id, reason='silence')
         try:
-            next_delay = calculate_next_delay(uid)
-            ack_msg = f"ACK:{uid}:NEXT:{next_delay}"
-            ack_msg = await _secure_message(ack_msg, remote_uid=uid)
-            await _safe_send(ack_msg.encode(), remote_uid=uid)
-            await debug_print(f"Sent silence ACK to {uid}", "BASE_NODE")
-            try:
-                from oled import display_message
-                await display_message("ACK", 0.6)
-            except Exception:
-                pass
-        except Exception as e:
-            await log_error(f"Silence ACK error {uid}: {e}")
+            from oled import display_message
+            await display_message("ACK", 0.6)
+        except Exception:
+            pass
 
         try:
             st['chunks'].pop('FIELD_DATA', None)
@@ -1033,6 +1054,7 @@ async def _maybe_force_ack_on_silence():
         st.pop('chunk_first_ts', None)
         st.pop('last_chunk_ts', None)
         st.pop('chunk_total', None)
+        st.pop('batch_id', None)
         st.pop('session_active', None)
 
 async def base_packet_processor():
@@ -1056,19 +1078,51 @@ async def base_packet_processor():
                 remote_uid = str(parsed_data or uid or '').strip()
                 await debug_print(f"HELLO from {remote_uid}", "BASE_NODE")
                 try:
-                    ready = f"READY:{remote_uid}"
+                    chunk_sz = int(getattr(settings, 'LORA_CHUNK_SIZE', 100) or 100)
+                    ready = f"READY:{remote_uid}:CHUNKSZ:{chunk_sz}"
                     ready = await _secure_message(ready, remote_uid=remote_uid)
                     await _safe_send(ready.encode(), remote_uid=remote_uid)
-                    await debug_print(f"Sent READY to {remote_uid}", "BASE_NODE")
+                    await debug_print(f"READY sent to {remote_uid} (chunk={chunk_sz})", "BASE_NODE")
                 except Exception as e:
                     await log_error(f"READY send error: {e}")
 
+                st['chunks'] = {'FIELD_DATA': {}}
                 st['session_active'] = True
                 st['chunk_first_ts'] = time.time()
                 st['last_chunk_ts'] = time.time()
                 st['last_rx'] = current_time
                 lora_rx_queue.task_done()
                 await _maybe_force_ack_on_silence()
+                gc.collect()
+                continue
+
+            if packet_type == 'END':
+                end_info = parsed_data if isinstance(parsed_data, dict) else {}
+                remote_uid = str(end_info.get('uid') or uid or '').strip()
+                total = _safe_int(end_info.get('total'), 0)
+                batch_id = end_info.get('batch_id')
+                await debug_print(
+                    f"END received from {remote_uid} (declared total={total})",
+                    "BASE_NODE"
+                )
+                have = len((st.get('chunks') or {}).get('FIELD_DATA') or {})
+                await debug_print(
+                    f"Session complete - have {have} chunks, sending ACK",
+                    "BASE_NODE"
+                )
+                st['batch_id'] = batch_id
+                await _send_final_ack(remote_uid, batch_id=batch_id, reason='end')
+
+                if remote_uid in settings.REMOTE_NODE_INFO:
+                    rst = settings.REMOTE_NODE_INFO[remote_uid]
+                    rst.get('chunks', {}).pop('FIELD_DATA', None)
+                    rst.pop('chunk_first_ts', None)
+                    rst.pop('last_chunk_ts', None)
+                    rst.pop('chunk_total', None)
+                    rst.pop('batch_id', None)
+                    rst.pop('session_active', None)
+
+                lora_rx_queue.task_done()
                 gc.collect()
                 continue
 
@@ -1094,6 +1148,9 @@ async def base_packet_processor():
                         st['chunk_first_ts'] = time.time()
                     st['last_chunk_ts'] = time.time()
                     st['chunk_total'] = total
+                    bid = packet.get('batch_id')
+                    if bid:
+                        st['batch_id'] = bid
                     st['chunks'][orig_type][cn] = parsed_data
                     last_lora_activity_ts = time.time()
                     st['last_rx'] = current_time
@@ -1173,28 +1230,25 @@ async def check_incomplete_bursts():
 
                 silent = now - last_ts
 
-                # Force ACK after only 5 seconds of silence.
-                if silent >= 5:
+                silence_limit = float(getattr(settings, 'LORA_SESSION_SILENCE_S', 4) or 4)
+
+                # Force ACK after short session silence.
+                if silent >= silence_limit:
                     have = len(field_chunks)
                     total = int(st.get('chunk_total') or 0)
+                    batch_id = st.get('batch_id')
                     await debug_print(
                         f"FORCING ACK {uid} after {silent:.0f}s silence "
                         f"(have {have}/{total})", "BASE_NODE"
                     )
-                    try:
-                        next_delay = calculate_next_delay(uid)
-                        ack_msg = f"ACK:{uid}:NEXT:{next_delay}"
-                        ack_msg = await _secure_message(ack_msg, remote_uid=uid)
-                        await _safe_send(ack_msg.encode(), remote_uid=uid)
-                        await debug_print(f"Sent FORCED ACK to {uid}", "BASE_NODE")
-                    except Exception as e:
-                        await log_error(f"Forced ACK error: {e}")
+                    await _send_final_ack(uid, batch_id=batch_id, reason='checker')
 
                     # Clear so we don't keep firing
                     st.get('chunks', {}).pop('FIELD_DATA', None)
                     st.pop('chunk_first_ts', None)
                     st.pop('last_chunk_ts', None)
                     st.pop('chunk_total', None)
+                    st.pop('batch_id', None)
         except Exception as e:
             await log_error(f"check_incomplete_bursts: {e}")
         await asyncio.sleep(2)
@@ -1216,6 +1270,8 @@ async def handle_incoming_packet(msg):
                     break
             if uid_hint is None and msg_str.startswith('HELLO:'):
                 uid_hint = msg_str.split('|', 1)[0].split(':', 1)[1].strip()
+            if uid_hint is None and msg_str.startswith('END:'):
+                uid_hint = msg_str.split('|', 1)[0].split(':', 2)[1].strip()
         except Exception:
             uid_hint = None
 
@@ -1295,12 +1351,27 @@ async def handle_incoming_packet(msg):
             remote_uid = None
         parsed_data = remote_uid
 
+    elif msg_str.startswith('END:'):
+        packet_type = 'END'
+        try:
+            parts = msg_str.split(':')
+            remote_uid = parts[1].strip() if len(parts) > 1 else None
+            declared_total = _safe_int(parts[2], 0) if len(parts) > 2 else 0
+            batch_id = None
+            if len(parts) >= 5 and parts[3] == 'BID':
+                batch_id = parts[4]
+            parsed_data = {'uid': remote_uid, 'total': declared_total, 'batch_id': batch_id}
+        except Exception:
+            remote_uid = None
+            parsed_data = None
+
     elif msg_str.startswith('TYPE:'):
         parts = msg_str.split(',')
         msg_type = None
         remote_uid = None
         data_b64 = None
         chunk_str = None
+        batch_id = None
         for p in parts:
             if p.startswith('TYPE:'):
                 msg_type = p[5:]
@@ -1310,6 +1381,8 @@ async def handle_incoming_packet(msg):
                 data_b64 = p[5:]
             elif p.startswith('CHUNK:'):
                 chunk_str = p[6:]
+            elif p.startswith('BID:'):
+                batch_id = p[4:]
         if msg_type and remote_uid:
             packet_type = msg_type
             if msg_type.endswith('_CHUNK'):
@@ -1346,7 +1419,8 @@ async def handle_incoming_packet(msg):
             'uid': remote_uid,
             'type': packet_type,
             'data': parsed_data,
-            'chunk_info': chunk_str if packet_type.endswith('_CHUNK') else None
+            'chunk_info': chunk_str if packet_type.endswith('_CHUNK') else None,
+            'batch_id': batch_id if packet_type.endswith('_CHUNK') else None,
         }
         await lora_rx_queue.put(packet)
 
@@ -1916,7 +1990,7 @@ async def send_hello_and_wait_ready():
         await debug_print(f"HELLO send failed: {e}", "WARN")
         return False
 
-    timeout = _safe_int(getattr(settings, 'LORA_HELLO_TIMEOUT_S', 8), 8)
+    timeout = _safe_int(getattr(settings, 'LORA_HELLO_TIMEOUT_S', 10), 10)
     timeout = max(2, timeout)
     end_ts = time.time() + timeout
     while time.time() < end_ts:
@@ -1930,14 +2004,139 @@ async def send_hello_and_wait_ready():
                 raw = msg.rstrip(b'\x00').decode()
                 clear = await _unsecure_message(raw)
                 if clear and clear.startswith("READY:") and uid in clear:
-                    await debug_print("Received READY from base", "REMOTE_NODE")
-                    return True
+                    await debug_print(f"READY received: {clear}", "REMOTE_NODE")
+                    return clear
         except Exception:
             pass
         await asyncio.sleep_ms(100)
 
-    await debug_print("No READY received - continuing anyway", "WARN")
-    return False
+    await debug_print("No READY received", "WARN")
+    return None
+
+
+async def send_field_data_controlled(payload):
+    """Remote controlled session: HELLO -> READY -> chunks -> END -> FINAL ACK."""
+    if str(getattr(settings, 'NODE_TYPE', 'base')).lower() != 'remote':
+        return None
+
+    uid = str(getattr(settings, 'UNIT_ID', '') or '')
+    await debug_print("=== SESSION START ===", "REMOTE_NODE")
+
+    ready_msg = await send_hello_and_wait_ready()
+    if not ready_msg:
+        await debug_print("No READY - aborting session", "WARN")
+        await debug_print("=== SESSION FAILED ===", "REMOTE_NODE")
+        return None
+
+    chunk_size = _safe_int(getattr(settings, 'LORA_CHUNK_SIZE', 100), 100)
+    try:
+        parts = str(ready_msg).split(':')
+        if len(parts) >= 4 and parts[0] == 'READY' and parts[1] == uid and parts[2] == 'CHUNKSZ':
+            chunk_size = max(48, int(parts[3]))
+    except Exception:
+        pass
+
+    try:
+        raw_json = ujson.dumps(payload)
+        full_b64 = _ub.b2a_base64(raw_json.encode()).rstrip(b'\n').decode()
+    except Exception as e:
+        await debug_print(f"Payload encode failed: {e}", "ERROR")
+        await debug_print("=== SESSION FAILED ===", "REMOTE_NODE")
+        return None
+
+    total = (len(full_b64) + chunk_size - 1) // chunk_size if full_b64 else 1
+    await debug_print(f"Payload {len(raw_json)} bytes -> {total} chunk(s)", "REMOTE_NODE")
+
+    batch_id = None
+    try:
+        if isinstance(payload, dict):
+            batch_id = payload.get('batch_id')
+    except Exception:
+        batch_id = None
+
+    for i in range(total):
+        start = i * chunk_size
+        part = full_b64[start:start + chunk_size]
+        if batch_id:
+            chunk_msg = f"TYPE:FIELD_DATA_CHUNK,UID:{uid},CHUNK:{i}/{total},BID:{batch_id},DATA:{part}"
+        else:
+            chunk_msg = f"TYPE:FIELD_DATA_CHUNK,UID:{uid},CHUNK:{i}/{total},DATA:{part}"
+        try:
+            secured = await _secure_message(chunk_msg)
+            ok = await _safe_send(secured.encode())
+            await debug_print(f"Chunk {i}/{total} sent (ok={ok})", "REMOTE_NODE")
+            if not ok:
+                await debug_print(f"Chunk {i} TX failed", "ERROR")
+                await debug_print("=== SESSION FAILED ===", "REMOTE_NODE")
+                return None
+        except Exception as e:
+            await debug_print(f"Chunk {i} send exception: {e}", "ERROR")
+            await debug_print("=== SESSION FAILED ===", "REMOTE_NODE")
+            return None
+        await asyncio.sleep_ms(300)
+
+    if batch_id:
+        end_msg = f"END:{uid}:{total}:BID:{batch_id}"
+    else:
+        end_msg = f"END:{uid}:{total}"
+
+    try:
+        secured = await _secure_message(end_msg)
+        ok = await _safe_send(secured.encode())
+        await debug_print(f"END sent (total={total}, ok={ok})", "REMOTE_NODE")
+    except Exception as e:
+        await debug_print(f"END send failed: {e}", "ERROR")
+        await debug_print("=== SESSION FAILED ===", "REMOTE_NODE")
+        return None
+
+    await debug_print("Waiting for final ACK...", "REMOTE_NODE")
+    ack_timeout = _safe_int(getattr(settings, 'REMOTE_ACK_WAIT_S', 45), 45)
+    ack_timeout = max(10, ack_timeout)
+    end_ts = time.time() + ack_timeout
+
+    while time.time() < end_ts:
+        try:
+            if lora is None:
+                break
+            try:
+                msg, err = lora.recv(0)
+            except TypeError:
+                msg, err = lora.recv()
+            if err == 0 and msg:
+                raw = msg.rstrip(b'\x00').decode()
+                clear = await _unsecure_message(raw)
+                if clear and clear.startswith('ACK:'):
+                    parts = clear.split(':')
+                    if len(parts) >= 4 and parts[1] == uid and parts[2] == 'NEXT':
+                        ack_bid = None
+                        if len(parts) >= 6:
+                            i = 4
+                            while i + 1 < len(parts):
+                                if parts[i] == 'BID':
+                                    ack_bid = parts[i + 1]
+                                    break
+                                i += 2
+                        if batch_id and ack_bid and str(ack_bid) != str(batch_id):
+                            await debug_print(
+                                f"Final ACK BID mismatch (expected {batch_id}, got {ack_bid})",
+                                "WARN"
+                            )
+                            await asyncio.sleep_ms(80)
+                            continue
+                        try:
+                            delay = max(10, int(parts[3]))
+                        except Exception:
+                            delay = None
+                        await debug_print(f"FINAL ACK received: {clear}", "REMOTE_NODE")
+                        await debug_print("=== SESSION SUCCESS ===", "REMOTE_NODE")
+                        return delay
+        except Exception:
+            pass
+        await asyncio.sleep_ms(100)
+
+    await debug_print("Final ACK timeout", "WARN")
+    await debug_print("=== SESSION FAILED ===", "REMOTE_NODE")
+    return None
 
 async def _fetch_remote_pending_command(remote_unit_id, remote_machine_id=None):
     """Base helper: fetch one queued command for a remote unit from UC/WP."""

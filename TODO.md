@@ -27,6 +27,7 @@ Immediate tasks
 - [x] Fix premature partial FIELD_DATA cleanup path in packet processor so chunk state survives until assembly/ACK decision.
 - [x] Test-tune LoRa transport: `_wait_tx_done` timeout 5s + immediate radio re-init recovery, disable CAD by default, `LORA_CHUNK_SIZE=100`, `REMOTE_ACK_WAIT_S=40`, `LORA_MAX_RETRIES=4`.
 - [x] Shrink remote LoRa field payload keys to essential telemetry (`ts`, `v`, `t`, `h`, `rssi`) with top-level `unit_id`, `batch_id`, `node_type`, `fw`.
+- [x] Implement controlled LoRa session protocol: `HELLO -> READY:CHUNKSZ -> FIELD_DATA_CHUNK* -> END -> FINAL ACK`, plus session-silence fallback ACK and stage-by-stage diagnostics.
 - [x] Add basic CI that runs readiness validation and build packaging (GitHub Actions, `.github/workflows/release-readiness.yml`).
 - [x] Fix OTA task errors: `_get_ota()` now validates module attributes and won't cache a partial/wrong module; wrappers check validity before calling; `ota.py` `maybe_gc` import wrapped in try/except with inline fallback.
 - [x] Suppress expected OTA idle noise: `apply_pending_update` no longer logs WARN when `OTA_PENDING_FILE` is missing (`ENOENT`).
