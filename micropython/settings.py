@@ -49,7 +49,7 @@ FIELD_DATA_MEM_LOW_WATERMARK = 40 * 1024
 UNIT_ID = "None"
 UNIT_Name = "No Device Name"
 NODE_TYPE = 'base'
-FIRMWARE_VERSION = "v2.00.4e"
+FIRMWARE_VERSION = "v2.00.4f"
 
 # ============================================================
 # BOOTSTRAP CREDENTIALS (Required for First-Boot Provisioning)
@@ -132,7 +132,7 @@ SOIL_PROBE_PIN = 8
 
 # ===================== Remote Deep Sleep Control =====================
 REMOTE_REQUIRE_SUCCESSFUL_SYNC_BEFORE_SLEEP = True
-REMOTE_ACK_WAIT_S = 120
+REMOTE_ACK_WAIT_S = 90
 REMOTE_FAILED_SYNC_RETRY_S = 45
 
 # ===================== SD Card Support =====================
@@ -219,7 +219,7 @@ LORA_SLOT_SPACING_S = LORA_SYNC_WINDOW
 LORA_CHECK_IN_MINUTES = 5
 LORA_WATCHDOG_TIMEOUT_S = 300
 LORA_INIT_RETRY_BACKOFF_S = 1
-LORA_MAX_RETRIES = 8
+LORA_MAX_RETRIES = 5
 LORA_RETRY_BASE_DELAY_S = 1.5
 LORA_MAX_BACKOFF_S = 90
 LORA_MISSED_SYNC_THRESHOLD = 3
@@ -465,5 +465,5 @@ REST_HEADER_READ_KEY = 'X-TMON-READ'
 REST_HEADER_CONFIRM = 'X-TMON-CONFIRM'
 
 # Additions for LoRa OTA
-LORA_CHUNK_SIZE = 100
+LORA_CHUNK_SIZE = 180
 OTA_TEMP_FILE = '/ota_temp.py'

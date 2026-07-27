@@ -1000,6 +1000,7 @@ async def base_packet_processor():
             packet_type = packet.get('type')
             parsed_data = packet.get('data')
             current_time = time.time()
+            handled_field_data = False
 
             if uid not in settings.REMOTE_NODE_INFO:
                 settings.REMOTE_NODE_INFO[uid] = {'types': set(), 'last_rx': current_time, 'data': {}, 'chunks': {}}
@@ -1011,21 +1012,36 @@ async def base_packet_processor():
                     st['chunks'] = {}
                 if orig_type not in st['chunks']:
                     st['chunks'][orig_type] = {}
+                    st['chunk_first_ts'] = time.time()
+                    st['chunk_total'] = 0
                 try:
                     cn, total = map(int, packet.get('chunk_info', '0/0').split('/'))
                     st['chunks'][orig_type][cn] = parsed_data
+                    st['chunk_total'] = total
+                    st['last_chunk_ts'] = time.time()
+                    last_lora_activity_ts = time.time()
                     st['last_rx'] = current_time
 
-                    await debug_print(f"Stored CHUNK {cn}/{total} for {orig_type} from {uid} (have {len(st['chunks'][orig_type])}/{total})", "BASE_NODE")
+                    have = len(st['chunks'][orig_type])
+                    await debug_print(
+                        f"Stored CHUNK {cn}/{total} for {orig_type} from {uid} (have {have}/{total})",
+                        "BASE_NODE"
+                    )
 
-                    if len(st['chunks'][orig_type]) == total and all(k in st['chunks'][orig_type] for k in range(total)):
+                    if have == total and all(k in st['chunks'][orig_type] for k in range(total)):
                         assembled_b64 = ''.join(st['chunks'][orig_type][j] for j in range(total))
                         json_data = _ub.a2b_base64(assembled_b64.encode()).decode()
                         parsed_dict = ujson.loads(json_data)
                         st['data'][orig_type] = parsed_dict
                         st['types'].add(orig_type)
                         del st['chunks'][orig_type]
-                        await debug_print(f"✅ FULLY ASSEMBLED {orig_type} ({total} chunks) for {uid}", "BASE_NODE")
+                        st.pop('chunk_first_ts', None)
+                        st.pop('chunk_total', None)
+                        st.pop('last_chunk_ts', None)
+                        await debug_print(f"FULLY ASSEMBLED {orig_type} ({total} chunks) for {uid}", "BASE_NODE")
+                        if orig_type == 'FIELD_DATA':
+                            await process_remote_field_data(uid, st)
+                            handled_field_data = True
                 except Exception as e:
                     await log_error(f"Chunk parse error for {uid}: {e}")
 
@@ -1034,7 +1050,7 @@ async def base_packet_processor():
                 st['data'][packet_type] = parsed_data
                 st['last_rx'] = current_time
 
-            if orig_type == 'FIELD_DATA':
+            if orig_type == 'FIELD_DATA' and not handled_field_data:
                 await process_remote_field_data(uid, st)
             elif orig_type == 'CMD_RESULT':
                 await process_remote_command_result(uid, st)
@@ -1058,6 +1074,41 @@ async def base_packet_processor():
         except Exception as e:
             await log_error(f"Background packet processor error: {e}")
             await asyncio.sleep(1)
+
+
+async def check_incomplete_bursts():
+    """If a remote FIELD_DATA burst remains incomplete too long, send timeout ACK and clear it."""
+    while True:
+        try:
+            now = time.time()
+            for uid, st in list(getattr(settings, 'REMOTE_NODE_INFO', {}).items()):
+                if not isinstance(st, dict):
+                    continue
+                chunks = st.get('chunks', {})
+                field_chunks = chunks.get('FIELD_DATA') if isinstance(chunks, dict) else None
+                if isinstance(field_chunks, dict) and field_chunks:
+                    first_ts = st.get('chunk_first_ts', 0)
+                    if first_ts and (now - first_ts) > 45:
+                        await debug_print(f"Timeout assembly for {uid} - sending ACK anyway", "BASE_NODE")
+                        next_delay = calculate_next_delay(uid)
+                        try:
+                            ack_msg = f"ACK:{uid}:NEXT:{next_delay}"
+                            ack_msg = await _secure_message(ack_msg, remote_uid=uid)
+                            await _send_with_retry(ack_msg.encode())
+                            await debug_print(f"Sent timeout ACK to {uid}", "BASE_NODE")
+                        except Exception as e:
+                            await log_error(f"Timeout ACK error: {e}")
+
+                        try:
+                            st['chunks'].pop('FIELD_DATA', None)
+                        except Exception:
+                            pass
+                        st.pop('chunk_first_ts', None)
+                        st.pop('chunk_total', None)
+                        st.pop('last_chunk_ts', None)
+        except Exception:
+            pass
+        await asyncio.sleep(10)
 
 async def handle_incoming_packet(msg):
     global last_rx_ts, last_lora_activity_ts
@@ -2202,9 +2253,15 @@ async def connectLora():
     if settings.NODE_TYPE == 'base':
         asyncio.create_task(base_packet_processor())
         await debug_print("Base background processor started", "BASE_NODE")
+        asyncio.create_task(check_incomplete_bursts())
+        await debug_print("Base incomplete-burst checker started", "BASE_NODE")
         if heartbeat_ping:
             asyncio.create_task(heartbeat_ping_loop())
             await debug_print("Base heartbeat ping loop started", "BASE_NODE")
+
+    if settings.NODE_TYPE == 'wifi':
+        asyncio.create_task(check_incomplete_bursts())
+        await debug_print("WiFi incomplete-burst checker started", "BASE_NODE")
 
     if settings.NODE_TYPE == 'remote':
         uid = settings.UNIT_ID

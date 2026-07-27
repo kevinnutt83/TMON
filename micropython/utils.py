@@ -1675,10 +1675,44 @@ async def send_field_data_via_lora():
                     batch_epoch = 0
                 batch_id = f"{getattr(settings, 'UNIT_ID', '')}-{batch_epoch}-{bi}"
 
+                # Keep LoRa burst payload minimal to reduce chunk count and improve delivery reliability.
+                minimal_records = []
+                for row in data_batch:
+                    if not isinstance(row, dict):
+                        continue
+                    minimal_records.append({
+                        'unit_id': getattr(settings, 'UNIT_ID', ''),
+                        'node_type': 'remote',
+                        'ts': row.get('timestamp') or row.get('ts') or batch_epoch,
+                        'firmware_version': getattr(settings, 'FIRMWARE_VERSION', ''),
+                        'sys_voltage': row.get('sys_voltage'),
+                        'cur_temp_f': row.get('cur_temp_f'),
+                        'cur_device_temp_f': row.get('cur_device_temp_f'),
+                        'cur_humid': row.get('cur_humid'),
+                        'cur_bar_pres': row.get('cur_bar_pres'),
+                        'lora_SigStr': row.get('lora_SigStr'),
+                        'free_mem': row.get('free_mem'),
+                    })
+                if not minimal_records:
+                    minimal_records = [{
+                        'unit_id': getattr(settings, 'UNIT_ID', ''),
+                        'node_type': 'remote',
+                        'ts': batch_epoch,
+                        'firmware_version': getattr(settings, 'FIRMWARE_VERSION', ''),
+                        'sys_voltage': getattr(sdata, 'sys_voltage', None),
+                        'cur_temp_f': getattr(sdata, 'cur_temp_f', None),
+                        'cur_device_temp_f': getattr(sdata, 'cur_device_temp_f', None),
+                        'cur_humid': getattr(sdata, 'cur_humid', None),
+                        'cur_bar_pres': getattr(sdata, 'cur_bar_pres', None),
+                        'lora_SigStr': getattr(sdata, 'lora_SigStr', None),
+                        'free_mem': getattr(sdata, 'free_mem', None),
+                    }]
+
                 payload = {
                     'unit_id': getattr(settings, 'UNIT_ID', ''),
                     'batch_id': batch_id,
-                    'data': data_batch,
+                    'node_type': 'remote',
+                    'data': minimal_records,
                 }
                 try:
                     payload['machine_id'] = get_machine_id()
@@ -1738,6 +1772,9 @@ async def send_field_data_via_lora():
                                 f'sfd_lora: no ACK confirmation for batch {bi+1} attempt {attempt}',
                                 'WARN'
                             )
+                            # Avoid immediate flood-retry loops after ACK timeout.
+                            await debug_print('ACK timeout - backing off before next full burst', 'REMOTE_NODE')
+                            await asyncio.sleep(30)
 
                     if delivered:
                         acked_indices.update(idx_list)
