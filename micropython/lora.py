@@ -991,9 +991,11 @@ async def process_remote_state_files(uid, st):
             st['chunks'].pop('STATE_FILES', None)
 
 async def base_packet_processor():
+    global last_lora_activity_ts
     while True:
         try:
             packet = await lora_rx_queue.get()
+            last_lora_activity_ts = time.time()
             uid = packet.get('uid')
             packet_type = packet.get('type')
             parsed_data = packet.get('data')
@@ -1058,7 +1060,7 @@ async def base_packet_processor():
             await asyncio.sleep(1)
 
 async def handle_incoming_packet(msg):
-    global last_rx_ts
+    global last_rx_ts, last_lora_activity_ts
     msg_str = msg.rstrip(b'\x00').decode()
 
     uid_hint = None
@@ -1088,6 +1090,7 @@ async def handle_incoming_packet(msg):
 
     await debug_print(f"Base RX: {msg_str[:120]}...", "BASE_NODE")
     last_rx_ts = time.time()
+    last_lora_activity_ts = last_rx_ts
     sdata.lora_SigStr = lora.getRSSI() if hasattr(lora, 'getRSSI') else -60
     sdata.lora_snr = lora.getSNR() if hasattr(lora, 'getSNR') else 0
     sdata.LORA_CONNECTED = True
@@ -1545,7 +1548,11 @@ def calculate_next_delay(node_id):
 async def _send_chunked(msg_type, full_b64, target_uid=None, chunk_len=None):
     max_b64_chunk_len = _safe_int(chunk_len, 0)
     if max_b64_chunk_len <= 0:
-        max_b64_chunk_len = 100 if getattr(settings, 'LORA_ENCRYPT_ENABLED', False) else 160
+        configured = _safe_int(getattr(settings, 'LORA_CHUNK_SIZE', 0), 0)
+        if configured > 0:
+            max_b64_chunk_len = configured
+        else:
+            max_b64_chunk_len = 100 if getattr(settings, 'LORA_ENCRYPT_ENABLED', False) else 160
     target = str(target_uid or getattr(settings, 'UNIT_ID', ''))
     b64_len = len(full_b64)
     if b64_len <= max_b64_chunk_len:
@@ -2186,6 +2193,7 @@ async def connectLora():
     async with pin_lock:
         if not await init_lora():
             return False
+    last_lora_activity_ts = time.time()
 
     if settings.NODE_TYPE == 'base':
         asyncio.create_task(base_packet_processor())
@@ -2224,10 +2232,24 @@ async def connectLora():
         try:
             current_time = time.time()
 
-            if current_time - last_lora_activity_ts > 90:
-                await debug_print("LoRa health watchdog - re-init", "WARN")
-                await init_lora()
-                last_lora_activity_ts = current_time
+            # ---------- Safer LoRa health watchdog ----------
+            # Only re-init if there has been NO activity for a long time.
+            # Never use the old aggressive watchdog on base/wifi.
+            watch_timeout_s = int(getattr(settings, 'LORA_WATCHDOG_TIMEOUT_S', 300))
+            is_base_or_wifi = str(getattr(settings, 'NODE_TYPE', '')).lower() in ('base', 'wifi')
+
+            if not is_base_or_wifi:
+                # Remotes can keep a shorter watchdog.
+                if current_time - last_lora_activity_ts > 120:
+                    await debug_print("LoRa health watchdog (remote) - re-init", "WARN")
+                    await init_lora()
+                    last_lora_activity_ts = current_time
+            else:
+                # Base/wifi only after a long quiet period.
+                if current_time - last_lora_activity_ts > watch_timeout_s:
+                    await debug_print("LoRa health watchdog (base) - long idle re-init", "WARN")
+                    await init_lora()
+                    last_lora_activity_ts = current_time
 
             if lora is None or not hasattr(lora, '_events'):
                 if not await init_lora():
@@ -2284,6 +2306,7 @@ async def connectLora():
 
                 elif state == STATE_WAIT_RESPONSE:
                     if lora and hasattr(lora, '_events') and (lora._events() & lora.RX_DONE):
+                        last_lora_activity_ts = time.time()
                         msg, err = lora.recv()
                         if err == 0 and msg:
                             msg_str = msg.rstrip(b'\x00').decode()
