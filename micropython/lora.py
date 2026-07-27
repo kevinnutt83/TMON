@@ -162,7 +162,6 @@ last_lora_activity_ts = 0
 lora_rx_queue = SimpleQueue(maxsize=10)
 
 tx_counter = 0
-rx_counter = 0
 remote_counters = {}
 _lora_ota_cache = {'version': None, 'files': None}
 _remote_lora_ota_jobs = {}
@@ -1049,7 +1048,21 @@ async def handle_incoming_packet(msg):
     global last_rx_ts
     msg_str = msg.rstrip(b'\x00').decode()
 
-    msg_str = await _unsecure_message(msg_str)
+    uid_hint = None
+    if str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'base':
+        try:
+            parts = msg_str.split(',')
+            for p in parts:
+                if p.startswith('UID:'):
+                    uid_hint = p[4:].strip()
+                    break
+                if p.startswith('U:'):
+                    uid_hint = p[2:].strip()
+                    break
+        except Exception:
+            uid_hint = None
+
+    msg_str = await _unsecure_message(msg_str, remote_uid=uid_hint)
     if not msg_str:
         return
 
@@ -1171,53 +1184,143 @@ async def handle_incoming_packet(msg):
         }
         await lora_rx_queue.put(packet)
 
-# ===================== SECURE MESSAGING (unchanged) =====================
+# ---------------------------------------------------------------------------
+# LoRa Security - HMAC + per-remote counters + replay window
+# ---------------------------------------------------------------------------
+
+def _load_counters():
+    """Load persisted counters from disk."""
+    global tx_counter, remote_counters
+    try:
+        path = getattr(settings, 'LORA_COUNTERS_FILE', '/logs/lora_counters.json')
+        with open(path, 'r') as f:
+            data = ujson.load(f)
+        if isinstance(data, dict):
+            tx_counter = int(data.get('tx_counter', 0))
+            rc = data.get('remote_counters', {})
+            if isinstance(rc, dict):
+                remote_counters = {}
+                for uid, vals in rc.items():
+                    if isinstance(vals, dict):
+                        remote_counters[uid] = {
+                            'tx': int(vals.get('tx', 0)),
+                            'rx': int(vals.get('rx', 0))
+                        }
+    except Exception:
+        pass
+
+
+def _save_counters():
+    """Persist counters to disk."""
+    try:
+        path = getattr(settings, 'LORA_COUNTERS_FILE', '/logs/lora_counters.json')
+        data = {
+            'tx_counter': tx_counter,
+            'remote_counters': remote_counters
+        }
+        with open(path, 'w') as f:
+            ujson.dump(data, f)
+    except Exception:
+        pass
+
+
+_load_counters()
+
+
+def hmac_sha256(key, msg):
+    BLOCK_SIZE = 64
+    if isinstance(key, str):
+        key = key.encode()
+    if isinstance(msg, str):
+        msg = msg.encode()
+    if len(key) > BLOCK_SIZE:
+        key = uhashlib.sha256(key).digest()
+    key = key + b'\x00' * (BLOCK_SIZE - len(key))
+    opad = bytes((x ^ 0x5C) for x in key)
+    ipad = bytes((x ^ 0x36) for x in key)
+    inner = uhashlib.sha256(ipad + msg).digest()
+    return uhashlib.sha256(opad + inner).digest()
+
+
+def _format_crc(crc_val):
+    try:
+        return '{:04X}'.format(crc_val & 0xFFFF)
+    except Exception:
+        return '0000'
+
+
 async def _secure_message(msg_str, remote_uid=None):
+    """
+    Add CNT + HMAC (and optional encryption) to a message.
+    remote_uid is required when the base is sending to a specific remote.
+    """
     global tx_counter
+
     if not getattr(settings, 'LORA_HMAC_ENABLED', False):
         return msg_str
-    if settings.NODE_TYPE == 'remote':
+
+    if str(getattr(settings, 'NODE_TYPE', '')).lower() == 'remote':
         counter = tx_counter + 1
+        tx_counter = counter
     else:
         if remote_uid is None:
-            return msg_str
-        if remote_uid not in remote_counters:
-            remote_counters[remote_uid] = {'tx': 0, 'rx': 0}
-        counter = remote_counters[remote_uid]['tx'] + 1
+            counter = tx_counter + 1
+            tx_counter = counter
+        else:
+            if remote_uid not in remote_counters:
+                remote_counters[remote_uid] = {'tx': 0, 'rx': 0}
+            counter = remote_counters[remote_uid]['tx'] + 1
+            remote_counters[remote_uid]['tx'] = counter
+
     counter_str = str(counter)
     counter_bytes = counter.to_bytes(4, 'big')
 
-    crc_hex = _format_crc(crc16_ccitt(msg_str.encode())) if getattr(settings, 'LORA_CRC_ENABLED', True) else None
+    secret = getattr(settings, 'LORA_HMAC_SECRET', '') or ''
+    if isinstance(secret, str):
+        secret = secret.encode()
+
+    crc_hex = None
+    if getattr(settings, 'LORA_CRC_ENABLED', True):
+        try:
+            crc_hex = _format_crc(crc16_ccitt(msg_str.encode()))
+        except Exception:
+            crc_hex = None
 
     if getattr(settings, 'LORA_ENCRYPT_ENABLED', False):
         msg_bytes = msg_str.encode()
-        stream_key = getattr(settings, 'LORA_ENCRYPT_SECRET', b'').encode() + counter_bytes
+        stream_key = secret + counter_bytes
         stream_hash = uhashlib.sha256(stream_key).digest()
-        encrypted = xor_bytes(msg_bytes, stream_hash)
+        encrypted = bytes(a ^ b for a, b in zip(msg_bytes, (stream_hash * ((len(msg_bytes) // 32) + 1))[:len(msg_bytes)]))
         enc_b64 = _ub.b2a_base64(encrypted).rstrip(b'\n').decode()
         to_hmac = encrypted + counter_bytes
-        hmac_val = hmac_sha256(getattr(settings, 'LORA_HMAC_SECRET', b'').encode(), to_hmac)
+        hmac_val = hmac_sha256(secret, to_hmac)
         hmac_hex = _ub.hexlify(hmac_val).decode()[:getattr(settings, 'LORA_HMAC_TRUNCATE', 16)]
         secure_msg = f"ENC:{enc_b64},CNT:{counter},HMAC:{hmac_hex}"
     else:
         to_hmac = msg_str.encode() + counter_str.encode()
-        hmac_val = hmac_sha256(getattr(settings, 'LORA_HMAC_SECRET', b'').encode(), to_hmac)
+        hmac_val = hmac_sha256(secret, to_hmac)
         hmac_hex = _ub.hexlify(hmac_val).decode()[:getattr(settings, 'LORA_HMAC_TRUNCATE', 16)]
         secure_msg = msg_str + f",CNT:{counter},HMAC:{hmac_hex}"
 
     if crc_hex is not None:
-        secure_msg = secure_msg + f",CRC:{crc_hex}"
+        secure_msg += f",CRC:{crc_hex}"
 
-    if settings.NODE_TYPE == 'remote':
-        tx_counter = counter
-    else:
-        remote_counters[remote_uid]['tx'] = counter
+    if counter % 5 == 0:
+        _save_counters()
+
     return secure_msg
 
-async def _unsecure_message(msg_str):
-    global rx_counter
+
+async def _unsecure_message(msg_str, remote_uid=None):
+    """
+    Verify HMAC and anti-replay counter.
+    Returns the original message string or None if verification fails.
+    """
     if not getattr(settings, 'LORA_HMAC_ENABLED', False):
         return msg_str
+
+    if not msg_str:
+        return None
 
     cnt = None
     hmac_hex = None
@@ -1233,15 +1336,21 @@ async def _unsecure_message(msg_str):
             if p.startswith('ENC:'):
                 enc_b64 = p[4:]
             elif p.startswith('CNT:'):
-                cnt = int(p[4:])
+                try:
+                    cnt = int(p[4:])
+                except Exception:
+                    cnt = None
             elif p.startswith('HMAC:'):
                 hmac_hex = p[5:]
             elif p.startswith('CRC:'):
                 crc_hex = p[4:]
     else:
         if ',CNT:' not in msg_str or ',HMAC:' not in msg_str:
-            await log_error("Invalid secure format (no CNT/HMAC)")
-            return None
+            if getattr(settings, 'LORA_HMAC_REJECT_UNSIGNED', True):
+                await log_error('Invalid secure format (no CNT/HMAC)')
+                return None
+            return msg_str
+
         try:
             parts = msg_str.split(',')
             message_parts = []
@@ -1262,30 +1371,39 @@ async def _unsecure_message(msg_str):
             return None
 
     if cnt is None or hmac_hex is None:
-        await log_error("Missing CNT or HMAC in secure message")
+        await log_error('Missing CNT or HMAC in secure message')
         return None
 
+    secret = getattr(settings, 'LORA_HMAC_SECRET', '') or ''
+    if isinstance(secret, str):
+        secret = secret.encode()
+
     counter_bytes = cnt.to_bytes(4, 'big')
+
     if is_enc:
-        encrypted = _ub.a2b_base64(enc_b64.encode())
+        try:
+            encrypted = _ub.a2b_base64(enc_b64.encode())
+        except Exception:
+            await log_error('Base64 decode failed')
+            return None
         to_hmac = encrypted + counter_bytes
     else:
         to_hmac = original_msg.encode() + str(cnt).encode()
 
-    hmac_val = hmac_sha256(getattr(settings, 'LORA_HMAC_SECRET', b'').encode(), to_hmac)
+    hmac_val = hmac_sha256(secret, to_hmac)
     hmac_hex_calc = _ub.hexlify(hmac_val).decode()[:getattr(settings, 'LORA_HMAC_TRUNCATE', 16)]
     if hmac_hex_calc != hmac_hex:
-        await log_error("HMAC verification failed")
+        await log_error('HMAC verification failed')
         return None
 
     if is_enc:
-        stream_key = getattr(settings, 'LORA_ENCRYPT_SECRET', b'').encode() + counter_bytes
+        stream_key = secret + counter_bytes
         stream_hash = uhashlib.sha256(stream_key).digest()
-        decrypted = xor_bytes(encrypted, stream_hash)
+        decrypted = bytes(a ^ b for a, b in zip(encrypted, (stream_hash * ((len(encrypted) // 32) + 1))[:len(encrypted)]))
         try:
             msg_str = decrypted.decode()
         except Exception:
-            await log_error("Decryption decode failed")
+            await log_error('Decryption decode failed')
             return None
     else:
         msg_str = original_msg
@@ -1293,18 +1411,54 @@ async def _unsecure_message(msg_str):
     if crc_hex:
         try:
             expected_crc = int(crc_hex, 16)
+            actual_crc = crc16_ccitt(msg_str.encode())
+            if actual_crc != expected_crc:
+                await log_error(f"CRC mismatch: expected {crc_hex}, got {_format_crc(actual_crc)}")
+                return None
         except Exception:
-            await log_error("Invalid CRC format")
+            pass
+
+    if not getattr(settings, 'LORA_HMAC_REPLAY_PROTECT', True):
+        return msg_str
+
+    window = max(1, int(getattr(settings, 'LORA_REPLAY_WINDOW', 8)))
+
+    if str(getattr(settings, 'NODE_TYPE', '')).lower() == 'remote':
+        last_rx = getattr(settings, '_last_rx_counter', 0)
+        if cnt <= last_rx - window:
+            await log_error(f"Replay attack detected (cnt {cnt} <= last_rx {last_rx})")
             return None
-        actual_crc = crc16_ccitt(msg_str.encode())
-        if actual_crc != expected_crc:
-            await log_error(f"CRC mismatch: expected {crc_hex}, got {_format_crc(actual_crc)}")
+        settings._last_rx_counter = max(last_rx, cnt)
+    else:
+        if remote_uid is None:
+            try:
+                if 'UID:' in msg_str:
+                    remote_uid = msg_str.split('UID:')[1].split(',')[0].strip()
+                elif ',U:' in msg_str:
+                    remote_uid = msg_str.split(',U:')[1].split(',')[0].strip()
+                elif msg_str.startswith('U:'):
+                    remote_uid = msg_str.split('U:')[1].split(',')[0].strip()
+                elif 'unit-' in msg_str:
+                    for part in msg_str.split(','):
+                        if part.startswith('unit-') or 'UID' in part:
+                            remote_uid = part.split(':')[-1].strip()
+                            break
+            except Exception:
+                remote_uid = 'unknown'
+
+        if remote_uid not in remote_counters:
+            remote_counters[remote_uid] = {'tx': 0, 'rx': 0}
+
+        last_rx = remote_counters[remote_uid]['rx']
+
+        if cnt <= last_rx - window:
+            await log_error(f"Replay attack detected (cnt {cnt} <= rx_counter {last_rx}) uid={remote_uid}")
             return None
 
-    if cnt <= rx_counter:
-        await log_error(f"Replay attack detected (cnt {cnt} <= rx_counter {rx_counter})")
-        return None
-    rx_counter = cnt
+        if cnt > last_rx:
+            remote_counters[remote_uid]['rx'] = cnt
+            if cnt % 5 == 0:
+                _save_counters()
 
     return msg_str
 
