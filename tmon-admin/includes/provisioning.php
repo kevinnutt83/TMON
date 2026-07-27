@@ -1100,7 +1100,7 @@ function tmon_admin_arr_get($arr, $key, $default=''){ return isset($arr[$key]) ?
  * @return array
  */
 function tmon_admin_get_role_options() {
-	$defaults = array( 'base', 'wifi', 'remote', 'gateway' );
+	$defaults = array( 'base', 'wifi', 'remote' );
 	$opts = apply_filters( 'tmon_admin_provision_role_options', $defaults );
 	// ensure uniqueness & stable order
 	$seen = array();

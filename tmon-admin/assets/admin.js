@@ -112,9 +112,10 @@
 				var hasWifi = false, hasRemote = false;
 				for (var i=0;i<sel.options.length;i++){
 					if (sel.options[i].value === 'wifi') hasWifi = true;
+					if (sel.options[i].value === 'base') hasBase = true;
 					if (sel.options[i].value === 'remote') hasRemote = true;
 				}
-				if (hasWifi && hasRemote) return;
+				if (hasWifi && hasRemote && hasBase) return;
 				var cur = sel.value || '';
 				// rebuild safely preserving selection when possible
 				sel.innerHTML = '';
