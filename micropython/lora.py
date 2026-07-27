@@ -1005,6 +1005,24 @@ async def _send_final_ack(remote_uid, batch_id=None, reason=''):
                 f"FINAL ACK sent to {remote_uid} (next={next_delay}s)",
                 "BASE_NODE"
             )
+
+        # Keep per-remote sync schedule current for watcher/missed-sync logic.
+        try:
+            now = time.time()
+            if not hasattr(settings, 'REMOTE_NODE_INFO') or settings.REMOTE_NODE_INFO is None:
+                settings.REMOTE_NODE_INFO = {}
+            st = settings.REMOTE_NODE_INFO.setdefault(str(remote_uid), {})
+            st['next_expected'] = now + int(next_delay)
+            st['last_sync_ts'] = now
+            st['missed_syncs'] = 0
+            save_remote_node_info()
+            await debug_print(
+                f"Registered {remote_uid} next_sync in {next_delay}s",
+                "BASE_NODE"
+            )
+        except Exception:
+            pass
+
         return next_delay
     except Exception as e:
         await log_error(f"Final ACK error for {remote_uid}: {e}")
@@ -1076,21 +1094,52 @@ async def base_packet_processor():
             orig_type = packet_type[:-6] if packet_type.endswith('_CHUNK') else packet_type
             if packet_type == 'HELLO':
                 remote_uid = str(parsed_data or uid or '').strip()
-                await debug_print(f"HELLO from {remote_uid}", "BASE_NODE")
+                try:
+                    remote_uid = remote_uid.split(',')[0].strip()
+                except Exception:
+                    pass
+                if not remote_uid:
+                    remote_uid = str(uid or 'unknown').strip()
+
+                await debug_print(f"HELLO received from {remote_uid}", "BASE_NODE")
+
+                if not hasattr(settings, 'REMOTE_NODE_INFO') or settings.REMOTE_NODE_INFO is None:
+                    settings.REMOTE_NODE_INFO = {}
+                if remote_uid not in settings.REMOTE_NODE_INFO:
+                    settings.REMOTE_NODE_INFO[remote_uid] = {}
+                st = settings.REMOTE_NODE_INFO[remote_uid]
+
+                now = time.time()
+                st['last_hello_ts'] = now
+                st['last_rx'] = now
+                st['session_active'] = True
+                st['chunks'] = {'FIELD_DATA': {}}
+                st['base_uid'] = str(getattr(settings, 'UNIT_ID', '') or '')
+                st['chunk_first_ts'] = now
+                st['last_chunk_ts'] = now
+                try:
+                    save_remote_node_info()
+                except Exception:
+                    pass
+
                 try:
                     chunk_sz = int(getattr(settings, 'LORA_CHUNK_SIZE', 100) or 100)
-                    ready = f"READY:{remote_uid}:CHUNKSZ:{chunk_sz}"
+                    base_uid = str(getattr(settings, 'UNIT_ID', '') or '')
+                    ready = f"READY:{remote_uid}:BASE:{base_uid}:CHUNKSZ:{chunk_sz}"
                     ready = await _secure_message(ready, remote_uid=remote_uid)
-                    await _safe_send(ready.encode(), remote_uid=remote_uid)
-                    await debug_print(f"READY sent to {remote_uid} (chunk={chunk_sz})", "BASE_NODE")
+                    ok = await _safe_send(ready.encode(), remote_uid=remote_uid)
+                    await debug_print(
+                        f"READY sent to {remote_uid} (ok={ok}) base={base_uid} chunk={chunk_sz}",
+                        "BASE_NODE"
+                    )
+                    try:
+                        from oled import display_message
+                        await display_message("READY", 0.6)
+                    except Exception:
+                        pass
                 except Exception as e:
-                    await log_error(f"READY send error: {e}")
+                    await log_error(f"READY send FAILED for {remote_uid}: {e}")
 
-                st['chunks'] = {'FIELD_DATA': {}}
-                st['session_active'] = True
-                st['chunk_first_ts'] = time.time()
-                st['last_chunk_ts'] = time.time()
-                st['last_rx'] = current_time
                 lora_rx_queue.task_done()
                 await _maybe_force_ack_on_silence()
                 gc.collect()
@@ -1977,21 +2026,33 @@ async def wait_for_next_sync_ack(timeout_s=None, expected_batch_id=None):
 async def send_hello_and_wait_ready():
     """Remote greeting: announce a transfer session and wait briefly for READY."""
     if str(getattr(settings, 'NODE_TYPE', 'base')).lower() != 'remote':
-        return False
+        return None
 
     uid = str(getattr(settings, 'UNIT_ID', '') or '')
     hello = f"HELLO:{uid}"
-    try:
-        secured = await _secure_message(hello)
-        await _safe_send(secured.encode())
-        await ensure_lora_listening()
-        await debug_print("Sent HELLO", "REMOTE_NODE")
-    except Exception as e:
-        await debug_print(f"HELLO send failed: {e}", "WARN")
-        return False
+    await debug_print("=== SESSION START ===", "REMOTE_NODE")
 
-    timeout = _safe_int(getattr(settings, 'LORA_HELLO_TIMEOUT_S', 10), 10)
+    sent_any = False
+    for attempt in range(3):
+        try:
+            secured = await _secure_message(hello)
+            ok = await _safe_send(secured.encode())
+            sent_any = bool(ok)
+            await ensure_lora_listening()
+            await debug_print(f"HELLO sent attempt {attempt+1} (ok={ok})", "REMOTE_NODE")
+            if ok:
+                break
+        except Exception as e:
+            await debug_print(f"HELLO TX error: {e}", "WARN")
+        await asyncio.sleep_ms(400)
+
+    if not sent_any:
+        await debug_print("HELLO failed all attempts", "ERROR")
+        return None
+
+    timeout = _safe_int(getattr(settings, 'LORA_HELLO_TIMEOUT_S', 12), 12)
     timeout = max(2, timeout)
+    await debug_print(f"Waiting for READY ({timeout}s)...", "REMOTE_NODE")
     end_ts = time.time() + timeout
     while time.time() < end_ts:
         try:
@@ -1999,18 +2060,46 @@ async def send_hello_and_wait_ready():
                 await asyncio.sleep_ms(100)
                 continue
 
+            # Ensure RX mode while waiting for READY.
+            try:
+                lora.recv(0, False, 0)
+            except Exception:
+                pass
+
             msg, err = lora.recv(0) if hasattr(lora, 'recv') else (None, -1)
             if err == 0 and msg:
                 raw = msg.rstrip(b'\x00').decode()
                 clear = await _unsecure_message(raw)
                 if clear and clear.startswith("READY:") and uid in clear:
                     await debug_print(f"READY received: {clear}", "REMOTE_NODE")
+
+                    # Format: READY:<remote_uid>:BASE:<base_uid>:CHUNKSZ:<chunk>
+                    parts = str(clear).split(':')
+                    base_uid = None
+                    chunk_sz = _safe_int(getattr(settings, 'LORA_CHUNK_SIZE', 100), 100)
+                    try:
+                        if 'BASE' in parts:
+                            base_uid = parts[parts.index('BASE') + 1]
+                        if 'CHUNKSZ' in parts:
+                            chunk_sz = int(parts[parts.index('CHUNKSZ') + 1])
+                    except Exception:
+                        pass
+                    try:
+                        settings.PAIRED_BASE_UID = base_uid
+                        with open(settings.LOG_DIR.rstrip('/') + '/paired_base.txt', 'w') as f:
+                            f.write(str(base_uid or ''))
+                    except Exception:
+                        pass
+                    await debug_print(
+                        f"Paired with base {base_uid}, chunk_size={chunk_sz}",
+                        "REMOTE_NODE"
+                    )
                     return clear
         except Exception:
             pass
         await asyncio.sleep_ms(100)
 
-    await debug_print("No READY received", "WARN")
+    await debug_print("No READY received - aborting session", "WARN")
     return None
 
 
@@ -2020,7 +2109,6 @@ async def send_field_data_controlled(payload):
         return None
 
     uid = str(getattr(settings, 'UNIT_ID', '') or '')
-    await debug_print("=== SESSION START ===", "REMOTE_NODE")
 
     ready_msg = await send_hello_and_wait_ready()
     if not ready_msg:
@@ -2031,8 +2119,9 @@ async def send_field_data_controlled(payload):
     chunk_size = _safe_int(getattr(settings, 'LORA_CHUNK_SIZE', 100), 100)
     try:
         parts = str(ready_msg).split(':')
-        if len(parts) >= 4 and parts[0] == 'READY' and parts[1] == uid and parts[2] == 'CHUNKSZ':
-            chunk_size = max(48, int(parts[3]))
+        if parts and parts[0] == 'READY' and uid in parts:
+            if 'CHUNKSZ' in parts:
+                chunk_size = max(48, int(parts[parts.index('CHUNKSZ') + 1]))
     except Exception:
         pass
 
@@ -2447,6 +2536,25 @@ async def heartbeat_ping_loop():
         await heartbeat_ping()
         await asyncio.sleep(60)
 
+
+async def expected_sync_watcher():
+    """Log remotes that are near their expected sync time and keep RX in listen mode."""
+    if settings.NODE_TYPE != 'base':
+        return
+    while True:
+        try:
+            now = time.time()
+            for uid, st in list(getattr(settings, 'REMOTE_NODE_INFO', {}).items()):
+                if not isinstance(st, dict):
+                    continue
+                next_exp = st.get('next_expected', 0)
+                if next_exp and abs(now - next_exp) < 15:
+                    await debug_print(f"Expecting {uid} around now", "BASE_NODE")
+                    await ensure_lora_listening()
+        except Exception:
+            pass
+        await asyncio.sleep(10)
+
 async def check_missed_syncs():
     if settings.NODE_TYPE != 'base':
         return
@@ -2642,6 +2750,8 @@ async def connectLora():
         if heartbeat_ping:
             asyncio.create_task(heartbeat_ping_loop())
             await debug_print("Base heartbeat ping loop started", "BASE_NODE")
+        asyncio.create_task(expected_sync_watcher())
+        await debug_print("Base expected-sync watcher started", "BASE_NODE")
 
     if settings.NODE_TYPE == 'wifi':
         asyncio.create_task(check_incomplete_bursts())
@@ -2718,7 +2828,11 @@ async def connectLora():
                     awaiting_ota_session = None
                     ota_wait_deadline = 0
                     await debug_print("Remote: starting full check-in (periodic)", "REMOTE_NODE")
-                    await send_hello_and_wait_ready()
+                    ready_msg = await send_hello_and_wait_ready()
+                    if bool(getattr(settings, 'LORA_SESSION_ENABLED', True)) and not ready_msg:
+                        await debug_print("Remote: READY not received, deferring burst TX", "WARN")
+                        await asyncio.sleep(2)
+                        continue
                     await display_message("TX Data...", 0.8)
                     ts = time.time()
                     data_str = (
