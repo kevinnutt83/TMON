@@ -181,15 +181,6 @@ def _safe_int(v, default=0):
         return int(default)
 
 
-def _is_lora_hub_node():
-    try:
-        if not bool(getattr(settings, 'ENABLE_LORA', True)):
-            return False
-        return str(getattr(settings, 'NODE_TYPE', 'base')).lower() in ('base', 'wifi')
-    except Exception:
-        return False
-
-
 def _version_key(ver):
     try:
         s = str(ver or '').strip().lower()
@@ -270,7 +261,7 @@ def _read_local_firmware_files():
 
 def _stage_remote_lora_ota_job(remote_uid, remote_ver):
     """Prepare a LoRa OTA push job when base firmware is newer than remote."""
-    if not _is_lora_hub_node():
+    if str(getattr(settings, 'NODE_TYPE', 'base')).lower() != 'base':
         return None
     if not bool(getattr(settings, 'ENABLE_LORA_OTA', True)):
         return None
@@ -1316,7 +1307,7 @@ async def handle_incoming_packet(msg):
     msg_str = msg.rstrip(b'\x00').decode()
 
     uid_hint = None
-    if str(getattr(settings, 'NODE_TYPE', 'base')).lower() != 'remote':
+    if str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'base':
         try:
             parts = msg_str.split(',')
             for p in parts:
@@ -1338,7 +1329,7 @@ async def handle_incoming_packet(msg):
         return
 
     # Validate network membership after decryption so secure envelopes can be checked.
-    if _is_lora_hub_node():
+    if str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'base':
         strict_net_check = msg_str.startswith('T:')
         if not _base_network_matches(msg_str, strict=strict_net_check):
             await debug_print('LoRa packet rejected due to network mismatch', 'WARN')
@@ -1767,11 +1758,11 @@ async def _unsecure_message(msg_str, remote_uid=None):
 async def _send_with_retry(data, retries=6):
     global lora
     if lora is None or not hasattr(lora, 'send'):
-        return False
+        return
     max_size = int(getattr(settings, 'LORA_MAX_PACKET_SIZE', 240))
     if len(data) > max_size:
         await log_error(f"Payload too large: {len(data)} (max {max_size})")
-        return False
+        return
     base_delay = getattr(settings, 'LORA_RETRY_BASE_DELAY_S', 2)
     max_backoff = getattr(settings, 'LORA_MAX_BACKOFF_S', 90)
     for att in range(retries):
@@ -1788,13 +1779,13 @@ async def _send_with_retry(data, retries=6):
             lora.send(data)
             if await _wait_tx_done():
                 await ensure_lora_listening()
-                return True
+                return
         except Exception as e:
             await log_error(f"TX attempt {att+1} failed: {e}")
             if lora is None:
                 await hard_reset_lora()
                 await init_lora()
-                return False
+                return
             delay = min(max_backoff, base_delay * (2 ** att))
             delay += random.uniform(0, base_delay)
             await asyncio.sleep(delay)
@@ -1804,7 +1795,6 @@ async def _send_with_retry(data, retries=6):
         await init_lora()
     except Exception as e:
         await log_error(f"TX recovery failed: {e}")
-    return False
 
 
 async def _safe_send(data: bytes, remote_uid=None):
@@ -1820,7 +1810,8 @@ async def _safe_send(data: bytes, remote_uid=None):
         data = data[:max_size]
 
     try:
-        return bool(await _send_with_retry(data))
+        await _send_with_retry(data)
+        return True
     except Exception as e:
         await log_error(f"_safe_send error: {e}")
         return False
@@ -1884,7 +1875,7 @@ async def _send_chunked(msg_type, full_b64, target_uid=None, chunk_len=None):
             else:
                 data_str = f"TYPE:{msg_type}_CHUNK,UID:{target},CHUNK:{i}/{num_chunks},DATA:{chunk_b64}"
 
-            if _is_lora_hub_node():
+            if str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'base':
                 secured = await _secure_message(data_str, remote_uid=target)
             else:
                 secured = await _secure_message(data_str)
@@ -2239,7 +2230,7 @@ async def send_field_data_controlled(payload):
 async def _fetch_remote_pending_command(remote_unit_id, remote_machine_id=None):
     """Base helper: fetch one queued command for a remote unit from UC/WP."""
     try:
-        if not _is_lora_hub_node():
+        if settings.NODE_TYPE != 'base':
             return None
         wp_url = ''
         headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
@@ -2421,7 +2412,7 @@ async def _apply_remote_command_from_ack(cmd_obj):
 async def _proxy_remote_command_result(remote_uid, payload):
     """Base helper: proxy remote command execution result to UC/WP."""
     try:
-        if not _is_lora_hub_node() or not isinstance(payload, dict):
+        if settings.NODE_TYPE != 'base' or not isinstance(payload, dict):
             return
         wp_url = ''
         headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
@@ -2520,7 +2511,7 @@ async def _send_lora_heartbeat():
 
 # ===================== PERIODIC TASKS (unchanged) =====================
 async def periodic_wp_sync():
-    if not _is_lora_hub_node():
+    if settings.NODE_TYPE != 'base':
         return
     if not all((register_with_wp, send_settings_to_wp, fetch_settings_from_wp, send_data_to_wp, poll_ota_jobs)):
         await debug_print("periodic_wp_sync unavailable: WP helpers missing", "LORA")
@@ -2536,7 +2527,7 @@ async def periodic_wp_sync():
         await asyncio.sleep(300)
 
 async def heartbeat_ping_loop():
-    if not _is_lora_hub_node():
+    if settings.NODE_TYPE != 'base':
         return
     if not heartbeat_ping:
         await debug_print("heartbeat_ping_loop unavailable: heartbeat_ping helper missing", "LORA")
@@ -2548,7 +2539,7 @@ async def heartbeat_ping_loop():
 
 async def expected_sync_watcher():
     """Log remotes that are near their expected sync time and keep RX in listen mode."""
-    if not _is_lora_hub_node():
+    if settings.NODE_TYPE != 'base':
         return
     while True:
         try:
@@ -2565,7 +2556,7 @@ async def expected_sync_watcher():
         await asyncio.sleep(10)
 
 async def check_missed_syncs():
-    if not _is_lora_hub_node():
+    if settings.NODE_TYPE != 'base':
         return
     while True:
         now = time.time()
@@ -2751,18 +2742,20 @@ async def connectLora():
             return False
     last_lora_activity_ts = time.time()
 
-    if settings.NODE_TYPE in ('base', 'wifi'):
+    if settings.NODE_TYPE == 'base':
         asyncio.create_task(base_packet_processor())
-        await debug_print("Base/WiFi background processor started", "BASE_NODE")
+        await debug_print("Base background processor started", "BASE_NODE")
         asyncio.create_task(check_incomplete_bursts())
-        await debug_print("Base/WiFi incomplete-burst checker started", "BASE_NODE")
-
-    if settings.NODE_TYPE in ('base', 'wifi'):
+        await debug_print("Base incomplete-burst checker started", "BASE_NODE")
         if heartbeat_ping:
             asyncio.create_task(heartbeat_ping_loop())
-            await debug_print("Base/WiFi heartbeat ping loop started", "BASE_NODE")
+            await debug_print("Base heartbeat ping loop started", "BASE_NODE")
         asyncio.create_task(expected_sync_watcher())
-        await debug_print("Base/WiFi expected-sync watcher started", "BASE_NODE")
+        await debug_print("Base expected-sync watcher started", "BASE_NODE")
+
+    if settings.NODE_TYPE == 'wifi':
+        asyncio.create_task(check_incomplete_bursts())
+        await debug_print("WiFi incomplete-burst checker started", "BASE_NODE")
 
     if settings.NODE_TYPE == 'remote':
         uid = settings.UNIT_ID
@@ -2818,7 +2811,7 @@ async def connectLora():
                     await asyncio.sleep(8)
                     continue
 
-            if _is_lora_hub_node():
+            if settings.NODE_TYPE == 'base':
                 await ensure_lora_listening()
 
             if current_time - last_rx_ts > 70:
