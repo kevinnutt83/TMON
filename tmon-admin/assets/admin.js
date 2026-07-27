@@ -109,7 +109,7 @@
 			var roles = ['base','wifi','remote'];
 			document.querySelectorAll('select[name="role"]').forEach(function(sel){
 				// quick check: if wifi & remote present already, skip
-				var hasWifi = false, hasRemote = false;
+				var hasWifi = false, hasBase = false, hasRemote = false;
 				for (var i=0;i<sel.options.length;i++){
 					if (sel.options[i].value === 'wifi') hasWifi = true;
 					if (sel.options[i].value === 'base') hasBase = true;
