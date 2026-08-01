@@ -173,7 +173,33 @@ if (!function_exists('tmon_uc_get_hub_shared_key')) {
         }
 
         /*
-         * Canonical Unit Connector option.
+         * Canonical hub pairing key (issued by Admin /uc/key/register).
+         */
+        $key =
+            get_option(
+                'tmon_uc_hub_shared_key',
+                ''
+            );
+
+        if ($key !== '') {
+            return (string) $key;
+        }
+
+        /*
+         * Legacy canonical alias used in older UC builds.
+         */
+        $legacy_admin_uc_key =
+            get_option(
+                'tmon_admin_uc_key',
+                ''
+            );
+
+        if ($legacy_admin_uc_key !== '') {
+            return (string) $legacy_admin_uc_key;
+        }
+
+        /*
+         * Local UC integration/admin key fallback.
          */
         $key =
             get_option(
@@ -196,16 +222,6 @@ if (!function_exists('tmon_uc_get_hub_shared_key')) {
 
         if ($legacy !== '') {
             return (string) $legacy;
-        }
-
-        $legacy2 =
-            get_option(
-                'tmon_admin_uc_key',
-                ''
-            );
-
-        if ($legacy2 !== '') {
-            return (string) $legacy2;
         }
 
         return '';
@@ -258,7 +274,7 @@ if (!function_exists('tmon_uc_set_hub_shared_key')) {
          * Canonical.
          */
         update_option(
-            'tmon_uc_admin_key',
+            'tmon_uc_hub_shared_key',
             $key,
             false
         );
@@ -266,6 +282,18 @@ if (!function_exists('tmon_uc_set_hub_shared_key')) {
         /*
          * Keep legacy option synchronized during migration.
          */
+        update_option(
+            'tmon_uc_admin_key',
+            $key,
+            false
+        );
+
+        update_option(
+            'tmon_admin_uc_key',
+            $key,
+            false
+        );
+
         update_option(
             'tmon_uc_shared_key',
             $key,

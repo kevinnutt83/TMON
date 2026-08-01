@@ -142,7 +142,12 @@ function tmon_uc_pair_with_hub_core($mode = 'pair') {
     $code = wp_remote_retrieve_response_code($resp);
     $body = json_decode(wp_remote_retrieve_body($resp), true);
     if ($code === 200 && is_array($body) && !empty($body['hub_key'])) {
-        update_option('tmon_uc_hub_shared_key', sanitize_text_field($body['hub_key']));
+        $hub_key = sanitize_text_field($body['hub_key']);
+        update_option('tmon_uc_hub_shared_key', $hub_key);
+        // Keep canonical/legacy UC key aliases aligned with Admin-issued hub key.
+        update_option('tmon_uc_admin_key', $hub_key);
+        update_option('tmon_admin_uc_key', $hub_key);
+        update_option('tmon_uc_shared_key', $hub_key);
         if (!empty($body['read_token'])) update_option('tmon_uc_hub_read_token', sanitize_text_field($body['read_token']));
         // Track normalized pairing
         $paired = get_option('tmon_uc_paired_sites', []);
@@ -161,7 +166,7 @@ function tmon_uc_pair_with_hub_core($mode = 'pair') {
         return $result[$cache_key] = [
             'status' => 'ok',
             'paired' => true,
-            'hub_key' => sanitize_text_field($body['hub_key']),
+            'hub_key' => $hub_key,
             'read_token' => isset($body['read_token']) ? sanitize_text_field($body['read_token']) : '',
             'paired_sites' => $paired,
         ];

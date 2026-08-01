@@ -117,6 +117,9 @@ add_action('init', function () {
 	// Backfill missing columns on older installs
 	$cols = $wpdb->get_results("SHOW COLUMNS FROM {$table}", ARRAY_A) ?: array();
 	$names = array_map(function($c){ return $c['Field']; }, $cols);
+	if (!in_array('updated_at', $names, true)) {
+		$wpdb->query("ALTER TABLE {$table} ADD COLUMN updated_at DATETIME NULL AFTER created_at");
+	}
 	if (!in_array('executed_at', $names, true)) {
 		$wpdb->query("ALTER TABLE {$table} ADD COLUMN executed_at DATETIME NULL AFTER updated_at");
 	}
@@ -549,6 +552,7 @@ if (!function_exists('tmon_uc_get_device_commands')) {
         $table =
             $wpdb->prefix .
             'tmon_device_commands';
+		$has_updated_at = (bool) $wpdb->get_var($wpdb->prepare("SHOW COLUMNS FROM {$table} LIKE %s", 'updated_at'));
 
         /*
          * Commands that have been claimed but never completed are
@@ -578,36 +582,66 @@ if (!function_exists('tmon_uc_get_device_commands')) {
          *
          * or stale claimed commands.
          */
-        $rows =
-            $wpdb->get_results(
-                $wpdb->prepare(
-                    "SELECT
-                        id,
-                        command,
-                        params,
-                        status,
-                        created_at,
-                        updated_at
-                     FROM {$table}
-                     WHERE device_id = %s
-                       AND (
-                            status = 'queued'
-                            OR (
-                                status = 'claimed'
-                                AND (
-                                    updated_at IS NULL
-                                    OR updated_at < %s
-                                )
-                            )
-                       )
-                     ORDER BY id ASC
-                     LIMIT %d",
-                    $unit_id,
-                    $lease_cutoff,
-                    $limit
-                ),
-                ARRAY_A
-            );
+		if ($has_updated_at) {
+			$rows =
+				$wpdb->get_results(
+					$wpdb->prepare(
+						"SELECT
+							id,
+							command,
+							params,
+							status,
+							created_at,
+							updated_at
+						 FROM {$table}
+						 WHERE device_id = %s
+						   AND (
+								status = 'queued'
+								OR (
+									status = 'claimed'
+									AND (
+										updated_at IS NULL
+										OR updated_at < %s
+									)
+								)
+						   )
+						 ORDER BY id ASC
+						 LIMIT %d",
+						$unit_id,
+						$lease_cutoff,
+						$limit
+					),
+					ARRAY_A
+				);
+		} else {
+			$rows =
+				$wpdb->get_results(
+					$wpdb->prepare(
+						"SELECT
+							id,
+							command,
+							params,
+							status,
+							created_at,
+							created_at AS updated_at
+						 FROM {$table}
+						 WHERE device_id = %s
+						   AND (
+								status = 'queued'
+								OR (
+									status = 'claimed'
+									AND created_at < %s
+								)
+						   )
+						 ORDER BY id ASC
+						 LIMIT %d",
+						$unit_id,
+						$lease_cutoff,
+						$limit
+					),
+					ARRAY_A
+				);
+		}
 
         if (!$rows) {
 
@@ -679,12 +713,20 @@ if (!function_exists('tmon_uc_get_device_commands')) {
                     )
                 );
 
-            $wpdb->query(
-                "UPDATE {$table}
-                 SET status = 'claimed',
-                     updated_at = UTC_TIMESTAMP()
-                 WHERE id IN ({$id_sql})"
-            );
+			if ($has_updated_at) {
+				$wpdb->query(
+					"UPDATE {$table}
+					 SET status = 'claimed',
+						 updated_at = UTC_TIMESTAMP()
+					 WHERE id IN ({$id_sql})"
+				);
+			} else {
+				$wpdb->query(
+					"UPDATE {$table}
+					 SET status = 'claimed'
+					 WHERE id IN ({$id_sql})"
+				);
+			}
         }
 
         return rest_ensure_response(

@@ -780,8 +780,18 @@ async def process_remote_burst(uid, st):
             save_remote_node_info()
 
     if uid:
+        pending_cmd = None
+        try:
+            pending_cmd = await _fetch_remote_pending_command(uid, remote_machine_id)
+        except Exception as cmd_fetch_e:
+            await log_error(f"Pending command fetch error for {uid}: {cmd_fetch_e}")
+
         ack_delay = calculate_next_delay(uid)
         ack_msg = f"ACK:{uid}:NEXT:{ack_delay}"
+        if isinstance(pending_cmd, dict):
+            encoded_cmd = _encode_ack_command(pending_cmd)
+            if encoded_cmd:
+                ack_msg += f":CMD:{encoded_cmd}"
         try:
             ota_session_hint = _remote_lora_ota_jobs.get(uid)
             if isinstance(ota_session_hint, dict) and ota_session_hint.get('session'):
@@ -852,17 +862,6 @@ async def process_remote_burst(uid, st):
     if 'SDATA' in st['types']:
         sdata_dict = st['data']['SDATA']
         stage_remote_field_data(uid, [sdata_dict])
-
-    # Keep ACK minimal for reliability; command piggyback is intentionally deferred.
-    try:
-        pending_cmd = await _fetch_remote_pending_command(uid, remote_machine_id)
-        if isinstance(pending_cmd, dict):
-            await debug_print(
-                f"Deferred ACK command piggyback for {uid} (cmd_id={pending_cmd.get('id')})",
-                "BASE_NODE"
-            )
-    except Exception as cmd_hint_e:
-        await log_error(f"Pending command check error for {uid}: {cmd_hint_e}")
 
     if ota_session_id:
         try:
@@ -1008,13 +1007,28 @@ async def process_remote_state_files(uid, st):
             st['chunks'].pop('STATE_FILES', None)
 
 
-async def _send_final_ack(remote_uid, batch_id=None, reason=''):
+async def _send_final_ack(remote_uid, batch_id=None, reason='', remote_machine_id=None):
     """Send a final ACK to a remote and include optional batch marker."""
     try:
         next_delay = calculate_next_delay(remote_uid)
         ack_msg = f"ACK:{remote_uid}:NEXT:{next_delay}"
         if batch_id:
             ack_msg += f":BID:{batch_id}"
+
+        # Opportunistically piggyback one queued command for this remote.
+        try:
+            if not remote_machine_id:
+                node_meta = getattr(settings, 'REMOTE_NODE_INFO', {}).get(str(remote_uid), {})
+                if isinstance(node_meta, dict):
+                    remote_machine_id = node_meta.get('MACHINE_ID')
+            pending_cmd = await _fetch_remote_pending_command(remote_uid, remote_machine_id)
+            if isinstance(pending_cmd, dict):
+                encoded_cmd = _encode_ack_command(pending_cmd)
+                if encoded_cmd:
+                    ack_msg += f":CMD:{encoded_cmd}"
+        except Exception as cmd_e:
+            await log_error(f"Final ACK command piggyback error for {remote_uid}: {cmd_e}")
+
         ack_msg = await _secure_message(ack_msg, remote_uid=remote_uid)
         await _safe_send(ack_msg.encode(), remote_uid=remote_uid)
         if reason:
@@ -1348,6 +1362,7 @@ async def handle_incoming_packet(msg):
 
     msg_str = await _unsecure_message(msg_str, remote_uid=uid_hint)
     if not msg_str:
+        await debug_print("Dropped inbound packet: secure decode failed", "WARN")
         return
 
     # Validate network membership after decryption so secure envelopes can be checked.
@@ -1656,7 +1671,7 @@ async def _unsecure_message(msg_str, remote_uid=None):
             elif p.startswith('HMAC:'):
                 hmac_hex = p[5:]
             elif p.startswith('CRC:'):
-                crc_hex = ''.join(ch for ch in p[4:] if ch in '0123456789abcdefABCDEF')[:4]
+                crc_hex = ''.join(ch for ch in p[4:] if ch in '0123456789abcdefABCDEF')
     else:
         cnt_marker = f'{meta_sep}CNT:'
         hmac_marker = f'{meta_sep}HMAC:'
@@ -1678,7 +1693,7 @@ async def _unsecure_message(msg_str, remote_uid=None):
                 elif p.startswith('HMAC:'):
                     hmac_hex = p[5:]
                 elif p.startswith('CRC:'):
-                    crc_hex = ''.join(ch for ch in p[4:] if ch in '0123456789abcdefABCDEF')[:4]
+                    crc_hex = ''.join(ch for ch in p[4:] if ch in '0123456789abcdefABCDEF')
                 else:
                     message_parts.append(p)
             original_msg = meta_sep.join(message_parts)
@@ -1725,14 +1740,14 @@ async def _unsecure_message(msg_str, remote_uid=None):
 
     if crc_hex:
         try:
-            crc_hex = ''.join(ch for ch in str(crc_hex) if ch in '0123456789abcdefABCDEF')[:4]
-            if len(crc_hex) < 4:
+            crc_hex = ''.join(ch for ch in str(crc_hex) if ch in '0123456789abcdefABCDEF')
+            if len(crc_hex) != 4:
                 await _log_security_error('invalid_crc_field', f'Invalid CRC field: {crc_hex}')
                 return None
-            expected_crc = int(crc_hex[:4], 16)
+            expected_crc = int(crc_hex, 16)
             actual_crc = crc16_ccitt(msg_str.encode())
             if actual_crc != expected_crc:
-                await _log_security_error('crc_mismatch', f"CRC mismatch: expected {crc_hex[:4]}, got {_format_crc(actual_crc)}")
+                await _log_security_error('crc_mismatch', f"CRC mismatch: expected {crc_hex}, got {_format_crc(actual_crc)}")
                 return None
         except Exception:
             await _log_security_error('crc_parse_error', f'CRC parse error: {crc_hex}')
@@ -1758,6 +1773,14 @@ async def _unsecure_message(msg_str, remote_uid=None):
                     remote_uid = msg_str.split(',U:')[1].split(',')[0].strip()
                 elif msg_str.startswith('U:'):
                     remote_uid = msg_str.split('U:')[1].split(',')[0].strip()
+                elif msg_str.startswith('HELLO:'):
+                    remote_uid = msg_str.split(':', 1)[1].split(',')[0].strip()
+                elif msg_str.startswith('END:'):
+                    remote_uid = msg_str.split(':', 2)[1].strip()
+                elif msg_str.startswith('ACK:'):
+                    remote_uid = msg_str.split(':', 2)[1].strip()
+                elif msg_str.startswith('READY:'):
+                    remote_uid = msg_str.split(':', 2)[1].strip()
                 elif 'unit-' in msg_str:
                     for part in msg_str.split(','):
                         if part.startswith('unit-') or 'UID' in part:
@@ -1765,6 +1788,9 @@ async def _unsecure_message(msg_str, remote_uid=None):
                             break
             except Exception:
                 remote_uid = 'unknown'
+
+        if not remote_uid:
+            remote_uid = 'unknown'
 
         if remote_uid not in remote_counters:
             remote_counters[remote_uid] = {'tx': 0, 'rx': 0}
@@ -2225,11 +2251,14 @@ async def send_field_data_controlled(payload):
                     parts = clear.split(':')
                     if len(parts) >= 4 and parts[1] == uid and parts[2] == 'NEXT':
                         ack_bid = None
+                        ack_cmd = None
                         if len(parts) >= 6:
                             i = 4
                             while i + 1 < len(parts):
                                 if parts[i] == 'BID':
                                     ack_bid = parts[i + 1]
+                                elif parts[i] == 'CMD':
+                                    ack_cmd = _decode_ack_command(parts[i + 1])
                                     break
                                 i += 2
                         if batch_id and ack_bid and str(ack_bid) != str(batch_id):
@@ -2239,6 +2268,9 @@ async def send_field_data_controlled(payload):
                             )
                             await asyncio.sleep_ms(80)
                             continue
+                        if isinstance(ack_cmd, dict):
+                            await debug_print("Remote: received command via FINAL ACK", "REMOTE_NODE")
+                            await _apply_remote_command_from_ack(ack_cmd)
                         try:
                             delay = max(10, int(parts[3]))
                         except Exception:
@@ -2762,6 +2794,15 @@ async def connectLora():
         return False
 
     await debug_print(f"Enabling LoRa - {getattr(settings, 'FIRMWARE_VERSION', 'unknown')}", "LORA")
+    try:
+        secret = str(getattr(settings, 'LORA_HMAC_SECRET', '') or '')
+        if secret:
+            fp = _ub.hexlify(uhashlib.sha256(secret.encode()).digest()).decode()[:10]
+            await debug_print(f"LoRa HMAC secret fingerprint: {fp}", "LORA")
+        else:
+            await debug_print("LoRa HMAC secret is empty", "WARN")
+    except Exception:
+        pass
     await display_message("LoRa Starting...", 1)
 
     async with pin_lock:

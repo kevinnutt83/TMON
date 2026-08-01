@@ -147,8 +147,8 @@ function tmon_uc_install_schema() {
 		status VARCHAR(32) DEFAULT 'queued',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME NULL,
-        executed_at DATETIME NULL
-		result LONGTEXT,
+		executed_at DATETIME NULL,
+		result LONGTEXT
     ) $charset_collate;");
 
     // Company

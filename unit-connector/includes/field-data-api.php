@@ -464,6 +464,33 @@ function tmon_uc_receive_field_data($request) {
             $rec_unit = isset($t['unit_id']) ? sanitize_text_field($t['unit_id']) : $unit_id;
             $rec_machine = isset($t['machine_id']) ? sanitize_text_field($t['machine_id']) : $machine_id;
 
+            // Canonicalize common sensor aliases so stored field_data always contains chart-friendly keys.
+            if (!isset($t['t_f'])) {
+                if (isset($t['cur_temp_f'])) $t['t_f'] = $t['cur_temp_f'];
+                elseif (isset($t['probe_temp_f'])) $t['t_f'] = $t['probe_temp_f'];
+                elseif (isset($t['temp_f'])) $t['t_f'] = $t['temp_f'];
+            }
+            if (!isset($t['t_c'])) {
+                if (isset($t['cur_temp_c'])) $t['t_c'] = $t['cur_temp_c'];
+                elseif (isset($t['probe_temp_c'])) $t['t_c'] = $t['probe_temp_c'];
+                elseif (isset($t['temp_c'])) $t['t_c'] = $t['temp_c'];
+            }
+            if (!isset($t['hum'])) {
+                if (isset($t['cur_humid'])) $t['hum'] = $t['cur_humid'];
+                elseif (isset($t['probe_humid'])) $t['hum'] = $t['probe_humid'];
+                elseif (isset($t['humidity'])) $t['hum'] = $t['humidity'];
+            }
+            if (!isset($t['bar'])) {
+                if (isset($t['cur_bar_pres'])) $t['bar'] = $t['cur_bar_pres'];
+                elseif (isset($t['probe_bar'])) $t['bar'] = $t['probe_bar'];
+                elseif (isset($t['pressure'])) $t['bar'] = $t['pressure'];
+            }
+            if (!isset($t['v'])) {
+                if (isset($t['sys_voltage'])) $t['v'] = $t['sys_voltage'];
+                elseif (isset($t['voltage_v'])) $t['v'] = $t['voltage_v'];
+                elseif (isset($t['volt'])) $t['v'] = $t['volt'];
+            }
+
             // Resolve unit_id from existing mapping via machine_id when missing
             if (!$rec_unit && $rec_machine) {
                 $row = $wpdb->get_row($wpdb->prepare("SELECT unit_id FROM {$wpdb->prefix}tmon_devices WHERE machine_id=%s", $rec_machine), ARRAY_A);
@@ -618,6 +645,14 @@ function tmon_uc_get_device_history($request) {
     }
     $rows = $wpdb->get_results($wpdb->prepare("SELECT data, created_at FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s AND created_at >= %s ORDER BY created_at ASC", $unit_id, $since), ARRAY_A);
     $points = [];
+    $pick_value = static function($arr, $keys) {
+        foreach ($keys as $k) {
+            if (array_key_exists($k, $arr) && $arr[$k] !== '' && $arr[$k] !== null) {
+                return $arr[$k];
+            }
+        }
+        return null;
+    };
     foreach ($rows as $r) {
         $d = json_decode($r['data'], true);
         if (!is_array($d)) continue;
@@ -638,10 +673,10 @@ function tmon_uc_get_device_history($request) {
         $points[] = [
             // expose ISO timestamps in site-local time for charting/labels
             't' => date_i18n(DATE_ISO8601, tmon_uc_mysql_to_local_timestamp($r['created_at'])),
-            'temp_f' => $d['probe_temp_f'] ?? ($d['t_f'] ?? ($d['cur_temp_f'] ?? null)),
-            'humid' => $d['probe_humid'] ?? ($d['hum'] ?? ($d['cur_humid'] ?? null)),
-            'bar' => $d['probe_bar'] ?? ($d['bar'] ?? ($d['cur_bar_pres'] ?? null)),
-            'volt' => $d['v'] ?? ($d['sys_voltage'] ?? null),
+            'temp_f' => $pick_value($d, ['temp_f', 'probe_temp_f', 't_f', 'cur_temp_f', 'cur_probe_temp_f']),
+            'humid' => $pick_value($d, ['humid', 'humidity', 'probe_humid', 'hum', 'cur_humid', 'cur_probe_humid']),
+            'bar' => $pick_value($d, ['bar', 'pressure', 'probe_bar', 'cur_bar_pres', 'cur_probe_bar_pres']),
+            'volt' => $pick_value($d, ['volt', 'v', 'voltage_v', 'sys_voltage']),
             'device_temp_f' => $d['device_temp_f'] ?? ($d['dt_f'] ?? ($d['cur_device_temp_f'] ?? null)),
             'device_humid' => $d['device_humid'] ?? ($d['dh'] ?? ($d['cur_device_humid'] ?? null)),
             'device_bar' => $d['device_bar'] ?? ($d['db'] ?? ($d['cur_device_bar_pres'] ?? null)),

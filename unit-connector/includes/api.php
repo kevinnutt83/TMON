@@ -115,22 +115,37 @@ if (!function_exists('tmon_uc_validate_hub_request')) {
         }
 
         $provided_hub = '';
+        $provided_admin = '';
         if (is_object($request) && method_exists($request, 'get_header')) {
             $provided_hub = (string) ($request->get_header('X-TMON-HUB') ?: '');
+            $provided_admin = (string) ($request->get_header('X-TMON-ADMIN') ?: '');
         }
         if ($provided_hub === '') {
             $provided_hub = (string) ($_SERVER['HTTP_X_TMON_HUB'] ?? '');
         }
+        if ($provided_admin === '') {
+            $provided_admin = (string) ($_SERVER['HTTP_X_TMON_ADMIN'] ?? '');
+        }
 
-        $expected_hub = '';
+        $expected_keys = [];
         if (function_exists('tmon_uc_get_hub_shared_key')) {
-            $expected_hub = (string) tmon_uc_get_hub_shared_key();
+            $expected_keys[] = (string) tmon_uc_get_hub_shared_key();
         }
-        if ($expected_hub === '') {
-            $expected_hub = (string) (get_option('tmon_uc_admin_key', '') ?: get_option('tmon_uc_shared_key', ''));
-        }
-        if ($expected_hub !== '' && $provided_hub !== '' && hash_equals($expected_hub, $provided_hub)) {
-            return true;
+        $expected_keys[] = (string) get_option('tmon_uc_hub_shared_key', '');
+        $expected_keys[] = (string) get_option('tmon_uc_admin_key', '');
+        $expected_keys[] = (string) get_option('tmon_admin_uc_key', '');
+        $expected_keys[] = (string) get_option('tmon_uc_shared_key', '');
+        $expected_keys = array_values(array_filter(array_unique($expected_keys), static function($k) {
+            return $k !== '';
+        }));
+
+        foreach ($expected_keys as $expected_hub) {
+            if ($provided_hub !== '' && hash_equals($expected_hub, $provided_hub)) {
+                return true;
+            }
+            if ($provided_admin !== '' && hash_equals($expected_hub, $provided_admin)) {
+                return true;
+            }
         }
 
         $read_token = (string) get_option('tmon_uc_hub_read_token', '');
@@ -227,7 +242,19 @@ add_action('rest_api_init', function() {
         'permission_callback' => '__return_true',
     ]);
 
+    register_rest_route('tmon-admin/v1', '/admin/site/devices', [
+        'methods' => 'GET',
+        'callback' => $site_devices_cb,
+        'permission_callback' => '__return_true',
+    ]);
+
     register_rest_route('tmon-admin/v1', '/site/devices-count', [
+        'methods' => 'GET',
+        'callback' => $site_count_cb,
+        'permission_callback' => '__return_true',
+    ]);
+
+    register_rest_route('tmon-admin/v1', '/admin/site/devices-count', [
         'methods' => 'GET',
         'callback' => $site_count_cb,
         'permission_callback' => '__return_true',

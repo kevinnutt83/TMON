@@ -97,6 +97,17 @@ add_action('admin_init', function() {
     }
 });
 
+// Defensive migration pass on init for non-admin traffic as well.
+add_action('init', function() {
+    static $ran = false;
+    if ($ran) return;
+    $ran = true;
+    require_once __DIR__ . '/includes/schema.php';
+    if (function_exists('tmon_uc_ensure_schema')) {
+        tmon_uc_ensure_schema();
+    }
+}, 5);
+
 function tmon_unit_connector_deactivate() {
     $remove_data = get_option('tmon_uc_remove_data_on_deactivate', false);
     if ( $remove_data ) {
