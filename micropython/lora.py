@@ -169,6 +169,7 @@ proxy_last_ts = {}
 last_rx_ts = 0
 last_lora_activity_ts = 0
 lora_rx_queue = SimpleQueue(maxsize=10)
+_security_error_last_ts = {}
 
 tx_counter = 0
 remote_counters = {}
@@ -552,6 +553,18 @@ async def log_error(error_msg):
                 f.write(log_line)
     except Exception:
         await debug_print(f"[FATAL] Failed to log error: {error_msg}", "ERROR")
+
+
+async def _log_security_error(key, message, interval_s=5):
+    try:
+        now = time.time()
+        last_ts = float(_security_error_last_ts.get(key) or 0)
+        if now - last_ts < interval_s:
+            return
+        _security_error_last_ts[key] = now
+    except Exception:
+        pass
+    await log_error(message)
 
 async def hard_reset_lora():
     global lora
@@ -1643,13 +1656,13 @@ async def _unsecure_message(msg_str, remote_uid=None):
             elif p.startswith('HMAC:'):
                 hmac_hex = p[5:]
             elif p.startswith('CRC:'):
-                crc_hex = p[4:]
+                crc_hex = ''.join(ch for ch in p[4:] if ch in '0123456789abcdefABCDEF')[:4]
     else:
         cnt_marker = f'{meta_sep}CNT:'
         hmac_marker = f'{meta_sep}HMAC:'
         if cnt_marker not in msg_str or hmac_marker not in msg_str:
             if getattr(settings, 'LORA_HMAC_REJECT_UNSIGNED', True):
-                await log_error('Invalid secure format (no CNT/HMAC)')
+                await _log_security_error('invalid_secure_format', 'Invalid secure format (no CNT/HMAC)')
                 return None
             return msg_str
 
@@ -1665,7 +1678,7 @@ async def _unsecure_message(msg_str, remote_uid=None):
                 elif p.startswith('HMAC:'):
                     hmac_hex = p[5:]
                 elif p.startswith('CRC:'):
-                    crc_hex = p[4:]
+                    crc_hex = ''.join(ch for ch in p[4:] if ch in '0123456789abcdefABCDEF')[:4]
                 else:
                     message_parts.append(p)
             original_msg = meta_sep.join(message_parts)
@@ -1673,7 +1686,7 @@ async def _unsecure_message(msg_str, remote_uid=None):
             return None
 
     if cnt is None or hmac_hex is None:
-        await log_error('Missing CNT or HMAC in secure message')
+        await _log_security_error('missing_cnt_hmac', 'Missing CNT or HMAC in secure message')
         return None
 
     secret = getattr(settings, 'LORA_HMAC_SECRET', '') or ''
@@ -1695,7 +1708,7 @@ async def _unsecure_message(msg_str, remote_uid=None):
     hmac_val = hmac_sha256(secret, to_hmac)
     hmac_hex_calc = _ub.hexlify(hmac_val).decode()[:getattr(settings, 'LORA_HMAC_TRUNCATE', 16)]
     if hmac_hex_calc != hmac_hex:
-        await log_error('HMAC verification failed')
+        await _log_security_error('hmac_verification_failed', 'HMAC verification failed')
         return None
 
     if is_enc:
@@ -1712,13 +1725,18 @@ async def _unsecure_message(msg_str, remote_uid=None):
 
     if crc_hex:
         try:
-            expected_crc = int(crc_hex, 16)
+            crc_hex = ''.join(ch for ch in str(crc_hex) if ch in '0123456789abcdefABCDEF')[:4]
+            if len(crc_hex) < 4:
+                await _log_security_error('invalid_crc_field', f'Invalid CRC field: {crc_hex}')
+                return None
+            expected_crc = int(crc_hex[:4], 16)
             actual_crc = crc16_ccitt(msg_str.encode())
             if actual_crc != expected_crc:
-                await log_error(f"CRC mismatch: expected {crc_hex}, got {_format_crc(actual_crc)}")
+                await _log_security_error('crc_mismatch', f"CRC mismatch: expected {crc_hex[:4]}, got {_format_crc(actual_crc)}")
                 return None
         except Exception:
-            pass
+            await _log_security_error('crc_parse_error', f'CRC parse error: {crc_hex}')
+            return None
 
     if not getattr(settings, 'LORA_HMAC_REPLAY_PROTECT', True):
         return msg_str
@@ -1728,7 +1746,7 @@ async def _unsecure_message(msg_str, remote_uid=None):
     if str(getattr(settings, 'NODE_TYPE', '')).lower() == 'remote':
         last_rx = getattr(settings, '_last_rx_counter', 0)
         if cnt <= last_rx - window:
-            await log_error(f"Replay attack detected (cnt {cnt} <= last_rx {last_rx})")
+            await _log_security_error('replay_remote', f"Replay attack detected (cnt {cnt} <= last_rx {last_rx})")
             return None
         settings._last_rx_counter = max(last_rx, cnt)
     else:
@@ -1754,7 +1772,7 @@ async def _unsecure_message(msg_str, remote_uid=None):
         last_rx = remote_counters[remote_uid]['rx']
 
         if cnt <= last_rx - window:
-            await log_error(f"Replay attack detected (cnt {cnt} <= rx_counter {last_rx}) uid={remote_uid}")
+            await _log_security_error('replay_base', f"Replay attack detected (cnt {cnt} <= rx_counter {last_rx}) uid={remote_uid}")
             return None
 
         if cnt > last_rx:

@@ -218,7 +218,7 @@ function tmon_uc_admin_read_auth($request) {
     $hub = '';
     if (isset($headers['X-TMON-HUB'])) $hub = $headers['X-TMON-HUB'];
     elseif (isset($_SERVER['HTTP_X_TMON_HUB'])) $hub = $_SERVER['HTTP_X_TMON_HUB'];
-    $expected_hub = get_option('tmon_uc_hub_shared_key');
+    $expected_hub = function_exists('tmon_uc_get_hub_shared_key') ? tmon_uc_get_hub_shared_key() : get_option('tmon_uc_hub_shared_key');
     if ($expected_hub && hash_equals($expected_hub, (string)$hub)) return true;
     // Dedicated read token header
     $read = '';

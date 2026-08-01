@@ -819,7 +819,7 @@ add_action('rest_api_init', function () {
         'methods' => 'POST',
         'permission_callback' => '__return_true',
         'callback' => function (WP_REST_Request $request) {
-            $expected = get_option('tmon_admin_uc_key', '');
+            $expected = get_option('tmon_admin_uc_key', '') ?: get_option('tmon_admin_hub_shared_key', '');
             $provided = '';
             if (function_exists('getallheaders')) {
                 $headers = getallheaders();

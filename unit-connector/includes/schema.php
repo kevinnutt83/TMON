@@ -1,6 +1,92 @@
 <?php
 // DB schema for TMON organizational hierarchy and device data
 // Call tmon_uc_install_schema() from the main plugin activation hook
+
+if (!function_exists('tmon_uc_ensure_schema')) {
+function tmon_uc_ensure_schema() {
+	global $wpdb;
+	require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+	$charset = $wpdb->get_charset_collate();
+
+	$devices = $wpdb->prefix . 'tmon_devices';
+	$commands = $wpdb->prefix . 'tmon_device_commands';
+
+	$sql_devices = "CREATE TABLE {$devices} (
+		id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+		unit_id varchar(64) NOT NULL,
+		machine_id varchar(128) DEFAULT '',
+		unit_name varchar(255) DEFAULT '',
+		role varchar(32) DEFAULT '',
+		node_type varchar(32) DEFAULT '',
+		company varchar(255) DEFAULT '',
+		site varchar(255) DEFAULT '',
+		zone varchar(255) DEFAULT '',
+		cluster varchar(255) DEFAULT '',
+		suspended tinyint(1) NOT NULL DEFAULT 0,
+		last_seen datetime DEFAULT NULL,
+		settings longtext,
+		status longtext,
+		registered_at datetime DEFAULT NULL,
+		updated_at datetime DEFAULT NULL,
+		PRIMARY KEY  (id),
+		UNIQUE KEY unit_id (unit_id),
+		KEY machine_id (machine_id),
+		KEY role (role),
+		KEY node_type (node_type)
+	) {$charset};";
+
+	$sql_commands = "CREATE TABLE {$commands} (
+		id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+		device_id varchar(64) NOT NULL,
+		command varchar(64) NOT NULL,
+		params longtext,
+		status varchar(32) NOT NULL DEFAULT 'queued',
+		created_at datetime DEFAULT NULL,
+		updated_at datetime DEFAULT NULL,
+		executed_at datetime DEFAULT NULL,
+		result longtext,
+		PRIMARY KEY  (id),
+		KEY device_status (device_id, status),
+		KEY updated_at (updated_at)
+	) {$charset};";
+
+	dbDelta($sql_devices);
+	dbDelta($sql_commands);
+
+	$dcols = $wpdb->get_col("DESCRIBE {$devices}", 0);
+	if (is_array($dcols) && !in_array('role', $dcols, true)) {
+		$wpdb->query("ALTER TABLE {$devices} ADD COLUMN role varchar(32) DEFAULT '' AFTER unit_name");
+	}
+	if (is_array($dcols) && !in_array('node_type', $dcols, true)) {
+		$wpdb->query("ALTER TABLE {$devices} ADD COLUMN node_type varchar(32) DEFAULT '' AFTER role");
+	}
+	if (is_array($dcols) && !in_array('registered_at', $dcols, true)) {
+		$wpdb->query("ALTER TABLE {$devices} ADD COLUMN registered_at datetime DEFAULT NULL AFTER settings");
+	}
+	if (is_array($dcols) && !in_array('updated_at', $dcols, true)) {
+		$wpdb->query("ALTER TABLE {$devices} ADD COLUMN updated_at datetime DEFAULT NULL AFTER registered_at");
+	}
+
+	$ccols = $wpdb->get_col("DESCRIBE {$commands}", 0);
+	if (is_array($ccols) && !in_array('status', $ccols, true)) {
+		$wpdb->query("ALTER TABLE {$commands} ADD COLUMN status varchar(32) NOT NULL DEFAULT 'queued' AFTER params");
+	}
+	if (is_array($ccols) && !in_array('updated_at', $ccols, true)) {
+		$wpdb->query("ALTER TABLE {$commands} ADD COLUMN updated_at datetime DEFAULT NULL AFTER created_at");
+	}
+	if (is_array($ccols) && !in_array('executed_at', $ccols, true)) {
+		$wpdb->query("ALTER TABLE {$commands} ADD COLUMN executed_at datetime DEFAULT NULL AFTER updated_at");
+	}
+	if (is_array($ccols) && !in_array('result', $ccols, true)) {
+		$wpdb->query("ALTER TABLE {$commands} ADD COLUMN result longtext AFTER executed_at");
+	}
+
+	$wpdb->query("UPDATE {$devices} SET role = node_type WHERE (role IS NULL OR role = '') AND node_type <> ''");
+	$wpdb->query("UPDATE {$devices} SET role = 'remote' WHERE (role IS NULL OR role = '')");
+
+	update_option('tmon_uc_schema_version', '2.0.5', false);
+}}
+
 function tmon_uc_install_schema() {
     global $wpdb;
     $charset_collate = $wpdb->get_charset_collate();
@@ -58,8 +144,11 @@ function tmon_uc_install_schema() {
         device_id VARCHAR(64) NOT NULL,
         command VARCHAR(64) NOT NULL,
         params LONGTEXT,
+		status VARCHAR(32) DEFAULT 'queued',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME NULL,
         executed_at DATETIME NULL
+		result LONGTEXT,
     ) $charset_collate;");
 
     // Company
@@ -152,6 +241,9 @@ function tmon_uc_install_schema() {
         details TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     ) $charset_collate;");
+
+	// Ensure current live schema matches what the code expects.
+	tmon_uc_ensure_schema();
 }
 
 // Ensure core DB schema and upgrade-safe column additions for Unit Connector

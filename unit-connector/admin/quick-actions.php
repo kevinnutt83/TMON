@@ -81,7 +81,7 @@ add_action('tmon_uc_refresh_queue_cron', function(){
     $queue = get_option('tmon_uc_refresh_queue', array());
     if (!is_array($queue) || empty($queue)) return;
     $hub = function_exists('tmon_uc_get_hub_url') ? tmon_uc_get_hub_url() : get_option('tmon_uc_hub_url', '');
-    $hub_key = get_option('tmon_uc_hub_shared_key', '');
+    $hub_key = function_exists('tmon_uc_get_hub_shared_key') ? tmon_uc_get_hub_shared_key() : get_option('tmon_uc_hub_shared_key', '');
     if (!$hub || !$hub_key) return;
     $endpoint = rtrim($hub, '/') . '/wp-json/tmon-admin/v1/uc/sync-devices';
     $processed = array();
@@ -105,11 +105,15 @@ add_action('tmon_uc_refresh_queue_cron', function(){
             $resp = tmon_uc_safe_remote_post($endpoint, $args, 'refresh_queue');
             if (!is_wp_error($resp) && intval(wp_remote_retrieve_response_code($resp)) === 200) {
                 $processed[] = $idx;
+            } elseif (!is_wp_error($resp)) {
+                error_log('unit-connector: refresh_queue sync-devices failed code=' . intval(wp_remote_retrieve_response_code($resp)) . ' hub_key_len=' . strlen((string) $hub_key));
             }
         } else {
             $resp = wp_remote_post($endpoint, $args);
             if (!is_wp_error($resp) && intval(wp_remote_retrieve_response_code($resp)) === 200) {
                 $processed[] = $idx;
+            } elseif (!is_wp_error($resp)) {
+                error_log('unit-connector: refresh_queue sync-devices failed code=' . intval(wp_remote_retrieve_response_code($resp)) . ' hub_key_len=' . strlen((string) $hub_key));
             }
         }
     }

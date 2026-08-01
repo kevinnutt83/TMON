@@ -264,12 +264,12 @@ add_action('wp_ajax_tmon_refresh_site_count', function(){
 		wp_send_json_error('Forbidden', 403);
 	}
 
-	$nonce = $_REQUEST['_wpnonce'] ?? '';
-	if (!wp_verify_nonce($nonce, 'tmon_admin_uc_refresh')) {
+    $nonce = $_REQUEST['_wpnonce'] ?? ($_REQUEST['nonce'] ?? '');
+    if (!wp_verify_nonce($nonce, 'tmon_admin_uc_refresh')) {
 		wp_send_json_error('Invalid nonce', 403);
 	}
 
-	$site_url = $_REQUEST['site'] ?? '';
+    $site_url = $_REQUEST['site'] ?? ($_REQUEST['site_url'] ?? '');
 	$site_url = filter_var($site_url, FILTER_SANITIZE_URL);
 	if (!filter_var($site_url, FILTER_VALIDATE_URL)) {
 		wp_send_json_error('Invalid site URL', 400);

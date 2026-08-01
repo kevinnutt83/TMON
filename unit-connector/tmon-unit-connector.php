@@ -74,6 +74,7 @@ function tmon_unit_connector_activate() {
     require_once __DIR__ . '/includes/schema.php';
     // Create all required tables
     tmon_uc_install_schema();
+    tmon_uc_ensure_schema();
 
     // Add custom roles and capabilities for TMON
     add_role('tmon_manager', 'TMON Manager', [
@@ -88,6 +89,13 @@ function tmon_unit_connector_activate() {
         'edit_tmon_units' => true,
     ]);
 }
+
+add_action('admin_init', function() {
+    require_once __DIR__ . '/includes/schema.php';
+    if (get_option('tmon_uc_schema_version') !== '2.0.5') {
+        tmon_uc_ensure_schema();
+    }
+});
 
 function tmon_unit_connector_deactivate() {
     $remove_data = get_option('tmon_uc_remove_data_on_deactivate', false);

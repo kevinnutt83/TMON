@@ -1141,41 +1141,74 @@ function tmon_admin_ajax_refresh_site_count() {
 	}
 
 	// Verify nonce (returns false instead of die when arg 3 is false)
-	if (! isset($_REQUEST['nonce']) || ! check_ajax_referer('tmon_admin_uc_refresh', 'nonce', false) ) {
+	$nonce_value = $_REQUEST['nonce'] ?? ($_REQUEST['_wpnonce'] ?? '');
+	if (! $nonce_value || ! wp_verify_nonce($nonce_value, 'tmon_admin_uc_refresh')) {
 		wp_send_json_error(['message' => 'Security check failed'], 403);
 	}
 
-	$site = esc_url_raw($_POST['site_url'] ?? $_GET['site_url'] ?? '');
+	$site = esc_url_raw($_POST['site_url'] ?? $_GET['site_url'] ?? $_POST['site'] ?? $_GET['site'] ?? '');
 	if (! $site) {
 		wp_send_json_error(['message' => 'Missing site_url'], 400);
 	}
 
-	$endpoint = rtrim($site, '/') . '/wp-json/tmon/v1/admin/site/devices';
-	$resp = wp_remote_get($endpoint, ['timeout' => 5, 'headers' => ['Accept' => 'application/json']]);
-	if (is_wp_error($resp)) {
-		wp_send_json_error(['message' => $resp->get_error_message()]);
+	$headers = ['Accept' => 'application/json'];
+	$pairings = get_option('tmon_admin_uc_sites', []);
+	if (is_array($pairings) && isset($pairings[$site])) {
+		$meta = $pairings[$site];
+		if (!empty($meta['read_token'])) {
+			$headers['Authorization'] = 'Bearer ' . $meta['read_token'];
+		} elseif (!empty($meta['uc_key'])) {
+			$headers['X-TMON-HUB'] = $meta['uc_key'];
+		} elseif (!empty($meta['hub_key'])) {
+			$headers['X-TMON-HUB'] = $meta['hub_key'];
+		}
+	} else {
+		$hub_key = get_option('tmon_admin_hub_shared_key', '');
+		if ($hub_key) {
+			$headers['X-TMON-HUB'] = $hub_key;
+		}
 	}
-	$code = intval(wp_remote_retrieve_response_code($resp));
-	$body = wp_remote_retrieve_body($resp);
-	if (! in_array($code, [200,201], true)) {
-		wp_send_json_error(['message' => 'HTTP '. $code, 'raw' => substr($body,0,400)]);
-	}
+
+	$candidates = [
+		'/wp-json/tmon/v1/admin/site/devices',
+		'/wp-json/tmon/v1/admin/site/devices-count',
+		'/wp-json/tmon-admin/v1/site/devices',
+		'/wp-json/tmon-admin/v1/site/devices-count',
+		'/wp-json/tmon/v1/site/devices',
+		'/wp-json/tmon-admin/v1/site/devices?count=1',
+	];
 
 	$count = null;
-	// Try JSON parse first, accept {count:N} or {devices:[..]} or top-level array
-	$j = json_decode($body, true);
-	if (is_array($j)) {
-		if (isset($j['count'])) $count = intval($j['count']);
-		elseif (isset($j['devices']) && is_array($j['devices'])) $count = count($j['devices']);
-		elseif (array_values($j) === $j) $count = count($j);
-	}
-	// If parsing failed, try to extract a number from body
-	if ($count === null) {
-		if (preg_match('/\bcount\D?(\d+)\b/i', $body, $m)) $count = intval($m[1]);
-		elseif (preg_match('/^(\d+)\s*$/', trim($body), $m)) $count = intval($m[1]);
+	$raw = '';
+	$errors = [];
+	foreach ($candidates as $path) {
+		$endpoint = rtrim($site, '/') . $path;
+		$resp = wp_remote_get($endpoint, ['timeout' => 10, 'headers' => $headers]);
+		if (is_wp_error($resp)) {
+			$errors[] = $path . ': ' . $resp->get_error_message();
+			continue;
+		}
+		$code = intval(wp_remote_retrieve_response_code($resp));
+		$body = wp_remote_retrieve_body($resp);
+		$raw = substr($body, 0, 400);
+		if (! in_array($code, [200, 201], true)) {
+			$errors[] = $path . ': HTTP ' . $code;
+			continue;
+		}
+		$j = json_decode($body, true);
+		if (is_array($j)) {
+			if (isset($j['count'])) $count = intval($j['count']);
+			elseif (isset($j['devices']) && is_array($j['devices'])) $count = count($j['devices']);
+			elseif (array_values($j) === $j) $count = count($j);
+		}
+		if ($count === null) {
+			if (preg_match('/\bcount\D?(\d+)\b/i', $body, $m)) $count = intval($m[1]);
+			elseif (preg_match('/^(\d+)\s*$/', trim($body), $m)) $count = intval($m[1]);
+		}
+		wp_send_json_success(['count' => $count, 'raw' => $raw, 'path' => $path]);
 	}
 
-	wp_send_json_success(['count' => $count, 'raw' => substr($body, 0, 400)]);
+	wp_send_json_error(['message' => 'All refresh endpoints failed', 'errors' => $errors, 'raw' => $raw], 502);
 }
 
 

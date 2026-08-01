@@ -732,7 +732,7 @@ async def send_diagnostics_to_wp(extra=None):
             '/wp-json/tmon-admin/v1/device/diagnostics',
             '/wp-json/unit-connector/v1/device/diagnostics',
         ]
-        auth_modes = ['admin', 'hub', 'read', 'basic', 'none']
+        auth_modes = ['basic', 'admin', 'hub', 'read', 'none']
         max_attempts = int(getattr(settings, 'DIAGNOSTIC_MAX_ATTEMPTS', 2))
         base_backoff = float(getattr(settings, 'DIAGNOSTIC_RETRY_BASE_S', 2))
         last_failure = {}
@@ -750,17 +750,17 @@ async def send_diagnostics_to_wp(extra=None):
                         code, _body_text, parsed = _extract_response(resp)
                         if code in (200, 201):
                             _mark_rest_success()
-                            await debug_print(f'send_diagnostics_to_wp ok via {p} auth={auth_mode}', 'HTTP')
+                            await debug_print(f'send_diagnostics_to_wp ok via {p} auth={auth_mode} code={code}', 'INFO')
                             return True
                         if code == 202 and isinstance(parsed, dict) and parsed.get('status') in ('queued', 'accepted', 'ok'):
                             _mark_rest_success()
-                            await debug_print(f'send_diagnostics_to_wp accepted via {p} auth={auth_mode}', 'HTTP')
+                            await debug_print(f'send_diagnostics_to_wp accepted via {p} auth={auth_mode} code={code}', 'INFO')
                             return True
                         if code not in (404, 405):
-                            last_failure = {'path': p, 'auth_mode': auth_mode, 'code': code, 'attempt': attempt + 1}
+                            last_failure = {'path': p, 'auth_mode': auth_mode, 'code': code, 'attempt': attempt + 1, 'body': _body_text}
                             _set_last_rest_error('send_diagnostics_to_wp', code, p, 'unexpected_status', {'attempt': attempt + 1, 'auth_mode': auth_mode, 'body': _body_text})
                     except Exception as e:
-                        last_failure = {'path': p, 'auth_mode': auth_mode, 'code': 0, 'attempt': attempt + 1}
+                        last_failure = {'path': p, 'auth_mode': auth_mode, 'code': 0, 'attempt': attempt + 1, 'body': ''}
                         _set_last_rest_error('send_diagnostics_to_wp', 0, p, 'request_exception', {'attempt': attempt + 1, 'auth_mode': auth_mode, 'exception': format_exception(e)})
                         await log_exception(f'send_diagnostics_to_wp attempt {attempt+1} {p} auth={auth_mode}', e)
                     finally:
@@ -777,7 +777,7 @@ async def send_diagnostics_to_wp(extra=None):
         if last_failure:
             await debug_print(
                 'send_diagnostics_to_wp all attempts failed '
-                f"path={last_failure.get('path','')} auth={last_failure.get('auth_mode','')} code={last_failure.get('code',0)}",
+                f"path={last_failure.get('path','')} auth={last_failure.get('auth_mode','')} code={last_failure.get('code',0)} body={last_failure.get('body','')[:120]}",
                 'WARN',
             )
         else:

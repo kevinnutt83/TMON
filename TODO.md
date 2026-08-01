@@ -37,6 +37,10 @@ Immediate tasks
 - [x] Consume staged settings after device apply in Unit Connector: `settings-applied` now removes entries from `tmon_uc_staged_settings`, keeps bounded apply audit, and firmware posts acknowledgement after local apply/delete.
 - [x] Add firmware log rotation controls and starter-page shortcode fixes: bounded `log_rotate.py` loop, new log settings, dynamic history datasets, full sdata key rendering, and curated starter page content with shared picker guidance.
 - [x] Add one-time staged-settings clear entry points in Unit Connector for stuck apply loops (`tmon_uc_clear_staged_settings_core`, admin-post, and REST clear route).
+- [x] Add Unit Connector schema migration/version gate (`tmon_uc_schema_version=2.0.5`) to ensure `tmon_devices.role/node_type/updated_at` and `tmon_device_commands.status/updated_at/executed_at/result` exist on live sites with older schemas.
+- [x] Canonicalize UC hub-key usage for Admin sync and diagnostics auth paths: UC sync queue uses shared `X-TMON-HUB` key helper, Admin sync route accepts canonical hub key fallback, and key-length failures are logged without exposing the secret.
+- [x] Harden LoRa secure envelope parsing in `micropython/lora.py`: CRC is emitted/parses as 4 hex digits, security failures are rate-limited, and CRC/HMAC parse failures no longer swallow HELLO/READY traffic due to malformed CRC fields.
+- [x] Fix TMON Admin UC device refresh action: both refresh handlers now accept the same nonce/site parameter shapes, and the centralized handler probes multiple UC count endpoints instead of failing on a single 404 route.
 - [x] Add basic CI that runs readiness validation and build packaging (GitHub Actions, `.github/workflows/release-readiness.yml`).
 - [x] Fix OTA task errors: `_get_ota()` now validates module attributes and won't cache a partial/wrong module; wrappers check validity before calling; `ota.py` `maybe_gc` import wrapped in try/except with inline fallback.
 - [x] Suppress expected OTA idle noise: `apply_pending_update` no longer logs WARN when `OTA_PENDING_FILE` is missing (`ENOENT`).
