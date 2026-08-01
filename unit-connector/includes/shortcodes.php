@@ -2153,3 +2153,438 @@ add_action('wp_ajax_tmon_device_status_refresh', function(){
     wp_send_json_success(['html'=>$html]);
 });
 add_action('wp_ajax_nopriv_tmon_device_status_refresh', function(){ wp_send_json_error(['message'=>'not_authenticated'], 403); });
+
+
+<?php
+/**
+ * TMON Unit Connector
+ *
+ * Relay command AJAX endpoint.
+ *
+ * IMPORTANT:
+ * All relay commands go through the canonical
+ * tmon_device_commands queue.
+ *
+ * The device firmware polls that queue over REST.
+ */
+
+if (!function_exists('tmon_uc_ajax_relay_command')) {
+
+    function tmon_uc_ajax_relay_command() {
+
+        /*
+         * -------------------------------------------------------------
+         * Authentication / authorization
+         * -------------------------------------------------------------
+         */
+
+        if (
+            !current_user_can('manage_options')
+            && !current_user_can('edit_tmon_units')
+        ) {
+            wp_send_json_error(
+                array(
+                    'message' => 'You do not have permission to control devices.',
+                ),
+                403
+            );
+        }
+
+        if (
+            !isset($_POST['nonce'])
+            || !wp_verify_nonce(
+                sanitize_text_field(wp_unslash($_POST['nonce'])),
+                'tmon_uc_relay'
+            )
+        ) {
+            wp_send_json_error(
+                array(
+                    'message' => 'Security check failed.',
+                ),
+                403
+            );
+        }
+
+        /*
+         * -------------------------------------------------------------
+         * Inputs
+         * -------------------------------------------------------------
+         */
+
+        $unit_id = sanitize_text_field(
+            wp_unslash($_POST['unit_id'] ?? '')
+        );
+
+        $relay_num = intval(
+            $_POST['relay_num'] ?? 0
+        );
+
+        $state = strtolower(
+            sanitize_text_field(
+                wp_unslash($_POST['state'] ?? '')
+            )
+        );
+
+        $runtime_min = intval(
+            $_POST['runtime_min'] ?? 0
+        );
+
+        $schedule_at = sanitize_text_field(
+            wp_unslash($_POST['schedule_at'] ?? '')
+        );
+
+        /*
+         * -------------------------------------------------------------
+         * Validate
+         * -------------------------------------------------------------
+         */
+
+        if ($unit_id === '') {
+            wp_send_json_error(
+                array(
+                    'message' => 'unit_id is required.',
+                ),
+                400
+            );
+        }
+
+        if ($relay_num < 1 || $relay_num > 8) {
+            wp_send_json_error(
+                array(
+                    'message' => 'relay_num must be between 1 and 8.',
+                ),
+                400
+            );
+        }
+
+        if (!in_array($state, array('on', 'off', 'toggle'), true)) {
+            wp_send_json_error(
+                array(
+                    'message' => 'Invalid relay state.',
+                ),
+                400
+            );
+        }
+
+        $runtime_min = max(
+            0,
+            min(
+                1440,
+                $runtime_min
+            )
+        );
+
+        /*
+         * -------------------------------------------------------------
+         * Verify the device actually exists.
+         * -------------------------------------------------------------
+         */
+
+        global $wpdb;
+
+        $device_table =
+            $wpdb->prefix . 'tmon_devices';
+
+        $device = $wpdb->get_row(
+            $wpdb->prepare(
+                "SELECT unit_id, unit_name, suspended
+                 FROM {$device_table}
+                 WHERE unit_id = %s
+                 LIMIT 1",
+                $unit_id
+            ),
+            ARRAY_A
+        );
+
+        if (!$device) {
+
+            wp_send_json_error(
+                array(
+                    'message' => 'Device not found.',
+                    'unit_id' => $unit_id,
+                ),
+                404
+            );
+        }
+
+        if (!empty($device['suspended'])) {
+
+            wp_send_json_error(
+                array(
+                    'message' => 'Device is suspended.',
+                    'unit_id' => $unit_id,
+                ),
+                409
+            );
+        }
+
+        /*
+         * -------------------------------------------------------------
+         * Optional schedule validation.
+         * -------------------------------------------------------------
+         *
+         * HTML datetime-local normally arrives as:
+         *
+         *     2026-07-28T12:30
+         *
+         * We store it as a UTC timestamp so the device doesn't have
+         * to interpret WordPress timezone settings.
+         */
+
+        $schedule_ts = 0;
+
+        if ($schedule_at !== '') {
+
+            $schedule_at_normalized =
+                str_replace(
+                    'T',
+                    ' ',
+                    $schedule_at
+                );
+
+            $dt = DateTime::createFromFormat(
+                'Y-m-d H:i',
+                $schedule_at_normalized,
+                wp_timezone()
+            );
+
+            if (!$dt) {
+
+                $dt = DateTime::createFromFormat(
+                    'Y-m-d H:i:s',
+                    $schedule_at_normalized,
+                    wp_timezone()
+                );
+            }
+
+            if (!$dt) {
+
+                wp_send_json_error(
+                    array(
+                        'message' => 'Invalid schedule time.',
+                    ),
+                    400
+                );
+            }
+
+            $schedule_ts = $dt->getTimestamp();
+
+            if ($schedule_ts <= time()) {
+
+                wp_send_json_error(
+                    array(
+                        'message' => 'Schedule time must be in the future.',
+                    ),
+                    400
+                );
+            }
+        }
+
+        /*
+         * -------------------------------------------------------------
+         * Canonical command payload
+         * -------------------------------------------------------------
+         */
+
+        $payload = array(
+            'relay_num'   => $relay_num,
+            'state'       => $state,
+            'runtime_min' => $runtime_min,
+        );
+
+        if ($schedule_ts > 0) {
+
+            $payload['schedule_ts'] =
+                $schedule_ts;
+
+            $payload['schedule_at'] =
+                gmdate(
+                    'c',
+                    $schedule_ts
+                );
+        }
+
+        /*
+         * -------------------------------------------------------------
+         * Prevent accidental duplicate clicks.
+         * -------------------------------------------------------------
+         *
+         * If the exact same command was queued very recently, return
+         * the existing command rather than creating another command.
+         */
+
+        $command_table =
+            $wpdb->prefix . 'tmon_device_commands';
+
+        $duplicate_window =
+            max(
+                1,
+                intval(
+                    get_option(
+                        'tmon_uc_relay_duplicate_window',
+                        5
+                    )
+                )
+            );
+
+        $since =
+            gmdate(
+                'Y-m-d H:i:s',
+                time() - $duplicate_window
+            );
+
+        $recent_rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT id, params
+                 FROM {$command_table}
+                 WHERE device_id = %s
+                   AND command = 'relay_ctrl'
+                   AND created_at >= %s
+                   AND executed_at IS NULL
+                 ORDER BY id DESC
+                 LIMIT 10",
+                $unit_id,
+                $since
+            ),
+            ARRAY_A
+        );
+
+        foreach ((array) $recent_rows as $recent) {
+
+            $recent_payload =
+                json_decode(
+                    (string) ($recent['params'] ?? ''),
+                    true
+                );
+
+            if (
+                is_array($recent_payload)
+                && $recent_payload === $payload
+            ) {
+
+                wp_send_json_success(
+                    array(
+                        'queued' => true,
+                        'duplicate' => true,
+                        'command_id' => intval(
+                            $recent['id']
+                        ),
+                        'unit_id' => $unit_id,
+                        'relay_num' => $relay_num,
+                        'state' => $state,
+                        'scheduled' => ($schedule_ts > 0),
+                    )
+                );
+            }
+        }
+
+        /*
+         * -------------------------------------------------------------
+         * Insert into the canonical device queue.
+         * -------------------------------------------------------------
+         */
+
+        $now =
+            current_time(
+                'mysql'
+            );
+
+        $inserted =
+            $wpdb->insert(
+                $command_table,
+                array(
+                    'device_id' => $unit_id,
+                    'command'   => 'relay_ctrl',
+                    'params'    => wp_json_encode(
+                        $payload
+                    ),
+                    'status'    => 'queued',
+                    'created_at'=> $now,
+                    'updated_at'=> $now,
+                ),
+                array(
+                    '%s',
+                    '%s',
+                    '%s',
+                    '%s',
+                    '%s',
+                )
+            );
+
+        if ($inserted === false) {
+
+            wp_send_json_error(
+                array(
+                    'message' => 'Unable to queue relay command.',
+                    'db_error' => $wpdb->last_error,
+                ),
+                500
+            );
+        }
+
+        $command_id =
+            intval(
+                $wpdb->insert_id
+            );
+
+        /*
+         * Audit hook.
+         */
+
+        do_action(
+            'tmon_uc_relay_command_queued',
+            $unit_id,
+            $command_id,
+            $payload
+        );
+
+        /*
+         * -------------------------------------------------------------
+         * Response
+         * -------------------------------------------------------------
+         */
+
+        wp_send_json_success(
+            array(
+                'queued' => true,
+                'duplicate' => false,
+                'command_id' => $command_id,
+                'unit_id' => $unit_id,
+                'relay_num' => $relay_num,
+                'state' => $state,
+                'runtime_min' => $runtime_min,
+                'scheduled' => ($schedule_ts > 0),
+                'schedule_ts' => $schedule_ts,
+                'message' => $schedule_ts > 0
+                    ? 'Relay command scheduled.'
+                    : 'Relay command queued.',
+            )
+        );
+    }
+}
+
+
+/*
+ * Authenticated WordPress users.
+ */
+add_action(
+    'wp_ajax_tmon_uc_relay_command',
+    'tmon_uc_ajax_relay_command'
+);
+
+
+/*
+ * Explicitly reject unauthenticated requests.
+ */
+add_action(
+    'wp_ajax_nopriv_tmon_uc_relay_command',
+    function() {
+
+        wp_send_json_error(
+            array(
+                'message' => 'Authentication required.',
+            ),
+            403
+        );
+    }
+);

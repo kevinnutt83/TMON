@@ -505,47 +505,194 @@ add_action( 'rest_api_init', function () {
 } );
 
 // Return pending commands for the given unit (payload: { unit_id: '...' , limit: n })
-function tmon_uc_get_device_commands( WP_REST_Request $req ) {
-	$params = $req->get_json_params();
-	$unit_id = isset( $params['unit_id'] ) ? sanitize_text_field( $params['unit_id'] ) : '';
-	$limit = isset( $params['limit'] ) ? intval( $params['limit'] ) : 50;
-	if ( ! $unit_id ) {
-		return new WP_REST_Response( array( 'error' => 'missing unit_id' ), 400 );
-	}
-	global $wpdb;
-	$table = $wpdb->prefix . 'tmon_device_commands';
-	$rows = $wpdb->get_results(
-		$wpdb->prepare(
-			"SELECT id, command, params FROM {$table} WHERE device_id=%s AND (status='queued' OR status='claimed') ORDER BY id ASC LIMIT %d",
-			$unit_id,
-			max(1, min(100, $limit))
-		),
-		ARRAY_A
-	);
-	$ids = array();
-	$out = array();
-	foreach ( (array) $rows as $r ) {
-		$payload = json_decode( (string) ($r['params'] ?? '{}'), true );
-		if ( ! is_array( $payload ) ) {
-			$payload = array();
-		}
-		$id = intval( $r['id'] ?? 0 );
-		if ( $id > 0 ) {
-			$ids[] = $id;
-		}
-		$out[] = array(
-			'id' => $id,
-			'type' => (string) ($r['command'] ?? ''),
-			'command' => (string) ($r['command'] ?? ''),
-			'payload' => $payload,
-			'params' => $payload,
-			'data' => $payload,
-		);
-	}
-	if ( ! empty( $ids ) ) {
-		$wpdb->query( "UPDATE {$table} SET status='claimed', updated_at=NOW() WHERE id IN (" . implode(',', array_map('intval', $ids)) . ")" );
-	}
-	return rest_ensure_response( array( 'commands' => $out ) );
+if (!function_exists('tmon_uc_get_device_commands')) {
+
+    function tmon_uc_get_device_commands(
+        WP_REST_Request $req
+    ) {
+
+        global $wpdb;
+
+        $params =
+            $req->get_json_params();
+
+        if (!is_array($params)) {
+            $params = array();
+        }
+
+        $unit_id =
+            sanitize_text_field(
+                $params['unit_id'] ?? ''
+            );
+
+        $limit =
+            max(
+                1,
+                min(
+                    50,
+                    intval(
+                        $params['limit'] ?? 10
+                    )
+                )
+            );
+
+        if ($unit_id === '') {
+
+            return new WP_REST_Response(
+                array(
+                    'error' => 'missing unit_id',
+                ),
+                400
+            );
+        }
+
+        $table =
+            $wpdb->prefix .
+            'tmon_device_commands';
+
+        /*
+         * Commands that have been claimed but never completed are
+         * eligible for redelivery after the lease expires.
+         */
+        $lease_seconds =
+            max(
+                30,
+                intval(
+                    get_option(
+                        'tmon_uc_command_claim_lease',
+                        300
+                    )
+                )
+            );
+
+        $lease_cutoff =
+            gmdate(
+                'Y-m-d H:i:s',
+                time() - $lease_seconds
+            );
+
+        /*
+         * Return:
+         *
+         *   queued
+         *
+         * or stale claimed commands.
+         */
+        $rows =
+            $wpdb->get_results(
+                $wpdb->prepare(
+                    "SELECT
+                        id,
+                        command,
+                        params,
+                        status,
+                        created_at,
+                        updated_at
+                     FROM {$table}
+                     WHERE device_id = %s
+                       AND (
+                            status = 'queued'
+                            OR (
+                                status = 'claimed'
+                                AND (
+                                    updated_at IS NULL
+                                    OR updated_at < %s
+                                )
+                            )
+                       )
+                     ORDER BY id ASC
+                     LIMIT %d",
+                    $unit_id,
+                    $lease_cutoff,
+                    $limit
+                ),
+                ARRAY_A
+            );
+
+        if (!$rows) {
+
+            return rest_ensure_response(
+                array(
+                    'commands' => array(),
+                )
+            );
+        }
+
+        $out = array();
+        $ids = array();
+
+        foreach ($rows as $row) {
+
+            $id =
+                intval(
+                    $row['id'] ?? 0
+                );
+
+            if ($id <= 0) {
+                continue;
+            }
+
+            $payload =
+                json_decode(
+                    (string) (
+                        $row['params']
+                        ?? '{}'
+                    ),
+                    true
+                );
+
+            if (!is_array($payload)) {
+                $payload = array();
+            }
+
+            $out[] = array(
+                'id'      => $id,
+                'job_id'  => $id,
+                'type'    => (string) (
+                    $row['command']
+                    ?? ''
+                ),
+                'command' => (string) (
+                    $row['command']
+                    ?? ''
+                ),
+                'payload' => $payload,
+                'params'  => $payload,
+                'data'    => $payload,
+            );
+
+            $ids[] = $id;
+        }
+
+        /*
+         * Lease the commands atomically enough for WordPress's normal
+         * single-request model.
+         */
+        if (!empty($ids)) {
+
+            $id_sql =
+                implode(
+                    ',',
+                    array_map(
+                        'intval',
+                        $ids
+                    )
+                );
+
+            $wpdb->query(
+                "UPDATE {$table}
+                 SET status = 'claimed',
+                     updated_at = UTC_TIMESTAMP()
+                 WHERE id IN ({$id_sql})"
+            );
+        }
+
+        return rest_ensure_response(
+            array(
+                'commands' => $out,
+            )
+        );
+    }
 }
 
 // Mark command processed for the given unit/job and record confirmation (best-effort, idempotent)

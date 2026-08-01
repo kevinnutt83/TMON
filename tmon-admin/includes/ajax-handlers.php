@@ -1085,3 +1085,216 @@ function tmon_admin_ajax_refresh_site_count() {
 
 	wp_send_json_success(['count' => $count, 'raw' => substr($body, 0, 400)]);
 }
+
+
+if (!function_exists('tmon_admin_ajax_refresh_uc_snapshot')) {
+
+    function tmon_admin_ajax_refresh_uc_snapshot() {
+
+        if (
+            !current_user_can(
+                'manage_options'
+            )
+        ) {
+
+            wp_send_json_error(
+                array(
+                    'message' =>
+                        'Forbidden',
+                ),
+                403
+            );
+        }
+
+        check_ajax_referer(
+            'tmon_admin_provision_ajax'
+        );
+
+        global $wpdb;
+
+        $site_url =
+            esc_url_raw(
+                wp_unslash(
+                    $_POST['site_url']
+                    ?? ''
+                )
+            );
+
+        if ($site_url === '') {
+
+            wp_send_json_error(
+                array(
+                    'message' =>
+                        'site_url is required.',
+                ),
+                400
+            );
+        }
+
+        /*
+         * Canonical Admin -> UC key.
+         */
+        $key =
+            get_option(
+                'tmon_admin_uc_key',
+                ''
+            );
+
+        if ($key === '') {
+
+            wp_send_json_error(
+                array(
+                    'message' =>
+                        'Shared UC integration key is not configured.',
+                ),
+                503
+            );
+        }
+
+        $endpoint =
+            trailingslashit(
+                $site_url
+            )
+            . 'wp-json/tmon/v1/admin/device/snapshot';
+
+        $response =
+            wp_remote_get(
+                $endpoint,
+                array(
+                    'timeout' =>
+                        15,
+
+                    'headers' =>
+                        array(
+                            'Accept' =>
+                                'application/json',
+
+                            'X-TMON-HUB' =>
+                                $key,
+                        ),
+                )
+            );
+
+        if (
+            is_wp_error(
+                $response
+            )
+        ) {
+
+            wp_send_json_error(
+                array(
+                    'message' =>
+                        $response->get_error_message(),
+                ),
+                502
+            );
+        }
+
+        $code =
+            wp_remote_retrieve_response_code(
+                $response
+            );
+
+        $body =
+            wp_remote_retrieve_body(
+                $response
+            );
+
+        $data =
+            json_decode(
+                $body,
+                true
+            );
+
+        if (
+            $code < 200
+            || $code >= 300
+            || !is_array($data)
+        ) {
+
+            wp_send_json_error(
+                array(
+                    'message' =>
+                        'Unit Connector returned an invalid response.',
+
+                    'http_code' =>
+                        $code,
+
+                    'body' =>
+                        substr(
+                            $body,
+                            0,
+                            1000
+                        ),
+                ),
+                502
+            );
+        }
+
+        /*
+         * Store the entire snapshot locally.
+         */
+        $store =
+            get_option(
+                'tmon_admin_uc_snapshots',
+                array()
+            );
+
+        if (!is_array($store)) {
+            $store = array();
+        }
+
+        $store[$site_url] = array(
+            'received_at' =>
+                current_time(
+                    'mysql'
+                ),
+
+            'data' =>
+                $data,
+        );
+
+        /*
+         * Prevent the option from growing forever.
+         */
+        if (
+            count($store)
+            > 100
+        ) {
+
+            $store =
+                array_slice(
+                    $store,
+                    -100,
+                    100,
+                    true
+                );
+        }
+
+        update_option(
+            'tmon_admin_uc_snapshots',
+            $store,
+            false
+        );
+
+        wp_send_json_success(
+            array(
+                'site_url' =>
+                    $site_url,
+
+                'received_at' =>
+                    current_time(
+                        'mysql'
+                    ),
+
+                'data' =>
+                    $data,
+            )
+        );
+    }
+}
+
+add_action(
+    'wp_ajax_tmon_admin_refresh_uc_snapshot',
+    'tmon_admin_ajax_refresh_uc_snapshot'
+);

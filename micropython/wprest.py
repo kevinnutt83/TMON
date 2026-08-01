@@ -790,72 +790,359 @@ async def send_diagnostics_to_wp(extra=None):
 
 
 async def fetch_settings_from_wp():
-    """Fetch staged settings from WP/UC/Admin and persist for settings_apply loop."""
+    """
+    Fetch staged settings from WP/UC/Admin and persist for settings_apply.
+
+    IMPORTANT:
+        Do not continually rewrite a staged configuration that is already
+        identical to the device's applied settings.
+
+    This prevents the server-side staged configuration from causing
+    unnecessary local apply cycles.
+    """
+
     try:
+
         wp_url = _current_wp_url()
+
         if not wp_url:
-            await debug_print('fetch_settings_from_wp: no WP url', 'WARN')
+
+            await debug_print(
+                'fetch_settings_from_wp: no WP url',
+                'WARN'
+            )
+
             return False
-        unit_id = str(getattr(settings, 'UNIT_ID', '') or '').strip()
-        machine_id = str(getattr(settings, 'MACHINE_ID', '') or get_machine_id() or '').strip()
+
+        unit_id = str(
+            getattr(
+                settings,
+                'UNIT_ID',
+                ''
+            ) or ''
+        ).strip()
+
+        machine_id = str(
+            getattr(
+                settings,
+                'MACHINE_ID',
+                ''
+            )
+            or get_machine_id()
+            or ''
+        ).strip()
+
         if not unit_id and not machine_id:
+
             return False
 
         candidates = [
-            f"/wp-json/tmon/v1/device/settings/{unit_id}",
-            f"/wp-json/tmon/v1/device/staged-settings?unit_id={unit_id}",
-            f"/wp-json/tmon-admin/v1/device/settings/{unit_id}",
-            f"/wp-json/unit-connector/v1/device/settings/{unit_id}",
+            '/wp-json/tmon/v1/device/settings/%s' % unit_id,
+
+            '/wp-json/tmon/v1/device/staged-settings?unit_id=%s'
+            % unit_id,
+
+            '/wp-json/tmon-admin/v1/device/settings/%s'
+            % unit_id,
+
+            '/wp-json/unit-connector/v1/device/settings/%s'
+            % unit_id,
         ]
+
         if machine_id:
+
             candidates.extend([
-                f"/wp-json/tmon/v1/device/staged-settings?machine_id={machine_id}",
-                f"/wp-json/tmon/v1/device/settings/{machine_id}",
+                '/wp-json/tmon/v1/device/staged-settings?machine_id=%s'
+                % machine_id,
+
+                '/wp-json/tmon/v1/device/settings/%s'
+                % machine_id,
             ])
 
+        # ---------------------------------------------------------------
+        # Paths used by settings_apply.py
+        # ---------------------------------------------------------------
+
+        staged_path = getattr(
+            settings,
+            'REMOTE_SETTINGS_STAGED_FILE',
+            settings.LOG_DIR
+            + '/remote_settings.staged.json'
+        )
+
+        applied_path = getattr(
+            settings,
+            'REMOTE_SETTINGS_APPLIED_FILE',
+            settings.LOG_DIR
+            + '/remote_settings.applied.json'
+        )
+
+        # ---------------------------------------------------------------
+        # Load the last successfully applied snapshot.
+        # ---------------------------------------------------------------
+
+        applied_meta = read_json_safe(
+            applied_path,
+            None
+        )
+
+        applied_snapshot = {}
+
+        if isinstance(applied_meta, dict):
+
+            if isinstance(
+                applied_meta.get('applied'),
+                dict
+            ):
+
+                applied_snapshot = (
+                    applied_meta.get('applied')
+                    or {}
+                )
+
         for p in candidates:
+
             resp = None
+
             try:
-                url = wp_url.rstrip('/') + p
+
+                url = (
+                    wp_url.rstrip('/')
+                    + p
+                )
+
                 try:
-                    resp = requests.get(url, headers=_auth_headers(), timeout=8)
+
+                    resp = requests.get(
+                        url,
+                        headers=_auth_headers(),
+                        timeout=8
+                    )
+
                 except TypeError:
-                    resp = requests.get(url, headers=_auth_headers())
-                code, _body_text, parsed = _extract_response(resp, max_chars=1200)
-                if code in (200, 201) and isinstance(parsed, dict):
-                    staged = parsed.get('settings')
-                    if not isinstance(staged, dict):
-                        staged = parsed.get('staged') if isinstance(parsed.get('staged'), dict) else None
-                    if not isinstance(staged, dict):
+
+                    resp = requests.get(
+                        url,
+                        headers=_auth_headers()
+                    )
+
+                code, body_text, parsed = _extract_response(
+                    resp,
+                    max_chars=1200
+                )
+
+                if (
+                    code not in (200, 201)
+                    or not isinstance(parsed, dict)
+                ):
+
+                    continue
+
+                staged = parsed.get(
+                    'settings'
+                )
+
+                if not isinstance(staged, dict):
+
+                    staged = (
+                        parsed.get('staged')
+                        if isinstance(
+                            parsed.get('staged'),
+                            dict
+                        )
+                        else None
+                    )
+
+                if not isinstance(staged, dict):
+
+                    # Server explicitly says there are no staged settings.
+                    if parsed.get('staged_exists') is False:
+
+                        return False
+
+                    continue
+
+                # -------------------------------------------------------
+                # Compare staged configuration against the applied
+                # snapshot.
+                #
+                # If every staged key already matches what was applied,
+                # don't create another local staged file.
+                # -------------------------------------------------------
+
+                already_applied = True
+
+                for k, desired in staged.items():
+
+                    if k == 'commands':
+
+                        # Commands are one-shot and must not be considered
+                        # part of the persistent settings comparison.
                         continue
+
+                    if k not in applied_snapshot:
+
+                        already_applied = False
+                        break
+
                     try:
-                        import ujson as _uj
+
+                        current = applied_snapshot.get(k)
+
+                        # Normalize booleans.
+                        if isinstance(current, bool):
+
+                            desired_norm = (
+                                str(desired)
+                                .strip()
+                                .lower()
+                                in (
+                                    '1',
+                                    'true',
+                                    'yes',
+                                    'on'
+                                )
+                            )
+
+                        elif isinstance(current, int) and not isinstance(
+                            current,
+                            bool
+                        ):
+
+                            try:
+                                desired_norm = int(
+                                    desired
+                                )
+                            except Exception:
+                                desired_norm = desired
+
+                        elif isinstance(current, float):
+
+                            try:
+                                desired_norm = float(
+                                    desired
+                                )
+                            except Exception:
+                                desired_norm = desired
+
+                        else:
+
+                            desired_norm = desired
+
+                        if current != desired_norm:
+
+                            already_applied = False
+                            break
+
                     except Exception:
-                        _uj = json
-                    staged_path = getattr(settings, 'REMOTE_SETTINGS_STAGED_FILE', settings.LOG_DIR + '/remote_settings.staged.json')
-                    _ = _uj
-                    write_json_atomic(staged_path, staged)
-                    if asyncio:
-                        await asyncio.sleep_ms(5)
+
+                        if current != desired:
+
+                            already_applied = False
+                            break
+
+                if already_applied and staged:
+
+                    await debug_print(
+                        'fetch_settings_from_wp: server settings '
+                        'already match applied snapshot; skipping '
+                        'local re-stage',
+                        'INFO'
+                    )
+
                     _mark_rest_success()
-                    await debug_print(f'fetch_settings_from_wp: staged settings fetched via {p}', 'INFO')
-                    return True
-            except Exception as e:
-                await _record_rest_failure('fetch_settings_from_wp', 0, p, 'request_exception', {'exception': format_exception(e)})
-            finally:
+
+                    return False
+
+                # -------------------------------------------------------
+                # New/different settings.
+                # -------------------------------------------------------
+
                 try:
-                    if resp:
-                        resp.close()
-                except Exception:
-                    pass
+
+                    write_json_atomic(
+                        staged_path,
+                        staged
+                    )
+
+                except Exception as e:
+
+                    await debug_print(
+                        'fetch_settings_from_wp: failed writing '
+                        'staged file: %s'
+                        % e,
+                        'ERROR'
+                    )
+
+                    return False
+
                 if asyncio:
-                    await asyncio.sleep_ms(5)
-        return False
-    except Exception as e:
-        await _record_rest_failure('fetch_settings_from_wp', 0, '', 'unhandled_exception', {'exception': format_exception(e)})
-        await log_exception('fetch_settings_from_wp', e)
+
+                    await asyncio.sleep_ms(
+                        5
+                    )
+
+                _mark_rest_success()
+
+                await debug_print(
+                    'fetch_settings_from_wp: staged settings '
+                    'fetched via %s'
+                    % p,
+                    'INFO'
+                )
+
+                return True
+
+            except Exception as e:
+
+                await _record_rest_failure(
+                    'fetch_settings_from_wp',
+                    0,
+                    p,
+                    'request_exception',
+                    {
+                        'exception': format_exception(e)
+                    }
+                )
+
+            finally:
+
+                try:
+
+                    if resp:
+
+                        resp.close()
+
+                except Exception:
+
+                    pass
+
+                if asyncio:
+
+                    await asyncio.sleep_ms(
+                        5
+                    )
+
         return False
 
+    except Exception as e:
+
+        await _record_rest_failure(
+            'fetch_settings_from_wp',
+            0,
+            '',
+            'unhandled_exception',
+            {
+                'exception': format_exception(e)
+            }
+        )
+
+        await log_exception(
+            'fetch_settings_from_wp',
+            e
+        )
+
+        return False
 
 async def _post_command_result(job_id, status='done', result=None):
     wp_url = _current_wp_url()
@@ -1102,3 +1389,4 @@ async def poll_device_commands():
         await _record_rest_failure('poll_device_commands', 0, '', 'unhandled_exception', {'exception': format_exception(e)})
         await log_exception('poll_device_commands', e)
         return False
+

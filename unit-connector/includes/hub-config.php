@@ -149,3 +149,398 @@ add_action('admin_init', function(){
 		}
 	}
 });
+
+
+/*
+ * ============================================================
+ * TMON CANONICAL HUB INTEGRATION
+ * ============================================================
+ */
+
+if (!function_exists('tmon_uc_get_hub_shared_key')) {
+
+    function tmon_uc_get_hub_shared_key() {
+
+        /*
+         * Constant override is useful for deployments where secrets
+         * are stored in wp-config.php instead of the database.
+         */
+        if (
+            defined('TMON_HUB_SHARED_SECRET')
+            && TMON_HUB_SHARED_SECRET
+        ) {
+            return (string) TMON_HUB_SHARED_SECRET;
+        }
+
+        /*
+         * Canonical Unit Connector option.
+         */
+        $key =
+            get_option(
+                'tmon_uc_admin_key',
+                ''
+            );
+
+        if ($key !== '') {
+            return (string) $key;
+        }
+
+        /*
+         * Backward compatibility with existing installs.
+         */
+        $legacy =
+            get_option(
+                'tmon_uc_shared_key',
+                ''
+            );
+
+        if ($legacy !== '') {
+            return (string) $legacy;
+        }
+
+        $legacy2 =
+            get_option(
+                'tmon_admin_uc_key',
+                ''
+            );
+
+        if ($legacy2 !== '') {
+            return (string) $legacy2;
+        }
+
+        return '';
+    }
+}
+
+
+if (!function_exists('tmon_uc_get_hub_headers')) {
+
+    function tmon_uc_get_hub_headers() {
+
+        $key =
+            tmon_uc_get_hub_shared_key();
+
+        $headers = array(
+            'Accept' =>
+                'application/json',
+            'Content-Type' =>
+                'application/json',
+        );
+
+        if ($key !== '') {
+
+            $headers['X-TMON-HUB'] =
+                $key;
+        }
+
+        return $headers;
+    }
+}
+
+
+if (!function_exists('tmon_uc_set_hub_shared_key')) {
+
+    function tmon_uc_set_hub_shared_key($key) {
+
+        $key =
+            trim(
+                sanitize_text_field(
+                    (string) $key
+                )
+            );
+
+        if ($key === '') {
+
+            return false;
+        }
+
+        /*
+         * Canonical.
+         */
+        update_option(
+            'tmon_uc_admin_key',
+            $key,
+            false
+        );
+
+        /*
+         * Keep legacy option synchronized during migration.
+         */
+        update_option(
+            'tmon_uc_shared_key',
+            $key,
+            false
+        );
+
+        return true;
+    }
+}
+
+
+if (!function_exists('tmon_uc_clear_hub_shared_key')) {
+
+    function tmon_uc_clear_hub_shared_key() {
+
+        delete_option(
+            'tmon_uc_admin_key'
+        );
+
+        delete_option(
+            'tmon_uc_shared_key'
+        );
+
+        return true;
+    }
+}
+
+
+/*
+ * Validate a hub request.
+ */
+if (!function_exists('tmon_uc_validate_hub_request')) {
+
+    function tmon_uc_validate_hub_request(
+        WP_REST_Request $request
+    ) {
+
+        $expected =
+            tmon_uc_get_hub_shared_key();
+
+        if ($expected === '') {
+
+            return new WP_Error(
+                'hub_not_configured',
+                'Unit Connector hub key is not configured.',
+                array(
+                    'status' => 503,
+                )
+            );
+        }
+
+        $provided =
+            $request->get_header(
+                'X-TMON-HUB'
+            );
+
+        if ($provided === '') {
+
+            $provided =
+                $_SERVER['HTTP_X_TMON_HUB']
+                ?? '';
+        }
+
+        if ($provided === '') {
+
+            return new WP_Error(
+                'missing_hub_key',
+                'Missing X-TMON-HUB header.',
+                array(
+                    'status' => 401,
+                )
+            );
+        }
+
+        if (
+            !hash_equals(
+                (string) $expected,
+                (string) $provided
+            )
+        ) {
+
+            return new WP_Error(
+                'invalid_hub_key',
+                'Invalid hub key.',
+                array(
+                    'status' => 403,
+                )
+            );
+        }
+
+        return true;
+    }
+}
+
+if (!function_exists('tmon_uc_build_hub_device_snapshot')) {
+
+    function tmon_uc_build_hub_device_snapshot(
+        $unit_id
+    ) {
+
+        global $wpdb;
+
+        $unit_id =
+            sanitize_text_field(
+                (string) $unit_id
+            );
+
+        if ($unit_id === '') {
+            return array();
+        }
+
+        $device =
+            $wpdb->get_row(
+                $wpdb->prepare(
+                    "SELECT *
+                     FROM {$wpdb->prefix}tmon_devices
+                     WHERE unit_id = %s
+                     LIMIT 1",
+                    $unit_id
+                ),
+                ARRAY_A
+            );
+
+        $diagnostics =
+            get_option(
+                'tmon_uc_device_diagnostics',
+                array()
+            );
+
+        if (!is_array($diagnostics)) {
+            $diagnostics = array();
+        }
+
+        $diag =
+            isset($diagnostics[$unit_id])
+            && is_array($diagnostics[$unit_id])
+                ? $diagnostics[$unit_id]
+                : array();
+
+        $lora =
+            get_option(
+                'tmon_uc_lora_status',
+                array()
+            );
+
+        if (!is_array($lora)) {
+            $lora = array();
+        }
+
+        $lora_status =
+            isset($lora[$unit_id])
+            && is_array($lora[$unit_id])
+                ? (
+                    is_array(
+                        $lora[$unit_id]['status']
+                        ?? null
+                    )
+                        ? $lora[$unit_id]['status']
+                        : array()
+                )
+                : array();
+
+        $latest =
+            $wpdb->get_row(
+                $wpdb->prepare(
+                    "SELECT *
+                     FROM {$wpdb->prefix}tmon_device_data
+                     WHERE unit_id = %s
+                     ORDER BY id DESC
+                     LIMIT 1",
+                    $unit_id
+                ),
+                ARRAY_A
+            );
+
+        $latest_data = array();
+
+        if (
+            is_array($latest)
+            && !empty($latest['data'])
+        ) {
+
+            $decoded =
+                json_decode(
+                    $latest['data'],
+                    true
+                );
+
+            if (is_array($decoded)) {
+                $latest_data =
+                    $decoded;
+            }
+        }
+
+        return array(
+            'unit_id' =>
+                $unit_id,
+
+            'machine_id' =>
+                (string) (
+                    $device['machine_id']
+                    ?? ''
+                ),
+
+            'unit_name' =>
+                (string) (
+                    $device['unit_name']
+                    ?? ''
+                ),
+
+            'role' =>
+                (string) (
+                    $device['role']
+                    ?? (
+                        $device['node_type']
+                        ?? ''
+                    )
+                ),
+
+            'company' =>
+                (string) (
+                    $device['company']
+                    ?? ''
+                ),
+
+            'site' =>
+                (string) (
+                    $device['site']
+                    ?? ''
+                ),
+
+            'zone' =>
+                (string) (
+                    $device['zone']
+                    ?? ''
+                ),
+
+            'cluster' =>
+                (string) (
+                    $device['cluster']
+                    ?? ''
+                ),
+
+            'suspended' =>
+                !empty(
+                    $device['suspended']
+                ),
+
+            'last_seen' =>
+                (string) (
+                    $device['last_seen']
+                    ?? ''
+                ),
+
+            'settings' =>
+                !empty($device['settings'])
+                    ? json_decode(
+                        $device['settings'],
+                        true
+                    )
+                    : array(),
+
+            'diagnostics' =>
+                $diag,
+
+            'lora' =>
+                $lora_status,
+
+            'latest_data' =>
+                $latest_data,
+
+            'reported_at' =>
+                current_time(
+                    'mysql'
+                ),
+        );
+    }
+}
