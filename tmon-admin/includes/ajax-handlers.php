@@ -26,6 +26,37 @@ if (!function_exists('tmon_admin_get_queue_max_per_site')) {
 	}
 }
 
+if (!function_exists('tmon_admin_queue_site_key')) {
+	function tmon_admin_queue_site_key($payload) {
+		if (!is_array($payload)) return '';
+		$raw = '';
+		if (!empty($payload['site_url'])) {
+			$raw = (string) $payload['site_url'];
+		} elseif (!empty($payload['wordpress_api_url'])) {
+			$raw = (string) $payload['wordpress_api_url'];
+		}
+		if ($raw === '') return '';
+		return strtolower(rtrim(trim($raw), '/'));
+	}
+}
+
+if (!function_exists('tmon_admin_queue_identity_key')) {
+	function tmon_admin_queue_identity_key($payload, $fallback_key = '') {
+		if (!is_array($payload)) return tmon_admin_normalize_key($fallback_key);
+		$uid_norm = !empty($payload['unit_id_norm'])
+			? tmon_admin_normalize_key($payload['unit_id_norm'])
+			: (!empty($payload['unit_id']) ? tmon_admin_normalize_key($payload['unit_id']) : '');
+		if ($uid_norm !== '') return 'u:' . $uid_norm;
+
+		$mid_norm = !empty($payload['machine_id_norm'])
+			? tmon_admin_normalize_mac($payload['machine_id_norm'])
+			: (!empty($payload['machine_id']) ? tmon_admin_normalize_mac($payload['machine_id']) : '');
+		if ($mid_norm !== '') return 'm:' . $mid_norm;
+
+		return tmon_admin_normalize_key($fallback_key);
+	}
+}
+
 if (!function_exists('tmon_admin_prune_pending_queue')) {
 	function tmon_admin_prune_pending_queue() {
 		$queue = get_option('tmon_admin_pending_provision', []);
@@ -92,6 +123,19 @@ if (!function_exists('tmon_admin_enqueue_provision')) {
 		$queue = get_option('tmon_admin_pending_provision', []);
 		if (!is_array($queue)) $queue = [];
 
+		$current_uid_norm = (string) ($payload['unit_id_norm'] ?? '');
+		$current_mid_norm = (string) ($payload['machine_id_norm'] ?? '');
+
+		// Remove stale entries for the same unit/machine identity before re-enqueueing.
+		foreach ($queue as $qk => $qv) {
+			if (!is_array($qv)) continue;
+			$q_uid_norm = !empty($qv['unit_id_norm']) ? tmon_admin_normalize_key($qv['unit_id_norm']) : (!empty($qv['unit_id']) ? tmon_admin_normalize_key($qv['unit_id']) : '');
+			$q_mid_norm = !empty($qv['machine_id_norm']) ? tmon_admin_normalize_mac($qv['machine_id_norm']) : (!empty($qv['machine_id']) ? tmon_admin_normalize_mac($qv['machine_id']) : '');
+			if (($current_uid_norm !== '' && $q_uid_norm === $current_uid_norm) || ($current_mid_norm !== '' && $q_mid_norm === $current_mid_norm)) {
+				unset($queue[$qk]);
+			}
+		}
+
 		// Primary normalized enqueue
 		$queue[$key] = $payload;
 
@@ -105,6 +149,35 @@ if (!function_exists('tmon_admin_enqueue_provision')) {
 			if ($machine_key && $machine_key !== $key) $queue[$machine_key] = $payload;
 			$machine_stripped = tmon_admin_normalize_mac($payload['machine_id']);
 			if ($machine_stripped && $machine_stripped !== $machine_key && $machine_stripped !== $key) $queue[$machine_stripped] = $payload;
+		}
+
+		// Enforce max queued identities per site after enqueue.
+		$site_key = tmon_admin_queue_site_key($payload);
+		if ($site_key !== '') {
+			$max_per_site = tmon_admin_get_queue_max_per_site();
+			$site_items = [];
+			foreach ($queue as $qk => $qv) {
+				if (!is_array($qv)) continue;
+				if (tmon_admin_queue_site_key($qv) !== $site_key) continue;
+				$id_key = tmon_admin_queue_identity_key($qv, $qk);
+				$ts = !empty($qv['requested_at']) ? strtotime((string) $qv['requested_at']) : 0;
+				if (!isset($site_items[$id_key]) || $ts >= $site_items[$id_key]) {
+					$site_items[$id_key] = $ts;
+				}
+			}
+
+			if (count($site_items) > $max_per_site) {
+				arsort($site_items);
+				$keep_ids = array_flip(array_slice(array_keys($site_items), 0, $max_per_site));
+				foreach ($queue as $qk => $qv) {
+					if (!is_array($qv)) continue;
+					if (tmon_admin_queue_site_key($qv) !== $site_key) continue;
+					$id_key = tmon_admin_queue_identity_key($qv, $qk);
+					if (!isset($keep_ids[$id_key])) {
+						unset($queue[$qk]);
+					}
+				}
+			}
 		}
 
 		update_option('tmon_admin_pending_provision', $queue);
