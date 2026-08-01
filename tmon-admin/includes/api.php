@@ -58,6 +58,17 @@ if (!function_exists('tmon_admin_generate_unique_unit_id')) {
     }
 }
 
+if (!function_exists('tmon_admin_get_or_create_uc_shared_key')) {
+    function tmon_admin_get_or_create_uc_shared_key($rotate = false) {
+        $hub_key = (string) get_option('tmon_admin_uc_key', '');
+        if ($rotate || $hub_key === '') {
+            try { $hub_key = bin2hex(random_bytes(24)); } catch (Exception $e) { $hub_key = wp_generate_password(48, false, false); }
+            update_option('tmon_admin_uc_key', $hub_key);
+        }
+        return $hub_key;
+    }
+}
+
 add_action('rest_api_init', function() {
     register_rest_route('tmon-admin/v1', '/status', [
         'methods' => 'GET',
@@ -310,11 +321,7 @@ add_action('rest_api_init', function() {
             ];
             update_option('tmon_admin_uc_sites', $map);
             // Return hub key for UC to store
-            $hub_key = get_option('tmon_admin_uc_key');
-            if (!$hub_key) {
-                try { $hub_key = bin2hex(random_bytes(24)); } catch (Exception $e) { $hub_key = wp_generate_password(48, false, false); }
-                update_option('tmon_admin_uc_key', $hub_key);
-            }
+            $hub_key = tmon_admin_get_or_create_uc_shared_key(false);
             // Also persist in tmon_uc_sites table for UI listings
             if (function_exists('tmon_admin_ensure_tables')) { tmon_admin_ensure_tables(); }
             global $wpdb;
@@ -350,6 +357,78 @@ add_action('rest_api_init', function() {
         }
     ]);
 
+    // Lifecycle endpoint: UC registers/requests credentials using its local uc_key.
+    register_rest_route('tmon-admin/v1', '/uc/key/register', [
+        'methods' => 'POST',
+        'permission_callback' => '__return_true',
+        'callback' => function($request){
+            $site_url = esc_url_raw($request->get_param('site_url'));
+            $uc_key = sanitize_text_field($request->get_param('uc_key'));
+            $rotate_read_token = !empty($request->get_param('rotate_read_token'));
+            if (!$site_url || !$uc_key) {
+                return new WP_REST_Response(['status' => 'error', 'message' => 'site_url and uc_key required'], 400);
+            }
+            $map = get_option('tmon_admin_uc_sites', []);
+            if (!is_array($map)) $map = [];
+
+            $existing = isset($map[$site_url]) && is_array($map[$site_url]) ? $map[$site_url] : [];
+            $read_token = isset($existing['read_token']) ? (string) $existing['read_token'] : '';
+            if ($read_token === '' || $rotate_read_token) {
+                try { $read_token = bin2hex(random_bytes(24)); } catch (Exception $e) { $read_token = wp_generate_password(48, false, false); }
+            }
+            $paired_at = current_time('mysql');
+            $map[$site_url] = [
+                'uc_key' => $uc_key,
+                'paired_at' => $paired_at,
+                'read_token' => $read_token,
+            ];
+            update_option('tmon_admin_uc_sites', $map);
+
+            $hub_key = tmon_admin_get_or_create_uc_shared_key(false);
+            return rest_ensure_response([
+                'status' => 'ok',
+                'hub_key' => $hub_key,
+                'read_token' => $read_token,
+                'paired_at' => $paired_at,
+            ]);
+        }
+    ]);
+
+    // Lifecycle endpoint: UC refreshes token/keys using current hub shared key.
+    register_rest_route('tmon-admin/v1', '/uc/key/refresh', [
+        'methods' => 'POST',
+        'permission_callback' => '__return_true',
+        'callback' => function($request){
+            $site_url = esc_url_raw($request->get_param('site_url'));
+            $rotate_hub_key = !empty($request->get_param('rotate_hub_key'));
+            if (!$site_url) {
+                return new WP_REST_Response(['status' => 'error', 'message' => 'site_url required'], 400);
+            }
+            $provided = (string) ($request->get_header('X-TMON-HUB') ?: ($_SERVER['HTTP_X_TMON_HUB'] ?? ''));
+            $expected = (string) get_option('tmon_admin_uc_key', '');
+            if ($expected === '' || $provided === '' || !hash_equals($expected, $provided)) {
+                return new WP_REST_Response(['status' => 'forbidden', 'message' => 'Invalid hub key'], 403);
+            }
+
+            $map = get_option('tmon_admin_uc_sites', []);
+            if (!is_array($map)) $map = [];
+            if (!isset($map[$site_url]) || !is_array($map[$site_url])) {
+                $map[$site_url] = [];
+            }
+            try { $read_token = bin2hex(random_bytes(24)); } catch (Exception $e) { $read_token = wp_generate_password(48, false, false); }
+            $map[$site_url]['read_token'] = $read_token;
+            $map[$site_url]['paired_at'] = current_time('mysql');
+            update_option('tmon_admin_uc_sites', $map);
+
+            $hub_key = tmon_admin_get_or_create_uc_shared_key($rotate_hub_key);
+            return rest_ensure_response([
+                'status' => 'ok',
+                'hub_key' => $hub_key,
+                'read_token' => $read_token,
+            ]);
+        }
+    ]);
+
     // Read-only: list provisioned devices for Unit Connector (authenticated via hub shared key)
     register_rest_route('tmon-admin/v1', '/provisioned-devices', [
         'methods' => 'GET',
@@ -373,7 +452,12 @@ add_action('rest_api_init', function() {
             if (!$exists) {
                 return rest_ensure_response(['status'=>'ok', 'devices'=>[]]);
             }
-            $rows = $wpdb->get_results("SELECT id, unit_id, machine_id, role, company_id, plan, status, notes, created_at, updated_at FROM $table ORDER BY created_at DESC", ARRAY_A);
+            $customer_id = intval($request->get_param('customer_id') ?? 0);
+            if ($customer_id > 0) {
+                $rows = $wpdb->get_results($wpdb->prepare("SELECT id, unit_id, machine_id, role, company_id, plan, status, notes, created_at, updated_at FROM $table WHERE company_id=%d ORDER BY created_at DESC", $customer_id), ARRAY_A);
+            } else {
+                $rows = $wpdb->get_results("SELECT id, unit_id, machine_id, role, company_id, plan, status, notes, created_at, updated_at FROM $table ORDER BY created_at DESC", ARRAY_A);
+            }
             return rest_ensure_response(['status'=>'ok', 'devices'=> is_array($rows)? $rows : []]);
         }
     ]);

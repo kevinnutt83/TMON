@@ -121,10 +121,29 @@ function uc_devices_refresh_from_local_mirror() {
 	return $count;
 }
 
-// Schedule periodic sync of UC device mirror to Admin hub
+// Schedule periodic sync of UC device mirror to Admin hub based on configured cadence.
 add_action('init', function(){
-	if (!wp_next_scheduled('tmon_uc_sync_devices_cron')) {
-		wp_schedule_event(time() + 120, 'hourly', 'tmon_uc_sync_devices_cron');
+	$cadence = (string) get_option('tmon_uc_sync_refresh_cadence', 'hourly');
+	$allowed = ['off', 'hourly', 'daily'];
+	if (!in_array($cadence, $allowed, true)) {
+		$cadence = 'hourly';
+	}
+	$next = wp_next_scheduled('tmon_uc_sync_devices_cron');
+	if ($cadence === 'off') {
+		if ($next) {
+			wp_unschedule_event($next, 'tmon_uc_sync_devices_cron');
+		}
+		return;
+	}
+	if (!$next) {
+		wp_schedule_event(time() + 120, $cadence, 'tmon_uc_sync_devices_cron');
+		return;
+	}
+	$current = wp_get_scheduled_event('tmon_uc_sync_devices_cron');
+	$current_recur = is_object($current) && !empty($current->schedule) ? (string) $current->schedule : '';
+	if ($current_recur !== $cadence) {
+		wp_unschedule_event($next, 'tmon_uc_sync_devices_cron');
+		wp_schedule_event(time() + 120, $cadence, 'tmon_uc_sync_devices_cron');
 	}
 });
 

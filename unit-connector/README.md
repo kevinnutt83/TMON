@@ -75,6 +75,26 @@ Add these shortcodes to any Page or Post:
 	TMON Admin can upsert Company into UC via "Send to UC registry" to ensure immediate association.
 - Use the Provisioned Devices admin screens (mirror view) or TMON Admin to confirm device provisioning.
 
+## Hub Pairing and Credentials
+
+- Open `TMON Devices -> Hub Pairing` to:
+	- Pair with hub
+	- Refresh hub credentials (token/key refresh)
+	- Refresh assigned devices from Admin
+- UC uses the Admin lifecycle endpoints:
+	- `POST /wp-json/tmon-admin/v1/uc/key/register`
+	- `POST /wp-json/tmon-admin/v1/uc/key/refresh`
+
+## Refresh Cadence and Diagnostics
+
+- Settings now include backfill cadence:
+	- `off`, `hourly`, or `daily`
+- Diagnostics polling can be toggled from settings.
+
+## Staged Settings Push Tool
+
+- In `TMON Devices -> Settings`, use the per-device tool to push staged settings to Admin by Unit ID.
+
 ## Claim Device Flow
 1. A logged-in customer submits Unit ID and Machine ID using `[tmon_claim_device]`.
 2. The claim is sent to `/wp-json/tmon-admin/v1/claim` with a REST nonce.

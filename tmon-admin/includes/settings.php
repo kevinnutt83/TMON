@@ -3,6 +3,7 @@
 add_action('admin_init', function() {
     register_setting('tmon_admin_settings_group', 'tmon_admin_uc_key');
     register_setting('tmon_admin_settings_group', 'tmon_admin_hub_url');
+    register_setting('tmon_admin_settings_group', 'tmon_admin_provision_email_recipients');
     register_setting('tmon_admin_settings_group', 'tmon_admin_queue_lifetime');
     register_setting('tmon_admin_settings_group', 'tmon_admin_queue_max_per_site');
     register_setting('tmon_admin_settings_group', 'tmon_admin_allow_diagnostics_no_auth', [
@@ -15,13 +16,20 @@ add_action('admin_init', function() {
     }, 'tmon-admin-settings');
     add_settings_field('tmon_admin_uc_key', 'Shared Key for UC Integration', function() {
         $val = get_option('tmon_admin_uc_key', '');
-        echo '<input type="text" name="tmon_admin_uc_key" class="regular-text" value="' . esc_attr($val) . '" />';
+        $rotate_url = wp_nonce_url(admin_url('admin-post.php?action=tmon_admin_rotate_uc_key'), 'tmon_admin_rotate_uc_key');
+        echo '<input type="text" name="tmon_admin_uc_key" class="regular-text" value="' . esc_attr($val) . '" /> ';
+        echo '<a class="button" href="' . esc_url($rotate_url) . '">Generate New Shared Key</a>';
         echo '<p class="description">Used as X-TMON-ADMIN header when pushing to Unit Connector endpoints.</p>';
     }, 'tmon-admin-settings', 'tmon_admin_main');
     add_settings_field('tmon_admin_hub_url', 'Hub URL (for UC forward)', function() {
         $val = get_option('tmon_admin_hub_url', home_url());
         echo '<input type="url" name="tmon_admin_hub_url" class="regular-text" value="' . esc_attr($val) . '" />';
         echo '<p class="description">Optional; Unit Connector can set TMON_ADMIN_HUB_URL to forward unknown devices here.</p>';
+    }, 'tmon-admin-settings', 'tmon_admin_main');
+    add_settings_field('tmon_admin_provision_email_recipients', 'Provisioning Notification Emails', function() {
+        $val = (string) get_option('tmon_admin_provision_email_recipients', '');
+        echo '<input type="text" name="tmon_admin_provision_email_recipients" class="regular-text" value="' . esc_attr($val) . '" placeholder="ops@example.com, support@example.com" />';
+        echo '<p class="description">Optional. Comma-separated email recipients for provisioning queued/applied/failed events.</p>';
     }, 'tmon-admin-settings', 'tmon_admin_main');
     add_settings_field('tmon_admin_allow_diagnostics_no_auth', 'Diagnostics Without Auth (Legacy Compatibility)', function() {
         $val = (int) get_option('tmon_admin_allow_diagnostics_no_auth', 0);
@@ -39,6 +47,9 @@ if (!function_exists('tmon_admin_settings_page')) {
 		if (!current_user_can('manage_options')) wp_die('Forbidden');
 		// Save action handling (moved purge forms)
 		echo '<div class="wrap"><h1>TMON Admin Settings</h1>';
+        if (!empty($_GET['rotated'])) {
+            echo '<div class="notice notice-success"><p>Shared key rotated successfully.</p></div>';
+        }
 		// Purge options
 		echo '<h2>Data Maintenance</h2>';
 		echo '<form method="post" onsubmit="return confirm(\'This will delete ALL provisioning and audit data on this Admin site. Continue?\');" style="margin-bottom:10px">';
@@ -210,6 +221,18 @@ add_action('admin_init', function(){
         do_action('tmon_admin_audit', 'purge_unit', sprintf('user=%s unit=%s', wp_get_current_user()->user_login, $unit_id));
         add_action('admin_notices', function(){ echo '<div class="updated"><p>Unit data purged.</p></div>'; });
     }
+});
+
+add_action('admin_post_tmon_admin_rotate_uc_key', function(){
+    if (!current_user_can('manage_options')) wp_die('Forbidden');
+    check_admin_referer('tmon_admin_rotate_uc_key');
+    if (function_exists('tmon_admin_get_or_create_uc_shared_key')) {
+        tmon_admin_get_or_create_uc_shared_key(true);
+    } else {
+        update_option('tmon_admin_uc_key', wp_generate_password(48, false, false));
+    }
+    wp_safe_redirect(admin_url('admin.php?page=tmon-admin-settings&rotated=1'));
+    exit;
 });
 
 if (!function_exists('tmon_admin_render_settings_buttons')) {

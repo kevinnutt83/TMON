@@ -16,6 +16,9 @@
             <div class="notice notice-error is-dismissible"><p>Settings staging failed<?php echo isset($_GET['msg']) ? ': ' . esc_html($_GET['msg']) : '.'; ?></p></div>
         <?php endif; ?>
     <?php endif; ?>
+    <?php $json_err = get_transient('tmon_uc_settings_json_error'); if ($json_err): delete_transient('tmon_uc_settings_json_error'); ?>
+        <div class="notice notice-error is-dismissible"><p><?php echo esc_html($json_err); ?></p></div>
+    <?php endif; ?>
     <script>
     (function(){
         // Auto-hide admin notices after 6 seconds
@@ -29,6 +32,7 @@
 
     <form method="post" action="options.php">
         <?php settings_fields('tmon_uc_settings'); ?>
+        <?php do_settings_sections('tmon_uc_settings'); ?>
         <table class="form-table">
             <tr valign="top">
                 <th scope="row">Remove all plugin data on deactivation</th>
@@ -55,6 +59,13 @@
     <p>
         <a class="button button-primary" href="<?php echo esc_url(admin_url('admin.php?page=tmon-device-data')); ?>">Open Device Data</a>
     </p>
+    <p class="description">Optional: push a staged profile for a specific device to the Admin hub now.</p>
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
+        <?php wp_nonce_field('tmon_uc_push_staged_to_admin'); ?>
+        <input type="hidden" name="action" value="tmon_uc_push_staged_to_admin" />
+        <input type="text" name="unit_id" class="regular-text" placeholder="6-digit Unit ID" pattern="[0-9]{6}" required />
+        <button type="submit" class="button">Push Staged Settings to Admin</button>
+    </form>
 
     <hr>
     <h2>Data Maintenance</h2>

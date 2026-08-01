@@ -440,13 +440,22 @@ function tmon_uc_receive_field_data($request) {
         // First, persist the primary record (base or direct remote),
         // then persist each embedded remote record if provided.
         $targets = [];
-        // Always include the primary record so base station data is stored
-        $targets[] = $rec;
+        // Always include the primary record so base station data is stored.
+        $primary = $rec;
+        if (!isset($primary['origin'])) {
+            $primary['origin'] = !empty($primary['machine_id']) ? 'direct_remote' : 'base';
+        }
+        $primary['source_unit_id'] = $unit_id;
+        $primary['source_node_type'] = $data['NODE_TYPE'] ?? ($data['node_type'] ?? ($primary['NODE_TYPE'] ?? null));
+        $targets[] = $primary;
         if (!empty($remote_map)) {
             // For each remote embedded record, prepare a per-remote target
             foreach ($remote_map as $rid => $rdata) {
                 if (!is_array($rdata)) continue;
                 $rdata['unit_id'] = isset($rdata['unit_id']) ? $rdata['unit_id'] : $rid;
+                $rdata['origin'] = 'remote_via_base';
+                $rdata['source_unit_id'] = $unit_id;
+                $rdata['source_node_type'] = 'base';
                 $targets[] = $rdata;
             }
         }
@@ -655,6 +664,24 @@ function tmon_uc_get_device_history($request) {
             'engine2_batt' => $d['e2v'] ?? ($d['engine2_batt_v'] ?? null),
             'relay' => $relay_states,
         ];
+
+        $idx = count($points) - 1;
+        // Preserve additional numeric keys for dynamic chart datasets.
+        foreach ($d as $k => $v) {
+            if (array_key_exists($k, $points[$idx])) {
+                continue;
+            }
+            if (is_numeric($v)) {
+                $points[$idx][$k] = $v + 0;
+                continue;
+            }
+            if (is_string($v)) {
+                $v_trim = trim($v);
+                if ($v_trim !== '' && is_numeric($v_trim)) {
+                    $points[$idx][$k] = $v_trim + 0;
+                }
+            }
+        }
     }
     sort($enabled_relays);
     $enabled_relays = array_values(array_unique($enabled_relays));

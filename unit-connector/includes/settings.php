@@ -10,6 +10,9 @@ add_action('admin_init', function() {
     ]);
     register_setting('tmon_uc_settings', 'tmon_uc_remove_data_on_deactivate');
     register_setting('tmon_uc_settings', 'tmon_uc_auto_update');
+    register_setting('tmon_uc_settings', 'tmon_uc_sync_refresh_cadence');
+    register_setting('tmon_uc_settings', 'tmon_uc_diagnostics_poll_enabled');
+    register_setting('tmon_uc_settings', 'tmon_uc_customer_id');
     register_setting('tmon_uc_settings', 'tmon_uc_history_voltage_min');
     register_setting('tmon_uc_settings', 'tmon_uc_history_voltage_max');
     add_settings_section('tmon_uc_main', 'Admin Integration', function(){
@@ -34,7 +37,19 @@ add_action('admin_init', function() {
         echo '<label><input type="checkbox" name="tmon_uc_allow_diagnostics_no_auth" value="1" ' . checked(1, $val, false) . ' /> Allow diagnostics ingestion without auth when no credentials are configured</label>';
         echo '<p class="description">Recommended OFF. Enable only while migrating legacy devices.</p>';
     }, 'tmon_uc_settings', 'tmon_uc_main');
-
+    add_settings_field('tmon_uc_sync_refresh_cadence', 'Hub Backfill Cadence', function() {
+        $val = (string) get_option('tmon_uc_sync_refresh_cadence', 'hourly');
+        echo '<select name="tmon_uc_sync_refresh_cadence">';
+        echo '<option value="off" ' . selected($val, 'off', false) . '>Off</option>';
+        echo '<option value="hourly" ' . selected($val, 'hourly', false) . '>Hourly</option>';
+        echo '<option value="daily" ' . selected($val, 'daily', false) . '>Daily</option>';
+        echo '</select>';
+        echo '<p class="description">Controls automatic Admin device backfill schedule.</p>';
+    }, 'tmon_uc_settings', 'tmon_uc_main');
+    add_settings_field('tmon_uc_diagnostics_poll_enabled', 'Diagnostics Polling', function() {
+        $val = (int) get_option('tmon_uc_diagnostics_poll_enabled', 1);
+        echo '<label><input type="checkbox" name="tmon_uc_diagnostics_poll_enabled" value="1" ' . checked(1, $val, false) . ' /> Enable diagnostics polling and refresh UI widgets</label>';
+    }, 'tmon_uc_settings', 'tmon_uc_main');
     add_settings_section('tmon_uc_chart', 'Chart Display', function(){
         echo '<p>Configure history chart bounds for voltage (applied to device history shortcode).</p>';
     }, 'tmon_uc_settings');
@@ -86,9 +101,10 @@ add_action('admin_post_tmon_uc_generate_key', function(){
 });
 
 // Core pairing routine reused by admin-post and AJAX to avoid duplicate requests
-function tmon_uc_pair_with_hub_core() {
-    static $result = null;
-    if ($result !== null) return $result;
+function tmon_uc_pair_with_hub_core($mode = 'pair') {
+    static $result = [];
+    $cache_key = (string) $mode;
+    if (isset($result[$cache_key])) return $result[$cache_key];
 
     $hub = trim(get_option('tmon_uc_hub_url', home_url()));
     if (stripos($hub, 'http') !== 0) { $hub = 'https://' . ltrim($hub, '/'); }
@@ -97,17 +113,31 @@ function tmon_uc_pair_with_hub_core() {
         try { $local_key = bin2hex(random_bytes(24)); } catch (Exception $e) { $local_key = wp_generate_password(48, false, false); }
         update_option('tmon_uc_admin_key', $local_key);
     }
-    $endpoint = rtrim($hub, '/') . '/wp-json/tmon-admin/v1/uc/pair';
+    $endpoint = rtrim($hub, '/') . '/wp-json/tmon-admin/v1/uc/key/register';
+    $headers = ['Content-Type' => 'application/json', 'Accept'=>'application/json', 'User-Agent'=>'TMON-UC/1.0'];
+    $payload = [
+        'site_url' => home_url(),
+        'uc_key'   => $local_key,
+    ];
+    if ($mode === 'refresh') {
+        $endpoint = rtrim($hub, '/') . '/wp-json/tmon-admin/v1/uc/key/refresh';
+        $payload = [
+            'site_url' => home_url(),
+            'rotate_hub_key' => 0,
+        ];
+        $hub_key = get_option('tmon_uc_hub_shared_key', '');
+        if ($hub_key) {
+            $headers['X-TMON-HUB'] = $hub_key;
+        }
+    }
+
     $resp = wp_remote_post($endpoint, [
         'timeout' => 15,
-        'headers' => ['Content-Type' => 'application/json', 'Accept'=>'application/json', 'User-Agent'=>'TMON-UC/1.0'],
-        'body' => wp_json_encode([
-            'site_url' => home_url(),
-            'uc_key'   => $local_key,
-        ]),
+        'headers' => $headers,
+        'body' => wp_json_encode($payload),
     ]);
     if (is_wp_error($resp)) {
-        return $result = ['status'=>'error','message'=>$resp->get_error_message(), 'paired'=>false];
+        return $result[$cache_key] = ['status'=>'error','message'=>$resp->get_error_message(), 'paired'=>false];
     }
     $code = wp_remote_retrieve_response_code($resp);
     $body = json_decode(wp_remote_retrieve_body($resp), true);
@@ -128,7 +158,7 @@ function tmon_uc_pair_with_hub_core() {
         if (function_exists('tmon_uc_backfill_provisioned_from_admin')) {
             tmon_uc_backfill_provisioned_from_admin();
         }
-        return $result = [
+        return $result[$cache_key] = [
             'status' => 'ok',
             'paired' => true,
             'hub_key' => sanitize_text_field($body['hub_key']),
@@ -136,7 +166,7 @@ function tmon_uc_pair_with_hub_core() {
             'paired_sites' => $paired,
         ];
     }
-    return $result = ['status'=>'error','message'=>'bad_response','paired'=>false,'body'=>$body];
+    return $result[$cache_key] = ['status'=>'error','message'=>'bad_response','paired'=>false,'body'=>$body];
 }
 
 // Add core purge helpers to ensure UC mirror, staged options, pairing keys, and files are removed.
@@ -314,6 +344,19 @@ add_action('admin_post_tmon_uc_pair_with_hub', function(){
     exit;
 });
 
+add_action('admin_post_tmon_uc_refresh_hub_credentials', function(){
+    if (!current_user_can('manage_options')) wp_die('Insufficient permissions');
+    check_admin_referer('tmon_uc_refresh_hub_credentials');
+    $res = tmon_uc_pair_with_hub_core('refresh');
+    if (isset($res['status']) && $res['status'] === 'ok') {
+        wp_safe_redirect(admin_url('admin.php?page=tmon-uc-hub&credentials_refreshed=1'));
+    } else {
+        $msg = isset($res['message']) ? $res['message'] : 'refresh_failed';
+        wp_safe_redirect(admin_url('admin.php?page=tmon-uc-hub&credentials_refreshed=0&msg=' . urlencode($msg)));
+    }
+    exit;
+});
+
 // AJAX pairing: keep user on Hub Pairing page and return JSON status
 add_action('wp_ajax_tmon_uc_pair_with_hub_ajax', function(){
     if (!current_user_can('manage_options')) {
@@ -439,6 +482,9 @@ function tmon_uc_merge_settings_from_post($schema) {
     $raw = isset($_POST['RAW_SETTINGS_JSON']) ? wp_unslash($_POST['RAW_SETTINGS_JSON']) : '';
     if ($raw) {
         $decoded = json_decode($raw, true);
+        if (!is_array($decoded)) {
+            set_transient('tmon_uc_settings_json_error', 'RAW_SETTINGS_JSON must be a valid JSON object/array.', 60);
+        }
         if (is_array($decoded)) {
             foreach ($decoded as $k => $v) {
                 // Do not override typed values; only add missing
@@ -460,7 +506,7 @@ add_action('admin_post_tmon_uc_stage_settings', function(){
     if (!current_user_can('manage_options')) wp_die('Insufficient permissions');
     check_admin_referer('tmon_uc_stage_settings');
     $unit_id = isset($_POST['unit_id']) ? sanitize_text_field($_POST['unit_id']) : '';
-    if (!$unit_id) {
+    if (!$unit_id || !preg_match('/^[0-9]{6}$/', $unit_id)) {
         wp_safe_redirect(add_query_arg(['tmon_cfg'=>'fail','msg'=>'missing_unit'], wp_get_referer() ?: admin_url('admin.php?page=tmon-settings')));
         exit;
     }
@@ -541,7 +587,11 @@ function tmon_uc_backfill_provisioned_from_admin() {
     $hub = trim(get_option('tmon_uc_hub_url', ''));
     $hub_key = get_option('tmon_uc_hub_shared_key', '');
     if (!$hub || !$hub_key) return 0;
+    $customer_id = intval(get_option('tmon_uc_customer_id', 0));
     $endpoint = rtrim($hub, '/') . '/wp-json/tmon-admin/v1/provisioned-devices';
+    if ($customer_id > 0) {
+        $endpoint .= '?customer_id=' . $customer_id;
+    }
     $resp = wp_remote_get($endpoint, ['timeout'=>15,'headers'=>['X-TMON-HUB'=>$hub_key]]);
     if (is_wp_error($resp) || wp_remote_retrieve_response_code($resp) !== 200) return 0;
     $data = json_decode(wp_remote_retrieve_body($resp), true);
@@ -551,6 +601,7 @@ function tmon_uc_backfill_provisioned_from_admin() {
     global $wpdb;
     uc_devices_ensure_table();
     $table = $wpdb->prefix . 'tmon_uc_devices';
+    $seen_units = [];
     foreach ($devices as $d) {
         $ok = uc_devices_upsert_row([
             'unit_id' => $d['unit_id'] ?? '',
@@ -559,7 +610,20 @@ function tmon_uc_backfill_provisioned_from_admin() {
             'role' => $d['role'] ?? '',
             'assigned' => 1,
         ]);
-        if ($ok) $count++;
+        if ($ok) {
+            $seen_units[] = (string) ($d['unit_id'] ?? '');
+            $count++;
+        }
+    }
+
+    // Admin is source-of-truth: deactivate local assigned flags for units no longer assigned to this UC/customer scope.
+    $seen_units = array_values(array_filter(array_unique($seen_units)));
+    if (!empty($seen_units)) {
+        $placeholders = implode(',', array_fill(0, count($seen_units), '%s'));
+        $sql = "UPDATE {$table} SET assigned=0, updated_at=NOW() WHERE assigned=1 AND unit_id NOT IN ({$placeholders})";
+        $wpdb->query($wpdb->prepare($sql, ...$seen_units));
+    } else {
+        $wpdb->query("UPDATE {$table} SET assigned=0, updated_at=NOW() WHERE assigned=1");
     }
     return $count;
 }
@@ -569,7 +633,7 @@ add_action('admin_post_tmon_uc_push_staged_to_admin', function(){
     if (!current_user_can('manage_options')) wp_die('Insufficient permissions');
     check_admin_referer('tmon_uc_push_staged_to_admin');
     $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
-    if (!$unit_id) {
+    if (!$unit_id || !preg_match('/^[0-9]{6}$/', $unit_id)) {
         wp_safe_redirect(add_query_arg(['tmon_cfg'=>'fail','msg'=>'missing_unit'], wp_get_referer() ?: admin_url('admin.php?page=tmon-settings')));
         exit;
     }

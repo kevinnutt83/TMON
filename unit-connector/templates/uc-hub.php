@@ -16,6 +16,13 @@
     <?php if (isset($_GET['tmon_refresh'])): ?>
         <div class="notice notice-success is-dismissible"><p>Devices refreshed from Admin hub.</p></div>
     <?php endif; ?>
+    <?php if (isset($_GET['credentials_refreshed'])): ?>
+        <?php if (intval($_GET['credentials_refreshed']) === 1): ?>
+            <div class="notice notice-success is-dismissible"><p>Hub credentials refreshed.</p></div>
+        <?php else: ?>
+            <div class="notice notice-error is-dismissible"><p>Hub credential refresh failed<?php echo isset($_GET['msg']) ? ': ' . esc_html($_GET['msg']) : '.'; ?></p></div>
+        <?php endif; ?>
+    <?php endif; ?>
     <script>
     (function(){
         setTimeout(function(){
@@ -28,9 +35,11 @@
     $normalized = function_exists('tmon_uc_normalize_url') ? tmon_uc_normalize_url($hub_url) : '';
     $refresh_url = wp_nonce_url(admin_url('admin-post.php?action=tmon_uc_refresh_devices'), 'tmon_uc_refresh_devices');
     $keygen_url = wp_nonce_url(admin_url('admin-post.php?action=tmon_uc_generate_key'), 'tmon_uc_generate_key');
+    $refresh_credentials_url = wp_nonce_url(admin_url('admin-post.php?action=tmon_uc_refresh_hub_credentials'), 'tmon_uc_refresh_hub_credentials');
     $pair_nonce = wp_create_nonce('tmon_uc_pair_with_hub_ajax');
     $ajax_url = admin_url('admin-ajax.php');
     $local_key = get_option('tmon_uc_admin_key', '');
+    $customer_profile_id = intval(get_option('tmon_uc_customer_id', 0));
     $hub_key = get_option('tmon_uc_hub_shared_key', '');
     $read_token = get_option('tmon_uc_hub_read_token', '');
     ?>
@@ -43,6 +52,7 @@
         <div id="tmon-uc-pair-status" style="margin-top:8px;"></div>
         <p style="margin-top:12px;">
             <button type="button" class="button button-primary" id="tmon-uc-pair-btn" data-nonce="<?php echo esc_attr($pair_nonce); ?>" data-ajaxurl="<?php echo esc_url($ajax_url); ?>">Pair with Hub</button>
+            <a class="button" href="<?php echo esc_url($refresh_credentials_url); ?>">Refresh Hub Credentials</a>
             <a class="button" href="<?php echo esc_url($refresh_url); ?>">Refresh Devices</a>
             <a class="button" href="<?php echo esc_url($keygen_url); ?>">Generate New Admin Key</a>
         </p>
@@ -61,6 +71,13 @@
                 <tr valign="top">
                     <th scope="row">Shared Key (X-TMON-ADMIN)</th>
                     <td><input type="text" name="tmon_uc_admin_key" class="regular-text" value="<?php echo esc_attr($local_key); ?>" /></td>
+                </tr>
+                <tr valign="top">
+                    <th scope="row">Customer Profile ID</th>
+                    <td>
+                        <input type="number" name="tmon_uc_customer_id" class="small-text" min="0" step="1" value="<?php echo esc_attr($customer_profile_id); ?>" />
+                        <p class="description">Optional. If set, this UC only backfills devices assigned to this customer profile from Admin.</p>
+                    </td>
                 </tr>
                 <tr valign="top">
                     <th scope="row">Remove all plugin data on deactivation</th>

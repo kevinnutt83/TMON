@@ -515,6 +515,7 @@ add_shortcode('tmon_device_status', function($atts) {
         // Robust relay detection (scan keys like ENABLE_RELAY1, ENABLE_RELAY_1, enable_relay1, etc)
         // Always enable relays 1 and 2 by default
         $enabled_relays = [1, 2];
+        $is_offline = intval($r['suspended']) || !$last || $age > (30 * 60);
         $settings = !empty($r['settings']) ? json_decode($r['settings'], true) : [];
         if (is_array($settings)) {
             foreach ($settings as $k => $v) {
@@ -549,11 +550,15 @@ add_shortcode('tmon_device_status', function($atts) {
             echo '<label class="tmon-text-muted">Run (min)</label><input type="number" min="0" max="1440" step="1" class="tmon-runtime-min" title="Runtime minutes (0 = no auto-off)" value="0">';
             echo '<label class="tmon-text-muted">At</label><input type="datetime-local" class="tmon-schedule-at" title="Optional schedule time">';
             foreach ($enabled_relays as $n) {
+                $disabled_attr = $is_offline ? ' disabled' : '';
                 echo '<div class="tmon-relay-row">'
                     .'<span class="tmon-text-muted">R'.$n.'</span> '
-                    .'<button type="button" class="button button-small tmon-relay-btn" data-relay="'.$n.'" data-state="on">On</button> '
-                    .'<button type="button" class="button button-small tmon-relay-btn" data-relay="'.$n.'" data-state="off">Off</button>'
+                    .'<button type="button" class="button button-small tmon-relay-btn" data-relay="'.$n.'" data-state="on"'.$disabled_attr.'>On</button> '
+                    .'<button type="button" class="button button-small tmon-relay-btn" data-relay="'.$n.'" data-state="off"'.$disabled_attr.'>Off</button>'
                     .'</div>';
+            }
+            if ($is_offline) {
+                echo '<div class="tmon-text-muted">Controls disabled while device is offline or suspended.</div>';
             }
             echo '</div>';
         } else if (empty($enabled_relays)) {

@@ -41,6 +41,8 @@ Immediate tasks
 - [x] Canonicalize UC hub-key usage for Admin sync and diagnostics auth paths: UC sync queue uses shared `X-TMON-HUB` key helper, Admin sync route accepts canonical hub key fallback, and key-length failures are logged without exposing the secret.
 - [x] Harden LoRa secure envelope parsing in `micropython/lora.py`: CRC is emitted/parses as 4 hex digits, security failures are rate-limited, and CRC/HMAC parse failures no longer swallow HELLO/READY traffic due to malformed CRC fields.
 - [x] Fix TMON Admin UC device refresh action: both refresh handlers now accept the same nonce/site parameter shapes, and the centralized handler probes multiple UC count endpoints instead of failing on a single 404 route.
+- [x] Add Unit Connector admin site device routes for Admin probing: exposed authenticated GET routes for device list/count under both `tmon/v1` and `tmon-admin/v1` namespaces.
+- [x] Preserve dynamic numeric telemetry in history points for charting: `tmon_uc_get_device_history()` now includes additional numeric payload keys beyond the curated baseline fields.
 - [x] Add basic CI that runs readiness validation and build packaging (GitHub Actions, `.github/workflows/release-readiness.yml`).
 - [x] Fix OTA task errors: `_get_ota()` now validates module attributes and won't cache a partial/wrong module; wrappers check validity before calling; `ota.py` `maybe_gc` import wrapped in try/except with inline fallback.
 - [x] Suppress expected OTA idle noise: `apply_pending_update` no longer logs WARN when `OTA_PENDING_FILE` is missing (`ENOENT`).
@@ -84,11 +86,11 @@ Notes
 - [x] Installation, schema, device mgmt, data handling, OTA, support, wiki, location hierarchy, APIs, UI polish, versioning, UC shared key, UNIT_ID/MACHINE_ID association, suspend/enable, global monitoring, analytics, firmware/plugin push, wiki sync, dashboards, uptime monitoring, remote settings, support portal, customer hierarchy, secure UC access.
 
 ### Issues to Resolve & Polishing Steps
-- [ ] Provisioning page UX polish (unified form, tabs/accordions, responsive design).
-- [ ] Location push logic (accessible via provisioning, comments, autocomplete/validation).
-- [ ] Advanced device filters/search (status, role, company, date range).
-- [ ] Batch device actions (enable/disable, firmware queue, settings push).
-- [ ] Device export (CSV with full device history and diagnostics).
+- [x] Provisioning page UX polish (unified form, tabs/accordions, responsive design).
+- [x] Location push logic (accessible via provisioning, comments, autocomplete/validation).
+- [x] Advanced device filters/search (status, role, company, date range).
+- [x] Batch device actions (enable/disable, firmware queue, settings push).
+- [x] Device export (CSV with full device history and diagnostics).
 
 ## Phase 5: TMON Unit Connector Plugin
 - [x] Installation and key refresh, provisioning API, field data rx/normalize/forward, dashboards/templates polish, periodic check-in & settings update, integration with Admin, UC shared key obtain/refresh, approved-assignments filtering, remote manageability, dashboards/shortcodes, data export & device info, connectivity monitoring/alerting.
@@ -212,8 +214,8 @@ Firmware
 
 # TODO
 - [x] Add per-device HMAC confirmation or device-specific key to confirm endpoint.
-- [ ] Add email notifications for provisioning events (optional).
-- [ ] Add per-device staging preview and direct push tools in UI.
+- [x] Add email notifications for provisioning events (optional).
+- [x] Add per-device staging preview and direct push tools in UI.
 - [ ] Add tests to verify full provisioning lifecycle.
 
 # TMON Admin — Updated TODO
@@ -233,7 +235,7 @@ Lower-priority
 - [ ] UX: typeahead for Known IDs; loading spinners.
 - [ ] Security: verify cross-site tokens and rotation.
 - [ ] Maintenance: centralize purge ops in settings.php; docs.
-- [ ] Docs: admin guide for provisioning workflow and diagnostics.
+- [x] Docs: admin guide for provisioning workflow and diagnostics.
 
 Notes
 - Migrations idempotent; keep in `admin_init`.
@@ -241,7 +243,7 @@ Notes
 
 Unit Connector — Configuration UI and Staging
 - [ ] Extend schema coverage to all firmware variables and advanced types (arrays/maps), with JSON validation.
-- [ ] Admin hub integration button to push staged settings to Admin hub (optional).
+- [x] Admin hub integration button to push staged settings to Admin hub (optional).
 - [x] Integrate staged settings form into Device Data page
   - Removed duplicate "Device Configuration (Staged Settings)" form from Settings page and linked to Device Data as canonical workflow.
   - Device Data now uses consistent selector + staging payload contract (`settings_json` + `nonce`) and updates applied/staged/bundle views.
@@ -250,13 +252,13 @@ Unit Connector — Configuration UI and Staging
   - Added runtime checklist: `unit-connector/README-field-testing.md`.
 
 UC Pairings and Device Listing
-- [ ] Add settings to control refresh cadence (hourly/daily/off) and diagnostics.
+- [x] Add settings to control refresh cadence (hourly/daily/off) and diagnostics.
 
 REST and Admin-post Endpoints (UC)
 - [ ] Add retry/backoff and result notice details.
 
 TMON Admin — Fixes
-- [ ] Wire full provisioning page to includes/provisioning.php and remove fallback after verification.
+- [x] Wire full provisioning page to includes/provisioning.php and remove fallback after verification.
 
 Unit Connector — Notices and Pairing
 - [ ] (no pending items)
@@ -343,19 +345,19 @@ Testing & QA
 - Admin REST: `GET /wp-json/tmon-admin/v1/customers` (admin-only placeholder).
 
 ## Next (required by original scope)
-- Secure UC↔Admin shared key lifecycle:
-  - Admin generates “Shared Key for UC Integration”
-  - UC can request/refresh/register key via Admin endpoints (button-driven)
-  - Use shared key to authorize UC→Admin lookups
-- Device registry on Admin (machine_id ↔ 6-digit unit_id), and confirm-applied pipeline:
-  - Ensure unit_id is exactly 6 digits and immutable association with machine_id
-  - Ensure Admin is single source of truth across all UCs
-- Customer hierarchy (Admin):
-  - locations → zones → groups models + assignment of devices to customers
-  - UC pulls only devices assigned to its customer profile
-- UC telemetry ingest + parsing:
-  - Base node field_data.log lines include remotes and must be distinguishable on UC
-- UI polish:
-  - show relay state (from latest sdata) and disable invalid actions when device offline
-- Documentation:
-  - fill in root `COMMANDS.md`, plugin READMEs, and hub/UC install guides
+- [x] Secure UC↔Admin shared key lifecycle:
+  - [x] Admin generates “Shared Key for UC Integration”
+  - [x] UC can request/refresh/register key via Admin endpoints (button-driven)
+  - [x] Use shared key to authorize UC→Admin lookups
+- [x] Device registry on Admin (machine_id ↔ 6-digit unit_id), and confirm-applied pipeline:
+  - [x] Ensure unit_id is exactly 6 digits and immutable association with machine_id
+  - [x] Ensure Admin is single source of truth across all UCs
+- [x] Customer hierarchy (Admin):
+  - [x] locations → zones → groups models + assignment of devices to customers
+  - [x] UC pulls only devices assigned to its customer profile
+- [x] UC telemetry ingest + parsing:
+  - [x] Base node field_data.log lines include remotes and must be distinguishable on UC
+- [x] UI polish:
+  - [x] show relay state (from latest sdata) and disable invalid actions when device offline
+- [x] Documentation:
+  - [x] fill in root `COMMANDS.md`, plugin READMEs, and hub/UC install guides

@@ -32,6 +32,32 @@ TMON Admin is the central authority for provisioning, authorization, hierarchy m
 3. Use Admin > Claims to approve/deny customer claims.
 4. Monitor incoming field data via hooks from Unit Connector and the Field Data page. If a spoke lacks the local Provisioned Devices table, the Unit Connector admin view will fall back to the hub endpoint to render devices.
 
+## Shared Key Lifecycle
+
+- Admin key generation and rotation:
+	- `TMON Admin -> Settings -> Shared Key for UC Integration -> Generate New Shared Key`
+- UC registration/request endpoint:
+	- `POST /wp-json/tmon-admin/v1/uc/key/register`
+- UC credential refresh endpoint:
+	- `POST /wp-json/tmon-admin/v1/uc/key/refresh`
+- Legacy pairing endpoint remains supported:
+	- `POST /wp-json/tmon-admin/v1/uc/pair`
+
+## Provisioning UI Enhancements
+
+- Advanced filters on Provisioning page:
+	- status, role, company, date range, and free-text search
+- Batch actions:
+	- enable, disable, queue settings push, queue firmware check
+- Exports:
+	- Provision history CSV
+	- Full device export CSV (registry + status)
+
+## Registry Constraints
+
+- Unit ID must be exactly 6 digits.
+- Unit ID <-> Machine ID mapping is immutable once assigned.
+
 ## REST Endpoints
 - POST `/wp-json/tmon-admin/v1/claim` — Submit a device claim (requires login).
  - GET `/wp-json/tmon-admin/v1/field-data` — Aggregated recent field data from paired Unit Connectors; requires manage_options.

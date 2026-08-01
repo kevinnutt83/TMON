@@ -108,6 +108,50 @@ if (!function_exists('tmon_uc_receive_device_diagnostics')) {
     }
 }
 
+if (!function_exists('tmon_uc_validate_hub_request')) {
+    function tmon_uc_validate_hub_request($request) {
+        if (current_user_can('manage_options')) {
+            return true;
+        }
+
+        $provided_hub = '';
+        if (is_object($request) && method_exists($request, 'get_header')) {
+            $provided_hub = (string) ($request->get_header('X-TMON-HUB') ?: '');
+        }
+        if ($provided_hub === '') {
+            $provided_hub = (string) ($_SERVER['HTTP_X_TMON_HUB'] ?? '');
+        }
+
+        $expected_hub = '';
+        if (function_exists('tmon_uc_get_hub_shared_key')) {
+            $expected_hub = (string) tmon_uc_get_hub_shared_key();
+        }
+        if ($expected_hub === '') {
+            $expected_hub = (string) (get_option('tmon_uc_admin_key', '') ?: get_option('tmon_uc_shared_key', ''));
+        }
+        if ($expected_hub !== '' && $provided_hub !== '' && hash_equals($expected_hub, $provided_hub)) {
+            return true;
+        }
+
+        $read_token = (string) get_option('tmon_uc_hub_read_token', '');
+        $auth_header = '';
+        if (is_object($request) && method_exists($request, 'get_header')) {
+            $auth_header = (string) ($request->get_header('Authorization') ?: '');
+        }
+        if ($auth_header === '') {
+            $auth_header = (string) ($_SERVER['HTTP_AUTHORIZATION'] ?? '');
+        }
+        if ($read_token !== '' && stripos($auth_header, 'Bearer ') === 0) {
+            $provided_bearer = trim(substr($auth_header, 7));
+            if ($provided_bearer !== '' && hash_equals($read_token, $provided_bearer)) {
+                return true;
+            }
+        }
+
+        return new WP_Error('forbidden', 'Invalid hub key', ['status' => 403]);
+    }
+}
+
 add_action('rest_api_init', function() {
     register_rest_route('tmon/v1', '/device/diagnostics', [
         'methods' => 'POST',
@@ -118,6 +162,74 @@ add_action('rest_api_init', function() {
     register_rest_route('unit-connector/v1', '/device/diagnostics', [
         'methods' => 'POST',
         'callback' => 'tmon_uc_receive_device_diagnostics',
+        'permission_callback' => '__return_true',
+    ]);
+
+    $site_devices_cb = function($request) {
+        $auth = tmon_uc_validate_hub_request($request);
+        if (is_wp_error($auth)) {
+            return $auth;
+        }
+
+        global $wpdb;
+        $table = $wpdb->prefix . 'tmon_devices';
+        $rows = $wpdb->get_results(
+            "SELECT unit_id, machine_id, unit_name, last_seen, suspended FROM {$table} ORDER BY unit_id ASC",
+            ARRAY_A
+        );
+
+        $devices = [];
+        foreach ((array) $rows as $r) {
+            $devices[] = [
+                'unit_id' => (string) ($r['unit_id'] ?? ''),
+                'machine_id' => (string) ($r['machine_id'] ?? ''),
+                'unit_name' => (string) ($r['unit_name'] ?? ''),
+                'last_seen' => (string) ($r['last_seen'] ?? ''),
+                'suspended' => !empty($r['suspended']),
+            ];
+        }
+
+        return new WP_REST_Response([
+            'ok' => true,
+            'count' => count($devices),
+            'devices' => $devices,
+            'site' => home_url(),
+        ], 200);
+    };
+
+    $site_count_cb = function($request) {
+        $auth = tmon_uc_validate_hub_request($request);
+        if (is_wp_error($auth)) {
+            return $auth;
+        }
+
+        global $wpdb;
+        $table = $wpdb->prefix . 'tmon_devices';
+        $n = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$table}");
+        return new WP_REST_Response(['ok' => true, 'count' => $n, 'site' => home_url()], 200);
+    };
+
+    register_rest_route('tmon/v1', '/admin/site/devices', [
+        'methods' => 'GET',
+        'callback' => $site_devices_cb,
+        'permission_callback' => '__return_true',
+    ]);
+
+    register_rest_route('tmon/v1', '/admin/site/devices-count', [
+        'methods' => 'GET',
+        'callback' => $site_count_cb,
+        'permission_callback' => '__return_true',
+    ]);
+
+    register_rest_route('tmon-admin/v1', '/site/devices', [
+        'methods' => 'GET',
+        'callback' => $site_devices_cb,
+        'permission_callback' => '__return_true',
+    ]);
+
+    register_rest_route('tmon-admin/v1', '/site/devices-count', [
+        'methods' => 'GET',
+        'callback' => $site_count_cb,
         'permission_callback' => '__return_true',
     ]);
 });

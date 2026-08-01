@@ -47,3 +47,32 @@ File naming & storage conventions (device-side):
 Notes
 - Telemetry (sdata) and persistent settings are kept separate: device POSTs include a `sdata` snapshot and an optional minimal `data` block.
 - Base nodes persist remote device readings into `field_data.log`, and will also write per-remote `device_settings-<unit_id>.json` if remote sends settings.
+
+## Hub and UC Install Guide (Quick)
+
+1. Install and activate `tmon-admin` on the hub site.
+2. Install and activate `tmon-unit-connector` on each customer site.
+3. In UC, open `TMON Devices -> Hub Pairing` and set `TMON Admin Hub URL`.
+4. Click `Pair with Hub` to register the UC and receive:
+   - `hub_key` used in `X-TMON-HUB`
+   - `read_token` for read-only admin sync calls
+5. Optional: click `Refresh Hub Credentials` to rotate read token and refresh shared credentials.
+6. In Admin, verify paired sites under `TMON Admin -> Deploy UC -> Paired Unit Connectors`.
+7. Run `Refresh Devices` in UC to backfill assigned devices.
+
+## Provisioning Operations (Admin)
+
+- `TMON Admin -> Provisioning`
+  - Filter by status, role, company, date range, and search text.
+  - Batch actions: enable, disable, queue settings push, queue firmware check.
+  - Export options:
+    - Provision history CSV
+    - Full device export CSV
+
+## Security Notes
+
+- Unit IDs are enforced as exactly 6 digits in provisioning and confirm-applied paths.
+- Machine ID <-> Unit ID mapping is immutable once established.
+- UC key lifecycle endpoints:
+  - `POST /wp-json/tmon-admin/v1/uc/key/register`
+  - `POST /wp-json/tmon-admin/v1/uc/key/refresh`
