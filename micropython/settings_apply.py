@@ -925,6 +925,32 @@ async def apply_staged_settings_once():
 
         try:
 
+            from wprest import confirm_staged_settings_applied
+
+        except Exception:
+
+            confirm_staged_settings_applied = None
+
+        if confirm_staged_settings_applied is not None:
+
+            try:
+
+                await confirm_staged_settings_applied(
+                    changed_keys=list(effective_changed_keys),
+                    applied_keys=list(applied.keys()),
+                    status='applied',
+                )
+
+            except Exception as e:
+
+                await debug_print(
+                    'Settings server acknowledgement failed: %s'
+                    % e,
+                    'WARN'
+                )
+
+        try:
+
             maybe_gc(
                 "settings_apply_once",
                 min_interval_ms=3000,

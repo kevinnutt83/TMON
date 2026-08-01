@@ -29,6 +29,22 @@ LOG_FILE = LOG_DIR + '/lora.log'
 ERROR_LOG_FILE = LOG_DIR + '/lora_errors.log'
 FIELD_DATA_LOG = LOG_DIR + '/field_data.log'
 DATA_HISTORY_LOG = LOG_DIR + '/data_history.log'
+REMOTE_INFO_LOG = LOG_DIR + '/remote_info.log'
+DEBUG_LOG_FILE = LOG_DIR + '/debug.log'
+PROVISION_LOG_FILE = LOG_DIR + '/provisioning.log'
+
+LOG_MAX_BYTES = 64 * 1024
+LOG_MAX_ROTATIONS = 3
+LOG_ROTATE_CHECK_INTERVAL_S = 300
+LOG_FILES_TO_ROTATE = [
+    FIELD_DATA_LOG,
+    DATA_HISTORY_LOG,
+    REMOTE_INFO_LOG,
+    ERROR_LOG_FILE,
+    DEBUG_LOG_FILE,
+    PROVISION_LOG_FILE,
+    LOG_FILE,
+]
 
 FIELD_DATA_DELIVERED_LOG = LOG_DIR + '/field_data.delivered.log'
 FIELD_DATA_MAX_BYTES = 256 * 1024

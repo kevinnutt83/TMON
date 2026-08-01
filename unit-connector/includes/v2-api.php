@@ -178,11 +178,87 @@ function tmon_uc_handle_command_confirm( $request ) {
 
 function tmon_uc_handle_settings_applied( $request ) {
 	$body = tmon_uc_get_body_json( $request );
-	$unit = isset( $body['unit_id'] ) ? sanitize_text_field( $body['unit_id'] ) : '';
-	// Store snapshot for auditing
-	$meta_key = 'tmon_settings_applied_' . ( $unit ? $unit : 'unknown' );
-	update_option( $meta_key, array( 'payload' => $body, 'ts' => time() ) );
-	return rest_ensure_response( array( 'status' => 'ok', 'unit_id' => $unit ) );
+	$unit_id = isset( $body['unit_id'] ) ? sanitize_text_field( (string) $body['unit_id'] ) : '';
+	$machine_id = isset( $body['machine_id'] ) ? sanitize_text_field( (string) $body['machine_id'] ) : '';
+	$status = isset( $body['status'] ) ? sanitize_text_field( (string) $body['status'] ) : 'applied';
+
+	if ( $unit_id === '' && $machine_id === '' ) {
+		return new WP_REST_Response( array(
+			'ok' => false,
+			'message' => 'unit_id or machine_id required',
+		), 400 );
+	}
+
+	$map = get_option( 'tmon_uc_staged_settings', array() );
+	if ( ! is_array( $map ) ) {
+		$map = array();
+	}
+
+	$matched = '';
+	if ( $unit_id !== '' && isset( $map[ $unit_id ] ) ) {
+		$matched = $unit_id;
+	} elseif ( $machine_id !== '' ) {
+		foreach ( $map as $candidate_key => $entry ) {
+			if ( ! is_array( $entry ) ) {
+				continue;
+			}
+			if ( isset( $entry['machine_id'] ) && (string) $entry['machine_id'] === $machine_id ) {
+				$matched = (string) $candidate_key;
+				break;
+			}
+		}
+	}
+
+	if ( $matched === '' ) {
+		return new WP_REST_Response( array(
+			'ok' => true,
+			'status' => 'already_consumed',
+			'unit_id' => $unit_id,
+			'machine_id' => $machine_id,
+		), 200 );
+	}
+
+	if ( ! in_array( $status, array( 'applied', 'success', 'ok' ), true ) ) {
+		return new WP_REST_Response( array(
+			'ok' => false,
+			'status' => 'not_consumed',
+			'unit_id' => $matched,
+		), 400 );
+	}
+
+	$entry = $map[ $matched ];
+	$audit = get_option( 'tmon_uc_settings_apply_audit', array() );
+	if ( ! is_array( $audit ) ) {
+		$audit = array();
+	}
+	$audit[] = array(
+		'unit_id' => $matched,
+		'machine_id' => $machine_id,
+		'status' => 'applied',
+		'staged_ts' => isset( $entry['ts'] ) ? $entry['ts'] : null,
+		'applied_ts' => current_time( 'mysql' ),
+		'settings' => isset( $entry['settings'] ) ? $entry['settings'] : $entry,
+		'changed_keys' => isset( $body['changed_keys'] ) && is_array( $body['changed_keys'] ) ? $body['changed_keys'] : array(),
+	);
+	if ( count( $audit ) > 500 ) {
+		$audit = array_slice( $audit, -500 );
+	}
+	update_option( 'tmon_uc_settings_apply_audit', $audit, false );
+
+	unset( $map[ $matched ] );
+	update_option( 'tmon_uc_staged_settings', $map, false );
+
+	$meta_key = 'tmon_settings_applied_' . $matched;
+	update_option( $meta_key, array( 'payload' => $body, 'ts' => time() ), false );
+
+	do_action(
+		'tmon_staged_settings_applied',
+		$matched,
+		isset( $entry['settings'] ) ? $entry['settings'] : $entry,
+		$body
+	);
+
+	return rest_ensure_response( array( 'ok' => true, 'status' => 'consumed', 'unit_id' => $matched ) );
 }
 
 function tmon_uc_handle_settings_get( $request ) {
@@ -258,6 +334,12 @@ add_action( 'rest_api_init', function () {
 		) );
 
 		register_rest_route( $ns, '/admin/device/settings-applied', array(
+			'methods'             => 'POST',
+			'callback'            => 'tmon_uc_handle_settings_applied',
+			'permission_callback' => 'tmon_uc_rest_permission_check',
+		) );
+
+		register_rest_route( $ns, '/device/settings-applied', array(
 			'methods'             => 'POST',
 			'callback'            => 'tmon_uc_handle_settings_applied',
 			'permission_callback' => 'tmon_uc_rest_permission_check',

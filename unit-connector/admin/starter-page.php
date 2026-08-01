@@ -25,23 +25,22 @@ add_action('admin_post_tmon_create_starter_page', function(){
     if (!current_user_can('manage_options')) { wp_die('Insufficient permissions'); }
     check_admin_referer('tmon_create_starter_page');
 
-    // Dynamically get all TMON shortcodes from shortcodes.php
-    $shortcodes = array();
-    global $shortcode_tags;
-    foreach ($shortcode_tags as $tag => $func) {
-        if (strpos($tag, 'tmon_') === 0) {
-            $shortcodes[] = $tag;
-        }
-    }
-    // Remove duplicates, just in case
-    $shortcodes = array_unique($shortcodes);
-
-    $content = "<h2>TMON Shortcodes Overview</h2>\n";
-    $content .= "<p>This page lists all available TMON shortcodes currently registered in the system.</p>\n";
-    foreach ($shortcodes as $shortcode) {
-        // $content .= "<h3><strong>[$shortcode]</strong></h3>\n";
-        $content .= "[$shortcode]\n\n";
-    }
+    $content = "<h2>TMON Starter</h2>\n";
+    $content .= "<p>This page uses the shared unit picker flow so the core widgets render without hand-editing unit IDs. Use the Known IDs table below when you need explicit <code>unit_id</code> or <code>units</code> shortcode attributes.</p>\n";
+    $content .= "[tmon_known_ids]\n\n";
+    $content .= "<h3>Fleet Overview</h3>\n";
+    $content .= "[tmon_active_units]\n\n";
+    $content .= "[tmon_device_status]\n\n";
+    $content .= "<h3>Selected Device</h3>\n";
+    $content .= "[tmon_device_sdata refresh_s=\"30\"]\n\n";
+    $content .= "[tmon_device_history hours=\"24\" refresh_s=\"60\"]\n\n";
+    $content .= "[tmon_frost_heat_watch refresh_s=\"30\"]\n\n";
+    $content .= "<h3>Commands</h3>\n";
+    $content .= "[tmon_pending_commands]\n\n";
+    $content .= "[tmon_relay_controls]\n\n";
+    $content .= "<h3>Advanced Shortcodes</h3>\n";
+    $content .= "<p>Examples:</p>\n";
+    $content .= "<pre>[tmon_device_sdata unit_id=\"your-unit-id\"]\n[tmon_device_history unit_id=\"your-unit-id\" hours=\"24\"]\n[tmon_devices_history units=\"unit-a,unit-b\" hours=\"24\"]</pre>\n";
 
     $starter_id = intval(get_option('tmon_starter_page_id', 0));
     $postarr = array(

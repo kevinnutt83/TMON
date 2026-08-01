@@ -618,17 +618,31 @@ add_shortcode('tmon_device_status', function($atts) {
 // Unit ID is sourced from a page-level dropdown with id "tmon-unit-picker" when present; otherwise a local dropdown is shown.
 add_shortcode('tmon_device_history', function($atts) {
     $a = shortcode_atts([
+        'unit_id' => '',
         'hours' => '24',
         'refresh_s' => '60',
     ], $atts);
     $hours = max(1, intval($a['hours']));
     $refresh = max(0, intval($a['refresh_s']));
+    $requested_unit = sanitize_text_field((string) $a['unit_id']);
     $feature = 'sample';
     $devices = tmon_uc_list_feature_devices($feature);
-    if (empty($devices)) {
+    if (empty($devices) && $requested_unit === '') {
         return '<em>No provisioned devices found for this feature.</em>';
     }
-    $default_unit = $devices[0]['unit_id'];
+    if ($requested_unit !== '') {
+        $found = false;
+        foreach ($devices as $device) {
+            if (($device['unit_id'] ?? '') === $requested_unit) {
+                $found = true;
+                break;
+            }
+        }
+        if (!$found) {
+            array_unshift($devices, ['unit_id' => $requested_unit, 'label' => $requested_unit]);
+        }
+    }
+    $default_unit = $requested_unit !== '' ? $requested_unit : $devices[0]['unit_id'];
     $select_id = 'tmon-history-select-' . wp_generate_password(6, false, false);
     $canvas_id = 'tmon-history-chart-' . wp_generate_password(8, false, false);
     $hours_id = 'tmon-history-hours-' . wp_generate_password(6, false, false);
@@ -800,6 +814,73 @@ add_shortcode('tmon_device_history', function($atts) {
 			return Array.from(nums).sort((a,b)=>a-b);
 		}
 
+        function numericOrNull(v) {
+            if (v === null || typeof v === 'undefined' || v === '') return null;
+            if (typeof v === 'number') return isFinite(v) ? v : null;
+            if (typeof v === 'string') {
+                const n = Number(v);
+                return isFinite(n) ? n : null;
+            }
+            return null;
+        }
+
+        function buildDynamicDatasets(points) {
+            const skip = {
+                t: 1, ts: 1, time: 1, timestamp: 1,
+                unit_id: 1, unit: 1, node_type: 1, NODE_TYPE: 1,
+                firmware_version: 1, fw: 1, batch_id: 1, machine_id: 1,
+                relay: 1
+            };
+            const preferred = {
+                temp_f: { label: 'Probe Temp (F)', yAxisID: 'y1' },
+                temp_c: { label: 'Probe Temp (C)', yAxisID: 'y1' },
+                device_temp_f: { label: 'Device Temp (F)', yAxisID: 'y1' },
+                device_temp_c: { label: 'Device Temp (C)', yAxisID: 'y1' },
+                humid: { label: 'Probe Humidity (%)', yAxisID: 'y2' },
+                device_humid: { label: 'Device Humidity (%)', yAxisID: 'y2' },
+                bar: { label: 'Probe Pressure (hPa)', yAxisID: 'y3' },
+                device_bar: { label: 'Device Pressure (hPa)', yAxisID: 'y3' },
+                volt: { label: 'Voltage (V)', yAxisID: 'y4' },
+                sys_voltage: { label: 'Sys Voltage (V)', yAxisID: 'y4' },
+                soil_moisture: { label: 'Soil Moisture', yAxisID: 'y2' },
+                free_mem: { label: 'Free Mem', yAxisID: 'y4' },
+                rssi: { label: 'WiFi RSSI', yAxisID: 'y4' },
+                lora_SigStr: { label: 'LoRa RSSI', yAxisID: 'y4' },
+                lora_snr: { label: 'LoRa SNR', yAxisID: 'y4' },
+                lowest_temp_f: { label: 'Lowest Temp (F)', yAxisID: 'y1', hidden: true },
+                highest_temp_f: { label: 'Highest Temp (F)', yAxisID: 'y1', hidden: true },
+                lowest_bar: { label: 'Lowest Pressure (hPa)', yAxisID: 'y3', hidden: true },
+                highest_bar: { label: 'Highest Pressure (hPa)', yAxisID: 'y3', hidden: true },
+                lowest_humid: { label: 'Lowest Humidity (%)', yAxisID: 'y2', hidden: true },
+                highest_humid: { label: 'Highest Humidity (%)', yAxisID: 'y2', hidden: true }
+            };
+            const colors = ['#e67e22', '#3498db', '#2ecc71', '#9b59b6', '#795548', '#1abc9c', '#34495e', '#e74c3c', '#16a085', '#f39c12'];
+            const keySet = {};
+            (points || []).forEach(function(p){
+                Object.keys(p || {}).forEach(function(k){
+                    if (skip[k]) return;
+                    if (/^relay[_]?\d+_?on$/i.test(k) || /^relay[_]?\d+$/i.test(k) || /^r\d+$/i.test(k)) return;
+                    const v = numericOrNull(p[k]);
+                    if (v !== null) keySet[k] = true;
+                });
+            });
+            return Object.keys(keySet).sort().map(function(k, idx){
+                const meta = preferred[k] || { label: k.replace(/_/g, ' '), yAxisID: /humid|soil/i.test(k) ? 'y2' : (/bar|press/i.test(k) ? 'y3' : (/volt|mem|rssi|snr/i.test(k) ? 'y4' : 'y1')) };
+                return {
+                    label: meta.label,
+                    data: (points || []).map(function(p){ return numericOrNull((p || {})[k]); }),
+                    borderColor: colors[idx % colors.length],
+                    backgroundColor: 'transparent',
+                    fill: false,
+                    yAxisID: meta.yAxisID,
+                    pointRadius: 0,
+                    spanGaps: true,
+                    cubicInterpolationMode: 'monotone',
+                    hidden: !!meta.hidden
+                };
+            });
+        }
+
 		function render(unit, hours) {
 			if (!unit) return;
 			const url = (hours === 'yoy')
@@ -808,21 +889,7 @@ add_shortcode('tmon_device_history', function($atts) {
 			fetch(url).then(r=>r.json()).then(data=>{
 				lastData = data;
 				const pts = Array.isArray(data.points) ? data.points : [];
-				const labels = pts.map(p=>p.t || '');
-				const temp = pts.map(p => (p && typeof p.temp_f !== 'undefined') ? p.temp_f : null);
-				const humid = pts.map(p => (p && typeof p.humid !== 'undefined') ? p.humid : null);
-				const bar = pts.map(p => (p && typeof p.bar !== 'undefined') ? p.bar : null);
-				const volt = pts.map(p => (p && typeof p.volt !== 'undefined') ? p.volt : null);
-				const devTemp = pts.map(p => (p && typeof p.device_temp_f !== 'undefined') ? p.device_temp_f : null);
-				const devHumid = pts.map(p => (p && typeof p.device_humid !== 'undefined') ? p.device_humid : null);
-				const devBar = pts.map(p => (p && typeof p.device_bar !== 'undefined') ? p.device_bar : null);
-				const soilMoisture = pts.map(p => (p && typeof p.soil_moisture !== 'undefined') ? p.soil_moisture : null);
-                const lowTempF = pts.map(p => (p && Object.prototype.hasOwnProperty.call(p, 'lowest_temp_f')) ? p.lowest_temp_f : null);
-                const highTempF = pts.map(p => (p && Object.prototype.hasOwnProperty.call(p, 'highest_temp_f')) ? p.highest_temp_f : null);
-                const lowBar = pts.map(p => (p && Object.prototype.hasOwnProperty.call(p, 'lowest_bar')) ? p.lowest_bar : null);
-                const highBar = pts.map(p => (p && Object.prototype.hasOwnProperty.call(p, 'highest_bar')) ? p.highest_bar : null);
-                const lowHumid = pts.map(p => (p && Object.prototype.hasOwnProperty.call(p, 'lowest_humid')) ? p.lowest_humid : null);
-                const highHumid = pts.map(p => (p && Object.prototype.hasOwnProperty.call(p, 'highest_humid')) ? p.highest_humid : null);
+                const labels = pts.map(p => p.t || p.timestamp || p.ts || '');
 
 				const relayNums = Array.isArray(data.enabled_relays) && data.enabled_relays.length ? data.enabled_relays : detectRelaysFromPoints(pts);
 				const relayColors = ["#6c757d","#95a5a6","#34495e","#7f8c8d","#95a5a6","#2d3436","#636e72","#99a3ad"];
@@ -842,22 +909,7 @@ add_shortcode('tmon_device_history', function($atts) {
                     };
                 });
 
-                const datasets = [
-                    { label: "Probe Temp (F)", data: temp, borderColor: "#e67e22", fill:false, yAxisID: "y1", pointRadius: 0, cubicInterpolationMode: 'monotone' },
-                    { label: "Device Temp (F)", data: devTemp, borderColor: "#d35400", borderDash: [4,2], fill:false, yAxisID: "y1", pointRadius: 0, cubicInterpolationMode: 'monotone' },
-                    { label: "Lowest Temp (F)", data: lowTempF, borderColor: "#f5b041", borderDash: [3,3], fill:false, yAxisID: "y1", pointRadius: 0, cubicInterpolationMode: 'monotone', hidden: true },
-                    { label: "Highest Temp (F)", data: highTempF, borderColor: "#af601a", borderDash: [3,3], fill:false, yAxisID: "y1", pointRadius: 0, cubicInterpolationMode: 'monotone', hidden: true },
-                    { label: "Probe Humidity (%)", data: humid, borderColor: "#3498db", fill:false, yAxisID: "y2", pointRadius: 0, cubicInterpolationMode: 'monotone' },
-                    { label: "Device Humidity (%)", data: devHumid, borderColor: "#2980b9", borderDash: [4,2], fill:false, yAxisID: "y2", pointRadius: 0, cubicInterpolationMode: 'monotone' },
-                    { label: "Lowest Humidity (%)", data: lowHumid, borderColor: "#5dade2", borderDash: [3,3], fill:false, yAxisID: "y2", pointRadius: 0, cubicInterpolationMode: 'monotone', hidden: true },
-                    { label: "Highest Humidity (%)", data: highHumid, borderColor: "#1f618d", borderDash: [3,3], fill:false, yAxisID: "y2", pointRadius: 0, cubicInterpolationMode: 'monotone', hidden: true },
-                    { label: "Probe Pressure (hPa)", data: bar, borderColor: "#2ecc71", fill:false, yAxisID: "y3", pointRadius: 0, cubicInterpolationMode: 'monotone' },
-                    { label: "Device Pressure (hPa)", data: devBar, borderColor: "#27ae60", borderDash: [4,2], fill:false, yAxisID: "y3", pointRadius: 0, cubicInterpolationMode: 'monotone' },
-                    { label: "Lowest Pressure (hPa)", data: lowBar, borderColor: "#58d68d", borderDash: [3,3], fill:false, yAxisID: "y3", pointRadius: 0, cubicInterpolationMode: 'monotone', hidden: true },
-                    { label: "Highest Pressure (hPa)", data: highBar, borderColor: "#1e8449", borderDash: [3,3], fill:false, yAxisID: "y3", pointRadius: 0, cubicInterpolationMode: 'monotone', hidden: true },
-                    { label: "Voltage (V)", data: volt, borderColor: "#9b59b6", fill:false, yAxisID: "y4", pointRadius: 0, cubicInterpolationMode: 'monotone' },
-                    { label: "Soil Moisture", data: soilMoisture, borderColor: "#795548", fill:false, yAxisID: "y2", pointRadius: 0, cubicInterpolationMode: 'monotone' }
-                ].concat(relayDatasets);
+                const datasets = buildDynamicDatasets(pts).concat(relayDatasets);
 
                 const persistedLegend = Object.assign({}, loadLegendState(), collectLegendState(chart));
                 datasets.forEach(function(ds){
@@ -1448,15 +1500,30 @@ add_shortcode('tmon_known_ids', function($atts){
 // Renders latest sdata payload; unit is selected from the shared picker (#tmon-unit-picker) or a local dropdown fallback.
 add_shortcode('tmon_device_sdata', function($atts) {
     $a = shortcode_atts([
+        'unit_id' => '',
         'refresh_s' => '30',
     ], $atts);
     $refresh = max(0, intval($a['refresh_s']));
+    $requested_unit = sanitize_text_field((string) $a['unit_id']);
     $devices = tmon_uc_list_feature_devices('sample');
-    if (empty($devices)) {
+    if (empty($devices) && $requested_unit === '') {
         return '<em>No provisioned devices found for this feature.</em>';
     }
 
-    $default_unit = $devices[0]['unit_id'];
+    if ($requested_unit !== '') {
+        $found = false;
+        foreach ($devices as $device) {
+            if (($device['unit_id'] ?? '') === $requested_unit) {
+                $found = true;
+                break;
+            }
+        }
+        if (!$found) {
+            array_unshift($devices, ['unit_id' => $requested_unit, 'label' => $requested_unit]);
+        }
+    }
+
+    $default_unit = $requested_unit !== '' ? $requested_unit : $devices[0]['unit_id'];
     $select_id = 'tmon-sdata-select-' . wp_generate_password(6, false, false);
     $table_id = 'tmon-sdata-table-' . wp_generate_password(6, false, false);
     $meta_id = 'tmon-sdata-meta-' . wp_generate_password(6, false, false);
@@ -1481,6 +1548,14 @@ add_shortcode('tmon_device_sdata', function($atts) {
     var table = document.getElementById("%TABLE_ID%");
     var meta = document.getElementById("%META_ID%");
     var base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : "%AJAX_ROOT%".replace(/\/$/, "");
+    function escapeHtml(value){
+        return String(value)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
     function render(unit){
         var url = base + "/tmon/v1/device/sdata?unit_id=" + encodeURIComponent(unit);
         fetch(url).then(function(r){ return r.json(); }).then(function(data){
@@ -1489,12 +1564,16 @@ add_shortcode('tmon_device_sdata', function($atts) {
                 meta.textContent = '';
                 return;
             }
-            var friendly = data.friendly || {};
+            var payload = data.data || {};
+            var source = Object.keys(payload).length ? payload : (data.friendly || {});
             var rows = [];
-            Object.keys(friendly).forEach(function(k){
-                var v = friendly[k];
+            Object.keys(source).sort().forEach(function(k){
+                var v = source[k];
                 if (v === null || v === undefined || v === '') return;
-                rows.push('<tr><th>' + k + '</th><td>' + v + '</td></tr>');
+                if (typeof v === 'object') {
+                    try { v = JSON.stringify(v); } catch (e) { v = String(v); }
+                }
+                rows.push('<tr><th>' + escapeHtml(k) + '</th><td>' + escapeHtml(v) + '</td></tr>');
             });
             table.innerHTML = rows.length ? rows.join('') : '<tr><td><em>No fields reported.</em></td></tr>';
             meta.textContent = data.created_at ? ('Last sample: ' + data.created_at) : '';
@@ -2154,8 +2233,6 @@ add_action('wp_ajax_tmon_device_status_refresh', function(){
 });
 add_action('wp_ajax_nopriv_tmon_device_status_refresh', function(){ wp_send_json_error(['message'=>'not_authenticated'], 403); });
 
-
-<?php
 /**
  * TMON Unit Connector
  *

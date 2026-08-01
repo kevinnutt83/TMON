@@ -208,16 +208,35 @@ add_action('rest_api_init', function() {
 	register_rest_route('tmon/v1', '/device/staged-settings', array(
 		'methods'  => 'GET',
 		'callback' => function(\WP_REST_Request $req) {
-			$unit = sanitize_text_field($req->get_param('unit_id') ?: $req->get_param('machine_id') ?: '');
-			if (!$unit) {
+            $unit_id = sanitize_text_field($req->get_param('unit_id') ?: '');
+            $machine_id = sanitize_text_field($req->get_param('machine_id') ?: '');
+            if (!$unit_id && !$machine_id) {
 				return new WP_REST_Response(array('staged_exists' => false, 'staged' => null), 200);
 			}
 			$map = get_option('tmon_uc_staged_settings', array());
-			$entry = is_array($map) && isset($map[$unit]) ? $map[$unit] : null;
+            $entry = null;
+            if (is_array($map)) {
+                if ($unit_id && isset($map[$unit_id])) {
+                    $entry = $map[$unit_id];
+                } elseif ($machine_id && isset($map[$machine_id])) {
+                    $entry = $map[$machine_id];
+                } elseif ($machine_id) {
+                    foreach ($map as $candidate) {
+                        if (!is_array($candidate)) {
+                            continue;
+                        }
+                        if (isset($candidate['machine_id']) && (string) $candidate['machine_id'] === (string) $machine_id) {
+                            $entry = $candidate;
+                            break;
+                        }
+                    }
+                }
+            }
 			if (!$entry) {
 				return new WP_REST_Response(array('staged_exists' => false, 'staged' => null), 200);
 			}
-			return new WP_REST_Response(array('staged_exists' => true, 'staged' => $entry['settings'], 'meta' => array('ts' => $entry['ts'], 'who' => $entry['who'] ?? '')), 200);
+            $settings_payload = (is_array($entry) && isset($entry['settings']) && is_array($entry['settings'])) ? $entry['settings'] : $entry;
+            return new WP_REST_Response(array('staged_exists' => true, 'staged' => $settings_payload, 'meta' => array('ts' => $entry['ts'] ?? null, 'who' => $entry['who'] ?? '')), 200);
 		},
 		'permission_callback' => '__return_true' // allow devices / anonymous to GET (tokenized channels may layer on this)
 	));

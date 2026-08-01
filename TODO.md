@@ -34,6 +34,9 @@ Immediate tasks
 - [x] Finalize LoRa hub-role gate cleanup in `micropython/lora.py`: replaced remaining strict `base` checks with shared hub-role helper so wifi+LoRa follows the same RX/session/ACK response path.
 - [x] Harden `tmon-admin/includes/ajax-handlers.php`: fixed manifest proxy capability/host validation, fixed endpoint validation result reporting, and preserved queue identity fields (`unit_id`/`machine_id`) in update/reenqueue payload paths.
 - [x] Enforce Admin pending provision queue controls in `tmon-admin/includes/ajax-handlers.php`: dedupe by device identity on enqueue and enforce per-site maximum queued identities using `tmon_admin_queue_max_per_site`.
+- [x] Consume staged settings after device apply in Unit Connector: `settings-applied` now removes entries from `tmon_uc_staged_settings`, keeps bounded apply audit, and firmware posts acknowledgement after local apply/delete.
+- [x] Add firmware log rotation controls and starter-page shortcode fixes: bounded `log_rotate.py` loop, new log settings, dynamic history datasets, full sdata key rendering, and curated starter page content with shared picker guidance.
+- [x] Add one-time staged-settings clear entry points in Unit Connector for stuck apply loops (`tmon_uc_clear_staged_settings_core`, admin-post, and REST clear route).
 - [x] Add basic CI that runs readiness validation and build packaging (GitHub Actions, `.github/workflows/release-readiness.yml`).
 - [x] Fix OTA task errors: `_get_ota()` now validates module attributes and won't cache a partial/wrong module; wrappers check validity before calling; `ota.py` `maybe_gc` import wrapped in try/except with inline fallback.
 - [x] Suppress expected OTA idle noise: `apply_pending_update` no longer logs WARN when `OTA_PENDING_FILE` is missing (`ENOENT`).

@@ -201,6 +201,35 @@ function tmon_uc_purge_unit_core($unit_id) {
     return true;
 }
 
+if (!function_exists('tmon_uc_clear_staged_settings_core')) {
+function tmon_uc_clear_staged_settings_core($unit_id = '') {
+    $map = get_option('tmon_uc_staged_settings', []);
+    if (!is_array($map)) {
+        $map = [];
+    }
+
+    $unit_id = sanitize_text_field((string) $unit_id);
+    if ($unit_id === '') {
+        update_option('tmon_uc_staged_settings', [], false);
+        return ['cleared' => count($map), 'mode' => 'all'];
+    }
+
+    $removed = 0;
+    foreach ($map as $key => $entry) {
+        $match = ((string) $key === $unit_id);
+        if (!$match && is_array($entry)) {
+            $match = isset($entry['machine_id']) && (string) $entry['machine_id'] === $unit_id;
+        }
+        if ($match) {
+            unset($map[$key]);
+            $removed++;
+        }
+    }
+
+    update_option('tmon_uc_staged_settings', $map, false);
+    return ['cleared' => $removed, 'mode' => 'single', 'unit_id' => $unit_id];
+}}
+
 // Replace admin_post handler to call centralized purge helper
 add_action('admin_post_tmon_uc_purge_all', function(){
     if (!current_user_can('manage_options')) wp_die('Insufficient permissions');
@@ -246,6 +275,29 @@ add_action('rest_api_init', function(){
         },
         'permission_callback' => '__return_true',
     ]);
+    register_rest_route('tmon/v1', '/admin/staged-settings/clear', [
+        'methods' => 'POST',
+        'callback' => function($request){
+            if (!tmon_uc_admin_integration_auth($request)) return new WP_REST_Response(['status'=>'forbidden'], 403);
+            $unit_id = sanitize_text_field($request->get_param('unit_id') ?? '');
+            $result = tmon_uc_clear_staged_settings_core($unit_id);
+            return rest_ensure_response(['status' => 'ok', 'result' => $result]);
+        },
+        'permission_callback' => '__return_true',
+    ]);
+});
+
+add_action('admin_post_tmon_uc_clear_staged_settings', function(){
+    if (!current_user_can('manage_options')) wp_die('Insufficient permissions');
+    check_admin_referer('tmon_uc_clear_staged_settings');
+    $unit_id = isset($_POST['unit_id']) ? sanitize_text_field($_POST['unit_id']) : '';
+    $result = tmon_uc_clear_staged_settings_core($unit_id);
+    $query = ['cleared' => intval($result['cleared'] ?? 0)];
+    if (!empty($unit_id)) {
+        $query['unit_id'] = $unit_id;
+    }
+    wp_safe_redirect(add_query_arg($query, admin_url('admin.php?page=tmon-settings')));
+    exit;
 });
 
 // Pair with TMON Admin hub: exchange shared key and save hub key locally

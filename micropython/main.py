@@ -19,6 +19,11 @@ from ota import check_for_update, apply_pending_update
 from oled import update_display, display_message
 from settings_apply import load_applied_settings_on_boot, settings_apply_loop
 try:
+    from log_rotate import log_rotate_loop, rotate_logs_if_needed
+except Exception:
+    log_rotate_loop = None
+    rotate_logs_if_needed = None
+try:
     from user_commands import user_commands_task
 except Exception:
     user_commands_task = None
@@ -411,6 +416,16 @@ if user_commands_task:
 
 # ========================== MAIN ENTRY POINT ==========================
 async def main():
+    if rotate_logs_if_needed:
+        try:
+            rotate_logs_if_needed(force=True)
+        except Exception as e:
+            _record_startup_exception('rotate_logs_if_needed', e)
+    if log_rotate_loop:
+        try:
+            asyncio.create_task(log_rotate_loop())
+        except Exception as e:
+            _record_startup_exception('log_rotate_loop', e)
     # Launch permanent LoRa task directly (new bulletproof version)
     asyncio.create_task(connectLora())
     # Run all other periodic tasks

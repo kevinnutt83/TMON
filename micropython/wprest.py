@@ -789,6 +789,86 @@ async def send_diagnostics_to_wp(extra=None):
         return False
 
 
+async def confirm_staged_settings_applied(changed_keys=None, applied_keys=None, status='applied'):
+    """Best-effort acknowledgement so UC can consume staged settings after apply."""
+    try:
+        wp_url = _current_wp_url()
+        if not wp_url:
+            await debug_print('confirm_staged_settings_applied: no WP url', 'WARN')
+            return False
+        if not requests:
+            await debug_print('confirm_staged_settings_applied: requests unavailable', 'WARN')
+            return False
+
+        unit_id = str(getattr(settings, 'UNIT_ID', '') or '')
+        try:
+            machine_id = str(getattr(settings, 'MACHINE_ID', '') or get_machine_id() or '')
+        except Exception:
+            machine_id = ''
+
+        payload = {
+            'unit_id': unit_id,
+            'device_id': unit_id,
+            'machine_id': machine_id,
+            'status': str(status or 'applied'),
+            'changed_keys': list(changed_keys or []),
+            'applied_keys': list(applied_keys or []),
+        }
+
+        paths = [
+            '/wp-json/tmon/v1/device/settings-applied',
+            '/wp-json/tmon/v1/admin/device/settings-applied',
+            '/wp-json/unit-connector/v1/device/settings-applied',
+        ]
+        auth_modes = ['basic', 'admin', 'hub', 'read', None, 'none']
+
+        for path in paths:
+            for auth_mode in auth_modes:
+                resp = None
+                try:
+                    url = wp_url.rstrip('/') + path
+                    headers = _auth_headers(auth_mode)
+                    try:
+                        resp = requests.post(url, json=payload, headers=headers, timeout=8)
+                    except TypeError:
+                        resp = requests.post(url, json=payload, headers=headers)
+                    code, body_text, parsed = _extract_response(resp, max_chars=600)
+                    if code in (200, 201, 202):
+                        _mark_rest_success()
+                        await debug_print('confirm_staged_settings_applied: ok via %s' % path, 'INFO')
+                        return True
+                    await _record_rest_failure(
+                        'confirm_staged_settings_applied',
+                        code,
+                        path,
+                        'unexpected_status',
+                        {'auth_mode': auth_mode, 'body': body_text, 'parsed': parsed}
+                    )
+                except Exception as e:
+                    await _record_rest_failure(
+                        'confirm_staged_settings_applied',
+                        0,
+                        path,
+                        'request_exception',
+                        {'auth_mode': auth_mode, 'exception': format_exception(e)}
+                    )
+                finally:
+                    try:
+                        if resp:
+                            resp.close()
+                    except Exception:
+                        pass
+                    if asyncio:
+                        await asyncio.sleep_ms(5)
+
+        await debug_print('confirm_staged_settings_applied: all attempts failed', 'WARN')
+        return False
+    except Exception as e:
+        _set_last_rest_error('confirm_staged_settings_applied', 0, '', 'unhandled_exception', {'exception': format_exception(e)})
+        await log_exception('confirm_staged_settings_applied', e)
+        return False
+
+
 async def fetch_settings_from_wp():
     """
     Fetch staged settings from WP/UC/Admin and persist for settings_apply.
