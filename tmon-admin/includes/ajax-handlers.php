@@ -548,6 +548,8 @@ if (!function_exists('tmon_admin_ajax_update_device_repo')) {
 			'firmware_version' => $version,
 			'site_url' => $site_url,
 			'unit_name' => $unit_name,
+			'unit_id' => $unit_id,
+			'machine_id' => $machine_id,
 		];
 
 		if ($row) {
@@ -563,6 +565,8 @@ if (!function_exists('tmon_admin_ajax_update_device_repo')) {
 			$payload = $meta;
 			$payload['site_url'] = $site_url;
 			$payload['unit_name'] = $unit_name;
+			$payload['unit_id'] = $unit_id;
+			$payload['machine_id'] = $machine_id;
 			$payload['requested_by_user'] = wp_get_current_user()->user_login;
 			if ($key1) tmon_admin_enqueue_provision($key1, $payload);
 			if ($key2 && $key2 !== $key1) tmon_admin_enqueue_provision($key2, $payload);
@@ -591,12 +595,14 @@ if (!function_exists('tmon_admin_ajax_update_device_repo')) {
 				'notes' => wp_json_encode($meta),
 				'created_at' => current_time('mysql'),
 			];
-			$ok = $wpdb->insert($table, $insert, ['%s','%s','%s','%s','%s','%s']);
+			$ok = $wpdb->insert($table, $insert, ['%s','%s','%s','%s','%s','%s','%s']);
 			if (!$ok) {
 				wp_send_json_error(['message' => 'insert failed']);
 			}
 			$key = $unit_id ?: $machine_id;
-			tmon_admin_enqueue_provision($key, $meta);
+			$payload = $meta;
+			$payload['requested_by_user'] = wp_get_current_user()->user_login;
+			tmon_admin_enqueue_provision($key, $payload);
 			wp_send_json_success(['message' => 'inserted', 'notes' => $meta]);
 		}
 	}
@@ -658,6 +664,8 @@ if (!function_exists('tmon_admin_ajax_manage_pending')) {
 				}
 				if ($row && intval($row['settings_staged'] ?? 0) === 1) {
 					$derived = [];
+					$derived['unit_id'] = (string) ($row['unit_id'] ?? '');
+					$derived['machine_id'] = (string) ($row['machine_id'] ?? '');
 					if (!empty($row['site_url'])) $derived['site_url'] = $row['site_url'];
 					if (!empty($row['unit_name'])) $derived['unit_name'] = $row['unit_name'];
 					if (!empty($row['firmware'])) $derived['firmware'] = $row['firmware'];
@@ -812,10 +820,10 @@ if (!defined('TMON_ADMIN_HANDLERS_INCLUDED')) {
 // AJAX: fetch GitHub manifest (proxy)
 if (!function_exists('tmon_admin_ajax_fetch_github_manifest')) {
     function tmon_admin_ajax_fetch_github_manifest() {
-        if (!current_user_can('manage_options') && !is_user_logged_in()) {
+		if (!current_user_can('manage_options')) {
             wp_send_json_error('forbidden', 403);
         }
-        $repo = isset($_GET['repo']) ? sanitize_text_field($_GET['repo']) : '';
+		$repo = isset($_GET['repo']) ? esc_url_raw($_GET['repo']) : '';
         if (!$repo) {
             wp_send_json_error('missing repo', 400);
         }
@@ -829,6 +837,14 @@ if (!function_exists('tmon_admin_ajax_fetch_github_manifest')) {
         } elseif (strpos($repo, 'raw.githubusercontent.com') !== false && strpos($repo, 'manifest.json') === false) {
             $manifest_url = rtrim($repo, '/') . '/manifest.json';
         }
+
+		$scheme = strtolower((string) parse_url($manifest_url, PHP_URL_SCHEME));
+		$host = strtolower((string) parse_url($manifest_url, PHP_URL_HOST));
+		$allowed_hosts = ['github.com', 'raw.githubusercontent.com'];
+		if ($scheme !== 'https' || !in_array($host, $allowed_hosts, true)) {
+			wp_send_json_error(['error' => 'unsupported manifest host'], 400);
+		}
+
         $res = wp_remote_get($manifest_url, ['timeout' => 8]);
         if (is_wp_error($res)) {
             wp_send_json_error(['error' => $res->get_error_message()], 502);
@@ -983,8 +999,10 @@ if (!function_exists('tmon_admin_ajax_validate_wp_endpoints')) {
 			if (strpos($ep, '/device/settings') !== false && $unit) $path = rtrim($ep, '/') . '/' . rawurlencode($unit);
 			$ok = false;
 			$last_error = '';
+			$status = null;
+			$url = rtrim($base, '/') . $path;
+			$recorded = false;
 			for ($i=1; $i <= $retries; $i++) {
-				$url = rtrim($base, '/') . $path;
 				$args = ['timeout' => $timeout, 'headers' => $headers];
 				$res = wp_remote_get($url, $args);
 				if (is_wp_error($res)) {
@@ -992,13 +1010,14 @@ if (!function_exists('tmon_admin_ajax_validate_wp_endpoints')) {
 					sleep(1);
 					continue;
 				}
-				$code = wp_remote_retrieve_response_code($res);
-				$ok = in_array($code, [200,201], true);
-				$results[] = ['url' => $url, 'status' => $code, 'ok' => $ok];
+				$status = wp_remote_retrieve_response_code($res);
+				$ok = in_array($status, [200,201], true);
+				$results[] = ['url' => $url, 'status' => $status, 'ok' => $ok];
+				$recorded = true;
 				break;
 			}
-			if (!$ok && empty($results)) {
-				$results[] = ['url' => $url, 'status' => null, 'ok' => false, 'error' => $last_error];
+			if (!$recorded) {
+				$results[] = ['url' => $url, 'status' => $status, 'ok' => false, 'error' => $last_error ?: 'request_failed'];
 			}
 		}
 		$payload = ['source' => 'php_fallback', 'results' => $results];
