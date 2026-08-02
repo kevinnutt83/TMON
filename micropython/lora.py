@@ -84,20 +84,40 @@ def xor_bytes(a, b):
     return bytes(x ^ y for x, y in zip(a, cycle(b)))
 
 
-def crc16_ccitt(data, poly=0x1021, init=0xFFFF):
-    crc = init
+def crc16_ccitt(data, crc=0xFFFF):
+    """CRC-16/CCITT-FALSE style (poly 0x1021)."""
+    if isinstance(data, str):
+        data = data.encode()
     for b in data:
-        crc ^= b << 8
+        crc ^= (b << 8) & 0xFFFF
         for _ in range(8):
             if crc & 0x8000:
-                crc = ((crc << 1) ^ poly) & 0xFFFF
+                crc = ((crc << 1) ^ 0x1021) & 0xFFFF
             else:
                 crc = (crc << 1) & 0xFFFF
-    return crc
+    return crc & 0xFFFF
 
 
-def _format_crc(crc):
-    return f"{crc:04X}"
+def _format_crc(crc_val):
+    """Always exactly 4 hex digits."""
+    return '{:04X}'.format(int(crc_val) & 0xFFFF)
+
+
+def _parse_crc_hex(raw):
+    """
+    Accept only the first 4 hex characters from a CRC field.
+    Prevents parse bugs when extra suffix characters are present.
+    """
+    if raw is None:
+        return ''
+    s = str(raw).strip()
+    hx = ''
+    for ch in s:
+        if ch in '0123456789abcdefABCDEF':
+            hx += ch
+            if len(hx) >= 4:
+                break
+    return hx[:4].upper()
 
 
 def _extract_lora_network_fields(msg_str):
@@ -169,7 +189,7 @@ proxy_last_ts = {}
 last_rx_ts = 0
 last_lora_activity_ts = 0
 lora_rx_queue = SimpleQueue(maxsize=10)
-_security_error_last_ts = {}
+_sec_log_last = {}
 
 tx_counter = 0
 remote_counters = {}
@@ -555,16 +575,27 @@ async def log_error(error_msg):
         await debug_print(f"[FATAL] Failed to log error: {error_msg}", "ERROR")
 
 
-async def _log_security_error(key, message, interval_s=5):
+async def _sec_log(msg, min_interval_s=5):
+    """Avoid flooding logs with repeated CRC/HMAC failures."""
+    now = time.time()
+    key = str(msg)[:48]
+    last = _sec_log_last.get(key, 0)
+    if (now - last) < min_interval_s:
+        return
+    _sec_log_last[key] = now
     try:
-        now = time.time()
-        last_ts = float(_security_error_last_ts.get(key) or 0)
-        if now - last_ts < interval_s:
-            return
-        _security_error_last_ts[key] = now
+        await log_error(msg)
     except Exception:
-        pass
-    await log_error(message)
+        try:
+            print('[LORA-SEC]', msg)
+        except Exception:
+            pass
+
+
+async def _log_security_error(key, message, interval_s=5):
+    # Compatibility wrapper used by existing code paths.
+    _ = key
+    await _sec_log(message, min_interval_s=interval_s)
 
 async def hard_reset_lora():
     global lora
@@ -1065,51 +1096,38 @@ async def _send_final_ack(remote_uid, batch_id=None, reason='', remote_machine_i
         return None
 
 
-async def _maybe_force_ack_on_silence():
-    """Force ACK inline from the packet processor when FIELD_DATA chunk flow goes silent."""
-    now = time.time()
-    silence_limit = float(getattr(settings, 'LORA_SESSION_SILENCE_S', 4) or 4)
-    info = getattr(settings, 'REMOTE_NODE_INFO', {})
+async def _maybe_force_ack_on_silence(remote_uid, st):
+    try:
+        silent_need = float(getattr(settings, 'LORA_SESSION_SILENCE_S', 5))
+        last = float(st.get('last_chunk_ts') or 0)
+        if last <= 0:
+            return
+        if (time.time() - last) < silent_need:
+            return
+        if not st.get('session_active'):
+            return
 
-    for uid, st in list(info.items()):
-        if not isinstance(st, dict):
-            continue
-        if not bool(st.get('session_active')):
-            continue
-        field_chunks = (st.get('chunks') or {}).get('FIELD_DATA')
-        if not isinstance(field_chunks, dict) or not field_chunks:
-            continue
+        chunks = (st.get('chunks') or {}).get('FIELD_DATA') or {}
+        if not chunks and not st.get('saw_end'):
+            return
 
-        last_ts = float(st.get('last_chunk_ts') or 0)
-        if last_ts == 0:
-            continue
-
-        silent = now - last_ts
-        if silent < silence_limit:
-            continue
-
-        have = len(field_chunks)
-        total = int(st.get('chunk_total') or 0)
-        batch_id = st.get('batch_id')
+        next_delay = await _send_final_ack(remote_uid, batch_id=st.get('batch_id'), reason='silence')
         await debug_print(
-            f"Silence ACK {uid} after {silent:.0f}s (have {have}/{total})", "BASE_NODE"
+            f"Silence ACK to {remote_uid} ok={bool(next_delay)}",
+            "BASE_NODE"
         )
-        await _send_final_ack(uid, batch_id=batch_id, reason='silence')
+        st['session_active'] = False
         try:
-            from oled import display_message
-            await display_message("ACK", 0.6)
-        except Exception:
-            pass
-
-        try:
-            st['chunks'].pop('FIELD_DATA', None)
+            st.get('chunks', {}).pop('FIELD_DATA', None)
         except Exception:
             pass
         st.pop('chunk_first_ts', None)
         st.pop('last_chunk_ts', None)
         st.pop('chunk_total', None)
         st.pop('batch_id', None)
-        st.pop('session_active', None)
+        st.pop('saw_end', None)
+    except Exception as e:
+        await log_error(f"Silence ACK handler error for {remote_uid}: {e}")
 
 async def base_packet_processor():
     global last_lora_activity_ts
@@ -1131,13 +1149,13 @@ async def base_packet_processor():
             if packet_type == 'HELLO':
                 remote_uid = str(parsed_data or uid or '').strip()
                 try:
-                    remote_uid = remote_uid.split(',')[0].strip()
+                    remote_uid = remote_uid.split(':', 1)[-1].strip().split('|')[0].strip()
                 except Exception:
                     pass
                 if not remote_uid:
                     remote_uid = str(uid or 'unknown').strip()
 
-                await debug_print(f"HELLO received from {remote_uid}", "BASE_NODE")
+                await debug_print(f"HELLO from {remote_uid}", "BASE_NODE")
 
                 if not hasattr(settings, 'REMOTE_NODE_INFO') or settings.REMOTE_NODE_INFO is None:
                     settings.REMOTE_NODE_INFO = {}
@@ -1149,10 +1167,18 @@ async def base_packet_processor():
                 st['last_hello_ts'] = now
                 st['last_rx'] = now
                 st['session_active'] = True
+                st['saw_end'] = False
                 st['chunks'] = {'FIELD_DATA': {}}
                 st['base_uid'] = str(getattr(settings, 'UNIT_ID', '') or '')
                 st['chunk_first_ts'] = now
                 st['last_chunk_ts'] = now
+                st['missed_syncs'] = 0
+                try:
+                    if not hasattr(settings, 'LORA_PEER_COUNTERS') or settings.LORA_PEER_COUNTERS is None:
+                        settings.LORA_PEER_COUNTERS = {}
+                    settings.LORA_PEER_COUNTERS.setdefault(remote_uid, {'tx': 0, 'rx': 0})
+                except Exception:
+                    pass
                 try:
                     save_remote_node_info()
                 except Exception:
@@ -1165,7 +1191,7 @@ async def base_packet_processor():
                     ready = await _secure_message(ready, remote_uid=remote_uid)
                     ok = await _safe_send(ready.encode(), remote_uid=remote_uid)
                     await debug_print(
-                        f"READY sent to {remote_uid} (ok={ok}) base={base_uid} chunk={chunk_sz}",
+                        f"READY sent to {remote_uid} ok={ok} chunk={chunk_sz}",
                         "BASE_NODE"
                     )
                     try:
@@ -1177,7 +1203,7 @@ async def base_packet_processor():
                     await log_error(f"READY send FAILED for {remote_uid}: {e}")
 
                 lora_rx_queue.task_done()
-                await _maybe_force_ack_on_silence()
+                await _maybe_force_ack_on_silence(remote_uid, st)
                 gc.collect()
                 continue
 
@@ -1187,16 +1213,16 @@ async def base_packet_processor():
                 total = _safe_int(end_info.get('total'), 0)
                 batch_id = end_info.get('batch_id')
                 await debug_print(
-                    f"END received from {remote_uid} (declared total={total})",
+                    f"END from {remote_uid} total={total}",
                     "BASE_NODE"
                 )
-                have = len((st.get('chunks') or {}).get('FIELD_DATA') or {})
-                await debug_print(
-                    f"Session complete - have {have} chunks, sending ACK",
-                    "BASE_NODE"
-                )
+                st['saw_end'] = True
                 st['batch_id'] = batch_id
-                await _send_final_ack(remote_uid, batch_id=batch_id, reason='end')
+                next_delay = await _send_final_ack(remote_uid, batch_id=batch_id, reason='end')
+                await debug_print(
+                    f"FINAL ACK to {remote_uid} ok={bool(next_delay)} next={int(next_delay or 0)}",
+                    "BASE_NODE"
+                )
 
                 if remote_uid in settings.REMOTE_NODE_INFO:
                     rst = settings.REMOTE_NODE_INFO[remote_uid]
@@ -1206,6 +1232,7 @@ async def base_packet_processor():
                     rst.pop('chunk_total', None)
                     rst.pop('batch_id', None)
                     rst.pop('session_active', None)
+                    rst.pop('saw_end', None)
 
                 lora_rx_queue.task_done()
                 gc.collect()
@@ -1288,7 +1315,7 @@ async def base_packet_processor():
                     del chunks_dict[t]
                     await debug_print(f"Discarded partial {t} chunks for {uid} (timeout)", "BASE_NODE")
 
-            await _maybe_force_ack_on_silence()
+            await _maybe_force_ack_on_silence(uid, st)
             lora_rx_queue.task_done()
             gc.collect()
         except Exception as e:
@@ -1532,6 +1559,7 @@ def _load_counters():
                             'tx': int(vals.get('tx', 0)),
                             'rx': int(vals.get('rx', 0))
                         }
+                settings.LORA_PEER_COUNTERS = remote_counters
     except Exception:
         pass
 
@@ -1540,6 +1568,14 @@ def _save_counters():
     """Persist counters to disk."""
     try:
         path = getattr(settings, 'LORA_COUNTERS_FILE', '/logs/lora_counters.json')
+        peer_map = getattr(settings, 'LORA_PEER_COUNTERS', None)
+        if isinstance(peer_map, dict):
+            for uid, vals in peer_map.items():
+                if isinstance(vals, dict):
+                    remote_counters[uid] = {
+                        'tx': int(vals.get('tx', 0)),
+                        'rx': int(vals.get('rx', 0))
+                    }
         data = {
             'tx_counter': tx_counter,
             'remote_counters': remote_counters
@@ -1568,245 +1604,145 @@ def hmac_sha256(key, msg):
     return uhashlib.sha256(opad + inner).digest()
 
 
-def _format_crc(crc_val):
-    try:
-        return '{:04X}'.format(crc_val & 0xFFFF)
-    except Exception:
-        return '0000'
-
-
 async def _secure_message(msg_str, remote_uid=None):
-    """Add CNT/HMAC metadata using a pipe-separated envelope."""
-    global tx_counter
+    """
+    Envelope: msg|CNT:n|HMAC:hex|CRC:XXXX
+    CRC covers the original msg_str only (not the envelope).
+    """
+    try:
+        if isinstance(msg_str, bytes):
+            msg_str = msg_str.decode()
+        msg_str = str(msg_str)
 
-    if not getattr(settings, 'LORA_HMAC_ENABLED', False):
-        return msg_str
+        uid = remote_uid or getattr(settings, 'UNIT_ID', 'local')
+        if not hasattr(settings, 'LORA_PEER_COUNTERS') or settings.LORA_PEER_COUNTERS is None:
+            settings.LORA_PEER_COUNTERS = {}
+        peer = settings.LORA_PEER_COUNTERS.setdefault(str(uid), {'tx': 0, 'rx': 0})
+        peer['tx'] = int(peer.get('tx', 0)) + 1
+        counter = int(peer['tx'])
+        remote_counters[str(uid)] = {'tx': int(peer['tx']), 'rx': int(peer.get('rx', 0))}
 
-    if str(getattr(settings, 'NODE_TYPE', '')).lower() == 'remote':
-        counter = tx_counter + 1
-        tx_counter = counter
-    else:
-        if remote_uid is None:
-            counter = tx_counter + 1
-            tx_counter = counter
-        else:
-            if remote_uid not in remote_counters:
-                remote_counters[remote_uid] = {'tx': 0, 'rx': 0}
-            counter = remote_counters[remote_uid]['tx'] + 1
-            remote_counters[remote_uid]['tx'] = counter
+        parts = [msg_str, 'CNT:%d' % counter]
 
-    counter_str = str(counter)
-    counter_bytes = counter.to_bytes(4, 'big')
+        if getattr(settings, 'LORA_HMAC_ENABLED', True):
+            secret = str(getattr(settings, 'LORA_HMAC_SECRET', '') or '')
+            trunc = int(getattr(settings, 'LORA_HMAC_TRUNCATE', 16))
+            material = ('%s|%d' % (msg_str, counter)).encode()
+            try:
+                digest = hmac_sha256(secret.encode(), material)
+                if isinstance(digest, bytes):
+                    hx = ''.join('{:02x}'.format(b) for b in digest)
+                else:
+                    hx = str(digest)
+                parts.append('HMAC:%s' % hx[:trunc])
+            except Exception as e:
+                await _sec_log('HMAC build failed: %s' % e)
 
-    secret = getattr(settings, 'LORA_HMAC_SECRET', '') or ''
-    if isinstance(secret, str):
-        secret = secret.encode()
+        if getattr(settings, 'LORA_CRC_ENABLED', True):
+            c = crc16_ccitt(msg_str.encode())
+            parts.append('CRC:%s' % _format_crc(c))
 
-    crc_hex = None
-    if getattr(settings, 'LORA_CRC_ENABLED', True):
-        try:
-            crc_hex = _format_crc(crc16_ccitt(msg_str.encode()))
-        except Exception:
-            crc_hex = None
-
-    if getattr(settings, 'LORA_ENCRYPT_ENABLED', False):
-        msg_bytes = msg_str.encode()
-        stream_key = secret + counter_bytes
-        stream_hash = uhashlib.sha256(stream_key).digest()
-        encrypted = bytes(a ^ b for a, b in zip(msg_bytes, (stream_hash * ((len(msg_bytes) // 32) + 1))[:len(msg_bytes)]))
-        enc_b64 = _ub.b2a_base64(encrypted).rstrip(b'\n').decode()
-        to_hmac = encrypted + counter_bytes
-        hmac_val = hmac_sha256(secret, to_hmac)
-        hmac_hex = _ub.hexlify(hmac_val).decode()[:getattr(settings, 'LORA_HMAC_TRUNCATE', 16)]
-        secure_msg = f"ENC:{enc_b64}|CNT:{counter}|HMAC:{hmac_hex}"
-    else:
-        to_hmac = msg_str.encode() + counter_str.encode()
-        hmac_val = hmac_sha256(secret, to_hmac)
-        hmac_hex = _ub.hexlify(hmac_val).decode()[:getattr(settings, 'LORA_HMAC_TRUNCATE', 16)]
-        secure_msg = msg_str + f"|CNT:{counter}|HMAC:{hmac_hex}"
-
-    if crc_hex is not None:
-        secure_msg += f"|CRC:{crc_hex}"
-
-    if counter % 5 == 0:
-        _save_counters()
-
-    return secure_msg
+        if counter % 5 == 0:
+            _save_counters()
+        return '|'.join(parts)
+    except Exception as e:
+        await _sec_log('secure_message error: %s' % e)
+        return str(msg_str)
 
 
 async def _unsecure_message(msg_str, remote_uid=None):
-    """Verify HMAC/CRC and replay window for pipe-separated secure envelopes."""
-    if not getattr(settings, 'LORA_HMAC_ENABLED', False):
-        return msg_str
+    """
+    Parse pipe envelope. Return cleartext msg or None on hard failure.
+    """
+    try:
+        if isinstance(msg_str, bytes):
+            msg_str = msg_str.rstrip(b'\x00').decode()
+        raw = str(msg_str).strip()
+        if not raw:
+            return None
 
-    if not msg_str:
-        return None
+        if '|' not in raw:
+            if raw.startswith('HELLO:') or raw.startswith('READY:') or raw.startswith('ACK:') or raw.startswith('END:'):
+                return raw
+            if getattr(settings, 'LORA_HMAC_REJECT_UNSIGNED', True) and getattr(settings, 'LORA_HMAC_ENABLED', True):
+                await _sec_log('Invalid secure format (no CNT/HMAC)')
+                return None
+            return raw
 
-    cnt = None
-    hmac_hex = None
-    crc_hex = None
-    is_enc = False
-    enc_b64 = None
-    original_msg = msg_str
+        parts = raw.split('|')
+        body = parts[0]
+        cnt = None
+        hmac_hex = None
+        crc_hex = None
 
-    if '|CNT:' in msg_str or '|HMAC:' in msg_str:
-        meta_sep = '|'
-    elif ',CNT:' in msg_str or ',HMAC:' in msg_str:
-        meta_sep = ','
-    else:
-        # Default for new format when metadata is incomplete/corrupt.
-        meta_sep = '|'
-
-    if msg_str.startswith('ENC:'):
-        is_enc = True
-        parts = msg_str.split(meta_sep)
-        for p in parts:
-            if p.startswith('ENC:'):
-                enc_b64 = p[4:]
-            elif p.startswith('CNT:'):
+        for p in parts[1:]:
+            if p.startswith('CNT:'):
                 try:
-                    cnt = int(p[4:])
+                    cnt = int(p[4:].strip())
                 except Exception:
                     cnt = None
             elif p.startswith('HMAC:'):
-                hmac_hex = p[5:]
+                hmac_hex = p[5:].strip()
             elif p.startswith('CRC:'):
-                crc_hex = ''.join(ch for ch in p[4:] if ch in '0123456789abcdefABCDEF')
-    else:
-        cnt_marker = f'{meta_sep}CNT:'
-        hmac_marker = f'{meta_sep}HMAC:'
-        if cnt_marker not in msg_str or hmac_marker not in msg_str:
+                crc_hex = _parse_crc_hex(p[4:])
+
+        if getattr(settings, 'LORA_HMAC_ENABLED', True) and hmac_hex is None:
             if getattr(settings, 'LORA_HMAC_REJECT_UNSIGNED', True):
-                await _log_security_error('invalid_secure_format', 'Invalid secure format (no CNT/HMAC)')
+                await _sec_log('Invalid secure format (no CNT/HMAC)')
                 return None
-            return msg_str
+            return body
 
-        try:
-            parts = msg_str.split(meta_sep)
-            message_parts = []
-            for p in parts:
-                if p.startswith('CNT:'):
-                    try:
-                        cnt = int(p[4:])
-                    except Exception:
-                        cnt = None
-                elif p.startswith('HMAC:'):
-                    hmac_hex = p[5:]
-                elif p.startswith('CRC:'):
-                    crc_hex = ''.join(ch for ch in p[4:] if ch in '0123456789abcdefABCDEF')
-                else:
-                    message_parts.append(p)
-            original_msg = meta_sep.join(message_parts)
-        except Exception:
-            return None
-
-    if cnt is None or hmac_hex is None:
-        await _log_security_error('missing_cnt_hmac', 'Missing CNT or HMAC in secure message')
-        return None
-
-    secret = getattr(settings, 'LORA_HMAC_SECRET', '') or ''
-    if isinstance(secret, str):
-        secret = secret.encode()
-
-    counter_bytes = cnt.to_bytes(4, 'big')
-
-    if is_enc:
-        try:
-            encrypted = _ub.a2b_base64(enc_b64.encode())
-        except Exception:
-            await log_error('Base64 decode failed')
-            return None
-        to_hmac = encrypted + counter_bytes
-    else:
-        to_hmac = original_msg.encode() + str(cnt).encode()
-
-    hmac_val = hmac_sha256(secret, to_hmac)
-    hmac_hex_calc = _ub.hexlify(hmac_val).decode()[:getattr(settings, 'LORA_HMAC_TRUNCATE', 16)]
-    if hmac_hex_calc != hmac_hex:
-        await _log_security_error('hmac_verification_failed', 'HMAC verification failed')
-        return None
-
-    if is_enc:
-        stream_key = secret + counter_bytes
-        stream_hash = uhashlib.sha256(stream_key).digest()
-        decrypted = bytes(a ^ b for a, b in zip(encrypted, (stream_hash * ((len(encrypted) // 32) + 1))[:len(encrypted)]))
-        try:
-            msg_str = decrypted.decode()
-        except Exception:
-            await log_error('Decryption decode failed')
-            return None
-    else:
-        msg_str = original_msg
-
-    if crc_hex:
-        try:
-            crc_hex = ''.join(ch for ch in str(crc_hex) if ch in '0123456789abcdefABCDEF')
-            if len(crc_hex) != 4:
-                await _log_security_error('invalid_crc_field', f'Invalid CRC field: {crc_hex}')
+        if getattr(settings, 'LORA_CRC_ENABLED', True) and crc_hex:
+            actual = crc16_ccitt(body.encode())
+            expected = int(crc_hex, 16)
+            if actual != expected:
+                await _sec_log('CRC mismatch: expected %04X, got %s' % (actual, crc_hex))
                 return None
-            expected_crc = int(crc_hex, 16)
-            actual_crc = crc16_ccitt(msg_str.encode())
-            if actual_crc != expected_crc:
-                await _log_security_error('crc_mismatch', f"CRC mismatch: expected {crc_hex}, got {_format_crc(actual_crc)}")
+
+        if getattr(settings, 'LORA_HMAC_ENABLED', True) and hmac_hex is not None:
+            secret = str(getattr(settings, 'LORA_HMAC_SECRET', '') or '')
+            trunc = int(getattr(settings, 'LORA_HMAC_TRUNCATE', 16))
+            if cnt is None:
+                await _sec_log('Invalid secure format (no CNT/HMAC)')
                 return None
-        except Exception:
-            await _log_security_error('crc_parse_error', f'CRC parse error: {crc_hex}')
-            return None
-
-    if not getattr(settings, 'LORA_HMAC_REPLAY_PROTECT', True):
-        return msg_str
-
-    window = max(1, int(getattr(settings, 'LORA_REPLAY_WINDOW', 8)))
-
-    if str(getattr(settings, 'NODE_TYPE', '')).lower() == 'remote':
-        last_rx = getattr(settings, '_last_rx_counter', 0)
-        if cnt <= last_rx - window:
-            await _log_security_error('replay_remote', f"Replay attack detected (cnt {cnt} <= last_rx {last_rx})")
-            return None
-        settings._last_rx_counter = max(last_rx, cnt)
-    else:
-        if remote_uid is None:
+            material = ('%s|%d' % (body, cnt)).encode()
             try:
-                if 'UID:' in msg_str:
-                    remote_uid = msg_str.split('UID:')[1].split(',')[0].strip()
-                elif ',U:' in msg_str:
-                    remote_uid = msg_str.split(',U:')[1].split(',')[0].strip()
-                elif msg_str.startswith('U:'):
-                    remote_uid = msg_str.split('U:')[1].split(',')[0].strip()
-                elif msg_str.startswith('HELLO:'):
-                    remote_uid = msg_str.split(':', 1)[1].split(',')[0].strip()
-                elif msg_str.startswith('END:'):
-                    remote_uid = msg_str.split(':', 2)[1].strip()
-                elif msg_str.startswith('ACK:'):
-                    remote_uid = msg_str.split(':', 2)[1].strip()
-                elif msg_str.startswith('READY:'):
-                    remote_uid = msg_str.split(':', 2)[1].strip()
-                elif 'unit-' in msg_str:
-                    for part in msg_str.split(','):
-                        if part.startswith('unit-') or 'UID' in part:
-                            remote_uid = part.split(':')[-1].strip()
-                            break
-            except Exception:
-                remote_uid = 'unknown'
+                digest = hmac_sha256(secret.encode(), material)
+                if isinstance(digest, bytes):
+                    calc = ''.join('{:02x}'.format(b) for b in digest)[:trunc]
+                else:
+                    calc = str(digest)[:trunc]
+                if calc.lower() != str(hmac_hex)[:trunc].lower():
+                    await _sec_log('HMAC verification failed')
+                    return None
+            except Exception as e:
+                await _sec_log('HMAC verify error: %s' % e)
+                return None
 
-        if not remote_uid:
-            remote_uid = 'unknown'
+        if cnt is not None and getattr(settings, 'LORA_HMAC_REPLAY_PROTECT', True):
+            uid = str(remote_uid or 'unknown')
+            if not hasattr(settings, 'LORA_PEER_COUNTERS') or settings.LORA_PEER_COUNTERS is None:
+                settings.LORA_PEER_COUNTERS = {}
+            peer = settings.LORA_PEER_COUNTERS.setdefault(uid, {'tx': 0, 'rx': 0})
+            last_rx = int(peer.get('rx', 0))
+            window = int(getattr(settings, 'LORA_REPLAY_WINDOW', 8))
 
-        if remote_uid not in remote_counters:
-            remote_counters[remote_uid] = {'tx': 0, 'rx': 0}
+            if body.startswith('HELLO:'):
+                peer['rx'] = cnt
+            elif cnt + window <= last_rx:
+                await _sec_log('Replay attack detected (cnt %d <= last_rx %d)' % (cnt, last_rx))
+                return None
+            elif cnt > last_rx:
+                peer['rx'] = cnt
 
-        last_rx = remote_counters[remote_uid]['rx']
-
-        if cnt <= last_rx - window:
-            await _log_security_error('replay_base', f"Replay attack detected (cnt {cnt} <= rx_counter {last_rx}) uid={remote_uid}")
-            return None
-
-        if cnt > last_rx:
-            remote_counters[remote_uid]['rx'] = cnt
+            remote_counters[uid] = {'tx': int(peer.get('tx', 0)), 'rx': int(peer.get('rx', 0))}
             if cnt % 5 == 0:
                 _save_counters()
 
-    return msg_str
+        return body
+    except Exception as e:
+        await _sec_log('unsecure_message error: %s' % e)
+        return None
 
 async def _send_with_retry(data, retries=6):
     global lora

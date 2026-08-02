@@ -40,6 +40,7 @@ Immediate tasks
 - [x] Add Unit Connector schema migration/version gate (`tmon_uc_schema_version=2.0.5`) to ensure `tmon_devices.role/node_type/updated_at` and `tmon_device_commands.status/updated_at/executed_at/result` exist on live sites with older schemas.
 - [x] Canonicalize UC hub-key usage for Admin sync and diagnostics auth paths: UC sync queue uses shared `X-TMON-HUB` key helper, Admin sync route accepts canonical hub key fallback, and key-length failures are logged without exposing the secret.
 - [x] Harden LoRa secure envelope parsing in `micropython/lora.py`: CRC is emitted/parses as 4 hex digits, security failures are rate-limited, and CRC/HMAC parse failures no longer swallow HELLO/READY traffic due to malformed CRC fields.
+- [x] Align LoRa session security and admission flow with strict 4-hex CRC parsing and HELLO session replay reset baseline (Phase 0-2 guide, 2026-08-02).
 - [x] Fix TMON Admin UC device refresh action: both refresh handlers now accept the same nonce/site parameter shapes, and the centralized handler probes multiple UC count endpoints instead of failing on a single 404 route.
 - [x] Add Unit Connector admin site device routes for Admin probing: exposed authenticated GET routes for device list/count under both `tmon/v1` and `tmon-admin/v1` namespaces.
 - [x] Preserve dynamic numeric telemetry in history points for charting: `tmon_uc_get_device_history()` now includes additional numeric payload keys beyond the curated baseline fields.
