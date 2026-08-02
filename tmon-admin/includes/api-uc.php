@@ -3,9 +3,14 @@ if (!defined('ABSPATH')) { exit; }
 
 function tmon_admin_validate_uc_key($request) {
 	$key = isset($_SERVER['HTTP_X_TMON_HUB']) ? sanitize_text_field($_SERVER['HTTP_X_TMON_HUB']) : '';
+	if (!$key && isset($_SERVER['HTTP_X_TMON_ADMIN'])) { $key = sanitize_text_field($_SERVER['HTTP_X_TMON_ADMIN']); }
+	if (!$key && function_exists('getallheaders')) {
+		$headers = getallheaders();
+		$key = sanitize_text_field($headers['X-TMON-HUB'] ?? ($headers['X-TMON-ADMIN'] ?? ''));
+	}
 	if (!$key) { return new WP_Error('no_key', 'Missing UC key'); }
-	$valid = get_option('tmon_uc_shared_key');
-	if (!$valid || !hash_equals($valid, $key)) {
+	$valid = tmon_admin_get_expected_uc_key();
+	if ($valid === '' || !hash_equals($valid, $key)) {
 		return new WP_Error('bad_key', 'Invalid UC key');
 	}
 	return true;

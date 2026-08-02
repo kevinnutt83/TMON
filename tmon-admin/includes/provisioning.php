@@ -163,7 +163,7 @@ if (!function_exists('tmon_admin_arr_get')) {
 if (!function_exists('tmon_admin_is_valid_unit_id')) {
 	function tmon_admin_is_valid_unit_id($unit_id) {
 		$unit_id = trim((string) $unit_id);
-		return (bool) preg_match('/^[0-9]{6}$/', $unit_id);
+		return (bool) preg_match('/^(?:[0-9]{6}|unit-[a-z0-9]{4,64})$/i', $unit_id);
 	}
 }
 
@@ -173,7 +173,7 @@ if (!function_exists('tmon_admin_registry_violation_message')) {
 		$prov_table = $wpdb->prefix . 'tmon_provisioned_devices';
 		$dev_table = $wpdb->prefix . 'tmon_devices';
 		if (!tmon_admin_is_valid_unit_id($unit_id)) {
-			return 'Unit ID must be exactly 6 digits.';
+			return 'Unit ID must be either a 6-digit legacy ID or a unit-<value> identifier.';
 		}
 
 		if ($machine_id !== '') {

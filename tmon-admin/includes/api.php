@@ -58,13 +58,24 @@ if (!function_exists('tmon_admin_generate_unique_unit_id')) {
     }
 }
 
+if (!function_exists('tmon_admin_get_expected_uc_key')) {
+    function tmon_admin_get_expected_uc_key() {
+        $key = (string) get_option('tmon_admin_uc_key', '');
+        if ($key === '') {
+            $key = (string) get_option('tmon_admin_hub_shared_key', '');
+        }
+        return $key;
+    }
+}
+
 if (!function_exists('tmon_admin_get_or_create_uc_shared_key')) {
     function tmon_admin_get_or_create_uc_shared_key($rotate = false) {
-        $hub_key = (string) get_option('tmon_admin_uc_key', '');
+        $hub_key = tmon_admin_get_expected_uc_key();
         if ($rotate || $hub_key === '') {
             try { $hub_key = bin2hex(random_bytes(24)); } catch (Exception $e) { $hub_key = wp_generate_password(48, false, false); }
-            update_option('tmon_admin_uc_key', $hub_key);
         }
+        update_option('tmon_admin_uc_key', $hub_key);
+        update_option('tmon_admin_hub_shared_key', $hub_key);
         return $hub_key;
     }
 }
@@ -404,8 +415,8 @@ add_action('rest_api_init', function() {
             if (!$site_url) {
                 return new WP_REST_Response(['status' => 'error', 'message' => 'site_url required'], 400);
             }
-            $provided = (string) ($request->get_header('X-TMON-HUB') ?: ($_SERVER['HTTP_X_TMON_HUB'] ?? ''));
-            $expected = (string) get_option('tmon_admin_uc_key', '');
+            $provided = (string) ($request->get_header('X-TMON-HUB') ?: ($request->get_header('X-TMON-ADMIN') ?: ($_SERVER['HTTP_X_TMON_HUB'] ?? ($_SERVER['HTTP_X_TMON_ADMIN'] ?? ''))));
+            $expected = tmon_admin_get_expected_uc_key();
             if ($expected === '' || $provided === '' || !hash_equals($expected, $provided)) {
                 return new WP_REST_Response(['status' => 'forbidden', 'message' => 'Invalid hub key'], 403);
             }
@@ -434,14 +445,14 @@ add_action('rest_api_init', function() {
         'methods' => 'GET',
         'permission_callback' => '__return_true',
         'callback' => function($request){
-            // Authenticate via shared hub key in header X-TMON-HUB
-            $expected = get_option('tmon_admin_uc_key', '');
+            // Authenticate via shared hub key in header X-TMON-HUB (or X-TMON-ADMIN for compatibility)
+            $expected = tmon_admin_get_expected_uc_key();
             $provided = '';
             if (function_exists('getallheaders')) {
                 $headers = getallheaders();
-                $provided = $headers['X-TMON-HUB'] ?? ($headers['x-tmon-hub'] ?? '');
+                $provided = $headers['X-TMON-HUB'] ?? ($headers['x-tmon-hub'] ?? ($headers['X-TMON-ADMIN'] ?? ($headers['x-tmon-admin'] ?? '')));
             } else {
-                $provided = $_SERVER['HTTP_X_TMON_HUB'] ?? '';
+                $provided = $_SERVER['HTTP_X_TMON_HUB'] ?? ($_SERVER['HTTP_X_TMON_ADMIN'] ?? '');
             }
             if (!$expected || !$provided || !hash_equals((string)$expected, (string)$provided)) {
                 return new WP_REST_Response(['status'=>'forbidden','message'=>'Invalid hub key'], 403);

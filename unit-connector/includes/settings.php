@@ -74,7 +74,7 @@ add_action('admin_init', function() {
         echo '<form method="post" action="' . esc_url(admin_url('admin-post.php')) . '" onsubmit="return confirm(\'This will delete data for the specified Unit ID. Continue?\');">';
         wp_nonce_field('tmon_uc_purge_unit');
         echo '<input type="hidden" name="action" value="tmon_uc_purge_unit" />';
-        echo '<input type="text" name="unit_id" class="regular-text" placeholder="Unit ID (e.g., 123456)" /> ';
+        echo '<input type="text" name="unit_id" class="regular-text" placeholder="Unit ID (e.g., 123456 or unit-f4vykz)" /> ';
         submit_button('Purge by Unit ID', 'delete', 'submit', false);
         echo '</form>';
         echo '<p class="description">This removes DB rows from tmon_field_data, tmon_devices, tmon_device_commands, tmon_ota_jobs and deletes matching CSV/LOG files under wp-content/tmon-field-logs.</p>';
@@ -100,6 +100,13 @@ add_action('admin_post_tmon_uc_generate_key', function(){
     exit;
 });
 
+if (!function_exists('tmon_uc_is_valid_unit_id')) {
+    function tmon_uc_is_valid_unit_id($unit_id) {
+        $unit_id = trim((string) $unit_id);
+        return (bool) preg_match('/^(?:[0-9]{6}|unit-[a-z0-9]{4,64})$/i', $unit_id);
+    }
+}
+
 // Core pairing routine reused by admin-post and AJAX to avoid duplicate requests
 function tmon_uc_pair_with_hub_core($mode = 'pair') {
     static $result = [];
@@ -113,65 +120,97 @@ function tmon_uc_pair_with_hub_core($mode = 'pair') {
         try { $local_key = bin2hex(random_bytes(24)); } catch (Exception $e) { $local_key = wp_generate_password(48, false, false); }
         update_option('tmon_uc_admin_key', $local_key);
     }
-    $endpoint = rtrim($hub, '/') . '/wp-json/tmon-admin/v1/uc/key/register';
-    $headers = ['Content-Type' => 'application/json', 'Accept'=>'application/json', 'User-Agent'=>'TMON-UC/1.0'];
-    $payload = [
-        'site_url' => home_url(),
-        'uc_key'   => $local_key,
-    ];
+
+    $base_headers = ['Content-Type' => 'application/json', 'Accept' => 'application/json', 'User-Agent' => 'TMON-UC/1.0'];
+    $endpoints = [];
+    $payloads = [];
     if ($mode === 'refresh') {
-        $endpoint = rtrim($hub, '/') . '/wp-json/tmon-admin/v1/uc/key/refresh';
-        $payload = [
-            'site_url' => home_url(),
-            'rotate_hub_key' => 0,
-        ];
-        $hub_key = get_option('tmon_uc_hub_shared_key', '');
-        if ($hub_key) {
-            $headers['X-TMON-HUB'] = $hub_key;
-        }
+        $endpoints[] = rtrim($hub, '/') . '/wp-json/tmon-admin/v1/uc/key/refresh';
+        $payloads[] = ['site_url' => home_url(), 'rotate_hub_key' => 0];
+        $endpoints[] = rtrim($hub, '/') . '/wp-json/tmon-admin/v1/uc/key/register';
+        $payloads[] = ['site_url' => home_url(), 'uc_key' => $local_key, 'rotate_read_token' => 0];
+    } else {
+        $endpoints[] = rtrim($hub, '/') . '/wp-json/tmon-admin/v1/uc/key/register';
+        $payloads[] = ['site_url' => home_url(), 'uc_key' => $local_key, 'rotate_read_token' => 0];
+        $endpoints[] = rtrim($hub, '/') . '/wp-json/tmon-admin/v1/uc/pair';
+        $payloads[] = ['site_url' => home_url(), 'uc_key' => $local_key];
     }
 
-    $resp = wp_remote_post($endpoint, [
-        'timeout' => 15,
-        'headers' => $headers,
-        'body' => wp_json_encode($payload),
-    ]);
-    if (is_wp_error($resp)) {
-        return $result[$cache_key] = ['status'=>'error','message'=>$resp->get_error_message(), 'paired'=>false];
-    }
-    $code = wp_remote_retrieve_response_code($resp);
-    $body = json_decode(wp_remote_retrieve_body($resp), true);
-    if ($code === 200 && is_array($body) && !empty($body['hub_key'])) {
-        $hub_key = sanitize_text_field($body['hub_key']);
-        update_option('tmon_uc_hub_shared_key', $hub_key);
-        // Keep canonical/legacy UC key aliases aligned with Admin-issued hub key.
-        update_option('tmon_uc_admin_key', $hub_key);
-        update_option('tmon_admin_uc_key', $hub_key);
-        update_option('tmon_uc_shared_key', $hub_key);
-        if (!empty($body['read_token'])) update_option('tmon_uc_hub_read_token', sanitize_text_field($body['read_token']));
-        // Track normalized pairing
-        $paired = get_option('tmon_uc_paired_sites', []);
-        if (!is_array($paired)) $paired = [];
-        $norm = tmon_uc_normalize_url($hub);
-        $paired[$norm] = [
-            'site'      => $hub,
-            'paired_at' => current_time('mysql', true),
-            'read_token'=> isset($body['read_token']) ? sanitize_text_field($body['read_token']) : '',
-        ];
-        update_option('tmon_uc_paired_sites', $paired, false);
-        // Backfill devices
-        if (function_exists('tmon_uc_backfill_provisioned_from_admin')) {
-            tmon_uc_backfill_provisioned_from_admin();
+    $last_error = '';
+    $last_body = null;
+    foreach ($endpoints as $index => $endpoint) {
+        $headers = $base_headers;
+        $headers['X-TMON-ADMIN'] = $local_key;
+        if ($mode === 'refresh') {
+            $hub_key = get_option('tmon_uc_hub_shared_key', '');
+            if ($hub_key === '') {
+                $hub_key = get_option('tmon_uc_admin_key', '');
+            }
+            if ($hub_key !== '') {
+                $headers['X-TMON-HUB'] = $hub_key;
+            }
         }
-        return $result[$cache_key] = [
-            'status' => 'ok',
-            'paired' => true,
-            'hub_key' => $hub_key,
-            'read_token' => isset($body['read_token']) ? sanitize_text_field($body['read_token']) : '',
-            'paired_sites' => $paired,
-        ];
+        $resp = wp_remote_post($endpoint, [
+            'timeout' => 15,
+            'headers' => $headers,
+            'body' => wp_json_encode($payloads[$index]),
+        ]);
+        if (is_wp_error($resp)) {
+            $last_error = $resp->get_error_message();
+            continue;
+        }
+        $code = wp_remote_retrieve_response_code($resp);
+        $body = json_decode(wp_remote_retrieve_body($resp), true);
+        $last_body = $body;
+        if ($code === 200 && is_array($body)) {
+            $hub_key = '';
+            if (!empty($body['hub_key'])) {
+                $hub_key = sanitize_text_field($body['hub_key']);
+            } elseif (!empty($body['shared_key'])) {
+                $hub_key = sanitize_text_field($body['shared_key']);
+            } elseif (!empty($body['key'])) {
+                $hub_key = sanitize_text_field($body['key']);
+            }
+            $read_token = '';
+            if (!empty($body['read_token'])) {
+                $read_token = sanitize_text_field($body['read_token']);
+            } elseif (!empty($body['token'])) {
+                $read_token = sanitize_text_field($body['token']);
+            }
+            if ($hub_key !== '' || $read_token !== '' || (!empty($body['status']) && $body['status'] === 'ok')) {
+                if ($hub_key !== '') {
+                    update_option('tmon_uc_hub_shared_key', $hub_key);
+                    update_option('tmon_uc_admin_key', $hub_key);
+                    update_option('tmon_admin_uc_key', $hub_key);
+                    update_option('tmon_admin_hub_shared_key', $hub_key);
+                    update_option('tmon_uc_shared_key', $hub_key);
+                }
+                if ($read_token !== '') {
+                    update_option('tmon_uc_hub_read_token', $read_token);
+                }
+                $paired = get_option('tmon_uc_paired_sites', []);
+                if (!is_array($paired)) $paired = [];
+                $norm = tmon_uc_normalize_url($hub);
+                $paired[$norm] = [
+                    'site' => $hub,
+                    'paired_at' => current_time('mysql', true),
+                    'read_token' => $read_token,
+                ];
+                update_option('tmon_uc_paired_sites', $paired, false);
+                if (function_exists('tmon_uc_backfill_provisioned_from_admin')) {
+                    tmon_uc_backfill_provisioned_from_admin();
+                }
+                return $result[$cache_key] = [
+                    'status' => 'ok',
+                    'paired' => true,
+                    'hub_key' => $hub_key,
+                    'read_token' => $read_token,
+                    'paired_sites' => $paired,
+                ];
+            }
+        }
     }
-    return $result[$cache_key] = ['status'=>'error','message'=>'bad_response','paired'=>false,'body'=>$body];
+    return $result[$cache_key] = ['status' => 'error', 'message' => $last_error ?: 'bad_response', 'paired' => false, 'body' => $last_body];
 }
 
 // Add core purge helpers to ensure UC mirror, staged options, pairing keys, and files are removed.
@@ -521,7 +560,7 @@ add_action('admin_post_tmon_uc_stage_settings', function(){
     if (!current_user_can('manage_options')) wp_die('Insufficient permissions');
     check_admin_referer('tmon_uc_stage_settings');
     $unit_id = isset($_POST['unit_id']) ? sanitize_text_field($_POST['unit_id']) : '';
-    if (!$unit_id || !preg_match('/^[0-9]{6}$/', $unit_id)) {
+    if (!$unit_id || !tmon_uc_is_valid_unit_id($unit_id)) {
         wp_safe_redirect(add_query_arg(['tmon_cfg'=>'fail','msg'=>'missing_unit'], wp_get_referer() ?: admin_url('admin.php?page=tmon-settings')));
         exit;
     }
@@ -648,7 +687,7 @@ add_action('admin_post_tmon_uc_push_staged_to_admin', function(){
     if (!current_user_can('manage_options')) wp_die('Insufficient permissions');
     check_admin_referer('tmon_uc_push_staged_to_admin');
     $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
-    if (!$unit_id || !preg_match('/^[0-9]{6}$/', $unit_id)) {
+    if (!$unit_id || !tmon_uc_is_valid_unit_id($unit_id)) {
         wp_safe_redirect(add_query_arg(['tmon_cfg'=>'fail','msg'=>'missing_unit'], wp_get_referer() ?: admin_url('admin.php?page=tmon-settings')));
         exit;
     }
