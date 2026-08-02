@@ -13,14 +13,13 @@ except Exception:
     random = None
 
 from sampling import sampleEnviroment
-from lora import init_lora, ensure_lora_listening, wait_for_next_sync_ack
+from lora import init_lora, ensure_lora_listening, send_field_data_controlled
 from utils import (
     debug_print,
     log_exception,
     load_next_lora_sync,
     persist_next_lora_sync,
     record_field_data,
-    send_field_data_via_lora,
     update_sys_voltage,
 )
 
@@ -150,19 +149,9 @@ async def _run_remote_cycle_once():
             raise RuntimeError('remote_sleep: LoRa init failed')
 
         await ensure_lora_listening()
-        ack_delay_hint = await send_field_data_via_lora()
+        next_delay = await send_field_data_controlled(None)
 
         now_epoch = _now_epoch()
-        ack_wait_s = max(2, _safe_int(getattr(settings, 'REMOTE_ACK_WAIT_S', 8), 8))
-        if isinstance(ack_delay_hint, int) and ack_delay_hint > 0:
-            next_delay = ack_delay_hint
-            await debug_print(
-                f"remote_sleep: using ACK hint from field-data send ({next_delay}s)",
-                "REMOTE_NODE"
-            )
-        else:
-            next_delay = await wait_for_next_sync_ack(timeout_s=ack_wait_s)
-
         if isinstance(next_delay, int) and next_delay > 0:
             next_epoch = now_epoch + next_delay
             sync_success = True

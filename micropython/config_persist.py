@@ -23,28 +23,38 @@ def _record_exception(context, exc):
         pass
 
 def ensure_dir(path):
+    """Create directory (and parents if possible). Never raise ENOENT to callers."""
     try:
-        d = path
-        # if path is a file path, take directory
-        if '/' in path and not path.endswith('/'):
-            d = path.rsplit('/', 1)[0]
-        if not d:
-            return
-        parts = d.split('/')
+        try:
+            import uos as _os
+        except Exception:
+            import os as _os
+        if not path:
+            return False
+
+        normalized = str(path).replace('\\', '/').rstrip('/')
+        if '.' in normalized.rsplit('/', 1)[-1] and '/' in normalized:
+            normalized = normalized.rsplit('/', 1)[0]
+
+        parts = normalized.split('/')
         cur = ''
         for p in parts:
-            if not p:
+            if p == '':
+                cur = '/'
                 continue
-            cur += '/' + p if cur else '/' + p
+            cur = (cur.rstrip('/') + '/' + p) if cur else p
             try:
-                os.stat(cur)
-            except OSError:
-                try:
-                    os.mkdir(cur)
-                except Exception as e:
-                    _record_exception('ensure_dir.mkdir', e)
+                _os.mkdir(cur)
+            except OSError as e:
+                if getattr(e, 'errno', None) not in (17, 5):
+                    try:
+                        _os.stat(cur)
+                    except Exception:
+                        pass
+        return True
     except Exception as e:
         _record_exception('ensure_dir', e)
+        return False
 
 def write_text(path, text):
     try:
@@ -113,17 +123,22 @@ def read_json_safe(path, default=None):
 
 def set_flag(path: str, enabled: bool) -> bool:
     try:
+        parent = path.rsplit('/', 1)[0] if '/' in path else ''
+        if parent:
+            ensure_dir(parent)
         if enabled:
-            return write_text(path, '1')
+            with open(path, 'w') as f:
+                f.write('1')
         else:
             try:
-                os.remove(path)
-                return True
-            except OSError:
-                return True
-            except Exception as e:
-                _record_exception('set_flag.remove', e)
-                return True
+                import uos as _os
+            except Exception:
+                import os as _os
+            try:
+                _os.remove(path)
+            except Exception:
+                pass
+        return True
     except Exception as e:
         _record_exception('set_flag', e)
         return False

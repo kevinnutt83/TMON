@@ -100,24 +100,46 @@ def crc16_ccitt(data, crc=0xFFFF):
 
 def _format_crc(crc_val):
     """Always exactly 4 hex digits."""
-    return '{:04X}'.format(int(crc_val) & 0xFFFF)
+    try:
+        return '{:04X}'.format(int(crc_val) & 0xFFFF)
+    except Exception:
+        return '0000'
 
 
-def _parse_crc_hex(raw):
+def _parse_crc_field(raw):
     """
-    Accept only the first 4 hex characters from a CRC field.
-    Prevents parse bugs when extra suffix characters are present.
+    Extract CRC from a CRC: field value.
+    - Accept only hex characters
+    - Use the first 4 hex digits (tolerate trailing RF garbage)
+    - Return (ok:bool, crc_int_or_None, normalized_hex)
     """
     if raw is None:
-        return ''
+        return False, None, ''
     s = str(raw).strip()
+    if s.upper().startswith('CRC:'):
+        s = s[4:]
     hx = ''
     for ch in s:
-        if ch in '0123456789abcdefABCDEF':
+        o = ord(ch)
+        if (48 <= o <= 57) or (65 <= o <= 70) or (97 <= o <= 102):
             hx += ch
             if len(hx) >= 4:
                 break
-    return hx[:4].upper()
+        else:
+            break
+    if len(hx) < 4:
+        return False, None, hx.upper()
+    hx4 = hx[:4].upper()
+    try:
+        return True, int(hx4, 16), hx4
+    except Exception:
+        return False, None, hx4
+
+
+async def debug_crc_sample():
+    sample = 'HELLO:unit-test'
+    sec = await _secure_message(sample)
+    await debug_print('SEC sample: %s' % sec, 'LORA')
 
 
 def _extract_lora_network_fields(msg_str):
@@ -190,6 +212,7 @@ last_rx_ts = 0
 last_lora_activity_ts = 0
 lora_rx_queue = SimpleQueue(maxsize=10)
 _sec_log_last = {}
+_sec_log_count = {}
 
 tx_counter = 0
 remote_counters = {}
@@ -575,14 +598,19 @@ async def log_error(error_msg):
         await debug_print(f"[FATAL] Failed to log error: {error_msg}", "ERROR")
 
 
-async def _sec_log(msg, min_interval_s=5):
+async def _sec_log(msg, min_interval_s=10):
     """Avoid flooding logs with repeated CRC/HMAC failures."""
     now = time.time()
-    key = str(msg)[:48]
+    key = str(msg)[:40]
+    max_burst = 3
     last = _sec_log_last.get(key, 0)
-    if (now - last) < min_interval_s:
+    cnt = _sec_log_count.get(key, 0)
+    if (now - last) < min_interval_s and cnt >= max_burst:
         return
+    if (now - last) >= min_interval_s:
+        cnt = 0
     _sec_log_last[key] = now
+    _sec_log_count[key] = cnt + 1
     try:
         await log_error(msg)
     except Exception:
@@ -1638,9 +1666,9 @@ async def _secure_message(msg_str, remote_uid=None):
             except Exception as e:
                 await _sec_log('HMAC build failed: %s' % e)
 
-        if getattr(settings, 'LORA_CRC_ENABLED', True):
-            c = crc16_ccitt(msg_str.encode())
-            parts.append('CRC:%s' % _format_crc(c))
+        if getattr(settings, 'LORA_CRC_ENABLED', True) or getattr(settings, 'CRC_ON', True):
+            c = crc16_ccitt(msg_str.encode() if not isinstance(msg_str, bytes) else msg_str)
+            parts.append('CRC:' + _format_crc(c))
 
         if counter % 5 == 0:
             _save_counters()
@@ -1673,18 +1701,19 @@ async def _unsecure_message(msg_str, remote_uid=None):
         body = parts[0]
         cnt = None
         hmac_hex = None
-        crc_hex = None
+        crc_raw = None
 
         for p in parts[1:]:
-            if p.startswith('CNT:'):
+            pu = p.strip()
+            if pu.upper().startswith('CRC:'):
+                crc_raw = pu[4:]
+            elif pu.upper().startswith('CNT:'):
                 try:
-                    cnt = int(p[4:].strip())
+                    cnt = int(pu[4:].strip())
                 except Exception:
                     cnt = None
-            elif p.startswith('HMAC:'):
-                hmac_hex = p[5:].strip()
-            elif p.startswith('CRC:'):
-                crc_hex = _parse_crc_hex(p[4:])
+            elif pu.upper().startswith('HMAC:'):
+                hmac_hex = pu[5:].strip()
 
         if getattr(settings, 'LORA_HMAC_ENABLED', True) and hmac_hex is None:
             if getattr(settings, 'LORA_HMAC_REJECT_UNSIGNED', True):
@@ -1692,11 +1721,24 @@ async def _unsecure_message(msg_str, remote_uid=None):
                 return None
             return body
 
-        if getattr(settings, 'LORA_CRC_ENABLED', True) and crc_hex:
-            actual = crc16_ccitt(body.encode())
-            expected = int(crc_hex, 16)
-            if actual != expected:
-                await _sec_log('CRC mismatch: expected %04X, got %s' % (actual, crc_hex))
+        if (getattr(settings, 'LORA_CRC_ENABLED', True) or getattr(settings, 'CRC_ON', True)) and crc_raw is not None:
+            ok_crc, expected_int, hx4 = _parse_crc_field(crc_raw)
+            if not ok_crc:
+                if getattr(settings, 'LORA_SESSION_SOFT_CRC', True):
+                    b = body.strip()
+                    if b.startswith('HELLO:') or b.startswith('READY:') or b.startswith('ACK:') or b.startswith('END:'):
+                        await _sec_log('CRC soft-accept session frame: %s' % b[:32])
+                        return body
+                await _sec_log('Invalid CRC field: %s' % str(crc_raw)[:16])
+                return None
+            actual = crc16_ccitt(body.encode() if not isinstance(body, bytes) else body)
+            if actual != expected_int:
+                if getattr(settings, 'LORA_SESSION_SOFT_CRC', True):
+                    b = body.strip()
+                    if b.startswith('HELLO:') or b.startswith('READY:') or b.startswith('ACK:') or b.startswith('END:'):
+                        await _sec_log('CRC soft-accept session frame: %s' % b[:32])
+                        return body
+                await _sec_log('CRC mismatch: expected %04X, got %s' % (actual, hx4))
                 return None
 
         if getattr(settings, 'LORA_HMAC_ENABLED', True) and hmac_hex is not None:
@@ -1795,8 +1837,7 @@ async def _safe_send(data: bytes, remote_uid=None):
 
     if len(data) > max_size:
         await log_error(f"Payload too large: {len(data)} (max {max_size})")
-        # Last-resort truncation (should be avoided by chunking logic)
-        data = data[:max_size]
+        return False
 
     try:
         await _send_with_retry(data)

@@ -219,6 +219,19 @@ async def first_boot_provision():
         ok = (resp is not None and getattr(resp, 'status_code', 0) == 200)
         if ok:
             try:
+                # Ensure parent dir exists (fixes OSError ENOENT)
+                try:
+                    from config_persist import ensure_dir
+                    ensure_dir(settings.LOG_DIR)
+                except Exception:
+                    try:
+                        import uos as _os
+                    except Exception:
+                        import os as _os
+                    try:
+                        _os.mkdir(settings.LOG_DIR)
+                    except OSError:
+                        pass
                 with open(flag, 'w') as f:
                     f.write('ok')
             except Exception as e:
@@ -311,7 +324,8 @@ async def sample_task():
 
 # Periodic field data task
 async def periodic_field_data_task():
-    from utils import send_field_data_log, send_field_data_via_lora
+    from utils import send_field_data_log
+    from lora import send_field_data_controlled
     while True:
         if not is_provisioned():
             await asyncio.sleep(2)
@@ -321,7 +335,7 @@ async def periodic_field_data_task():
                 await debug_print("suspended: skip sfd send", "WARN")
             else:
                 if str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'remote':
-                    await send_field_data_via_lora()
+                    await send_field_data_controlled(None)
                 else:
                     await send_field_data_log()
         except Exception as e:

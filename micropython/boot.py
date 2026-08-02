@@ -13,7 +13,18 @@ from utils import flash_led, log_exception
 import uasyncio as asyncio
 from oled import display_message
 
+try:
+    from config_persist import ensure_dir as _ensure_dir
+except Exception:
+    _ensure_dir = None
+
 async def boot():
+    try:
+        if _ensure_dir:
+            _ensure_dir(getattr(settings, 'LOG_DIR', '/logs'))
+    except Exception as e:
+        await log_exception('boot.ensure_log_dir', e)
+
     fw_msg = f"Firmware: {settings.FIRMWARE_VERSION}"
     await display_message(fw_msg, 2)
     try:
