@@ -803,8 +803,26 @@ add_action('rest_api_init', function() {
             if (!tmon_uc_admin_integration_auth($request)) return new WP_REST_Response(['status'=>'forbidden'], 403);
             global $wpdb;
             $params = $request->get_json_params();
+            if (!is_array($params)) {
+                $params = array();
+            }
             $unit_id = isset($params['unit_id']) ? sanitize_text_field($params['unit_id']) : '';
-            $settings_arr = isset($params['settings']) && is_array($params['settings']) ? $params['settings'] : [];
+            $settings_arr = [];
+            if (isset($params['settings']) && is_array($params['settings'])) {
+                $settings_arr = $params['settings'];
+            } elseif (isset($params['settings']) && is_string($params['settings'])) {
+                $decoded = json_decode(wp_unslash($params['settings']), true);
+                if (is_array($decoded)) {
+                    $settings_arr = $decoded;
+                }
+            } elseif (isset($params['settings_json']) && is_string($params['settings_json'])) {
+                $decoded = json_decode(wp_unslash($params['settings_json']), true);
+                if (is_array($decoded)) {
+                    $settings_arr = $decoded;
+                }
+            } elseif (isset($params['payload']) && is_array($params['payload'])) {
+                $settings_arr = $params['payload'];
+            }
             $settings = $settings_arr ? wp_json_encode($settings_arr) : '';
             if (!$unit_id) return rest_ensure_response(['status'=>'error','message'=>'Missing unit_id']);
             // If settings include a name field, persist to unit_name column as well

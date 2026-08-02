@@ -44,23 +44,24 @@
     if (invalid) return;
 
     result.textContent = 'Submitting…';
-    const fd = new FormData();
-    fd.append('unit_id', unit);
-    fd.append('machine_id', machine);
-
     const url = (window.TMON_CLAIM && TMON_CLAIM.restUrl) || (window.location.origin + '/wp-json/tmon-admin/v1/claim');
     const nonce = (window.TMON_CLAIM && TMON_CLAIM.nonce) || '';
+    const submitBtn = form.querySelector('.tmon-claim-submit');
+    if (submitBtn) submitBtn.disabled = true;
 
     fetch(url, {
       method: 'POST',
-      headers: { 'X-WP-Nonce': nonce },
-      body: fd
+      headers: {
+        'Content-Type': 'application/json',
+        'X-WP-Nonce': nonce
+      },
+      body: JSON.stringify({ unit_id: unit, machine_id: machine })
     }).then(async r => {
       let j = null;
       try{ j = await r.json(); } catch(e){}
       if (r.ok && j && j.status === 'ok'){
         const rid = j.id ? (' ID: ' + j.id) : '';
-        result.textContent = 'Claim submitted.' + rid;
+        result.textContent = 'Claim submitted.' + rid + ' Please wait for admin review.';
         form.reset();
       } else {
         const msg = (j && (j.message || j.code)) || ('HTTP ' + r.status);
@@ -68,6 +69,8 @@
       }
     }).catch(err => {
       result.textContent = 'Error: ' + err.toString();
+    }).finally(() => {
+      if (submitBtn) submitBtn.disabled = false;
     });
   }
 

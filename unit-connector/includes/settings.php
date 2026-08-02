@@ -447,6 +447,16 @@ function tmon_uc_settings_schema() {
         'SAMPLE_TEMP' => ['type'=>'bool','label'=>'Sample Temperature'],
         'SAMPLE_BAR' => ['type'=>'bool','label'=>'Sample Barometric Pressure'],
         'SAMPLE_HUMID' => ['type'=>'bool','label'=>'Sample Humidity'],
+        'ENABLE_FROSTWATCH' => ['type'=>'bool','label'=>'Enable Frostwatch'],
+        'FROSTWATCH_ACTIVE_TEMP' => ['type'=>'number','label'=>'Frostwatch Active Temp (F)'],
+        'FROSTWATCH_ALERT_TEMP' => ['type'=>'number','label'=>'Frostwatch Alert Temp (F)'],
+        'FROSTWATCH_ACTION_TEMP' => ['type'=>'number','label'=>'Frostwatch Action Temp (F)'],
+        'FROSTWATCH_STANDDOWN_TEMP' => ['type'=>'number','label'=>'Frostwatch Standdown Temp (F)'],
+        'ENABLE_HEATWATCH' => ['type'=>'bool','label'=>'Enable Heatwatch'],
+        'HEATWATCH_ACTIVE_TEMP' => ['type'=>'number','label'=>'Heatwatch Active Temp (F)'],
+        'HEATWATCH_ALERT_TEMP' => ['type'=>'number','label'=>'Heatwatch Alert Temp (F)'],
+        'HEATWATCH_ACTION_TEMP' => ['type'=>'number','label'=>'Heatwatch Action Temp (F)'],
+        'HEATWATCH_STANDDOWN_TEMP' => ['type'=>'number','label'=>'Heatwatch Standdown Temp (F)'],
         'SYS_VOLTAGE_SAMPLE_INTERVAL_S' => ['type'=>'number','label'=>'Voltage Sample Interval (s)'],
         // GPS
         'GPS_ENABLED' => ['type'=>'bool','label'=>'Enable GPS'],
@@ -751,44 +761,73 @@ add_action('tmon_uc_command_requeue_cron', function(){
     $wpdb->query("UPDATE {$table} SET status='queued' WHERE status='claimed' AND {$col} < (NOW() - INTERVAL 5 MINUTE)");
 });
 
+function tmon_uc_handle_claim_submission($req) {
+    $data = $req->get_json_params();
+    if (!is_array($data)) {
+        $data = $req->get_params();
+    }
+    $unit_id = sanitize_text_field((string) ($data['unit_id'] ?? $data['device_id'] ?? $req->get_param('unit_id') ?? ''));
+    $machine_id = sanitize_text_field((string) ($data['machine_id'] ?? $data['machine'] ?? $req->get_param('machine_id') ?? ''));
+    if (!$unit_id || !$machine_id) {
+        return new WP_REST_Response(['status' => 'error', 'message' => 'unit_id and machine_id required'], 400);
+    }
+
+    // Call Admin to confirm and fetch device record
+    $hub = trim(get_option('tmon_uc_hub_url', ''));
+    $key = get_option('tmon_uc_hub_shared_key', '');
+    if (!$hub || !$key) {
+        return new WP_REST_Response(['status' => 'error', 'message' => 'not_paired'], 400);
+    }
+
+    $endpoint = rtrim($hub, '/') . '/wp-json/tmon-admin/v1/uc/confirm-device';
+    $resp = wp_remote_post($endpoint, [
+        'timeout' => 15,
+        'headers' => ['Content-Type' => 'application/json', 'X-TMON-HUB' => $key],
+        'body' => wp_json_encode(['unit_id' => $unit_id, 'machine_id' => $machine_id, 'site_url' => home_url()]),
+    ]);
+    if (is_wp_error($resp) || wp_remote_retrieve_response_code($resp) !== 200) {
+        return new WP_REST_Response(['status' => 'error', 'message' => 'admin_unreachable'], 502);
+    }
+    $payload = json_decode(wp_remote_retrieve_body($resp), true);
+    if (!is_array($payload)) {
+        $payload = [];
+    }
+
+    // Upsert UC mirror
+    global $wpdb;
+    uc_devices_ensure_table();
+    $table = $wpdb->prefix . 'tmon_uc_devices';
+    $wpdb->query($wpdb->prepare(
+        "INSERT INTO {$table} (unit_id,machine_id,unit_name,role,assigned,updated_at)
+         VALUES (%s,%s,%s,%s,%d,NOW())
+         ON DUPLICATE KEY UPDATE unit_name=VALUES(unit_name), role=VALUES(role), assigned=VALUES(assigned), updated_at=NOW()",
+        $unit_id,
+        $machine_id,
+        sanitize_text_field((string) ($payload['unit_name'] ?? '')),
+        sanitize_text_field((string) ($payload['role'] ?? '')),
+        1
+    ));
+
+    return rest_ensure_response(['status' => 'ok', 'claimed' => true, 'device' => $payload]);
+}
+
 // First device check-in: claim flow (UC receives device, calls Admin to confirm and backfills local record)
 add_action('rest_api_init', function(){
-	register_rest_route('tmon/v1', '/device/first-checkin', [
-		'methods' => 'POST',
-		'callback' => function($req){
-			$unit_id = sanitize_text_field($req->get_param('unit_id'));
-			$machine_id = sanitize_text_field($req->get_param('machine_id'));
-			if (!$unit_id || !$machine_id) return new WP_REST_Response(['status'=>'error','message'=>'unit_id and machine_id required'], 400);
-
-			// Call Admin to confirm and fetch device record
-			$hub = trim(get_option('tmon_uc_hub_url', ''));
-			$key = get_option('tmon_uc_hub_shared_key', '');
-			if (!$hub || !$key) return new WP_REST_Response(['status'=>'error','message'=>'not_paired'], 400);
-
-			$endpoint = rtrim($hub, '/') . '/wp-json/tmon-admin/v1/uc/confirm-device';
-			$resp = wp_remote_post($endpoint, [
-				'timeout' => 15,
-				'headers' => ['Content-Type'=>'application/json','X-TMON-HUB'=>$key],
-				'body' => wp_json_encode(['unit_id'=>$unit_id,'machine_id'=>$machine_id,'site_url'=>home_url()]),
-			]);
-			if (is_wp_error($resp) || wp_remote_retrieve_response_code($resp) !== 200) {
-				return new WP_REST_Response(['status'=>'error','message'=>'admin_unreachable'], 502);
-			}
-			$data = json_decode(wp_remote_retrieve_body($resp), true);
-			// Upsert UC mirror
-			global $wpdb;
-			uc_devices_ensure_table();
-			$table = $wpdb->prefix . 'tmon_uc_devices';
-			$wpdb->query($wpdb->prepare(
-				"INSERT INTO {$table} (unit_id,machine_id,unit_name,role,assigned,updated_at)
-				 VALUES (%s,%s,%s,%s,%d,NOW())
-				 ON DUPLICATE KEY UPDATE unit_name=VALUES(unit_name), role=VALUES(role), assigned=VALUES(assigned), updated_at=NOW()",
-				$unit_id, $machine_id, sanitize_text_field($data['unit_name'] ?? ''), sanitize_text_field($data['role'] ?? ''), 1
-			));
-			return rest_ensure_response(['status'=>'ok','claimed'=>true,'device'=>$data]);
-		},
-		'permission_callback' => '__return_true',
-	]);
+    register_rest_route('tmon/v1', '/device/first-checkin', [
+        'methods' => 'POST',
+        'callback' => 'tmon_uc_handle_claim_submission',
+        'permission_callback' => '__return_true',
+    ]);
+    register_rest_route('tmon/v1', '/claim', [
+        'methods' => 'POST',
+        'callback' => 'tmon_uc_handle_claim_submission',
+        'permission_callback' => '__return_true',
+    ]);
+    register_rest_route('tmon-admin/v1', '/claim', [
+        'methods' => 'POST',
+        'callback' => 'tmon_uc_handle_claim_submission',
+        'permission_callback' => '__return_true',
+    ]);
 });
 
 // Shortcode: claim device via Unit ID + Machine ID

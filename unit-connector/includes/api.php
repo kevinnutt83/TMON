@@ -388,14 +388,34 @@ add_action('rest_api_init', function() {
 				return new WP_Error('forbidden', 'Insufficient permissions', array('status' => 403));
 			}
 			$body = $req->get_json_params();
-			$unit = sanitize_text_field($body['unit_id'] ?? '');
-			$settings = isset($body['settings']) && is_array($body['settings']) ? $body['settings'] : array();
+			if (!is_array($body)) {
+				$body = array();
+			}
+			$unit = sanitize_text_field((string) ($body['unit_id'] ?? $body['device_id'] ?? ''));
+			$settings = array();
+			if (isset($body['settings']) && is_array($body['settings'])) {
+				$settings = $body['settings'];
+			} elseif (isset($body['settings']) && is_string($body['settings'])) {
+				$decoded = json_decode(wp_unslash($body['settings']), true);
+				if (is_array($decoded)) {
+					$settings = $decoded;
+				}
+			} elseif (isset($body['settings_json']) && is_string($body['settings_json'])) {
+				$decoded = json_decode(wp_unslash($body['settings_json']), true);
+				if (is_array($decoded)) {
+					$settings = $decoded;
+				}
+			} elseif (isset($body['payload']) && is_array($body['payload'])) {
+				$settings = $body['payload'];
+			}
 			if (!$unit || !$settings) {
 				return new WP_Error('invalid', 'unit_id and settings are required', array('status' => 400));
 			}
 			// Merge/overwrite permitted keys only (server-side sanitization)
 			$allowed = apply_filters('tmon_staged_settings_allowed_keys', array(
 				'NODE_TYPE','UNIT_Name','SAMPLE_TEMP','SAMPLE_HUMID','SAMPLE_BAR','ENABLE_OLED','ENGINE_ENABLED',
+				'ENABLE_FROSTWATCH','FROSTWATCH_ACTIVE_TEMP','FROSTWATCH_ALERT_TEMP','FROSTWATCH_ACTION_TEMP','FROSTWATCH_STANDDOWN_TEMP',
+				'ENABLE_HEATWATCH','HEATWATCH_ACTIVE_TEMP','HEATWATCH_ALERT_TEMP','HEATWATCH_ACTION_TEMP','HEATWATCH_STANDDOWN_TEMP',
 				'RELAY_PIN1','RELAY_PIN2','RELAY_RUNTIME_LIMITS','WIFI_SSID','WIFI_PASS','ENABLE_sensorBME280',
 				'ENABLE_WIFI','ENABLE_LORA','DEVICE_SUSPENDED','FIELD_DATA_HMAC_ENABLED','FIELD_DATA_HMAC_SECRET'
 			));

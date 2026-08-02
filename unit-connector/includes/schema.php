@@ -10,6 +10,7 @@ function tmon_uc_ensure_schema() {
 
 	$devices = $wpdb->prefix . 'tmon_devices';
 	$commands = $wpdb->prefix . 'tmon_device_commands';
+	$data = $wpdb->prefix . 'tmon_device_data';
 
 	$sql_devices = "CREATE TABLE {$devices} (
 		id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
@@ -50,41 +51,55 @@ function tmon_uc_ensure_schema() {
 		KEY updated_at (updated_at)
 	) {$charset};";
 
+	$sql_data = "CREATE TABLE {$data} (
+		id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+		unit_id varchar(64) NOT NULL,
+		data longtext,
+		created_at datetime DEFAULT NULL,
+		PRIMARY KEY  (id),
+		KEY unit_created (unit_id, created_at)
+	) {$charset};";
+
 	dbDelta($sql_devices);
 	dbDelta($sql_commands);
+	dbDelta($sql_data);
 
 	$dcols = $wpdb->get_col("DESCRIBE {$devices}", 0);
-	if (is_array($dcols) && !in_array('role', $dcols, true)) {
-		$wpdb->query("ALTER TABLE {$devices} ADD COLUMN role varchar(32) DEFAULT '' AFTER unit_name");
-	}
-	if (is_array($dcols) && !in_array('node_type', $dcols, true)) {
-		$wpdb->query("ALTER TABLE {$devices} ADD COLUMN node_type varchar(32) DEFAULT '' AFTER role");
-	}
-	if (is_array($dcols) && !in_array('registered_at', $dcols, true)) {
-		$wpdb->query("ALTER TABLE {$devices} ADD COLUMN registered_at datetime DEFAULT NULL AFTER settings");
-	}
-	if (is_array($dcols) && !in_array('updated_at', $dcols, true)) {
-		$wpdb->query("ALTER TABLE {$devices} ADD COLUMN updated_at datetime DEFAULT NULL AFTER registered_at");
+	if (is_array($dcols)) {
+		if (!in_array('role', $dcols, true)) {
+			$wpdb->query("ALTER TABLE {$devices} ADD COLUMN role varchar(32) DEFAULT '' AFTER unit_name");
+		}
+		if (!in_array('node_type', $dcols, true)) {
+			$wpdb->query("ALTER TABLE {$devices} ADD COLUMN node_type varchar(32) DEFAULT '' AFTER role");
+		}
+		if (!in_array('registered_at', $dcols, true)) {
+			$wpdb->query("ALTER TABLE {$devices} ADD COLUMN registered_at datetime DEFAULT NULL AFTER settings");
+		}
+		if (!in_array('updated_at', $dcols, true)) {
+			$wpdb->query("ALTER TABLE {$devices} ADD COLUMN updated_at datetime DEFAULT NULL AFTER registered_at");
+		}
 	}
 
 	$ccols = $wpdb->get_col("DESCRIBE {$commands}", 0);
-	if (is_array($ccols) && !in_array('status', $ccols, true)) {
-		$wpdb->query("ALTER TABLE {$commands} ADD COLUMN status varchar(32) NOT NULL DEFAULT 'queued' AFTER params");
-	}
-	if (is_array($ccols) && !in_array('updated_at', $ccols, true)) {
-		$wpdb->query("ALTER TABLE {$commands} ADD COLUMN updated_at datetime DEFAULT NULL AFTER created_at");
-	}
-	if (is_array($ccols) && !in_array('executed_at', $ccols, true)) {
-		$wpdb->query("ALTER TABLE {$commands} ADD COLUMN executed_at datetime DEFAULT NULL AFTER updated_at");
-	}
-	if (is_array($ccols) && !in_array('result', $ccols, true)) {
-		$wpdb->query("ALTER TABLE {$commands} ADD COLUMN result longtext AFTER executed_at");
+	if (is_array($ccols)) {
+		if (!in_array('status', $ccols, true)) {
+			$wpdb->query("ALTER TABLE {$commands} ADD COLUMN status varchar(32) NOT NULL DEFAULT 'queued' AFTER params");
+		}
+		if (!in_array('updated_at', $ccols, true)) {
+			$wpdb->query("ALTER TABLE {$commands} ADD COLUMN updated_at datetime DEFAULT NULL AFTER created_at");
+		}
+		if (!in_array('executed_at', $ccols, true)) {
+			$wpdb->query("ALTER TABLE {$commands} ADD COLUMN executed_at datetime DEFAULT NULL AFTER updated_at");
+		}
+		if (!in_array('result', $ccols, true)) {
+			$wpdb->query("ALTER TABLE {$commands} ADD COLUMN result longtext AFTER executed_at");
+		}
 	}
 
 	$wpdb->query("UPDATE {$devices} SET role = node_type WHERE (role IS NULL OR role = '') AND node_type <> ''");
 	$wpdb->query("UPDATE {$devices} SET role = 'remote' WHERE (role IS NULL OR role = '')");
 
-	update_option('tmon_uc_schema_version', '2.0.5', false);
+	update_option('tmon_uc_schema_version', '2.0.6', false);
 }}
 
 function tmon_uc_install_schema() {
@@ -105,6 +120,8 @@ function tmon_uc_install_schema() {
         unit_id VARCHAR(64) NOT NULL UNIQUE,
         machine_id VARCHAR(64) NULL UNIQUE,
         unit_name VARCHAR(128),
+        role VARCHAR(32) DEFAULT '',
+        node_type VARCHAR(32) DEFAULT '',
         company VARCHAR(128),
         site VARCHAR(128),
         zone VARCHAR(128),
@@ -113,7 +130,16 @@ function tmon_uc_install_schema() {
         settings LONGTEXT,
         status LONGTEXT,
         suspended TINYINT(1) DEFAULT 0,
+        registered_at DATETIME NULL,
+        updated_at DATETIME NULL,
         PRIMARY KEY (id)
+    ) $charset_collate;");
+
+    $wpdb->query("CREATE TABLE IF NOT EXISTS {$wpdb->prefix}tmon_device_data (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+        unit_id VARCHAR(64) NOT NULL,
+        data LONGTEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     ) $charset_collate;");
 
     // Lightweight upgrade: add machine_id column if missing on existing installs

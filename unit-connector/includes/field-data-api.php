@@ -645,17 +645,11 @@ function tmon_uc_get_device_history($request) {
     }
     $rows = $wpdb->get_results($wpdb->prepare("SELECT data, created_at FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s AND created_at >= %s ORDER BY created_at ASC", $unit_id, $since), ARRAY_A);
     $points = [];
-    $pick_value = static function($arr, $keys) {
-        foreach ($keys as $k) {
-            if (array_key_exists($k, $arr) && $arr[$k] !== '' && $arr[$k] !== null) {
-                return $arr[$k];
-            }
-        }
-        return null;
-    };
     foreach ($rows as $r) {
         $d = json_decode($r['data'], true);
-        if (!is_array($d)) continue;
+        if (!is_array($d)) {
+            continue;
+        }
         $relay_states = [];
         for ($i = 1; $i <= 8; $i++) {
             $enable_key = 'ENABLE_RELAY' . $i;
@@ -670,53 +664,15 @@ function tmon_uc_get_device_history($request) {
                 $relay_states[$state_key] = tmon_uc_truthy($d[$state_key]) ? 1 : 0;
             }
         }
-        $points[] = [
-            // expose ISO timestamps in site-local time for charting/labels
-            't' => date_i18n(DATE_ISO8601, tmon_uc_mysql_to_local_timestamp($r['created_at'])),
-            'temp_f' => $pick_value($d, ['temp_f', 'probe_temp_f', 't_f', 'cur_temp_f', 'cur_probe_temp_f']),
-            'humid' => $pick_value($d, ['humid', 'humidity', 'probe_humid', 'hum', 'cur_humid', 'cur_probe_humid']),
-            'bar' => $pick_value($d, ['bar', 'pressure', 'probe_bar', 'cur_bar_pres', 'cur_probe_bar_pres']),
-            'volt' => $pick_value($d, ['volt', 'v', 'voltage_v', 'sys_voltage']),
-            'device_temp_f' => $d['device_temp_f'] ?? ($d['dt_f'] ?? ($d['cur_device_temp_f'] ?? null)),
-            'device_humid' => $d['device_humid'] ?? ($d['dh'] ?? ($d['cur_device_humid'] ?? null)),
-            'device_bar' => $d['device_bar'] ?? ($d['db'] ?? ($d['cur_device_bar_pres'] ?? null)),
-            'soil_moisture' => $d['sm'] ?? ($d['cur_soil_moisture'] ?? null),
-            'soil_temp_f' => $d['st_f'] ?? ($d['cur_soil_temp_f'] ?? null),
-            'cpu_temp' => $d['cpu'] ?? ($d['cpu_temp'] ?? null),
-            'lora_snr' => $d['lora_snr'] ?? null,
-            'wifi_connected' => $d['WIFI_CONNECTED'] ?? null,
-            'wan_connected' => $d['WAN_CONNECTED'] ?? null,
-            'lora_connected' => $d['LORA_CONNECTED'] ?? null,
-            'lowest_temp_f' => $d['lowest_temp_f'] ?? null,
-            'highest_temp_f' => $d['highest_temp_f'] ?? null,
-            'lowest_bar' => $d['lowest_bar'] ?? null,
-            'highest_bar' => $d['highest_bar'] ?? null,
-            'lowest_humid' => $d['lowest_humid'] ?? null,
-            'highest_humid' => $d['highest_humid'] ?? null,
-            'engine1_rpm' => $d['e1r'] ?? ($d['engine1_speed_rpm'] ?? null),
-            'engine1_batt' => $d['e1v'] ?? ($d['engine1_batt_v'] ?? null),
-            'engine2_rpm' => $d['e2r'] ?? ($d['engine2_speed_rpm'] ?? null),
-            'engine2_batt' => $d['e2v'] ?? ($d['engine2_batt_v'] ?? null),
-            'relay' => $relay_states,
-        ];
 
-        $idx = count($points) - 1;
-        // Preserve additional numeric keys for dynamic chart datasets.
-        foreach ($d as $k => $v) {
-            if (array_key_exists($k, $points[$idx])) {
-                continue;
-            }
-            if (is_numeric($v)) {
-                $points[$idx][$k] = $v + 0;
-                continue;
-            }
-            if (is_string($v)) {
-                $v_trim = trim($v);
-                if ($v_trim !== '' && is_numeric($v_trim)) {
-                    $points[$idx][$k] = $v_trim + 0;
-                }
-            }
+        $ts = date_i18n(DATE_ISO8601, tmon_uc_mysql_to_local_timestamp($r['created_at']));
+        $point = function_exists('tmon_uc_normalize_telemetry_point')
+            ? tmon_uc_normalize_telemetry_point($d, $ts)
+            : $d;
+        if ($relay_states) {
+            $point['relay'] = $relay_states;
         }
+        $points[] = $point;
     }
     sort($enabled_relays);
     $enabled_relays = array_values(array_unique($enabled_relays));
@@ -731,69 +687,57 @@ function tmon_uc_get_device_history_yoy($request) {
 function tmon_uc_get_device_sdata($request) {
     global $wpdb;
     $unit_id = sanitize_text_field($request->get_param('unit_id'));
-    if (!$unit_id) return rest_ensure_response(['status' => 'error', 'message' => 'unit_id required']);
-    $row = $wpdb->get_row($wpdb->prepare("SELECT data, created_at FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s ORDER BY created_at DESC LIMIT 1", $unit_id), ARRAY_A);
-    if (!$row) return rest_ensure_response(['status' => 'ok', 'unit_id' => $unit_id, 'data' => [], 'created_at' => null]);
-    $data = json_decode($row['data'], true);
-    if (!is_array($data)) $data = [];
+    if (!$unit_id) {
+        return rest_ensure_response(['status' => 'error', 'message' => 'unit_id required']);
+    }
+
+    $raw = function_exists('tmon_uc_get_latest_raw_payload')
+        ? tmon_uc_get_latest_raw_payload($unit_id)
+        : [];
+
+    $created_at = null;
+    if (is_array($raw) && isset($raw['_created_at'])) {
+        $created_at = $raw['_created_at'];
+        unset($raw['_created_at']);
+    }
+
+    $norm = function_exists('tmon_uc_normalize_telemetry_point')
+        ? tmon_uc_normalize_telemetry_point($raw)
+        : $raw;
+
+    foreach ($raw as $k => $v) {
+        if (!array_key_exists($k, $norm)) {
+            $norm[$k] = $v;
+        }
+    }
+
     $friendly = [
-        // Prefer device-provided timestamp when available; otherwise show site-local formatted DB created_at
-        'Timestamp' => isset($data['timestamp']) ? $data['timestamp'] : tmon_uc_format_mysql_datetime($row['created_at']),
-        'Machine ID' => $data['machine_id'] ?? null,
-        'Node Type' => $data['NODE_TYPE'] ?? ($data['node_type'] ?? null),
-        // Probe sensors
-        'Probe Temp (F)' => $data['probe_temp_f'] ?? ($data['t_f'] ?? ($data['cur_temp_f'] ?? null)),
-        'Probe Temp (C)' => $data['probe_temp_c'] ?? ($data['t_c'] ?? ($data['cur_temp_c'] ?? null)),
-        'Probe Humidity (%)' => $data['probe_humid'] ?? ($data['hum'] ?? ($data['cur_humid'] ?? null)),
-        'Probe Pressure (hPa)' => $data['probe_bar'] ?? ($data['bar'] ?? ($data['cur_bar_pres'] ?? null)),
-        // Device interior sensors
-        'Device Temp (F)' => $data['device_temp_f'] ?? ($data['dt_f'] ?? ($data['cur_device_temp_f'] ?? null)),
-        'Device Temp (C)' => $data['device_temp_c'] ?? ($data['dt_c'] ?? ($data['cur_device_temp_c'] ?? null)),
-        'Device Humidity (%)' => $data['device_humid'] ?? ($data['dh'] ?? ($data['cur_device_humid'] ?? null)),
-        'Device Pressure (hPa)' => $data['device_bar'] ?? ($data['db'] ?? ($data['cur_device_bar_pres'] ?? null)),
-        // Soil sensors
-        'Soil Moisture' => $data['sm'] ?? ($data['cur_soil_moisture'] ?? null),
-        'Soil Temp (C)' => $data['st_c'] ?? ($data['cur_soil_temp_c'] ?? null),
-        'Soil Temp (F)' => $data['st_f'] ?? ($data['cur_soil_temp_f'] ?? null),
-        // System
-        'Voltage (V)' => $data['v'] ?? ($data['sys_voltage'] ?? null),
-        'CPU Temp' => $data['cpu'] ?? ($data['cpu_temp'] ?? null),
-        'WiFi RSSI' => $data['wifi_rssi'] ?? null,
-        'LoRa Signal' => $data['lora_SigStr'] ?? null,
-        'LoRa SNR' => $data['lora_snr'] ?? null,
-        'WiFi Connected' => $data['WIFI_CONNECTED'] ?? null,
-        'WAN Connected' => $data['WAN_CONNECTED'] ?? null,
-        'LoRa Connected' => $data['LORA_CONNECTED'] ?? null,
-        'Free Mem (bytes)' => $data['fm'] ?? ($data['free_mem'] ?? null),
-        'Firmware' => $data['firmware_version'] ?? null,
-        'Lowest Probe Temp (F)' => $data['lowest_temp_f'] ?? null,
-        'Highest Probe Temp (F)' => $data['highest_temp_f'] ?? null,
-        'Lowest Pressure (hPa)' => $data['lowest_bar'] ?? null,
-        'Highest Pressure (hPa)' => $data['highest_bar'] ?? null,
-        'Lowest Humidity (%)' => $data['lowest_humid'] ?? null,
-        'Highest Humidity (%)' => $data['highest_humid'] ?? null,
-        // Engine
-        'Engine 1 RPM' => $data['e1r'] ?? ($data['engine1_speed_rpm'] ?? null),
-        'Engine 1 Battery (V)' => $data['e1v'] ?? ($data['engine1_batt_v'] ?? null),
-        'Engine 2 RPM' => $data['e2r'] ?? ($data['engine2_speed_rpm'] ?? null),
-        'Engine 2 Battery (V)' => $data['e2v'] ?? ($data['engine2_batt_v'] ?? null),
-        // Runtime
-        'Script Runtime (s)' => $data['sr'] ?? ($data['script_runtime'] ?? null),
-        'Loop Runtime (s)' => $data['lr'] ?? ($data['loop_runtime'] ?? null),
-        'Error Count' => $data['ec'] ?? ($data['error_count'] ?? null),
-        'Last Error' => $data['last_error'] ?? null,
-        'Last Message' => $data['last_message'] ?? null,
-        'Frostwatch Active' => $data['frostwatch_active'] ?? null,
-        'Heatwatch Active' => $data['heatwatch_active'] ?? null,
-        'Frost Alert' => $data['frost'] ?? null,
-        'Heat Alert' => $data['heat'] ?? null,
-        'Device Name' => $data['name'] ?? '',
+        'Timestamp' => $norm['t'] ?? $norm['timestamp'] ?? ($created_at ? tmon_uc_format_mysql_datetime($created_at) : null),
+        'Machine ID' => $norm['machine_id'] ?? null,
+        'Node Type' => $norm['NODE_TYPE'] ?? ($norm['node_type'] ?? null),
+        'Probe Temp (F)' => $norm['temp_f'] ?? null,
+        'Probe Temp (C)' => $norm['temp_c'] ?? null,
+        'Probe Humidity (%)' => $norm['humid'] ?? null,
+        'Probe Pressure (hPa)' => $norm['bar'] ?? null,
+        'Device Temp (F)' => $norm['device_temp_f'] ?? null,
+        'Device Temp (C)' => $norm['device_temp_c'] ?? null,
+        'Device Humidity (%)' => $norm['device_humid'] ?? null,
+        'Device Pressure (hPa)' => $norm['device_bar'] ?? null,
+        'Soil Moisture' => $norm['soil_moisture'] ?? null,
+        'Voltage (V)' => $norm['volt'] ?? ($norm['sys_voltage'] ?? null),
+        'CPU Temp' => $norm['cpu_temp'] ?? null,
+        'WiFi RSSI' => $norm['wifi_rssi'] ?? null,
+        'LoRa Signal' => $norm['lora_SigStr'] ?? null,
+        'Free Mem (bytes)' => $norm['free_mem'] ?? null,
+        'Firmware' => $norm['firmware_version'] ?? null,
     ];
+
     return rest_ensure_response([
         'status' => 'ok',
         'unit_id' => $unit_id,
-        'created_at' => $row['created_at'],
-        'data' => $data,
+        'created_at' => $created_at,
+        'sdata' => $norm,
+        'data' => $norm,
         'friendly' => $friendly,
     ]);
 }

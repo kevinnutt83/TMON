@@ -101,7 +101,10 @@ def run_validation(
 ) -> None:
     base = _normalize_base(uc_url)
 
-    settings_endpoint = f"{base}/wp-json/tmon/v1/admin/device/settings"
+    settings_endpoints = [
+        f"{base}/wp-json/tmon/v1/admin/device/settings",
+        f"{base}/wp-json/tmon/v1/admin/device/settings-staged",
+    ]
     enqueue_endpoint = f"{base}/wp-json/tmon-uc/v1/device/command"
     poll_endpoint = f"{base}/wp-json/tmon/v1/device/commands"
     result_endpoints = [
@@ -119,15 +122,39 @@ def run_validation(
     }
 
     _print_step("1/5 reprovision", "staging settings to Unit Connector admin endpoint")
-    reprovision = _request_json(
-        "POST",
-        settings_endpoint,
-        payload=staged_payload,
-        headers={"X-TMON-ADMIN": admin_key},
-    )
+    reprovision = None
+    reprovision_endpoint = None
+    last_error = None
+    for endpoint in settings_endpoints:
+        try:
+            candidate = _request_json(
+                "POST",
+                endpoint,
+                payload=staged_payload,
+                headers={"X-TMON-ADMIN": admin_key},
+            )
+        except FlowError as exc:
+            last_error = str(exc)
+            continue
+        if candidate.status in (200, 201):
+            reprovision = candidate
+            reprovision_endpoint = endpoint
+            break
+        last_error = f"{endpoint} returned status {candidate.status}: {candidate.raw}"
+
+    if reprovision is None:
+        raise FlowError(f"reprovision endpoints failed: {last_error}")
+
+    if reprovision_endpoint.endswith("settings-staged"):
+        _print_step("1/5 reprovision", f"using staged-settings endpoint {reprovision_endpoint}")
+    else:
+        _print_step("1/5 reprovision", f"using legacy settings endpoint {reprovision_endpoint}")
+
     _assert_status("reprovision", reprovision.status, [200, 201])
-    if isinstance(reprovision.body, dict) and reprovision.body.get("status") not in (None, "ok"):
-        raise FlowError(f"reprovision endpoint returned non-ok body: {reprovision.body}")
+    if isinstance(reprovision.body, dict):
+        body_ok = reprovision.body.get("status") in (None, "ok") or reprovision.body.get("ok") is True
+        if not body_ok:
+            raise FlowError(f"reprovision endpoint returned non-ok body: {reprovision.body}")
 
     cmd_payload = {
         "unit_id": unit_id,

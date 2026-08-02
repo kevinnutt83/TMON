@@ -1,4 +1,146 @@
 <?php
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+if (!function_exists('tmon_uc_list_devices_for_select')) {
+    function tmon_uc_list_devices_for_select() {
+        global $wpdb;
+        $table = $wpdb->prefix . 'tmon_devices';
+        $rows = $wpdb->get_results(
+            "SELECT unit_id, unit_name
+             FROM {$table}
+             WHERE COALESCE(suspended, 0) = 0
+             ORDER BY unit_name ASC, unit_id ASC",
+            ARRAY_A
+        );
+        return is_array($rows) ? $rows : [];
+    }
+}
+
+if (!function_exists('tmon_uc_unit_select_html')) {
+    function tmon_uc_unit_select_html($selected = '', $name = 'tmon_unit_id', $class = 'tmon-unit-select') {
+        $rows = tmon_uc_list_devices_for_select();
+        $html  = '<select name="' . esc_attr($name) . '" class="' . esc_attr($class) . '" data-tmon-unit-select="1">';
+        $html .= '<option value="">— Select unit —</option>';
+        foreach ($rows as $r) {
+            $uid   = (string) ($r['unit_id'] ?? '');
+            $label = trim((string) ($r['unit_name'] ?? ''));
+            if ($label === '') {
+                $label = $uid;
+            } else {
+                $label .= ' (' . $uid . ')';
+            }
+            $html .= '<option value="' . esc_attr($uid) . '"' . selected((string) $selected, $uid, false) . '>' . esc_html($label) . '</option>';
+        }
+        $html .= '</select>';
+        return $html;
+    }
+}
+
+if (!function_exists('tmon_uc_resolve_unit_id')) {
+    function tmon_uc_resolve_unit_id($atts) {
+        $atts = is_array($atts) ? $atts : [];
+        $uid  = isset($atts['unit_id']) ? sanitize_text_field($atts['unit_id']) : '';
+        if ($uid === '' && isset($_GET['unit_id'])) {
+            $uid = sanitize_text_field(wp_unslash($_GET['unit_id']));
+        }
+        return $uid;
+    }
+}
+
+if (!function_exists('tmon_uc_normalize_telemetry_point')) {
+    function tmon_uc_normalize_telemetry_point(array $d, $ts = null) {
+        $nested_keys = ['sdata', 'field_data', 'data', 'payload', 'values', 'telemetry', 'raw_payload'];
+        foreach ($nested_keys as $key) {
+            if (isset($d[$key]) && is_array($d[$key])) {
+                $d = array_merge($d, $d[$key]);
+            }
+        }
+
+        $get = function ($keys) use ($d) {
+            foreach ((array) $keys as $k) {
+                if (array_key_exists($k, $d) && $d[$k] !== null && $d[$k] !== '') {
+                    return $d[$k];
+                }
+            }
+            return null;
+        };
+
+        $point = [
+            't'             => $ts !== null ? $ts : $get(['t', 'ts', 'timestamp', 'time']),
+            'temp_f'        => $get(['temp_f', 'cur_temp_f', 'temperature_f', 'probe_temp_f', 't_f']),
+            'temp_c'        => $get(['temp_c', 'cur_temp_c', 'temperature_c', 'probe_temp_c', 't_c']),
+            'device_temp_f' => $get(['device_temp_f', 'cur_device_temp_f', 'dt_f']),
+            'device_temp_c' => $get(['device_temp_c', 'cur_device_temp_c', 'dt_c']),
+            'humid'         => $get(['humid', 'cur_humid', 'humidity', 'h', 'probe_humid', 'hum']),
+            'device_humid'  => $get(['device_humid', 'cur_device_humid', 'dh']),
+            'bar'           => $get(['bar', 'cur_bar_pres', 'pressure', 'bar_pres', 'probe_bar', 'bar_pres']),
+            'device_bar'    => $get(['device_bar', 'cur_device_bar_pres', 'device_bar_pres', 'db']),
+            'volt'          => $get(['volt', 'sys_voltage', 'v', 'voltage', 'voltage_v']),
+            'sys_voltage'   => $get(['sys_voltage', 'volt', 'v']),
+            'free_mem'      => $get(['free_mem', 'mem_free', 'free_memory', 'fm']),
+            'soil_moisture' => $get(['soil_moisture', 'soil', 'sm', 'cur_soil_moisture']),
+            'rssi'          => $get(['rssi', 'wifi_rssi']),
+            'lora_SigStr'   => $get(['lora_SigStr', 'lora_rssi', 'lora_signal']),
+        ];
+
+        foreach ($d as $k => $v) {
+            if (array_key_exists($k, $point)) {
+                continue;
+            }
+            if (is_bool($v)) {
+                $point[$k] = $v ? 1 : 0;
+            } elseif (is_numeric($v)) {
+                $point[$k] = 0 + $v;
+            }
+        }
+
+        return $point;
+    }
+}
+
+if (!function_exists('tmon_uc_get_latest_raw_payload')) {
+    function tmon_uc_get_latest_raw_payload($unit_id) {
+        global $wpdb;
+        $unit_id = sanitize_text_field($unit_id);
+        if ($unit_id === '') {
+            return [];
+        }
+
+        $tables = [
+            $wpdb->prefix . 'tmon_field_data',
+            $wpdb->prefix . 'tmon_device_data',
+        ];
+
+        foreach ($tables as $table) {
+            $row = $wpdb->get_row(
+                $wpdb->prepare(
+                    "SELECT data, created_at FROM {$table}
+                     WHERE unit_id = %s
+                     ORDER BY id DESC LIMIT 1",
+                    $unit_id
+                ),
+                ARRAY_A
+            );
+            if ($row) {
+                $decoded = json_decode((string) ($row['data'] ?? ''), true);
+                if (is_array($decoded)) {
+                    $decoded['_created_at'] = $row['created_at'] ?? null;
+                    return $decoded;
+                }
+            }
+        }
+
+        $diag = get_option('tmon_uc_device_diagnostics', []);
+        if (is_array($diag) && isset($diag[$unit_id]) && is_array($diag[$unit_id])) {
+            $payload = $diag[$unit_id]['payload'] ?? $diag[$unit_id];
+            return is_array($payload) ? $payload : [];
+        }
+        return [];
+    }
+}
+
 // Shortcode to display pending command list for a unit: [tmon_pending_commands]
 add_shortcode('tmon_pending_commands', function($atts){
     global $wpdb;
@@ -10,7 +152,7 @@ add_shortcode('tmon_pending_commands', function($atts){
     }
     // Get pending commands with unit info
     $rows = $wpdb->get_results(
-        "SELECT c.id, c.device_id, d.unit_name, c.command, c.created_at
+        "SELECT c.id, c.device_id, d.unit_name, c.command, c.params, c.created_at
          FROM {$wpdb->prefix}tmon_device_commands c
          LEFT JOIN {$wpdb->prefix}tmon_devices d ON c.device_id = d.unit_id
          WHERE c.executed_at IS NULL
@@ -43,7 +185,15 @@ add_shortcode('tmon_pending_commands', function($atts){
     echo '<thead><tr><th>Unit ID</th><th>Name</th><th>Command</th><th>Created</th><th>Actions</th></tr></thead><tbody>';
     foreach ($rows as $r) {
         $cmd = $r['command'];
-        if (is_string($cmd) && ($decoded = json_decode($cmd, true)) && json_last_error() === JSON_ERROR_NONE) {
+        $params_json = $r['params'] ?? '';
+        if (!empty($params_json) && is_string($params_json)) {
+            $decoded_params = json_decode($params_json, true);
+            if (is_array($decoded_params) && json_last_error() === JSON_ERROR_NONE) {
+                $cmd = '<pre style="margin:0;font-size:13px;">'.esc_html(json_encode($decoded_params, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)).'</pre>';
+            } else {
+                $cmd = '<pre style="margin:0;font-size:13px;">'.esc_html($params_json).'</pre>';
+            }
+        } elseif (is_string($cmd) && ($decoded = json_decode($cmd, true)) && json_last_error() === JSON_ERROR_NONE) {
             $cmd = '<pre style="margin:0;font-size:13px;">'.esc_html(json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)).'</pre>';
         } else {
             $cmd = '<pre style="margin:0;font-size:13px;">'.esc_html($cmd).'</pre>';
@@ -137,12 +287,16 @@ add_shortcode('tmon_pending_commands', function($atts){
                 if (res && res.success && typeof res.command !== "undefined") {
                     var unit_id = res.device_id || unit;
                     var cmd = res.command;
+                    var params = typeof res.params !== "undefined" ? res.params : '';
                     if (typeof cmd === "object") cmd = JSON.stringify(cmd);
                     if (typeof cmd === "string") cmd = cmd.trim();
+                    if (typeof params === "object") params = JSON.stringify(params);
+                    var body = "unit_id=" + encodeURIComponent(unit_id) + "&command=" + encodeURIComponent(cmd) + "&_wpnonce=" + nonce;
+                    if (params !== '') body += "&params=" + encodeURIComponent(params);
                     fetch(ajaxurl + "?action=tmon_pending_commands_requeue", {
                         method: "POST",
                         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                        body: "unit_id=" + encodeURIComponent(unit_id) + "&command=" + encodeURIComponent(cmd) + "&_wpnonce=" + nonce
+                        body: body
                     }).then(r2=>r2.json()).then(function(res2){
                         if (res2 && res2.success) {
                             alert('Command re-queued.');
@@ -172,8 +326,9 @@ add_shortcode('tmon_pending_commands', function($atts){
             fetch(ajaxurl + "?action=tmon_pending_commands_refresh&_wpnonce=" + nonce)
                 .then(r=>r.json())
                 .then(function(res){
-                    if (res && res.success && res.html) {
-                        table.tBodies[0].innerHTML = res.html;
+                    var html = (res && res.data && res.data.html) ? res.data.html : (res && res.html ? res.html : '');
+                    if (res && res.success && html) {
+                        table.tBodies[0].innerHTML = html;
                         // Reapply filter
                         if (filter && filter !== 'all') {
                             Array.from(table.tBodies[0].rows).forEach(function(row){
@@ -339,7 +494,8 @@ function tmon_uc_device_supports_feature($settings, $latest, $feature) {
         't_f','t_c','hum','bar','cur_temp_f','cur_temp_c','cur_humid','cur_bar_pres',
         'dt_f','dt_c','dh','db','cur_device_temp_f','cur_device_temp_c','cur_device_humid','cur_device_bar_pres',
         'sm','st_f','st_c','cur_soil_moisture','cur_soil_temp_f','cur_soil_temp_c',
-        'v','sys_voltage','wifi_rssi','lora_SigStr','WAN_CONNECTED','WIFI_CONNECTED','LORA_CONNECTED'
+        'v','sys_voltage','wifi_rssi','lora_SigStr','WAN_CONNECTED','WIFI_CONNECTED','LORA_CONNECTED',
+        'temp_f','temp_c','humid','device_temp_f','device_temp_c','device_humid','device_bar','soil_moisture','volt','free_mem','rssi','lora_SigStr'
     ] as $k) {
         if (array_key_exists($k, $flags)) {
             $has_any_telemetry = true;
@@ -349,11 +505,12 @@ function tmon_uc_device_supports_feature($settings, $latest, $feature) {
     $has_sample = tmon_uc_truthy_flag($flags['SAMPLE_TEMP'] ?? null)
         || tmon_uc_truthy_flag($flags['SAMPLE_HUMID'] ?? null)
         || tmon_uc_truthy_flag($flags['SAMPLE_BAR'] ?? null)
-        || isset($flags['t_f']) || isset($flags['cur_temp_f'])
-        || isset($flags['dt_f']) || isset($flags['cur_device_temp_f'])
-        || isset($flags['dh']) || isset($flags['cur_device_humid'])
-        || isset($flags['db']) || isset($flags['cur_device_bar_pres'])
-        || isset($flags['sm']) || isset($flags['cur_soil_moisture']);
+        || isset($flags['t_f']) || isset($flags['cur_temp_f']) || isset($flags['temp_f'])
+        || isset($flags['dt_f']) || isset($flags['cur_device_temp_f']) || isset($flags['device_temp_f'])
+        || isset($flags['dh']) || isset($flags['cur_device_humid']) || isset($flags['device_humid'])
+        || isset($flags['db']) || isset($flags['cur_device_bar_pres']) || isset($flags['device_bar'])
+        || isset($flags['sm']) || isset($flags['cur_soil_moisture']) || isset($flags['soil_moisture'])
+        || isset($flags['humid']) || isset($flags['bar']) || isset($flags['volt']);
     $has_engine = tmon_uc_truthy_flag($flags['ENGINE_ENABLED'] ?? null)
         || tmon_uc_truthy_flag($flags['USE_RS485'] ?? null)
         || isset($flags['engine1_speed_rpm']) || isset($flags['engine2_speed_rpm']);
@@ -372,21 +529,14 @@ function tmon_uc_list_feature_devices($feature = 'sample') {
     foreach ($rows as $r) {
         $settings = json_decode($r['settings'] ?? '', true);
         $latest = [];
-        if (!tmon_uc_device_supports_feature($settings, $latest, $feature)) {
-            $fd = $wpdb->get_row($wpdb->prepare("SELECT data FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s ORDER BY created_at DESC LIMIT 1", $r['unit_id']), ARRAY_A);
-            if ($fd && !empty($fd['data'])) {
-                $tmp = json_decode($fd['data'], true);
-                if (is_array($tmp)) $latest = $tmp;
-            }
+        if (function_exists('tmon_uc_get_latest_raw_payload')) {
+            $latest = tmon_uc_get_latest_raw_payload($r['unit_id']);
         }
         if (!is_array($latest)) {
             $latest = [];
         }
-        if (isset($latest['sdata']) && is_array($latest['sdata'])) {
-            $latest = array_merge($latest, $latest['sdata']);
-        }
-        if (isset($latest['data']) && is_array($latest['data'])) {
-            $latest = array_merge($latest, $latest['data']);
+        if (!empty($latest) && !tmon_uc_device_supports_feature($settings, $latest, $feature)) {
+            $latest = function_exists('tmon_uc_normalize_telemetry_point') ? tmon_uc_normalize_telemetry_point($latest) : $latest;
         }
         if (!tmon_uc_device_supports_feature($settings, $latest, $feature)) continue;
         $label = $r['unit_name'] ? ($r['unit_name'] . ' (' . $r['unit_id'] . ')') : $r['unit_id'];
@@ -1176,18 +1326,13 @@ add_shortcode('tmon_devices_sdata', function($atts){
     // Fetch latest sdata row per unit
     $out = '<table class="wp-list-table widefat"><thead><tr><th>Unit</th><th>Name</th><th>Last Seen</th><th>Device Temp (F)</th><th>Device Humidity (%)</th><th>Device Pressure (hPa)</th><th>Voltage (V)</th><th>Soil Moisture</th></tr></thead><tbody>';
     foreach ($rows as $r) {
-        $fd = $wpdb->get_row($wpdb->prepare("SELECT data, created_at FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s ORDER BY created_at DESC LIMIT 1", $r['unit_id']), ARRAY_A);
-        $device_temp = $device_humid = $device_bar = $volt = $soil = '';
-        if ($fd) {
-            $d = json_decode($fd['data'], true);
-            if (is_array($d)) {
-                $device_temp = $d['cur_device_temp_f'] ?? ($d['dt_f'] ?? '');
-                $device_humid = $d['cur_device_humid'] ?? ($d['dh'] ?? '');
-                $device_bar = $d['cur_device_bar_pres'] ?? ($d['db'] ?? '');
-                $volt = $d['v'] ?? ($d['sys_voltage'] ?? '');
-                $soil = $d['cur_soil_moisture'] ?? ($d['sm'] ?? '');
-            }
-        }
+        $payload = function_exists('tmon_uc_get_latest_raw_payload') ? tmon_uc_get_latest_raw_payload($r['unit_id']) : [];
+        $norm = function_exists('tmon_uc_normalize_telemetry_point') ? tmon_uc_normalize_telemetry_point($payload) : $payload;
+        $device_temp = $norm['device_temp_f'] ?? ($norm['temp_f'] ?? '');
+        $device_humid = $norm['device_humid'] ?? ($norm['humid'] ?? '');
+        $device_bar = $norm['device_bar'] ?? ($norm['bar'] ?? '');
+        $volt = $norm['volt'] ?? ($norm['sys_voltage'] ?? '');
+        $soil = $norm['soil_moisture'] ?? '';
         $out .= '<tr>'
             .'<td>'.esc_html($r['unit_id']).'</td>'
             .'<td>'.esc_html($r['unit_name']).'</td>'
@@ -1241,17 +1386,12 @@ add_shortcode('tmon_device_widgets', function($atts){
             $offline++;
         }
 
-        $fd = $wpdb->get_row($wpdb->prepare("SELECT data, created_at FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s ORDER BY created_at DESC LIMIT 1", $uid), ARRAY_A);
-        $temp = $humid = $volt = $soil = '';
-        if ($fd && !empty($fd['data'])) {
-            $j = json_decode($fd['data'], true);
-            if (is_array($j)) {
-                $temp = $j['cur_device_temp_f'] ?? ($j['t_f'] ?? '');
-                $humid = $j['cur_device_humid'] ?? ($j['hum'] ?? '');
-                $volt = $j['sys_voltage'] ?? ($j['v'] ?? '');
-                $soil = $j['cur_soil_moisture'] ?? '';
-            }
-        }
+        $payload = function_exists('tmon_uc_get_latest_raw_payload') ? tmon_uc_get_latest_raw_payload($uid) : [];
+        $norm = function_exists('tmon_uc_normalize_telemetry_point') ? tmon_uc_normalize_telemetry_point($payload) : $payload;
+        $temp = $norm['device_temp_f'] ?? ($norm['temp_f'] ?? '');
+        $humid = $norm['device_humid'] ?? ($norm['humid'] ?? '');
+        $volt = $norm['volt'] ?? ($norm['sys_voltage'] ?? '');
+        $soil = $norm['soil_moisture'] ?? '';
         $cards[] = [
             'unit_id' => $uid,
             'name' => $name,
@@ -1366,15 +1506,24 @@ if (!function_exists('tmon_uc_render_relay_shortcode')) {
             return '<div class="tmon-relay-shortcode"><em>Relay controls require device control permission.</em></div>';
         }
 
-        if ($unit_id === '') {
-            return '<div class="tmon-relay-shortcode"><em>Provide a unit_id attribute or use a page with the shared unit selector.</em></div>';
-        }
-
         $widget_id = 'tmon-relay-' . wp_generate_password(6, false, false);
+        $picker_id = 'tmon-relay-picker-' . wp_generate_password(6, false, false);
+        $units = tmon_uc_list_devices_for_select();
         ob_start();
         ?>
         <div id="<?php echo esc_attr($widget_id); ?>" class="tmon-relay-shortcode" data-unit="<?php echo esc_attr($unit_id); ?>" data-relay="<?php echo esc_attr($relay); ?>" data-state="<?php echo esc_attr($state); ?>" data-nonce="<?php echo esc_attr($nonce); ?>" data-runtime-min="<?php echo esc_attr($runtime_min); ?>" data-schedule-at="<?php echo esc_attr($schedule_at); ?>">
-            <button type="button" class="button button-primary tmon-relay-shortcode-btn"><?php echo esc_html($label); ?></button>
+            <?php if ($unit_id === '') : ?>
+                <div style="margin-bottom:6px;">
+                    <label for="<?php echo esc_attr($picker_id); ?>" class="tmon-text-muted">Unit</label>
+                    <select id="<?php echo esc_attr($picker_id); ?>" class="tmon-relay-target-select" style="margin-left:6px;">
+                        <option value="">— Select unit —</option>
+                        <?php foreach ($units as $row) : $uid = (string) ($row['unit_id'] ?? ''); if ($uid === '') continue; $label_text = trim((string) ($row['unit_name'] ?? '')); if ($label_text === '') { $label_text = $uid; } else { $label_text .= ' (' . $uid . ')'; } ?>
+                            <option value="<?php echo esc_attr($uid); ?>"><?php echo esc_html($label_text); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+            <?php endif; ?>
+            <button type="button" class="button button-primary tmon-relay-shortcode-btn"<?php echo $unit_id === '' ? ' disabled' : ''; ?>><?php echo esc_html($label); ?></button>
             <span class="tmon-relay-shortcode-status" style="margin-left:8px;"></span>
         </div>
         <script>
@@ -1383,7 +1532,12 @@ if (!function_exists('tmon_uc_render_relay_shortcode')) {
             if (!wrap) return;
             var btn = wrap.querySelector('.tmon-relay-shortcode-btn');
             var status = wrap.querySelector('.tmon-relay-shortcode-status');
+            var picker = wrap.querySelector('.tmon-relay-target-select');
             var ajaxUrl = <?php echo wp_json_encode($ajax_url); ?>;
+            function getUnit(){
+                if (picker && picker.value) return picker.value;
+                return wrap.getAttribute('data-unit') || '';
+            }
             function setStatus(text, isError) {
                 if (!status) return;
                 status.textContent = text || '';
@@ -1397,32 +1551,49 @@ if (!function_exists('tmon_uc_render_relay_shortcode')) {
                     body: new URLSearchParams(data).toString()
                 }).then(function(r){ return r.json(); });
             }
-            btn.addEventListener('click', function(){
-                var payload = {
-                    action: 'tmon_uc_relay_command',
-                    nonce: wrap.getAttribute('data-nonce') || '',
-                    unit_id: wrap.getAttribute('data-unit') || '',
-                    relay_num: wrap.getAttribute('data-relay') || '1',
-                    state: wrap.getAttribute('data-state') || 'on',
-                    runtime_min: wrap.getAttribute('data-runtime-min') || '0',
-                    schedule_at: wrap.getAttribute('data-schedule-at') || ''
-                };
-                btn.disabled = true;
-                setStatus('Sending...', false);
-                post(payload).then(function(res){
-                    if (res && res.success) {
-                        var data = res.data || {};
-                        setStatus(data.scheduled ? 'Scheduled' : 'Queued', false);
-                    } else {
-                        var msg = (res && res.data && res.data.message) ? res.data.message : 'Command failed';
-                        setStatus(msg, true);
+            if (picker) {
+                picker.addEventListener('change', function(){
+                    var unit = getUnit();
+                    wrap.setAttribute('data-unit', unit || '');
+                    if (btn) {
+                        btn.disabled = !unit;
+                        setStatus(unit ? '' : 'Choose a unit', false);
                     }
-                }).catch(function(){
-                    setStatus('Network error', true);
-                }).finally(function(){
-                    btn.disabled = false;
                 });
-            });
+            }
+            if (btn) {
+                btn.addEventListener('click', function(){
+                    var unit = getUnit();
+                    if (!unit) {
+                        setStatus('Choose a unit first', true);
+                        return;
+                    }
+                    var payload = {
+                        action: 'tmon_uc_relay_command',
+                        nonce: wrap.getAttribute('data-nonce') || '',
+                        unit_id: unit,
+                        relay_num: wrap.getAttribute('data-relay') || '1',
+                        state: wrap.getAttribute('data-state') || 'on',
+                        runtime_min: wrap.getAttribute('data-runtime-min') || '0',
+                        schedule_at: wrap.getAttribute('data-schedule-at') || ''
+                    };
+                    btn.disabled = true;
+                    setStatus('Sending...', false);
+                    post(payload).then(function(res){
+                        if (res && res.success) {
+                            var data = res.data || {};
+                            setStatus(data.scheduled ? 'Scheduled' : 'Queued', false);
+                        } else {
+                            var msg = (res && res.data && res.data.message) ? res.data.message : 'Command failed';
+                            setStatus(msg, true);
+                        }
+                    }).catch(function(){
+                        setStatus('Network error', true);
+                    }).finally(function(){
+                        btn.disabled = false;
+                    });
+                });
+            }
         })();
         </script>
         <?php
@@ -1436,10 +1607,11 @@ add_shortcode('tmon_relay_toggle', function($atts){ return tmon_uc_render_relay_
 add_shortcode('tmon_relay_controls', function($atts){
     $atts = shortcode_atts(array('unit_id' => '', 'relay' => '1'), $atts);
     $unit_id = sanitize_text_field((string) $atts['unit_id']);
-    if ($unit_id === '') {
-        return '<em>Provide a unit_id attribute for relay controls.</em>';
-    }
     $relay = max(1, min(8, intval($atts['relay'])));
+    $can_control = current_user_can('manage_options') || current_user_can('edit_tmon_units');
+    if (!$can_control) {
+        return '<div class="tmon-relay-shortcode"><em>Relay controls require device control permission.</em></div>';
+    }
     return '<div class="tmon-relay-shortcuts">'
         . tmon_uc_render_relay_shortcode('on', array('unit_id' => $unit_id, 'relay' => $relay, 'label' => 'Relay ' . $relay . ' On'))
         . tmon_uc_render_relay_shortcode('off', array('unit_id' => $unit_id, 'relay' => $relay, 'label' => 'Relay ' . $relay . ' Off'))
@@ -1714,6 +1886,16 @@ add_shortcode('tmon_device_settings', function($atts = array()){
  			{key:'SAMPLE_BAR', type:'bool', label:'Enable Barometric Pressure Sampling'},
  			{key:'ENABLE_OLED', type:'bool', label:'Enable OLED'},
  			{key:'ENGINE_ENABLED', type:'bool', label:'Enable Engine Controller'},
+ 			{key:'ENABLE_FROSTWATCH', type:'bool', label:'Enable Frostwatch'},
+ 			{key:'FROSTWATCH_ACTIVE_TEMP', type:'number', label:'Frostwatch Active Temp (F)'},
+ 			{key:'FROSTWATCH_ALERT_TEMP', type:'number', label:'Frostwatch Alert Temp (F)'},
+ 			{key:'FROSTWATCH_ACTION_TEMP', type:'number', label:'Frostwatch Action Temp (F)'},
+ 			{key:'FROSTWATCH_STANDDOWN_TEMP', type:'number', label:'Frostwatch Standdown Temp (F)'},
+ 			{key:'ENABLE_HEATWATCH', type:'bool', label:'Enable Heatwatch'},
+ 			{key:'HEATWATCH_ACTIVE_TEMP', type:'number', label:'Heatwatch Active Temp (F)'},
+ 			{key:'HEATWATCH_ALERT_TEMP', type:'number', label:'Heatwatch Alert Temp (F)'},
+ 			{key:'HEATWATCH_ACTION_TEMP', type:'number', label:'Heatwatch Action Temp (F)'},
+ 			{key:'HEATWATCH_STANDDOWN_TEMP', type:'number', label:'Heatwatch Standdown Temp (F)'},
  			{key:'RELAY_PIN1', type:'number', label:'Relay Pin 1'},
  			{key:'RELAY_PIN2', type:'number', label:'Relay Pin 2'},
  			{key:'WIFI_SSID', type:'text', label:'WiFi SSID'},
@@ -2033,9 +2215,9 @@ add_action('wp_ajax_tmon_pending_commands_get', function() {
     if (!current_user_can('manage_options') && !current_user_can('edit_tmon_units')) wp_send_json_error(['message'=>'forbidden'], 403);
     global $wpdb;
     $id = intval($_POST['id']);
-    $row = $wpdb->get_row($wpdb->prepare("SELECT command, device_id FROM {$wpdb->prefix}tmon_device_commands WHERE id=%d", $id), ARRAY_A);
+    $row = $wpdb->get_row($wpdb->prepare("SELECT command, params, device_id FROM {$wpdb->prefix}tmon_device_commands WHERE id=%d", $id), ARRAY_A);
     if ($row && isset($row['command'])) {
-        wp_send_json_success(['command' => $row['command'], 'device_id' => $row['device_id']]);
+        wp_send_json_success(['command' => $row['command'], 'params' => $row['params'] ?? '', 'device_id' => $row['device_id']]);
     }
     wp_send_json_error(['message' => 'Command not found', 'id' => $id], 404);
 });
@@ -2047,12 +2229,15 @@ add_action('wp_ajax_tmon_pending_commands_requeue', function() {
     global $wpdb;
     $unit_id = sanitize_text_field($_POST['unit_id'] ?? '');
     $command = $_POST['command'] ?? '';
+    $params = isset($_POST['params']) ? wp_unslash($_POST['params']) : '';
     if (!$unit_id || $command === '') wp_send_json_error(['message'=>'unit_or_command_required'], 400);
     $ok = $wpdb->insert($wpdb->prefix.'tmon_device_commands', [
         'device_id' => $unit_id,
         'command' => $command,
+        'params' => is_string($params) && $params !== '' ? $params : null,
         // store UTC
         'created_at' => current_time('mysql', true),
+        'updated_at' => current_time('mysql', true),
         'executed_at' => null
     ]);
     if ($ok === false) wp_send_json_error(['message'=>'insert_failed'], 500);
@@ -2067,7 +2252,7 @@ add_action('wp_ajax_tmon_pending_commands_refresh', function(){
     global $wpdb;
     $table = $wpdb->prefix . 'tmon_device_commands';
     $rows = $wpdb->get_results(
-        "SELECT c.id, c.device_id, d.unit_name, c.command, c.created_at
+        "SELECT c.id, c.device_id, d.unit_name, c.command, c.params, c.created_at
          FROM {$table} c
          LEFT JOIN {$wpdb->prefix}tmon_devices d ON c.device_id = d.unit_id
          WHERE c.executed_at IS NULL
@@ -2079,7 +2264,15 @@ add_action('wp_ajax_tmon_pending_commands_refresh', function(){
     } else {
         foreach ($rows as $r) {
             $cmd = $r['command'];
-            if (is_string($cmd) && ($decoded = json_decode($cmd, true)) && json_last_error() === JSON_ERROR_NONE) {
+            $params_json = $r['params'] ?? '';
+            if (!empty($params_json) && is_string($params_json)) {
+                $decoded_params = json_decode($params_json, true);
+                if (is_array($decoded_params) && json_last_error() === JSON_ERROR_NONE) {
+                    $cmd_html = '<pre style="margin:0;font-size:13px;">'.esc_html(json_encode($decoded_params, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)).'</pre>';
+                } else {
+                    $cmd_html = '<pre style="margin:0;font-size:13px;">'.esc_html($params_json).'</pre>';
+                }
+            } elseif (is_string($cmd) && ($decoded = json_decode($cmd, true)) && json_last_error() === JSON_ERROR_NONE) {
                 $cmd_html = '<pre style="margin:0;font-size:13px;">'.esc_html(json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES)).'</pre>';
             } else {
                 $cmd_html = '<pre style="margin:0;font-size:13px;">'.esc_html($cmd).'</pre>';

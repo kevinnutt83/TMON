@@ -92,7 +92,7 @@ function tmon_unit_connector_activate() {
 
 add_action('admin_init', function() {
     require_once __DIR__ . '/includes/schema.php';
-    if (get_option('tmon_uc_schema_version') !== '2.0.5') {
+    if (get_option('tmon_uc_schema_version') !== '2.0.6') {
         tmon_uc_ensure_schema();
     }
 });
