@@ -705,34 +705,12 @@ add_shortcode('tmon_device_history', function($atts) {
 		let chart = null;
 		let lastData = null;
 
-        function getCookie(name) {
-            try {
-                const needle = name + "=";
-                const parts = document.cookie ? document.cookie.split(';') : [];
-                for (let i = 0; i < parts.length; i++) {
-                    const c = parts[i].trim();
-                    if (c.indexOf(needle) === 0) {
-                        return decodeURIComponent(c.substring(needle.length));
-                    }
-                }
-            } catch(e) {}
-            return null;
-        }
-
-        function setCookie(name, value, days) {
-            try {
-                const maxAge = Math.max(1, Number(days || 30)) * 24 * 60 * 60;
-                document.cookie = name + "=" + encodeURIComponent(value) + "; path=/; max-age=" + maxAge + "; SameSite=Lax";
-            } catch(e) {}
-        }
+        try {
+            document.cookie = legendKey + "=; path=/; max-age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax";
+        } catch (e) {}
 
         function loadLegendState() {
             try {
-                const cookieRaw = getCookie(legendKey);
-                if (cookieRaw) return JSON.parse(cookieRaw);
-            } catch(e) {}
-            try {
-                // Backward compatibility with prior localStorage-only persistence.
                 const raw = localStorage.getItem(legendKey);
                 return raw ? JSON.parse(raw) : {};
             } catch(e) {
@@ -758,7 +736,6 @@ add_shortcode('tmon_device_history', function($atts) {
         function saveLegendState(input) {
             try {
                 const state = collectLegendState(input);
-                setCookie(legendKey, JSON.stringify(state), 30);
                 localStorage.setItem(legendKey, JSON.stringify(state));
             } catch(e) {}
         }

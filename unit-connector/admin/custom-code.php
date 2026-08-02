@@ -22,7 +22,10 @@ add_filter('elementor/utils/is_post_type_support', function($is_supported, $post
 
 add_action('elementor/init', function() {
     if (class_exists('\Elementor\Plugin') && isset(\Elementor\Plugin::$instance->documents)) {
-        \Elementor\Plugin::$instance->documents->remove_post_type_support('tmon_custom_code');
+        $documents_manager = \Elementor\Plugin::$instance->documents;
+        if (is_object($documents_manager) && method_exists($documents_manager, 'remove_post_type_support')) {
+            $documents_manager->remove_post_type_support('tmon_custom_code');
+        }
     }
 });
 
