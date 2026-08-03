@@ -440,8 +440,10 @@ async def main():
             asyncio.create_task(log_rotate_loop())
         except Exception as e:
             _record_startup_exception('log_rotate_loop', e)
-    # Launch permanent LoRa task directly (new bulletproof version)
-    asyncio.create_task(connectLora())
+    # Launch permanent LoRa task for hub roles; remotes use controlled-session path.
+    is_remote = str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'remote'
+    if not (is_remote and bool(getattr(settings, 'REMOTE_DISABLE_CONNECTLORA_LOOP', True))):
+        asyncio.create_task(connectLora())
     # Run all other periodic tasks
     await tm.run()
 

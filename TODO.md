@@ -42,6 +42,7 @@ Immediate tasks
 - [x] Harden LoRa secure envelope parsing in `micropython/lora.py`: CRC is emitted/parses as 4 hex digits, security failures are rate-limited, and CRC/HMAC parse failures no longer swallow HELLO/READY traffic due to malformed CRC fields.
 - [x] Align LoRa session security and admission flow with strict 4-hex CRC parsing and HELLO session replay reset baseline (Phase 0-2 guide, 2026-08-02).
 - [x] Harden LoRa CRC field handling and provisioning flag writes: tolerant first-4-hex CRC parse + optional session soft-CRC fallback, no oversize packet truncation, and guaranteed `/logs` creation before `provisioned.flag` writes.
+- [x] Lock P2P LoRa profile and controlled session behavior: canonical init defaults (`SF=10`, `POWER=17`), CRC self-test helper, minimal-telemetry controlled remote payloads, and watchdog idle re-init disabled by default.
 - [x] Fix TMON Admin UC device refresh action: both refresh handlers now accept the same nonce/site parameter shapes, and the centralized handler probes multiple UC count endpoints instead of failing on a single 404 route.
 - [x] Add Unit Connector admin site device routes for Admin probing: exposed authenticated GET routes for device list/count under both `tmon/v1` and `tmon-admin/v1` namespaces.
 - [x] Preserve dynamic numeric telemetry in history points for charting: `tmon_uc_get_device_history()` now includes additional numeric payload keys beyond the curated baseline fields.

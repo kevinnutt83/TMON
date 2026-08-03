@@ -136,6 +136,17 @@ def _parse_crc_field(raw):
         return False, None, hx4
 
 
+def verify_app_crc(body, crc_raw):
+    """Return (ok: bool, detail: str) for envelope CRC validation."""
+    ok, exp, hx4 = _parse_crc_field(crc_raw)
+    if not ok:
+        return False, 'Invalid CRC field: %s' % str(crc_raw)[:16]
+    actual = crc16_ccitt(body if isinstance(body, bytes) else body.encode())
+    if actual != exp:
+        return False, 'CRC mismatch: expected %04X, got %s' % (actual, hx4)
+    return True, 'CRC ok %s' % hx4
+
+
 async def debug_crc_sample():
     sample = 'HELLO:unit-test'
     sec = await _secure_message(sample)
@@ -225,6 +236,7 @@ _remote_ota_rx = {
     'files': {},
     'received': {},
 }
+_crc_selftest_done = False
 
 
 def _safe_int(v, default=0):
@@ -703,8 +715,8 @@ async def init_lora():
             )
             status = lora.begin(
                 freq=getattr(settings, 'FREQ', 915.0), bw=getattr(settings, 'BW', 125.0),
-                sf=getattr(settings, 'SF', 12), cr=getattr(settings, 'CR', 7),
-                syncWord=getattr(settings, 'SYNC_WORD', 0xF4), power=getattr(settings, 'POWER', 14),
+                sf=getattr(settings, 'SF', 10), cr=getattr(settings, 'CR', 7),
+                syncWord=getattr(settings, 'SYNC_WORD', 0xF4), power=getattr(settings, 'POWER', 17),
                 currentLimit=getattr(settings, 'CURRENT_LIMIT', 140.0),
                 preambleLength=getattr(settings, 'PREAMBLE_LEN', 12),
                 implicit=False, implicitLen=0xFF, crcOn=getattr(settings, 'CRC_ON', True),
@@ -1678,6 +1690,14 @@ async def _secure_message(msg_str, remote_uid=None):
         return str(msg_str)
 
 
+async def crc_selftest():
+    sample = 'HELLO:unit-test'
+    c = crc16_ccitt(sample.encode())
+    wire = _format_crc(c)
+    ok, detail = verify_app_crc(sample, wire)
+    await debug_print('CRC selftest %s %s (wire=CRC:%s)' % (ok, detail, wire), 'LORA')
+
+
 async def _unsecure_message(msg_str, remote_uid=None):
     """
     Parse pipe envelope. Return cleartext msg or None on hard failure.
@@ -1722,23 +1742,14 @@ async def _unsecure_message(msg_str, remote_uid=None):
             return body
 
         if (getattr(settings, 'LORA_CRC_ENABLED', True) or getattr(settings, 'CRC_ON', True)) and crc_raw is not None:
-            ok_crc, expected_int, hx4 = _parse_crc_field(crc_raw)
+            ok_crc, detail = verify_app_crc(body, crc_raw)
             if not ok_crc:
                 if getattr(settings, 'LORA_SESSION_SOFT_CRC', True):
                     b = body.strip()
                     if b.startswith('HELLO:') or b.startswith('READY:') or b.startswith('ACK:') or b.startswith('END:'):
                         await _sec_log('CRC soft-accept session frame: %s' % b[:32])
                         return body
-                await _sec_log('Invalid CRC field: %s' % str(crc_raw)[:16])
-                return None
-            actual = crc16_ccitt(body.encode() if not isinstance(body, bytes) else body)
-            if actual != expected_int:
-                if getattr(settings, 'LORA_SESSION_SOFT_CRC', True):
-                    b = body.strip()
-                    if b.startswith('HELLO:') or b.startswith('READY:') or b.startswith('ACK:') or b.startswith('END:'):
-                        await _sec_log('CRC soft-accept session frame: %s' % b[:32])
-                        return body
-                await _sec_log('CRC mismatch: expected %04X, got %s' % (actual, hx4))
+                await _sec_log(detail)
                 return None
 
         if getattr(settings, 'LORA_HMAC_ENABLED', True) and hmac_hex is not None:
@@ -2139,6 +2150,29 @@ async def send_field_data_controlled(payload):
         return None
 
     uid = str(getattr(settings, 'UNIT_ID', '') or '')
+
+    if payload is None:
+        ts_now = time.time()
+        if bool(getattr(settings, 'LORA_MINIMAL_TELEMETRY', True)):
+            payload = {
+                'unit_id': uid,
+                'ts': ts_now,
+                'fw': getattr(settings, 'FIRMWARE_VERSION', ''),
+                'volt': getattr(sdata, 'sys_voltage', None),
+                'temp_f': getattr(sdata, 'cur_temp_f', None),
+                'humid': getattr(sdata, 'cur_humid', None),
+            }
+        else:
+            payload = {
+                'unit_id': uid,
+                'node_type': 'remote',
+                'ts': ts_now,
+                'fw': getattr(settings, 'FIRMWARE_VERSION', ''),
+                'v': getattr(sdata, 'sys_voltage', None),
+                't': (getattr(sdata, 'cur_temp_f', None) or getattr(sdata, 'cur_device_temp_f', None)),
+                'h': getattr(sdata, 'cur_humid', None),
+                'rssi': getattr(sdata, 'lora_SigStr', None),
+            }
 
     ready_msg = await send_hello_and_wait_ready()
     if not ready_msg:
@@ -2766,7 +2800,7 @@ async def handle_ota_job(job):
 
 # ===================== MAIN LOOP =====================
 async def connectLora():
-    global lora, last_rx_ts, last_lora_activity_ts
+    global lora, last_rx_ts, last_lora_activity_ts, _crc_selftest_done
     if not getattr(settings, 'ENABLE_LORA', True):
         return False
 
@@ -2786,6 +2820,12 @@ async def connectLora():
         if not await init_lora():
             return False
     last_lora_activity_ts = time.time()
+    if not _crc_selftest_done:
+        try:
+            await crc_selftest()
+        except Exception as e:
+            await log_error(f"crc_selftest failed: {e}")
+        _crc_selftest_done = True
 
     if _is_lora_hub_node():
         asyncio.create_task(base_packet_processor())
@@ -2831,28 +2871,28 @@ async def connectLora():
             # ---------- Safer LoRa health watchdog ----------
             # Only re-init if there has been NO activity for a long time.
             # Never use the old aggressive watchdog on base/wifi.
-            watch_timeout_s = int(getattr(settings, 'LORA_WATCHDOG_TIMEOUT_S', 300))
+            watch_timeout_s = int(getattr(settings, 'LORA_WATCHDOG_TIMEOUT_S', 86400))
+            hard_reset_on_idle = bool(getattr(settings, 'LORA_WATCHDOG_HARD_RESET_ON_IDLE', False))
             is_base_or_wifi = str(getattr(settings, 'NODE_TYPE', '')).lower() in ('base', 'wifi')
 
-            if not is_base_or_wifi:
-                # Remotes can keep a shorter watchdog.
-                if current_time - last_lora_activity_ts > 120:
-                    await debug_print("LoRa health watchdog (remote) - re-init", "WARN")
-                    await init_lora()
-                    last_lora_activity_ts = current_time
-            else:
-                # Base/wifi only after a long quiet period.
-                if current_time - last_lora_activity_ts > watch_timeout_s:
-                    await debug_print("LoRa health watchdog (base) - long idle re-init", "WARN")
-                    await init_lora()
-                    last_lora_activity_ts = current_time
+            if hard_reset_on_idle:
+                if not is_base_or_wifi:
+                    if current_time - last_lora_activity_ts > 120:
+                        await debug_print("LoRa health watchdog (remote) - re-init", "WARN")
+                        await init_lora()
+                        last_lora_activity_ts = current_time
+                else:
+                    if current_time - last_lora_activity_ts > watch_timeout_s:
+                        await debug_print("LoRa health watchdog (base) - long idle re-init", "WARN")
+                        await init_lora()
+                        last_lora_activity_ts = current_time
 
             if lora is None or not hasattr(lora, '_events'):
                 if not await init_lora():
                     await asyncio.sleep(8)
                     continue
 
-            if _is_lora_hub_node():
+            if _is_lora_hub_node() or str(getattr(settings, 'NODE_TYPE', '')).lower() == 'remote':
                 await ensure_lora_listening()
 
             if current_time - last_rx_ts > 70:
