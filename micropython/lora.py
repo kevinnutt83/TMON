@@ -1474,6 +1474,131 @@ async def check_incomplete_bursts():
             await log_error(f"check_incomplete_bursts: {e}")
         await asyncio.sleep(2)
 
+
+async def handle_simple_session_hub(clear):
+    """
+    SIMPLE SESSION ONLY:
+      HELLO -> READY
+      END   -> ACK
+      FIELD_DATA_CHUNK -> optional assemble; no SETTINGS/SDATA dependency
+    """
+    if not clear:
+        return False
+    clear = str(clear).strip()
+
+    if clear.startswith('FWD:'):
+        await debug_print('Simple mode: ignore FWD frame', 'BASE_NODE')
+        return True
+
+    if clear.startswith('HELLO:'):
+        try:
+            remote_uid = clear.split(':', 1)[1].strip().split('|')[0].strip()
+        except Exception:
+            remote_uid = 'unknown'
+        await debug_print('HELLO from %s' % remote_uid, 'BASE_NODE')
+
+        if not hasattr(settings, 'REMOTE_NODE_INFO') or settings.REMOTE_NODE_INFO is None:
+            settings.REMOTE_NODE_INFO = {}
+        st = settings.REMOTE_NODE_INFO.setdefault(remote_uid, {})
+        st['session_active'] = True
+        st['chunks'] = []
+        st['chunk_total'] = None
+        try:
+            import utime as _t
+            st['last_hello_ts'] = _t.time()
+        except Exception:
+            pass
+
+        chunk_sz = int(getattr(settings, 'LORA_CHUNK_SIZE', 80))
+        base_uid = str(getattr(settings, 'UNIT_ID', '') or '')
+        ready = 'READY:%s:BASE:%s:CHUNKSZ:%d' % (remote_uid, base_uid, chunk_sz)
+        try:
+            secured = await _secure_message(ready, remote_uid=remote_uid)
+            data = secured.encode() if isinstance(secured, str) else secured
+            ok = await _safe_send(data, remote_uid=remote_uid)
+        except Exception as e:
+            ok = False
+            await debug_print('READY send error: %s' % e, 'ERROR')
+        await debug_print('READY sent to %s ok=%s' % (remote_uid, ok), 'BASE_NODE')
+        try:
+            await ensure_lora_listening()
+        except Exception:
+            pass
+        return True
+
+    if 'FIELD_DATA_CHUNK' in clear or clear.startswith('TYPE:FIELD_DATA_CHUNK'):
+        uid = ''
+        idx = -1
+        total = 0
+        try:
+            for part in clear.replace(',', ' ').split():
+                if part.startswith('UID:'):
+                    uid = part[4:].strip()
+                if part.startswith('CHUNK:'):
+                    frac = part[6:].strip()
+                    a, b = frac.split('/')
+                    idx, total = int(a), int(b)
+        except Exception:
+            pass
+        if uid:
+            st = getattr(settings, 'REMOTE_NODE_INFO', {}).setdefault(uid, {})
+            st['session_active'] = True
+            st['chunk_total'] = total
+            ch = st.setdefault('chunks', [])
+            if idx >= 0:
+                while len(ch) <= idx:
+                    ch.append(None)
+                ch[idx] = clear
+            await debug_print('Chunk %s %s/%s' % (uid, idx, total), 'BASE_NODE')
+        return True
+
+    if clear.startswith('END:'):
+        parts = clear.split(':')
+        remote_uid = parts[1].strip() if len(parts) > 1 else 'unknown'
+        total = 0
+        try:
+            if len(parts) > 2:
+                total = int(parts[2])
+        except Exception:
+            total = 0
+        await debug_print('END from %s total=%s' % (remote_uid, total), 'BASE_NODE')
+
+        try:
+            st = getattr(settings, 'REMOTE_NODE_INFO', {}).get(remote_uid, {})
+            if st.get('chunks') and callable(globals().get('process_remote_field_data')):
+                await process_remote_field_data(remote_uid, st)
+        except Exception as e:
+            await debug_print('field process skip: %s' % e, 'WARN')
+
+        next_delay = int(getattr(settings, 'REMOTE_SYNC_INTERVAL_S', 300) or 300)
+        try:
+            if callable(globals().get('calculate_next_delay')):
+                next_delay = int(calculate_next_delay(remote_uid))
+        except Exception:
+            pass
+        next_delay = max(30, next_delay)
+
+        ack = 'ACK:%s:NEXT:%d' % (remote_uid, next_delay)
+        try:
+            secured = await _secure_message(ack, remote_uid=remote_uid)
+            data = secured.encode() if isinstance(secured, str) else secured
+            ok = await _safe_send(data, remote_uid=remote_uid)
+        except Exception as e:
+            ok = False
+            await debug_print('ACK send error: %s' % e, 'ERROR')
+        await debug_print('FINAL ACK to %s ok=%s next=%d' % (remote_uid, ok, next_delay), 'BASE_NODE')
+
+        st = getattr(settings, 'REMOTE_NODE_INFO', {}).get(remote_uid, {})
+        st['session_active'] = False
+        st['chunks'] = []
+        try:
+            await ensure_lora_listening()
+        except Exception:
+            pass
+        return True
+
+    return False
+
 async def handle_incoming_packet(msg):
     global last_rx_ts, last_lora_activity_ts
     msg_str = msg.rstrip(b'\x00').decode()
@@ -1500,6 +1625,12 @@ async def handle_incoming_packet(msg):
     if not msg_str:
         await debug_print("Dropped inbound packet: secure decode failed", "WARN")
         return
+
+    if bool(getattr(settings, 'LORA_SIMPLE_SESSION_ONLY', True)):
+        if str(getattr(settings, 'NODE_TYPE', '')).lower() in ('base', 'wifi'):
+            handled = await handle_simple_session_hub(msg_str)
+            if handled:
+                return
 
     # Optional relay forwarding / unwrapping: FWD:ttl:origin:seq:inner
     if str(msg_str).startswith('FWD:'):
@@ -1739,6 +1870,14 @@ async def _secure_message(msg_str, remote_uid=None):
             msg_str = msg_str.decode()
         msg_str = str(msg_str)
 
+        # Simple-mode / diagnostics path: when HMAC is disabled, keep payload plain
+        # and optionally append only CRC.
+        if not bool(getattr(settings, 'LORA_HMAC_ENABLED', True)):
+            if bool(getattr(settings, 'LORA_CRC_ENABLED', False) or getattr(settings, 'CRC_ON', False)):
+                c = crc16_ccitt(msg_str.encode() if not isinstance(msg_str, bytes) else msg_str)
+                return '%s|CRC:%s' % (msg_str, _format_crc(c))
+            return msg_str
+
         uid = remote_uid or getattr(settings, 'UNIT_ID', 'local')
         if not hasattr(settings, 'LORA_PEER_COUNTERS') or settings.LORA_PEER_COUNTERS is None:
             settings.LORA_PEER_COUNTERS = {}
@@ -1820,10 +1959,26 @@ async def _unsecure_message(msg_str, remote_uid=None):
             elif pu.upper().startswith('HMAC:'):
                 hmac_hex = pu[5:].strip()
 
-        if getattr(settings, 'LORA_HMAC_ENABLED', True) and hmac_hex is None:
+        hmac_enabled = bool(getattr(settings, 'LORA_HMAC_ENABLED', True))
+
+        if hmac_enabled and hmac_hex is None:
             if getattr(settings, 'LORA_HMAC_REJECT_UNSIGNED', True):
                 await _sec_log('Invalid secure format (no CNT/HMAC)')
                 return None
+            return body
+
+        # When HMAC is disabled, accept plain body and (optionally) validate CRC.
+        if not hmac_enabled:
+            if crc_raw is not None and (bool(getattr(settings, 'LORA_CRC_ENABLED', False)) or bool(getattr(settings, 'CRC_ON', False))):
+                ok_crc, detail = verify_app_crc(body, crc_raw)
+                if not ok_crc:
+                    if getattr(settings, 'LORA_SESSION_SOFT_CRC', True):
+                        b = body.strip()
+                        if b.startswith('HELLO:') or b.startswith('READY:') or b.startswith('ACK:') or b.startswith('END:') or b.startswith('FWD:'):
+                            await _sec_log('CRC soft-accept session frame: %s' % b[:32])
+                            return body
+                    await _sec_log(detail)
+                    return None
             return body
 
         if (getattr(settings, 'LORA_CRC_ENABLED', True) or getattr(settings, 'CRC_ON', True)) and crc_raw is not None:
@@ -1837,7 +1992,7 @@ async def _unsecure_message(msg_str, remote_uid=None):
                 await _sec_log(detail)
                 return None
 
-        if getattr(settings, 'LORA_HMAC_ENABLED', True) and hmac_hex is not None:
+        if hmac_enabled and hmac_hex is not None:
             secret = str(getattr(settings, 'LORA_HMAC_SECRET', '') or '')
             trunc = int(getattr(settings, 'LORA_HMAC_TRUNCATE', 16))
             if cnt is None:
@@ -1857,7 +2012,7 @@ async def _unsecure_message(msg_str, remote_uid=None):
                 await _sec_log('HMAC verify error: %s' % e)
                 return None
 
-        if cnt is not None and getattr(settings, 'LORA_HMAC_REPLAY_PROTECT', True):
+        if hmac_enabled and cnt is not None and getattr(settings, 'LORA_HMAC_REPLAY_PROTECT', True):
             uid = str(remote_uid or 'unknown')
             if not hasattr(settings, 'LORA_PEER_COUNTERS') or settings.LORA_PEER_COUNTERS is None:
                 settings.LORA_PEER_COUNTERS = {}
@@ -2150,7 +2305,7 @@ async def wait_for_next_sync_ack(timeout_s=None, expected_batch_id=None):
 
 
 async def send_hello_and_wait_ready(use_fwd=False):
-    """Remote greeting: announce a transfer session and wait briefly for READY."""
+    """Simple mode remote greeting: direct HELLO -> wait for READY."""
     if str(getattr(settings, 'NODE_TYPE', 'base')).lower() != 'remote':
         return None
 
@@ -2166,15 +2321,8 @@ async def send_hello_and_wait_ready(use_fwd=False):
             await debug_print("LoRa HMAC secret is empty", "WARN")
     except Exception:
         pass
-    await debug_print("=== SESSION START ===", "REMOTE_NODE")
-
-    if use_fwd:
-        seq = int(getattr(settings, '_fwd_seq', 0)) + 1
-        settings._fwd_seq = seq
-        ttl = int(getattr(settings, 'LORA_RELAY_MAX_TTL', 2))
-        hello = 'FWD:%d:%s:%d:HELLO:%s' % (ttl, uid, seq, uid)
-    else:
-        hello = 'HELLO:%s' % uid
+    await debug_print("=== SIMPLE SESSION START ===", "REMOTE_NODE")
+    hello = 'HELLO:%s' % uid
 
     sent_any = False
     retries = int(getattr(settings, 'LORA_HELLO_RETRIES', 3))
@@ -2184,7 +2332,7 @@ async def send_hello_and_wait_ready(use_fwd=False):
             ok = await _safe_send(secured.encode())
             sent_any = bool(ok)
             await ensure_lora_listening()
-            await debug_print('HELLO sent attempt %d fwd=%s ok=%s' % (attempt + 1, use_fwd, ok), 'REMOTE_NODE')
+            await debug_print('HELLO sent attempt %d ok=%s' % (attempt + 1, ok), 'REMOTE_NODE')
             if ok:
                 break
         except Exception as e:
@@ -2216,11 +2364,6 @@ async def send_hello_and_wait_ready(use_fwd=False):
                 clear = await _unsecure_message(raw)
                 if not clear:
                     continue
-                if clear.startswith('FWD:'):
-                    try:
-                        clear = clear.split(':', 4)[-1]
-                    except Exception:
-                        pass
                 if clear.startswith("READY:") and uid in clear:
                     await debug_print(f"READY received: {clear}", "REMOTE_NODE")
 
@@ -2245,6 +2388,7 @@ async def send_hello_and_wait_ready(use_fwd=False):
                         f"Paired with base {base_uid}, chunk_size={chunk_sz}",
                         "REMOTE_NODE"
                     )
+                    await debug_print("=== SIMPLE SESSION READY ===", "REMOTE_NODE")
                     return clear
         except Exception:
             pass
@@ -2255,7 +2399,7 @@ async def send_hello_and_wait_ready(use_fwd=False):
 
 
 async def send_field_data_controlled(payload):
-    """Remote controlled session: HELLO -> READY -> chunks -> END -> FINAL ACK."""
+    """Remote controlled simple session: HELLO -> READY -> chunks -> END -> FINAL ACK."""
     if str(getattr(settings, 'NODE_TYPE', 'base')).lower() != 'remote':
         return None
 
@@ -2285,12 +2429,9 @@ async def send_field_data_controlled(payload):
             }
 
     ready_msg = await send_hello_and_wait_ready(use_fwd=False)
-    if not ready_msg and bool(getattr(settings, 'LORA_DIRECT_THEN_RELAY', True)):
-        await debug_print('Direct HELLO failed - trying FWD relay path', 'REMOTE_NODE')
-        ready_msg = await send_hello_and_wait_ready(use_fwd=True)
     if not ready_msg:
         await debug_print("No READY - aborting session", "WARN")
-        await debug_print("=== SESSION FAILED ===", "REMOTE_NODE")
+        await debug_print("=== SIMPLE SESSION FAILED ===", "REMOTE_NODE")
         return None
 
     chunk_size = _safe_int(getattr(settings, 'LORA_CHUNK_SIZE', 100), 100)
@@ -2307,7 +2448,7 @@ async def send_field_data_controlled(payload):
         full_b64 = _ub.b2a_base64(raw_json.encode()).rstrip(b'\n').decode()
     except Exception as e:
         await debug_print(f"Payload encode failed: {e}", "ERROR")
-        await debug_print("=== SESSION FAILED ===", "REMOTE_NODE")
+        await debug_print("=== SIMPLE SESSION FAILED ===", "REMOTE_NODE")
         return None
 
     total = (len(full_b64) + chunk_size - 1) // chunk_size if full_b64 else 1
@@ -2333,11 +2474,11 @@ async def send_field_data_controlled(payload):
             await debug_print(f"Chunk {i}/{total} sent (ok={ok})", "REMOTE_NODE")
             if not ok:
                 await debug_print(f"Chunk {i} TX failed", "ERROR")
-                await debug_print("=== SESSION FAILED ===", "REMOTE_NODE")
+                await debug_print("=== SIMPLE SESSION FAILED ===", "REMOTE_NODE")
                 return None
         except Exception as e:
             await debug_print(f"Chunk {i} send exception: {e}", "ERROR")
-            await debug_print("=== SESSION FAILED ===", "REMOTE_NODE")
+            await debug_print("=== SIMPLE SESSION FAILED ===", "REMOTE_NODE")
             return None
         await asyncio.sleep_ms(300)
 
@@ -2352,7 +2493,7 @@ async def send_field_data_controlled(payload):
         await debug_print(f"END sent (total={total}, ok={ok})", "REMOTE_NODE")
     except Exception as e:
         await debug_print(f"END send failed: {e}", "ERROR")
-        await debug_print("=== SESSION FAILED ===", "REMOTE_NODE")
+        await debug_print("=== SIMPLE SESSION FAILED ===", "REMOTE_NODE")
         return None
 
     await debug_print("Waiting for final ACK...", "REMOTE_NODE")
@@ -2371,11 +2512,6 @@ async def send_field_data_controlled(payload):
             if err == 0 and msg:
                 raw = msg.rstrip(b'\x00').decode()
                 clear = await _unsecure_message(raw)
-                if clear and clear.startswith('FWD:'):
-                    try:
-                        clear = clear.split(':', 4)[-1]
-                    except Exception:
-                        pass
                 if clear and clear.startswith('ACK:'):
                     parts = clear.split(':')
                     if len(parts) >= 4 and parts[1] == uid and parts[2] == 'NEXT':
@@ -2405,14 +2541,14 @@ async def send_field_data_controlled(payload):
                         except Exception:
                             delay = None
                         await debug_print(f"FINAL ACK received: {clear}", "REMOTE_NODE")
-                        await debug_print("=== SESSION SUCCESS ===", "REMOTE_NODE")
+                        await debug_print("=== SIMPLE SESSION SUCCESS ===", "REMOTE_NODE")
                         return delay
         except Exception:
             pass
         await asyncio.sleep_ms(100)
 
     await debug_print("Final ACK timeout", "WARN")
-    await debug_print("=== SESSION FAILED ===", "REMOTE_NODE")
+    await debug_print("=== SIMPLE SESSION FAILED ===", "REMOTE_NODE")
     return None
 
 async def _fetch_remote_pending_command(remote_unit_id, remote_machine_id=None):
@@ -3021,6 +3157,17 @@ async def connectLora():
                 sdata.LORA_CONNECTED = False
 
             if settings.NODE_TYPE == 'remote':
+                if bool(getattr(settings, 'LORA_SIMPLE_SESSION_ONLY', True)):
+                    await debug_print('Remote: simple session only mode (HELLO/READY/END/ACK)', 'REMOTE_NODE')
+                    _next = await send_field_data_controlled(None)
+                    if isinstance(_next, int) and _next > 0:
+                        await debug_print(f"Remote simple mode ACK next={_next}s", "REMOTE_NODE")
+                        await asyncio.sleep(max(5, _next))
+                    else:
+                        await debug_print("Remote simple mode: no ACK, retrying", "WARN")
+                        await asyncio.sleep(max(5, int(getattr(settings, 'REMOTE_FAILED_SYNC_RETRY_S', 60))))
+                    continue
+
                 heartbeat_interval = getattr(settings, 'LORA_HEARTBEAT_INTERVAL_S', 120)
                 if current_time - last_heartbeat_ts >= heartbeat_interval:
                     await _send_lora_heartbeat()

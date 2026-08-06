@@ -150,12 +150,16 @@ async def _run_remote_cycle_once():
 
         await ensure_lora_listening()
         next_delay = await send_field_data_controlled(None)
+        ack_ok = (next_delay is not None)
 
         now_epoch = _now_epoch()
-        if isinstance(next_delay, int) and next_delay > 0:
-            next_epoch = now_epoch + next_delay
+        if ack_ok:
+            if isinstance(next_delay, int) and next_delay > 0:
+                next_epoch = now_epoch + next_delay
+            else:
+                next_epoch = _compute_next_sync_epoch(now_epoch)
             sync_success = True
-            await debug_print(f"remote_sleep: ACK received, next delay {next_delay}s", "REMOTE_NODE")
+            await debug_print(f"remote_sleep: ACK received, next delay {next_delay}", "REMOTE_NODE")
         else:
             # No valid ACK – treat as failed sync
             next_epoch = _compute_next_sync_epoch(now_epoch)

@@ -50,6 +50,7 @@ Immediate tasks
 - [x] Add basic CI that runs readiness validation and build packaging (GitHub Actions, `.github/workflows/release-readiness.yml`).
 - [x] Fix OTA task errors: `_get_ota()` now validates module attributes and won't cache a partial/wrong module; wrappers check validity before calling; `ota.py` `maybe_gc` import wrapped in try/except with inline fallback.
 - [x] Suppress expected OTA idle noise: `apply_pending_update` no longer logs WARN when `OTA_PENDING_FILE` is missing (`ENOENT`).
+- [x] Add `LORA_SIMPLE_SESSION_ONLY` bring-up path: enforce direct HELLO/READY/END/ACK session flow, disable relay fallback on connect path, and allow HMAC-off simple envelope handling for diagnostics.
 
 Notes
 - README.md and CHANGELOG.md consolidated here; plugin READMEs are intentionally minimal as docs are centralized.
