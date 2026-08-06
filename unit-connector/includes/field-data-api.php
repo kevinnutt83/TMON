@@ -621,6 +621,50 @@ function tmon_uc_receive_data_history($request) {
     return rest_ensure_response(['status' => 'error', 'received' => false]);
 }
 
+if (!function_exists('tmon_uc_history_merge_numeric_fields')) {
+    function tmon_uc_history_merge_numeric_fields(array &$point, $raw, $prefix = '') {
+        if (!is_array($raw)) {
+            return;
+        }
+        foreach ($raw as $k => $v) {
+            $key = $prefix === '' ? (string) $k : ($prefix . '_' . (string) $k);
+            if (is_array($v)) {
+                tmon_uc_history_merge_numeric_fields($point, $v, $key);
+                continue;
+            }
+            if (is_bool($v)) {
+                if (!array_key_exists($key, $point)) {
+                    $point[$key] = $v ? 1 : 0;
+                }
+                continue;
+            }
+            if (is_numeric($v)) {
+                if (!array_key_exists($key, $point)) {
+                    $point[$key] = 0 + $v;
+                }
+                continue;
+            }
+            if (is_string($v)) {
+                $s = trim($v);
+                if ($s === '') {
+                    continue;
+                }
+                if (is_numeric($s)) {
+                    if (!array_key_exists($key, $point)) {
+                        $point[$key] = 0 + $s;
+                    }
+                    continue;
+                }
+                if (preg_match('/-?\d+(?:\.\d+)?/', $s, $m)) {
+                    if (!array_key_exists($key, $point)) {
+                        $point[$key] = 0 + $m[0];
+                    }
+                }
+            }
+        }
+    }
+}
+
 function tmon_uc_get_device_history($request) {
     global $wpdb;
     $unit_id = sanitize_text_field($request->get_param('unit_id'));
@@ -643,7 +687,26 @@ function tmon_uc_get_device_history($request) {
             }
         }
     }
-    $rows = $wpdb->get_results($wpdb->prepare("SELECT data, created_at FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s AND created_at >= %s ORDER BY created_at ASC", $unit_id, $since), ARRAY_A);
+    $rows_field = $wpdb->get_results(
+        $wpdb->prepare(
+            "SELECT data, created_at FROM {$wpdb->prefix}tmon_field_data WHERE unit_id=%s AND created_at >= %s",
+            $unit_id,
+            $since
+        ),
+        ARRAY_A
+    );
+    $rows_device = $wpdb->get_results(
+        $wpdb->prepare(
+            "SELECT data, created_at FROM {$wpdb->prefix}tmon_device_data WHERE unit_id=%s AND created_at >= %s",
+            $unit_id,
+            $since
+        ),
+        ARRAY_A
+    );
+    $rows = array_merge(is_array($rows_field) ? $rows_field : [], is_array($rows_device) ? $rows_device : []);
+    usort($rows, static function ($a, $b) {
+        return strcmp((string) ($a['created_at'] ?? ''), (string) ($b['created_at'] ?? ''));
+    });
     $points = [];
     foreach ($rows as $r) {
         $d = json_decode($r['data'], true);
@@ -669,6 +732,14 @@ function tmon_uc_get_device_history($request) {
         $point = function_exists('tmon_uc_normalize_telemetry_point')
             ? tmon_uc_normalize_telemetry_point($d, $ts)
             : $d;
+        // Keep raw top-level keys and recursively merged numeric fields so history
+        // reflects the same telemetry richness visible in sdata-oriented views.
+        foreach ($d as $k => $v) {
+            if (!array_key_exists($k, $point)) {
+                $point[$k] = $v;
+            }
+        }
+        tmon_uc_history_merge_numeric_fields($point, $d);
         if ($relay_states) {
             $point['relay'] = $relay_states;
         }
