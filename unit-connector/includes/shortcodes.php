@@ -800,6 +800,7 @@ add_shortcode('tmon_device_history', function($atts) {
     $default_unit = $requested_unit !== '' ? $requested_unit : $devices[0]['unit_id'];
     $select_id = 'tmon-history-select-' . wp_generate_password(6, false, false);
     $canvas_id = 'tmon-history-chart-' . wp_generate_password(8, false, false);
+    $metrics_id = 'tmon-history-metrics-' . wp_generate_password(8, false, false);
     $hours_id = 'tmon-history-hours-' . wp_generate_password(6, false, false);
     $csv_btn_id = 'tmon-history-csv-' . wp_generate_password(6, false, false);
     $ajax_root = esc_js(rest_url());
@@ -834,30 +835,27 @@ add_shortcode('tmon_device_history', function($atts) {
     // Export CSV button
     echo '<button id="'.$csv_btn_id.'" type="button" class="button" style="margin-left:8px;">Export CSV</button>';
     echo '<canvas id="'.$canvas_id.'" height="140"></canvas>';
+    echo '<div id="'.$metrics_id.'" class="tmon-history-metrics" style="margin-top:8px;font-size:12px;color:#50575e;"></div>';
     echo '<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>';
     ?>
     <script>
     (function(){
-		const localSelect = document.getElementById("<?php echo esc_js($select_id); ?>");
-		const hoursSel    = document.getElementById("<?php echo esc_js($hours_id); ?>");
-		const csvBtn      = document.getElementById("<?php echo esc_js($csv_btn_id); ?>");
-		const canvas      = document.getElementById("<?php echo esc_js($canvas_id); ?>");
-		if (!localSelect || !canvas) return;
+        const localSelect = document.getElementById("<?php echo esc_js($select_id); ?>");
+        const hoursSel = document.getElementById("<?php echo esc_js($hours_id); ?>");
+        const csvBtn = document.getElementById("<?php echo esc_js($csv_btn_id); ?>");
+        const canvas = document.getElementById("<?php echo esc_js($canvas_id); ?>");
+        const metricsBox = document.getElementById("<?php echo esc_js($metrics_id); ?>");
+        if (!localSelect || !canvas) return;
 
-		// Use page-level picker when present to avoid duplicate selectors in device template.
-		const externalSelect = document.getElementById('tmon-unit-picker');
-		if (externalSelect) { try { localSelect.style.display = 'none'; } catch(e){} }
-		const select = externalSelect || localSelect;
+        const externalSelect = document.getElementById('tmon-unit-picker');
+        if (externalSelect) { try { localSelect.style.display = 'none'; } catch(e){} }
+        const select = externalSelect || localSelect;
 
-		const ctx = canvas.getContext('2d');
-		const base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : "<?php echo $ajax_root; ?>".replace(/\/$/, "");
+        const ctx = canvas.getContext('2d');
+        const base = (window.wp && wp.apiSettings && wp.apiSettings.root) ? wp.apiSettings.root.replace(/\/$/, "") : "<?php echo $ajax_root; ?>".replace(/\/$/, "");
         const legendKey = "tmon_history_legend_" + (canvas.id || "default");
-		let chart = null;
-		let lastData = null;
-
-        try {
-            document.cookie = legendKey + "=; path=/; max-age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax";
-        } catch (e) {}
+        let chart = null;
+        let lastData = null;
 
         function loadLegendState() {
             try {
@@ -890,70 +888,127 @@ add_shortcode('tmon_device_history', function($atts) {
             } catch(e) {}
         }
 
-		// Robust relay value extraction (top-level keys and nested p.relay)
-		function relayStateValue(pt, num) {
-			if (!pt) return null;
-			const keys = [`relay${num}_on`, `relay_${num}_on`, `relay${num}`, `relay_${num}`, `r${num}`];
-			for (const k of keys) {
-				if (Object.prototype.hasOwnProperty.call(pt, k)) {
-					const v = pt[k];
-					if (typeof v === 'boolean') return v ? 1 : 0;
-					if (typeof v === 'number' ) return v;
-					if (typeof v === 'string') {
-						const lv = v.trim().toLowerCase();
-						if (['1','true','on','yes'].includes(lv)) return 1;
-						if (['0','false','off','no'].includes(lv)) return 0;
-						const nv = Number(v);
-						return isNaN(nv) ? null : nv;
-					}
-				}
-			}
-			if (pt && typeof pt.relay === 'object') {
-				for (const k of Object.keys(pt.relay)) {
-					let m = k.match(/^relay[_]?(\d+)_?on$/i) || k.match(/^relay[_]?(\d+)$/i) || k.match(/^r(\d+)$/i);
-					if (m && Number(m[1]) === num) {
-						const v = pt.relay[k];
-						if (typeof v === 'boolean') return v ? 1 : 0;
-						if (typeof v === 'number' ) return v;
-						if (typeof v === 'string') {
-							const lv = v.trim().toLowerCase();
-							if (['1','true','on','yes'].includes(lv)) return 1;
-							if (['0','false','off','no'].includes(lv)) return 0;
-							const nv = Number(v);
-							return isNaN(nv) ? null : nv;
-						}
-					}
-				}
-			}
-			return null;
-		}
+        function relayStateValue(pt, num) {
+            if (!pt) return null;
+            const keys = ["relay" + num + "_on", "relay_" + num + "_on", "relay" + num, "relay_" + num, "r" + num];
+            for (const k of keys) {
+                if (Object.prototype.hasOwnProperty.call(pt, k)) {
+                    const v = pt[k];
+                    if (typeof v === 'boolean') return v ? 1 : 0;
+                    if (typeof v === 'number') return v;
+                    if (typeof v === 'string') {
+                        const lv = v.trim().toLowerCase();
+                        if (['1','true','on','yes'].includes(lv)) return 1;
+                        if (['0','false','off','no'].includes(lv)) return 0;
+                        const nv = Number(v);
+                        return isNaN(nv) ? null : nv;
+                    }
+                }
+            }
+            if (pt && typeof pt.relay === 'object') {
+                for (const k of Object.keys(pt.relay)) {
+                    let m = k.match(/^relay[_]?(\d+)_?on$/i) || k.match(/^relay[_]?(\d+)$/i) || k.match(/^r(\d+)$/i);
+                    if (m && Number(m[1]) === num) {
+                        const v = pt.relay[k];
+                        if (typeof v === 'boolean') return v ? 1 : 0;
+                        if (typeof v === 'number') return v;
+                        if (typeof v === 'string') {
+                            const lv = v.trim().toLowerCase();
+                            if (['1','true','on','yes'].includes(lv)) return 1;
+                            if (['0','false','off','no'].includes(lv)) return 0;
+                            const nv = Number(v);
+                            return isNaN(nv) ? null : nv;
+                        }
+                    }
+                }
+            }
+            return null;
+        }
 
-		// Infer relay channel numbers from point keys when server doesn't return enabled_relays
-		function detectRelaysFromPoints(pts) {
-			const nums = new Set();
-			(pts || []).forEach(p => {
-				Object.keys(p || {}).forEach(k => {
-					let m = k.match(/^relay[_]?(\d+)_?on$/i) || k.match(/^relay[_]?(\d+)$/i) || k.match(/^r(\d+)$/i);
-					if (m) nums.add(parseInt(m[1], 10));
-				});
-				if (p && typeof p.relay === 'object') {
-					Object.keys(p.relay).forEach(k => {
-						let m = k.match(/^relay[_]?(\d+)_?on$/i) || k.match(/^relay[_]?(\d+)$/i) || k.match(/^r(\d+)$/i);
-						if (m) nums.add(parseInt(m[1], 10));
-					});
-				}
-			});
-			return Array.from(nums).sort((a,b)=>a-b);
-		}
+        function detectRelaysFromPoints(pts) {
+            const nums = new Set();
+            (pts || []).forEach(function(p){
+                Object.keys(p || {}).forEach(function(k){
+                    let m = k.match(/^relay[_]?(\d+)_?on$/i) || k.match(/^relay[_]?(\d+)$/i) || k.match(/^r(\d+)$/i);
+                    if (m) nums.add(parseInt(m[1], 10));
+                });
+                if (p && typeof p.relay === 'object') {
+                    Object.keys(p.relay).forEach(function(k){
+                        let m = k.match(/^relay[_]?(\d+)_?on$/i) || k.match(/^relay[_]?(\d+)$/i) || k.match(/^r(\d+)$/i);
+                        if (m) nums.add(parseInt(m[1], 10));
+                    });
+                }
+            });
+            return Array.from(nums).sort(function(a,b){ return a-b; });
+        }
 
         function numericOrNull(v) {
             if (v === null || typeof v === 'undefined' || v === '') return null;
             if (typeof v === 'number') return isFinite(v) ? v : null;
+            if (typeof v === 'boolean') return v ? 1 : 0;
             if (typeof v === 'string') {
-                const n = Number(v);
-                return isFinite(n) ? n : null;
+                const s = v.trim();
+                const n = Number(s);
+                if (isFinite(n)) return n;
+                const m = s.match(/-?\d+(?:\.\d+)?/);
+                if (m) {
+                    const ex = Number(m[0]);
+                    return isFinite(ex) ? ex : null;
+                }
             }
             return null;
+        }
+
+        function flattenNumericPoint(point) {
+            const out = {};
+            const skip = { relay: 1 };
+            function walk(obj, prefix) {
+                if (!obj || typeof obj !== 'object') return;
+                Object.keys(obj).forEach(function(key){
+                    const fullKey = prefix ? (prefix + '_' + key) : key;
+                    const val = obj[key];
+                    if (skip[fullKey]) return;
+                    if (val === null || typeof val === 'undefined' || val === '') return;
+                    if (typeof val === 'object' && !Array.isArray(val)) {
+                        walk(val, fullKey);
+                        return;
+                    }
+                    const num = numericOrNull(val);
+                    if (num !== null) out[fullKey] = num;
+                });
+            }
+            walk(point || {}, '');
+            return out;
+        }
+
+        function inferAxisFromKey(k) {
+            if (/humid|soil/i.test(k)) return 'y2';
+            if (/bar|press/i.test(k)) return 'y3';
+            if (/volt|mem|rssi|snr|relay|battery/i.test(k)) return 'y4';
+            return 'y1';
+        }
+
+        function prettifyKey(k) {
+            return String(k || '')
+                .replace(/^raw_payload_/, '')
+                .replace(/_/g, ' ')
+                .replace(/\b\w/g, function(c){ return c.toUpperCase(); });
+        }
+
+        function buildMetricSummary(flatPoints, datasets) {
+            if (!metricsBox) return;
+            if (!Array.isArray(flatPoints) || !flatPoints.length || !Array.isArray(datasets) || !datasets.length) {
+                metricsBox.innerHTML = '<em>No numeric telemetry fields found for selected period.</em>';
+                return;
+            }
+            const latest = flatPoints[flatPoints.length - 1] || {};
+            const rows = datasets.map(function(ds){
+                const key = ds.metricKey || ds.label || '';
+                const v = Object.prototype.hasOwnProperty.call(latest, key) ? latest[key] : null;
+                const val = (v === null || typeof v === 'undefined') ? 'n/a' : String(v);
+                return '<span style="display:inline-block;margin:2px 10px 2px 0;"><strong>' + String(ds.label || key) + ':</strong> ' + val + '</span>';
+            });
+            metricsBox.innerHTML = '<div><strong>Series:</strong> ' + datasets.length + '</div><div style="margin-top:4px;">' + rows.join('') + '</div>';
         }
 
         function buildDynamicDatasets(points) {
@@ -966,41 +1021,49 @@ add_shortcode('tmon_device_history', function($atts) {
             const preferred = {
                 temp_f: { label: 'Probe Temp (F)', yAxisID: 'y1' },
                 temp_c: { label: 'Probe Temp (C)', yAxisID: 'y1' },
+                cur_temp_f: { label: 'Probe Temp (F)', yAxisID: 'y1' },
+                cur_temp_c: { label: 'Probe Temp (C)', yAxisID: 'y1' },
                 device_temp_f: { label: 'Device Temp (F)', yAxisID: 'y1' },
                 device_temp_c: { label: 'Device Temp (C)', yAxisID: 'y1' },
+                cur_device_temp_f: { label: 'Device Temp (F)', yAxisID: 'y1' },
+                cur_device_temp_c: { label: 'Device Temp (C)', yAxisID: 'y1' },
                 humid: { label: 'Probe Humidity (%)', yAxisID: 'y2' },
+                cur_humid: { label: 'Probe Humidity (%)', yAxisID: 'y2' },
                 device_humid: { label: 'Device Humidity (%)', yAxisID: 'y2' },
+                cur_device_humid: { label: 'Device Humidity (%)', yAxisID: 'y2' },
                 bar: { label: 'Probe Pressure (hPa)', yAxisID: 'y3' },
+                cur_bar_pres: { label: 'Probe Pressure (hPa)', yAxisID: 'y3' },
                 device_bar: { label: 'Device Pressure (hPa)', yAxisID: 'y3' },
+                cur_device_bar_pres: { label: 'Device Pressure (hPa)', yAxisID: 'y3' },
                 volt: { label: 'Voltage (V)', yAxisID: 'y4' },
+                v: { label: 'Voltage (V)', yAxisID: 'y4' },
                 sys_voltage: { label: 'Sys Voltage (V)', yAxisID: 'y4' },
                 soil_moisture: { label: 'Soil Moisture', yAxisID: 'y2' },
+                cur_soil_moisture: { label: 'Soil Moisture', yAxisID: 'y2' },
                 free_mem: { label: 'Free Mem', yAxisID: 'y4' },
                 rssi: { label: 'WiFi RSSI', yAxisID: 'y4' },
                 lora_SigStr: { label: 'LoRa RSSI', yAxisID: 'y4' },
                 lora_snr: { label: 'LoRa SNR', yAxisID: 'y4' },
-                lowest_temp_f: { label: 'Lowest Temp (F)', yAxisID: 'y1', hidden: true },
-                highest_temp_f: { label: 'Highest Temp (F)', yAxisID: 'y1', hidden: true },
-                lowest_bar: { label: 'Lowest Pressure (hPa)', yAxisID: 'y3', hidden: true },
-                highest_bar: { label: 'Highest Pressure (hPa)', yAxisID: 'y3', hidden: true },
-                lowest_humid: { label: 'Lowest Humidity (%)', yAxisID: 'y2', hidden: true },
-                highest_humid: { label: 'Highest Humidity (%)', yAxisID: 'y2', hidden: true }
+                cpu_temp: { label: 'CPU Temp', yAxisID: 'y1' }
             };
             const colors = ['#e67e22', '#3498db', '#2ecc71', '#9b59b6', '#795548', '#1abc9c', '#34495e', '#e74c3c', '#16a085', '#f39c12'];
+            const flatPoints = (points || []).map(flattenNumericPoint);
             const keySet = {};
-            (points || []).forEach(function(p){
-                Object.keys(p || {}).forEach(function(k){
+            flatPoints.forEach(function(fp){
+                Object.keys(fp || {}).forEach(function(k){
                     if (skip[k]) return;
                     if (/^relay[_]?\d+_?on$/i.test(k) || /^relay[_]?\d+$/i.test(k) || /^r\d+$/i.test(k)) return;
-                    const v = numericOrNull(p[k]);
+                    const v = numericOrNull(fp[k]);
                     if (v !== null) keySet[k] = true;
                 });
             });
-            return Object.keys(keySet).sort().map(function(k, idx){
-                const meta = preferred[k] || { label: k.replace(/_/g, ' '), yAxisID: /humid|soil/i.test(k) ? 'y2' : (/bar|press/i.test(k) ? 'y3' : (/volt|mem|rssi|snr/i.test(k) ? 'y4' : 'y1')) };
+
+            const datasets = Object.keys(keySet).sort().map(function(k, idx){
+                const meta = preferred[k] || { label: prettifyKey(k), yAxisID: inferAxisFromKey(k) };
                 return {
                     label: meta.label,
-                    data: (points || []).map(function(p){ return numericOrNull((p || {})[k]); }),
+                    metricKey: k,
+                    data: flatPoints.map(function(fp){ return numericOrNull((fp || {})[k]); }),
                     borderColor: colors[idx % colors.length],
                     backgroundColor: 'transparent',
                     fill: false,
@@ -1011,22 +1074,25 @@ add_shortcode('tmon_device_history', function($atts) {
                     hidden: !!meta.hidden
                 };
             });
+
+            buildMetricSummary(flatPoints, datasets);
+            return datasets;
         }
 
-		function render(unit, hours) {
-			if (!unit) return;
-			const url = (hours === 'yoy')
-				? (base + "/tmon/v1/device/history-yoy?unit_id=" + encodeURIComponent(unit))
-				: (base + "/tmon/v1/device/history?unit_id=" + encodeURIComponent(unit) + "&hours=" + encodeURIComponent(hours));
-			fetch(url).then(r=>r.json()).then(data=>{
-				lastData = data;
-				const pts = Array.isArray(data.points) ? data.points : [];
-                const labels = pts.map(p => p.t || p.timestamp || p.ts || '');
+        function render(unit, hours) {
+            if (!unit) return;
+            const url = (hours === 'yoy')
+                ? (base + "/tmon/v1/device/history-yoy?unit_id=" + encodeURIComponent(unit))
+                : (base + "/tmon/v1/device/history?unit_id=" + encodeURIComponent(unit) + "&hours=" + encodeURIComponent(hours));
+            fetch(url).then(function(r){ return r.json(); }).then(function(data){
+                lastData = data;
+                const pts = Array.isArray(data.points) ? data.points : [];
+                const labels = pts.map(function(p){ return p.t || p.timestamp || p.ts || ''; });
 
-				const relayNums = Array.isArray(data.enabled_relays) && data.enabled_relays.length ? data.enabled_relays : detectRelaysFromPoints(pts);
-				const relayColors = ["#6c757d","#95a5a6","#34495e","#7f8c8d","#95a5a6","#2d3436","#636e72","#99a3ad"];
-                const relayDatasets = relayNums.map((num, idx) => {
-                    const values = pts.map(p => relayStateValue(p, num));
+                const relayNums = Array.isArray(data.enabled_relays) && data.enabled_relays.length ? data.enabled_relays : detectRelaysFromPoints(pts);
+                const relayColors = ["#6c757d","#95a5a6","#34495e","#7f8c8d","#95a5a6","#2d3436","#636e72","#99a3ad"];
+                const relayDatasets = relayNums.map(function(num, idx){
+                    const values = pts.map(function(p){ return relayStateValue(p, num); });
                     return {
                         label: "Relay " + num,
                         data: values,
@@ -1036,13 +1102,11 @@ add_shortcode('tmon_device_history', function($atts) {
                         yAxisID: "relay",
                         stepped: true,
                         pointRadius: 0,
-                        // ensure boolean numeric values so legend toggling behaves predictably
                         spanGaps: true
                     };
                 });
 
                 const datasets = buildDynamicDatasets(pts).concat(relayDatasets);
-
                 const persistedLegend = Object.assign({}, loadLegendState(), collectLegendState(chart));
                 datasets.forEach(function(ds){
                     if (ds && ds.label && Object.prototype.hasOwnProperty.call(persistedLegend, ds.label)) {
@@ -1050,7 +1114,6 @@ add_shortcode('tmon_device_history', function($atts) {
                     }
                 });
 
-                // Config for initial creation
                 const cfg = {
                     type: "line",
                     data: { labels: labels, datasets: datasets },
@@ -1078,58 +1141,63 @@ add_shortcode('tmon_device_history', function($atts) {
                             y2: { type: "linear", position: "right", grid: { drawOnChartArea: false } },
                             y3: { type: "linear", position: "right", grid: { drawOnChartArea: false } },
                             y4: { type: "linear", position: "left", grid: { drawOnChartArea: false }, suggestedMin: <?php echo $y4min; ?>, suggestedMax: <?php echo $y4max; ?> },
-                            relay: { type: "linear", position: "right", min: -0.1, max: 1.1, grid: { drawOnChartArea: false }, ticks: { stepSize: 1, callback: v => (v? 'On':'Off') } }
+                            relay: { type: "linear", position: "right", min: -0.1, max: 1.1, grid: { drawOnChartArea: false }, ticks: { stepSize: 1, callback: function(v){ return v ? 'On' : 'Off'; } } }
                         }
                     }
                 };
 
-                // Update existing chart in place to enable smooth shifting animation
                 if (chart) {
                     chart.data.labels = labels;
                     chart.data.datasets = datasets;
-                    chart.update('active'); // animate the transition
+                    chart.update('active');
                     saveLegendState(chart);
                 } else {
                     chart = new Chart(ctx, cfg);
                     saveLegendState(chart);
                 }
-            }).catch(err=>{
+            }).catch(function(err){
                 console.error("TMON history fetch error", err);
-                // keep UI subtle: don't throw alerts on network errors; attempt to console log
+                if (metricsBox) metricsBox.innerHTML = '<em>Error loading history data.</em>';
             });
         }
 
         function getCurrentUnit(){ return select.value; }
-		function getCurrentHours(){ return hoursSel.value; }
+        function getCurrentHours(){ return hoursSel.value; }
 
-		// Listen to page-level picker when present so graph follows page controls
-		if (externalSelect) externalSelect.addEventListener('change', function(){ render(getCurrentUnit(), getCurrentHours()); });
-		select.addEventListener('change', function(){ render(getCurrentUnit(), getCurrentHours()); });
-		hoursSel.addEventListener('change', function(){ render(getCurrentUnit(), getCurrentHours()); });
+        if (externalSelect) externalSelect.addEventListener('change', function(){ render(getCurrentUnit(), getCurrentHours()); });
+        select.addEventListener('change', function(){ render(getCurrentUnit(), getCurrentHours()); });
+        hoursSel.addEventListener('change', function(){ render(getCurrentUnit(), getCurrentHours()); });
 
-		render(getCurrentUnit(), getCurrentHours());
+        render(getCurrentUnit(), getCurrentHours());
 
-		// CSV export (unchanged behavior)
-		csvBtn.addEventListener('click', function(){
-			if (!lastData || !Array.isArray(lastData.points) || !lastData.points.length) { alert('No data to export.'); return; }
-			const pts = lastData.points;
-			let keys = new Set();
-			pts.forEach(p => Object.keys(p || {}).forEach(k => keys.add(k)));
-			keys = Array.from(keys);
-			let csv = keys.join(',') + '\n';
-			pts.forEach(p => {
-				csv += keys.map(k => (p[k] !== undefined ? JSON.stringify(p[k]) : '')).join(',') + '\n';
-			});
-			const blob = new Blob([csv], {type: 'text/csv'});
-			const url = URL.createObjectURL(blob);
-			const a = document.createElement('a'); a.href = url; a.download = 'tmon_history_' + getCurrentUnit() + '_' + getCurrentHours() + '.csv';
-			document.body.appendChild(a); a.click(); setTimeout(()=>{ document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
-		});
+        csvBtn.addEventListener('click', function(){
+            if (!lastData || !Array.isArray(lastData.points) || !lastData.points.length) { alert('No data to export.'); return; }
+            const pts = lastData.points;
+            let keys = new Set();
+            pts.forEach(function(p){ Object.keys(p || {}).forEach(function(k){ keys.add(k); }); });
+            keys = Array.from(keys);
+            let csv = keys.join(',') + '\n';
+            pts.forEach(function(p){
+                csv += keys.map(function(k){ return (p[k] !== undefined ? JSON.stringify(p[k]) : ''); }).join(',') + '\n';
+            });
+            const blob = new Blob([csv], {type: 'text/csv'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'tmon_history_' + getCurrentUnit() + '_' + getCurrentHours() + '.csv';
+            document.body.appendChild(a);
+            a.click();
+            setTimeout(function(){
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }, 100);
+        });
 
-		// Optional: auto-refresh
-		const refreshMs = <?php echo ($refresh*1000); ?>;
-		if (refreshMs > 0) setInterval(function(){ render(getCurrentUnit(), getCurrentHours()); }, refreshMs);
-	})();
+        const refreshMs = <?php echo ($refresh*1000); ?>;
+        if (refreshMs > 0) {
+            setInterval(function(){ render(getCurrentUnit(), getCurrentHours()); }, refreshMs);
+        }
+    })();
     </script>
     <?php
     echo '</div>';
