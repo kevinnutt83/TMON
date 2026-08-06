@@ -454,7 +454,10 @@ try:
 except Exception:
     pass
 
-if node_role == 'remote':
+is_remote = str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'remote'
+use_deep_sleep = is_remote and bool(getattr(settings, 'REMOTE_DISABLE_CONNECTLORA_LOOP', True))
+
+if use_deep_sleep:
     try:
         from remote_node import run_remote_deep_sleep
         run_remote_deep_sleep()
@@ -462,4 +465,7 @@ if node_role == 'remote':
         _record_startup_exception('run_remote_deep_sleep', e)
         asyncio.run(main())
 else:
+    # Continuous mode (or non-remote): run the full asyncio scheduler.
+    # connectLora() will be started inside main() because
+    # REMOTE_DISABLE_CONNECTLORA_LOOP is False.
     asyncio.run(main())

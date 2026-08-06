@@ -262,7 +262,11 @@ LORA_REPLAY_WINDOW = 8
 LORA_COUNTERS_FILE = '/logs/lora_counters.json'
 LORA_SESSION_SOFT_CRC = True
 REMOTE_USE_CONTROLLED_SESSION_ONLY = True
-REMOTE_DISABLE_CONNECTLORA_LOOP = False
+# When True  -> remote nodes use the battery-optimized deep-sleep cycle
+#              (run_remote_deep_sleep) and the continuous connectLora loop is skipped.
+# When False -> remote nodes run the continuous connectLora() loop
+#              (previous-version behaviour). Deep-sleep path is skipped.
+REMOTE_DISABLE_CONNECTLORA_LOOP = True
 REMOTE_REQUIRE_SUCCESSFUL_SYNC_BEFORE_SLEEP = True
 LORA_MINIMAL_TELEMETRY = True
 ENABLE_LORA_RELAY = False
