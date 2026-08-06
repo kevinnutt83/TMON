@@ -681,6 +681,10 @@ async def _sec_log(msg, min_interval_s=10):
     _sec_log_last[key] = now
     _sec_log_count[key] = cnt + 1
     try:
+        await debug_print(f"SEC: {msg}", "LORA")
+    except Exception:
+        pass
+    try:
         await log_error(msg)
     except Exception:
         try:
@@ -2153,6 +2157,15 @@ async def send_hello_and_wait_ready(use_fwd=False):
     uid = str(getattr(settings, 'UNIT_ID', '') or '')
     if not uid:
         return None
+    try:
+        secret = str(getattr(settings, 'LORA_HMAC_SECRET', '') or '')
+        if secret:
+            fp = _ub.hexlify(uhashlib.sha256(secret.encode()).digest()).decode()[:10]
+            await debug_print(f"LoRa HMAC secret fingerprint: {fp}", "LORA")
+        else:
+            await debug_print("LoRa HMAC secret is empty", "WARN")
+    except Exception:
+        pass
     await debug_print("=== SESSION START ===", "REMOTE_NODE")
 
     if use_fwd:
@@ -3161,6 +3174,12 @@ async def connectLora():
                     last_lora_activity_ts = current_time
                     msg, err = lora.recv()
                     if err == 0 and msg:
+                        # TEMP DIAGNOSTIC - log every raw packet the radio sees
+                        try:
+                            raw_preview = msg.rstrip(b'\x00')[:80]
+                            await debug_print(f"RAW RX ({len(msg)} bytes): {raw_preview!r}", "LORA_RX")
+                        except Exception as e:
+                            await debug_print(f"RAW RX log error: {e}", "LORA_RX")
                         await handle_incoming_packet(msg)
                     await ensure_lora_listening()
 
