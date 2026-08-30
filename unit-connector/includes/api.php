@@ -1,10 +1,55 @@
 <?php
 // Unit Connector API for remote install/update orchestrated by TMON Admin
+if (!function_exists('tmon_uc_route_auth_ok')) {
+    function tmon_uc_route_auth_ok($request = null) {
+        if (function_exists('current_user_can') && current_user_can('manage_options')) {
+            return true;
+        }
+
+        $provided = [];
+        if ($request && is_object($request) && method_exists($request, 'get_header')) {
+            $provided[] = (string) ($request->get_header('X-TMON-HUB') ?: '');
+            $provided[] = (string) ($request->get_header('X-TMON-ADMIN') ?: '');
+            $provided[] = (string) ($request->get_header('Authorization') ?: '');
+        }
+        $provided[] = (string) ($_SERVER['HTTP_X_TMON_HUB'] ?? '');
+        $provided[] = (string) ($_SERVER['HTTP_X_TMON_ADMIN'] ?? '');
+        $provided[] = (string) ($_SERVER['HTTP_AUTHORIZATION'] ?? '');
+
+        $expected = array_values(array_filter(array_unique([
+            (string) get_option('tmon_uc_hub_shared_key', ''),
+            (string) get_option('tmon_uc_admin_key', ''),
+            (string) get_option('tmon_admin_uc_key', ''),
+            (string) get_option('tmon_admin_hub_shared_key', ''),
+            (string) get_option('tmon_uc_hub_read_token', ''),
+        ]), static function($v) { return $v !== ''; }));
+
+        foreach ($provided as $value) {
+            $value = trim((string) $value);
+            if ($value === '') continue;
+            foreach ($expected as $expected_key) {
+                if (strpos(strtolower($value), 'bearer ') === 0) {
+                    $token = trim(substr($value, 7));
+                    if ($token !== '' && hash_equals((string) $expected_key, $token)) {
+                        return true;
+                    }
+                    continue;
+                }
+                if (hash_equals((string) $expected_key, $value)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+}
+
 add_action('rest_api_init', function(){
     register_rest_route('tmon/v1', '/uc/pull-install', [
         'methods' => 'POST',
         'callback' => 'tmon_uc_pull_install',
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_uc_route_auth_ok($request); },
     ]);
 });
 
@@ -171,13 +216,13 @@ add_action('rest_api_init', function() {
     register_rest_route('tmon/v1', '/device/diagnostics', [
         'methods' => 'POST',
         'callback' => 'tmon_uc_receive_device_diagnostics',
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_uc_route_auth_ok($request); },
     ]);
     // Alias namespace for firmware compatibility.
     register_rest_route('unit-connector/v1', '/device/diagnostics', [
         'methods' => 'POST',
         'callback' => 'tmon_uc_receive_device_diagnostics',
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_uc_route_auth_ok($request); },
     ]);
 
     $site_devices_cb = function($request) {
@@ -227,37 +272,37 @@ add_action('rest_api_init', function() {
     register_rest_route('tmon/v1', '/admin/site/devices', [
         'methods' => 'GET',
         'callback' => $site_devices_cb,
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_uc_route_auth_ok($request); },
     ]);
 
     register_rest_route('tmon/v1', '/admin/site/devices-count', [
         'methods' => 'GET',
         'callback' => $site_count_cb,
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_uc_route_auth_ok($request); },
     ]);
 
     register_rest_route('tmon-admin/v1', '/site/devices', [
         'methods' => 'GET',
         'callback' => $site_devices_cb,
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_uc_route_auth_ok($request); },
     ]);
 
     register_rest_route('tmon-admin/v1', '/admin/site/devices', [
         'methods' => 'GET',
         'callback' => $site_devices_cb,
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_uc_route_auth_ok($request); },
     ]);
 
     register_rest_route('tmon-admin/v1', '/site/devices-count', [
         'methods' => 'GET',
         'callback' => $site_count_cb,
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_uc_route_auth_ok($request); },
     ]);
 
     register_rest_route('tmon-admin/v1', '/admin/site/devices-count', [
         'methods' => 'GET',
         'callback' => $site_count_cb,
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_uc_route_auth_ok($request); },
     ]);
 });
 

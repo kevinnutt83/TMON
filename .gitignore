@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.bak
+micropython/pwd
+micropython/manifest.json.bak
+.vscode/*.code-workspace
+
+# Keep tracked defaults for runtime firmware config
+# micropython/settings.py is intentionally versioned.

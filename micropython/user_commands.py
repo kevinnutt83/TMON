@@ -414,9 +414,37 @@ async def handle_config_command(parts):
 
 
 async def handle_hmactest_command(parts):
-    """hmactest [message] - Print deterministic HMAC digest for cross-device verification."""
+    """hmactest [message] [counter] - Print the exact LoRa HMAC parity material."""
+    counter = 1
     if len(parts) > 1:
-        message = ' '.join(parts[1:])
+        msg_parts = []
+        for token in parts[1:]:
+            if token.lower() == '--counter' and len(msg_parts) < len(parts) - 1:
+                continue
+            if token.lower() == '--counter':
+                continue
+            if token.startswith('--counter='):
+                try:
+                    counter = int(token.split('=', 1)[1])
+                except ValueError:
+                    counter = 1
+                continue
+            msg_parts.append(token)
+        message = ' '.join(msg_parts) if msg_parts else 'TMON_HMAC_TEST'
+
+        if len(parts) > 2 and parts[-1].lstrip('-').isdigit():
+            try:
+                counter = int(parts[-1])
+            except ValueError:
+                pass
+
+        if '--counter' in parts:
+            idx = parts.index('--counter')
+            if idx + 1 < len(parts):
+                try:
+                    counter = int(parts[idx + 1])
+                except ValueError:
+                    counter = 1
     else:
         message = 'TMON_HMAC_TEST'
 
@@ -426,19 +454,22 @@ async def handle_hmactest_command(parts):
         return
 
     try:
-        from lora import hmac_sha256
-        digest = hmac_sha256(secret, message)
+        from lora import lora_hmac_digest, lora_hmac_material
+        material = lora_hmac_material(message, counter)
+        digest = lora_hmac_digest(secret, message, counter)
         full_hex = _ub.hexlify(digest).decode()
         trunc = int(getattr(settings, 'LORA_HMAC_TRUNCATE', 16))
         trunc_hex = full_hex[:max(1, trunc)]
 
         print('--- HMAC Test ---')
         print(f'Message     : {message}')
+        print(f'Counter     : {counter}')
+        print(f'Material    : {material.decode()}')
         print(f'Secret len  : {len(secret)}')
         print(f'Truncate    : {trunc}')
         print(f'HMAC full   : {full_hex}')
         print(f'HMAC trunc  : {trunc_hex}')
-        print('Use same message on base and remote; HMAC values must match exactly.')
+        print('Use the same message and counter on base and remote; HMAC values must match exactly.')
         print('-----------------')
     except Exception as e:
         print(f'hmactest failed: {e}')

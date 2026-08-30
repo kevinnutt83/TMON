@@ -11,7 +11,7 @@ TMON is an IoT platform for environmental monitoring using MicroPython-powered d
 
 - **MicroPython Firmware** (`micropython/`) — ESP32/RP2040 firmware supporting LoRa mesh, WiFi, sensor sampling, relay control, OLED display, and OTA updates.
 - **WordPress Plugins** — Admin (`tmon-admin/`) for device provisioning and fleet management; Unit Connector (`unit-connector/`) for field data ingestion and command dispatch.
-- **Current Version**: Firmware v2.06.x
+- **Current Version**: Follows `micropython/version.txt` (runtime value: v2.00.4g)
 
 ## Table of Contents
 1. [Architecture](#architecture)

@@ -27,19 +27,24 @@ def sha256_hex(path):
             h.update(chunk)
     return h.hexdigest()
 
+SKIP_NAMES = {'manifest.json', 'manifest.json.bak', 'pwd'}
+SKIP_SUFFIXES = ('.pyc', '.bak', '~')
+SKIP_DIRS = {'__pycache__', '.git'}
+
+
 def build_manifest(version=None):
     files = {}
     for root, dirs, filenames in os.walk(MP_DIR):
-        # skip .git and other hidden directories
+        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
         if '.git' in root.split(os.sep):
             continue
         for fn in filenames:
             rel = os.path.relpath(os.path.join(root, fn), MP_DIR)
-            # skip manifest files (we compute them)
-            if rel in ('manifest.json', os.path.basename(SIG_PATH)):
+            if rel in SKIP_NAMES or os.path.basename(rel) in SKIP_NAMES:
                 continue
-            # Skip editor temp/backups
-            if rel.endswith('~') or rel.startswith('.'):
+            if rel.endswith(SKIP_SUFFIXES) or rel.startswith('.'):
+                continue
+            if any(rel.endswith(suffix) for suffix in SKIP_SUFFIXES):
                 continue
             path = os.path.join(root, fn)
             files[rel.replace('\\','/')] = 'sha256:' + sha256_hex(path)
@@ -122,6 +127,30 @@ def sig_equal(manifest, sig_path, secret_env='OTA_MANIFEST_HMAC_SECRET'):
     except Exception:
         return False
 
+def sync_settings_version(version_value):
+    settings_path = os.path.join(REPO_ROOT, 'micropython', 'settings.py')
+    if not os.path.exists(settings_path):
+        return
+    try:
+        with open(settings_path, 'r') as fh:
+            text = fh.read()
+        marker = 'FIRMWARE_VERSION ='
+        if marker not in text:
+            return
+        start = text.index(marker)
+        end = text.find('\n# ============================================================', start)
+        if end == -1:
+            end = len(text)
+        replacement = 'FIRMWARE_VERSION = _read_firmware_version()'
+        if 'def _read_firmware_version()' not in text:
+            replacement = f'FIRMWARE_VERSION = "{version_value}"'
+        text = text[:start] + replacement + text[end:]
+        with open(settings_path, 'w') as fh:
+            fh.write(text)
+    except Exception:
+        pass
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--commit', action='store_true', help='git commit the new manifest (requires git & token in CI)')
@@ -151,6 +180,7 @@ def main():
 
     emit_manifest(manifest)
     emit_sig(manifest, secret_env=args.sig_secret_env)
+    sync_settings_version(version)
 
     if args.commit:
         git_commit(MANIFEST_PATH)

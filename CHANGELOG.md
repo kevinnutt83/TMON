@@ -2,6 +2,8 @@
 
 All notable changes to this project will be documented in this file.
 
+Note: dated headings such as v2.06.x are historical documentation snapshots. The runtime firmware version is sourced from `micropython/version.txt`, not from these dated changelog entries.
+
 ## v2.06.1 — 2025-01-XX
 - Documentation: Comprehensive README overhaul for micropython/ and root README.md.
   - Accurate device role descriptions (base, wifi, remote).

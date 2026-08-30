@@ -1,6 +1,10 @@
 import gc
 import os
-import utime as time
+
+try:
+    import utime as time
+except Exception:  # MicroPython fallback for host-side tests and local runs
+    import time
 
 import settings
 import sdata
@@ -84,6 +88,12 @@ def get_lora_health():
     except Exception:
         pass
 
+    remote_mode = str(_safe_attr(settings, 'NODE_TYPE', 'base') or 'base').lower() == 'remote'
+    loop_mode = 'deep_sleep' if remote_mode and bool(_safe_attr(settings, 'REMOTE_DISABLE_CONNECTLORA_LOOP', True)) else 'continuous'
+    session_mode = 'simple' if bool(_safe_attr(settings, 'LORA_SIMPLE_SESSION_ONLY', False)) else 'full'
+    paired_base = _safe_attr(settings, 'PAIRED_BASE_UID', '') or ''
+    chunk_size = int(_safe_attr(settings, 'LORA_CHUNK_SIZE', 0) or 0)
+
     return {
         'rssi': _safe_attr(sdata, 'lora_SigStr', None),
         'snr': _safe_attr(sdata, 'lora_snr', None),
@@ -93,6 +103,10 @@ def get_lora_health():
         'missed_syncs': max_missed,
         'remote_nodes': remote_count,
         'last_heartbeat_ts': latest_hb,
+        'loop_mode': loop_mode,
+        'session_mode': session_mode,
+        'paired_base_uid': paired_base,
+        'chunk_size': chunk_size,
     }
 
 

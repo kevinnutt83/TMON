@@ -80,6 +80,59 @@ if (!function_exists('tmon_admin_get_or_create_uc_shared_key')) {
     }
 }
 
+if (!function_exists('tmon_admin_route_auth_ok')) {
+    function tmon_admin_route_auth_ok($request = null) {
+        if (function_exists('current_user_can') && current_user_can('manage_options')) {
+            return true;
+        }
+
+        $expected = array_values(array_filter(array_unique([
+            (string) get_option('tmon_admin_uc_key', ''),
+            (string) get_option('tmon_admin_hub_shared_key', ''),
+            (string) get_option('tmon_uc_hub_shared_key', ''),
+            (string) get_option('tmon_uc_admin_key', ''),
+        ]), static function($v) { return $v !== ''; }));
+
+        $provided = [];
+        if ($request && is_object($request) && method_exists($request, 'get_header')) {
+            $provided[] = (string) ($request->get_header('X-TMON-HUB') ?: '');
+            $provided[] = (string) ($request->get_header('X-TMON-ADMIN') ?: '');
+            $provided[] = (string) ($request->get_header('X-TMON-READ') ?: '');
+        }
+        $provided[] = (string) ($_SERVER['HTTP_X_TMON_HUB'] ?? '');
+        $provided[] = (string) ($_SERVER['HTTP_X_TMON_ADMIN'] ?? '');
+        $provided[] = (string) ($_SERVER['HTTP_X_TMON_READ'] ?? '');
+
+        foreach ($provided as $value) {
+            $value = trim((string) $value);
+            if ($value === '') continue;
+            foreach ($expected as $expected_key) {
+                if (hash_equals((string) $expected_key, $value)) {
+                    return true;
+                }
+            }
+        }
+
+        $sites = get_option('tmon_admin_uc_sites', []);
+        if (is_array($sites)) {
+            foreach ($sites as $site_meta) {
+                if (!is_array($site_meta)) continue;
+                $site_uc_key = (string) ($site_meta['uc_key'] ?? '');
+                $site_read = (string) ($site_meta['read_token'] ?? '');
+                foreach ($provided as $value) {
+                    $value = trim((string) $value);
+                    if ($value === '') continue;
+                    if (($site_uc_key !== '' && hash_equals($site_uc_key, $value)) || ($site_read !== '' && hash_equals($site_read, $value))) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+}
+
 add_action('rest_api_init', function() {
     register_rest_route('tmon-admin/v1', '/status', [
         'methods' => 'GET',
@@ -595,7 +648,7 @@ add_action('rest_api_init', function() {
             update_option('tmon_admin_provision_history', $history);
             return rest_ensure_response(['ok' => true]);
         },
-        'permission_callback' => '__return_true'
+        'permission_callback' => function($request) { return tmon_admin_route_auth_ok($request); }
     ]);
 
     register_rest_route('tmon/v1', '/admin/uc-backfill', [

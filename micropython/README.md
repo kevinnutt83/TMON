@@ -1,4 +1,6 @@
-# TMON MicroPython Device Firmware (v2.06.x)
+# TMON MicroPython Device Firmware (runtime version follows micropython/version.txt)
+
+Current runtime version: v2.00.4g
 
 ## Overview
 MicroPython-based firmware for TMON environmental monitoring devices supporting LoRa mesh networking, WiFi connectivity, sensor sampling, relay control, and WordPress/Unit Connector integration.

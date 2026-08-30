@@ -1797,11 +1797,40 @@ async def handle_incoming_packet(msg):
 # LoRa Security - HMAC + per-remote counters + replay window
 # ---------------------------------------------------------------------------
 
+def _normalize_peer_counter_state(uid, state):
+    """Normalize persisted peer counter state for per-remote replay tracking."""
+    if not isinstance(state, dict):
+        state = {}
+    try:
+        tx = int(state.get('tx', 0))
+    except Exception:
+        tx = 0
+    try:
+        rx = int(state.get('rx', 0))
+    except Exception:
+        rx = 0
+    recent = state.get('recent', [])
+    if not isinstance(recent, list):
+        recent = []
+    cleaned = []
+    for value in recent:
+        try:
+            cleaned.append(int(value))
+        except Exception:
+            pass
+    state['tx'] = tx
+    state['rx'] = rx
+    state['recent'] = cleaned
+    return state
+
+
 def _load_counters():
     """Load persisted counters from disk."""
     global tx_counter, remote_counters
     try:
         path = getattr(settings, 'LORA_COUNTERS_FILE', '/logs/lora_counters.json')
+        if path and not os.path.exists(os.path.dirname(path) or '.'):
+            os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
         with open(path, 'r') as f:
             data = ujson.load(f)
         if isinstance(data, dict):
@@ -1811,10 +1840,8 @@ def _load_counters():
                 remote_counters = {}
                 for uid, vals in rc.items():
                     if isinstance(vals, dict):
-                        remote_counters[uid] = {
-                            'tx': int(vals.get('tx', 0)),
-                            'rx': int(vals.get('rx', 0))
-                        }
+                        peer = _normalize_peer_counter_state(uid, vals)
+                        remote_counters[str(uid)] = peer
                 settings.LORA_PEER_COUNTERS = remote_counters
     except Exception:
         pass
@@ -1824,14 +1851,15 @@ def _save_counters():
     """Persist counters to disk."""
     try:
         path = getattr(settings, 'LORA_COUNTERS_FILE', '/logs/lora_counters.json')
+        if path:
+            parent = os.path.dirname(path)
+            if parent and not os.path.exists(parent):
+                os.makedirs(parent, exist_ok=True)
         peer_map = getattr(settings, 'LORA_PEER_COUNTERS', None)
         if isinstance(peer_map, dict):
             for uid, vals in peer_map.items():
                 if isinstance(vals, dict):
-                    remote_counters[uid] = {
-                        'tx': int(vals.get('tx', 0)),
-                        'rx': int(vals.get('rx', 0))
-                    }
+                    remote_counters[str(uid)] = _normalize_peer_counter_state(uid, vals)
         data = {
             'tx_counter': tx_counter,
             'remote_counters': remote_counters
@@ -1860,6 +1888,18 @@ def hmac_sha256(key, msg):
     return uhashlib.sha256(opad + inner).digest()
 
 
+def lora_hmac_material(msg_str, counter=1):
+    """Return the exact signed material used for LoRa HMAC parity checks."""
+    if counter is None:
+        counter = 1
+    return ('%s|%d' % (str(msg_str), int(counter))).encode()
+
+
+def lora_hmac_digest(secret, msg_str, counter=1):
+    """Deterministic LoRa HMAC digest for a packet payload and counter."""
+    return hmac_sha256(str(secret).encode(), lora_hmac_material(msg_str, counter))
+
+
 async def _secure_message(msg_str, remote_uid=None):
     """
     Envelope: msg|CNT:n|HMAC:hex|CRC:XXXX
@@ -1881,19 +1921,20 @@ async def _secure_message(msg_str, remote_uid=None):
         uid = remote_uid or getattr(settings, 'UNIT_ID', 'local')
         if not hasattr(settings, 'LORA_PEER_COUNTERS') or settings.LORA_PEER_COUNTERS is None:
             settings.LORA_PEER_COUNTERS = {}
-        peer = settings.LORA_PEER_COUNTERS.setdefault(str(uid), {'tx': 0, 'rx': 0})
+        peer = settings.LORA_PEER_COUNTERS.setdefault(str(uid), {'tx': 0, 'rx': 0, 'recent': []})
+        peer = _normalize_peer_counter_state(str(uid), peer)
         peer['tx'] = int(peer.get('tx', 0)) + 1
         counter = int(peer['tx'])
-        remote_counters[str(uid)] = {'tx': int(peer['tx']), 'rx': int(peer.get('rx', 0))}
+        remote_counters[str(uid)] = {'tx': int(peer['tx']), 'rx': int(peer.get('rx', 0)), 'recent': list(peer.get('recent', []))}
 
         parts = [msg_str, 'CNT:%d' % counter]
 
         if getattr(settings, 'LORA_HMAC_ENABLED', True):
             secret = str(getattr(settings, 'LORA_HMAC_SECRET', '') or '')
             trunc = int(getattr(settings, 'LORA_HMAC_TRUNCATE', 16))
-            material = ('%s|%d' % (msg_str, counter)).encode()
+            material = lora_hmac_material(msg_str, counter)
             try:
-                digest = hmac_sha256(secret.encode(), material)
+                digest = lora_hmac_digest(secret, msg_str, counter)
                 if isinstance(digest, bytes):
                     hx = ''.join('{:02x}'.format(b) for b in digest)
                 else:
@@ -1998,9 +2039,9 @@ async def _unsecure_message(msg_str, remote_uid=None):
             if cnt is None:
                 await _sec_log('Invalid secure format (no CNT/HMAC)')
                 return None
-            material = ('%s|%d' % (body, cnt)).encode()
+            material = lora_hmac_material(body, cnt)
             try:
-                digest = hmac_sha256(secret.encode(), material)
+                digest = lora_hmac_digest(secret, body, cnt)
                 if isinstance(digest, bytes):
                     calc = ''.join('{:02x}'.format(b) for b in digest)[:trunc]
                 else:
@@ -2016,19 +2057,36 @@ async def _unsecure_message(msg_str, remote_uid=None):
             uid = str(remote_uid or 'unknown')
             if not hasattr(settings, 'LORA_PEER_COUNTERS') or settings.LORA_PEER_COUNTERS is None:
                 settings.LORA_PEER_COUNTERS = {}
-            peer = settings.LORA_PEER_COUNTERS.setdefault(uid, {'tx': 0, 'rx': 0})
-            last_rx = int(peer.get('rx', 0))
+            peer = settings.LORA_PEER_COUNTERS.setdefault(uid, {'tx': 0, 'rx': 0, 'recent': []})
+            peer = _normalize_peer_counter_state(uid, peer)
             window = int(getattr(settings, 'LORA_REPLAY_WINDOW', 8))
-
+            recent = peer.get('recent', [])
+            last_rx = int(peer.get('rx', 0))
             if body.startswith('HELLO:') or body.startswith('FWD:'):
                 peer['rx'] = cnt
-            elif cnt + window <= last_rx:
-                await _sec_log('Replay attack detected (cnt %d <= last_rx %d)' % (cnt, last_rx))
-                return None
-            elif cnt > last_rx:
-                peer['rx'] = cnt
+                recent = [v for v in recent if v > cnt - window]
+                recent.append(cnt)
+                peer['recent'] = recent[-window:]
+            else:
+                if cnt in recent:
+                    await _sec_log('Replay attack detected (duplicate cnt %d for %s)' % (cnt, uid))
+                    return None
+                stale_floor = max(0, last_rx - window)
+                if cnt < stale_floor:
+                    await _sec_log('Replay attack detected (cnt %d below floor %d for %s)' % (cnt, stale_floor, uid))
+                    return None
+                if cnt > last_rx:
+                    peer['rx'] = cnt
+                recent = [v for v in recent if v > cnt - window]
+                recent.append(cnt)
+                peer['recent'] = recent[-window:]
 
-            remote_counters[uid] = {'tx': int(peer.get('tx', 0)), 'rx': int(peer.get('rx', 0))}
+            remote_counters[uid] = {
+                'tx': int(peer.get('tx', 0)),
+                'rx': int(peer.get('rx', 0)),
+                'recent': list(peer.get('recent', []))
+            }
+            settings.LORA_PEER_COUNTERS[uid] = peer
             if cnt % 5 == 0:
                 _save_counters()
 

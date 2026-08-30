@@ -9,17 +9,22 @@ Goals
 - Security: remove hard-coded secrets, use persisted secure storage for credentials.
 
 Immediate tasks
-- Add unit/host tests for wprest async_http_request, send_field_data_log JSON shaping, and OTA manifest parsing.
-- Run static checks for Python 3 vs MicroPython compatibility (type hints, imports).
-- Increase remote LoRa ACK wait window so remotes do not deep-sleep before the base confirms the final chunked batch.
+- [x] Add unit/host tests for firmware version/manifest contract and staged validation coverage.
+- [x] Add unit/host tests for WPREST auth headers and compact field-data payload shaping.
+- [x] Add unit/host tests for LoRa HMAC parity helpers and session material determinism.
+- [x] Lock the remote deep-sleep loop gate and LoRa diagnostics contract: `REMOTE_DISABLE_CONNECTLORA_LOOP=False` should keep `connectLora()` continuous, and diagnostics should expose the active loop/session metadata.
+- [x] Run static checks for Python 3 vs MicroPython compatibility (type hints, imports).
+- [x] Re-verify the current slice after the host harness fix for MicroPython crypto module compatibility.
+- [x] Increase remote LoRa ACK wait window so remotes do not deep-sleep before the base confirms the final chunked batch.
 - Replace global LoRa replay counter with per-remote replay window + persisted counter file (`/logs/lora_counters.json`).
-- Require base ACK before trimming remote `field_data.log`, and append delivered remote records to local `data_history.log`.
-- Add fast retry when persisted remote next-sync is already overdue.
-- Stop aggressive LoRa watchdog resets from interrupting in-flight chunk reception; refresh activity timestamp on every RX path.
-- Switch LoRa secure metadata envelope to pipe-separated fields and add CLI `hmactest` parity check.
-- Reduce remote LoRa field payload to essential keys, use larger chunk size, and add base timeout-ACK recovery for incomplete FIELD_DATA bursts.
-- Enforce SX1262-safe packet ceiling (`LORA_MAX_PACKET_SIZE`) with safe send wrapper and adaptive chunk-size fallback for secured payload overhead.
-- Aggressive forced-ACK checker for incomplete FIELD_DATA bursts (age/partial/silent triggers) so remotes never wait indefinitely.
+- [x] Require base ACK before trimming remote `field_data.log`, and append delivered remote records to local `data_history.log`.
+- [x] Add fast retry when persisted remote next-sync is already overdue.
+- [x] Stop aggressive LoRa watchdog resets from interrupting in-flight chunk reception; refresh activity timestamp on every RX path.
+- [x] Protect sensitive UC/Admin endpoints: public check-in/status/version remain public, but all other device/installation/admin-sensitive routes now require manage_options or a valid hub/admin header.
+- [x] Switch LoRa secure metadata envelope to pipe-separated fields and add CLI `hmactest` parity check.
+- [x] Reduce remote LoRa field payload to essential keys, use larger chunk size, and add base timeout-ACK recovery for incomplete FIELD_DATA bursts.
+- [x] Enforce SX1262-safe packet ceiling (`LORA_MAX_PACKET_SIZE`) with safe send wrapper and adaptive chunk-size fallback for secured payload overhead.
+- [x] Aggressive forced-ACK checker for incomplete FIELD_DATA bursts (age/partial/silent triggers) so remotes never wait indefinitely.
 - [x] Break LoRa retry-storm deadlock: detect new burst at chunk `0` and clear stale FIELD_DATA partials; FORCE v3 checker now sends ACK after 5s chunk silence.
 - [x] Tune remote ACK/retry timing for field stability: `REMOTE_ACK_WAIT_S=45`, `REMOTE_FAILED_SYNC_RETRY_S=60`, `LORA_CHUNK_SIZE=120`.
 - [x] Add LoRa HELLO/READY session greeting (`HELLO:<uid>` / `READY:<uid>`) before remote burst send.
@@ -51,6 +56,7 @@ Immediate tasks
 - [x] Fix OTA task errors: `_get_ota()` now validates module attributes and won't cache a partial/wrong module; wrappers check validity before calling; `ota.py` `maybe_gc` import wrapped in try/except with inline fallback.
 - [x] Suppress expected OTA idle noise: `apply_pending_update` no longer logs WARN when `OTA_PENDING_FILE` is missing (`ENOENT`).
 - [x] Add `LORA_SIMPLE_SESSION_ONLY` bring-up path: enforce direct HELLO/READY/END/ACK session flow, disable relay fallback on connect path, and allow HMAC-off simple envelope handling for diagnostics.
+- [x] Slice 0: version.txt is the firmware version source of truth.
 
 Notes
 - README.md and CHANGELOG.md consolidated here; plugin READMEs are intentionally minimal as docs are centralized.

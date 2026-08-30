@@ -199,5 +199,12 @@ def writable(
         else:
 
             for b in model_instance.__bases__:
+                parent_hooks = getattr(b, '_hooks', None)
+                if parent_hooks is not None:
+                    model_instance._hooks = deepcopy(parent_hooks)
+                    break
+
+            if model_instance._hooks is None:
+                model_instance._hooks = Object()
 
        

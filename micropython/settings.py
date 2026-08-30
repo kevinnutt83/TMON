@@ -65,8 +65,21 @@ FIELD_DATA_MEM_LOW_WATERMARK = 40 * 1024
 UNIT_ID = "None"
 UNIT_Name = "No Device Name"
 NODE_TYPE = 'base'
-FIRMWARE_VERSION = "v2.00.4g"
 
+
+def _read_firmware_version():
+    for candidate in ('version.txt', '/version.txt'):
+        try:
+            with open(candidate, 'r') as fh:
+                value = (fh.read() or '').strip()
+                if value:
+                    return value
+        except Exception:
+            pass
+    return 'v2.00.4g'
+
+
+FIRMWARE_VERSION = _read_firmware_version()
 # ============================================================
 # BOOTSTRAP CREDENTIALS (Required for First-Boot Provisioning)
 # ============================================================
@@ -508,7 +521,9 @@ REST_HEADER_READ_KEY = 'X-TMON-READ'
 REST_HEADER_CONFIRM = 'X-TMON-CONFIRM'
 
 # Additions for LoRa OTA
+# Keep chunk sizes large enough to reduce field-data burst count while staying below
+# the SX1262-safe transmit ceiling for secured payloads.
 LORA_MAX_PACKET_SIZE = 200
-LORA_CHUNK_SIZE = 80
+LORA_CHUNK_SIZE = 120
 OTA_TEMP_FILE = '/ota_temp.py'
 
