@@ -38,7 +38,7 @@ add_action('rest_api_init', function () {
 			}
 			return rest_ensure_response($out);
 		},
-		'permission_callback' => '__return_true',
+		'permission_callback' => function($request) { return tmon_admin_route_auth_ok($request); },
 	));
 
 	// UC stages reprovision
@@ -76,7 +76,7 @@ add_action('rest_api_init', function () {
 			}
 			return rest_ensure_response(array('status' => 'ok'));
 		},
-		'permission_callback' => '__return_true',
+		'permission_callback' => function($request) { return tmon_admin_route_auth_ok($request); },
 	));
 
 	// UC pushes command/variables/functions/firmware update
@@ -110,13 +110,13 @@ add_action('rest_api_init', function () {
 			}
 			return rest_ensure_response(array('status' => 'ok'));
 		},
-		'permission_callback' => '__return_true',
+		'permission_callback' => function($request) { return tmon_admin_route_auth_ok($request); },
 	));
 
 	register_rest_route('tmon-admin/v1', '/uc/site-data', [
 		'methods' => WP_REST_Server::CREATABLE,
 		'callback' => 'tmon_admin_uc_receive_site_data',
-		'permission_callback' => '__return_true' // allow UC pushes (we validate hub key below)
+		'permission_callback' => function($request) { return tmon_admin_route_auth_ok($request); }
 	]);
 	register_rest_route('tmon-admin/v1', '/uc/site-data', [
 		'methods' => WP_REST_Server::READABLE,

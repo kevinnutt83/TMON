@@ -489,7 +489,7 @@ add_action('rest_api_init', function() {
     // Accept a device chunk-store snapshot (posted by device firmware or base)
     register_rest_route('tmon/v1', '/admin/chunk-store', [
         'methods' => 'POST',
-        'permission_callback' => '__return_true', // we validate hub key inside
+        'permission_callback' => function($request) { return tmon_uc_route_auth_ok($request); }, // we validate hub key inside
         'callback' => function($request) {
             $expected = get_option('tmon_uc_shared_key', '') ?: get_option('tmon_admin_uc_key', '');
             $provided = '';
@@ -516,7 +516,7 @@ add_action('rest_api_init', function() {
     // Accept lora status snapshots
     register_rest_route('tmon/v1', '/admin/lora-status', [
         'methods' => 'POST',
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_uc_route_auth_ok($request); },
         'callback' => function($request) {
             $expected = get_option('tmon_uc_shared_key', '') ?: get_option('tmon_admin_uc_key', '');
             $provided = '';
@@ -543,7 +543,7 @@ add_action('rest_api_init', function() {
     // Accept admin->UC commands: enqueue into local tmon_device_commands table
     register_rest_route('tmon/v1', '/device/command', [
         'methods' => 'POST',
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_uc_route_auth_ok($request); },
         'callback' => function($request) {
             // auth: allow either Hub key or WP capability if authenticated
             $expected = get_option('tmon_admin_uc_key', '') ?: get_option('tmon_uc_shared_key', '');
@@ -584,7 +584,7 @@ add_action('rest_api_init', function() {
     // Store a chunk-store snapshot for historical analysis
     register_rest_route('tmon/v1', '/admin/chunk-store-history', [
         'methods' => 'POST',
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_uc_route_auth_ok($request); },
         'callback' => function($request) {
             $expected = get_option('tmon_uc_shared_key','') ?: get_option('tmon_admin_uc_key','');
             $provided = $_SERVER['HTTP_X_TMON_HUB'] ?? ($_SERVER['HTTP_X_TMON_ADMIN'] ?? '');
@@ -604,7 +604,7 @@ add_action('rest_api_init', function() {
     // Append shell log chunk from a device (POST)
     register_rest_route('tmon/v1', '/device/shell-log', [
         'methods' => 'POST',
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_uc_route_auth_ok($request); },
         'callback' => function($request) {
             $params = $request->get_json_params();
             $unit = sanitize_text_field($params['unit_id'] ?? '');
@@ -675,7 +675,7 @@ add_action('rest_api_init', function() {
     // POST backfill from Admin -> UC (customers + locations)
     register_rest_route('tmon/v1', '/admin/backfill', [
         'methods' => 'POST',
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_uc_route_auth_ok($request); },
         'callback' => function($request) {
             // authenticate via hub key when configured
             $expected = get_option('tmon_uc_shared_key', '') ?: get_option('tmon_admin_uc_key', '');

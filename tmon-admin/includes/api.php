@@ -247,7 +247,7 @@ add_action('rest_api_init', function() {
             ]);
             return rest_ensure_response(['status' => 'ok', 'id' => $wpdb->insert_id]);
         },
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_admin_route_auth_ok($request); },
     ]);
 
     // Ingest unknown device reports from Unit Connectors (auto-provisioning queue)
@@ -277,13 +277,13 @@ add_action('rest_api_init', function() {
             }
             return rest_ensure_response(['status' => 'ok']);
         },
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_admin_route_auth_ok($request); },
     ]);
 
     // Proxy claim endpoint: UC forwards claims here using shared hub key header
     register_rest_route('tmon-admin/v1', '/proxy/claim', [
         'methods' => 'POST',
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_admin_route_auth_ok($request); },
         'callback' => function($request) {
             // Authenticate via shared hub key
             $expected = get_option('tmon_admin_uc_key', '');
@@ -337,7 +337,7 @@ add_action('rest_api_init', function() {
                 'response' => $result['body'],
             ]);
         },
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_admin_route_auth_ok($request); },
     ]);
 
     // UC confirms back
@@ -356,13 +356,13 @@ add_action('rest_api_init', function() {
             ]);
             return rest_ensure_response(['status' => 'ok']);
         },
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_admin_route_auth_ok($request); },
     ]);
 
     // Pairing: UC calls hub; hub saves mapping and responds with hub_key
     register_rest_route('tmon-admin/v1', '/uc/pair', [
         'methods' => 'POST',
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_admin_route_auth_ok($request); },
         'callback' => function($request){
             $site_url = esc_url_raw($request->get_param('site_url'));
             $norm_url = function_exists('tmon_admin_normalize_url') ? tmon_admin_normalize_url($site_url) : $site_url;
@@ -424,7 +424,7 @@ add_action('rest_api_init', function() {
     // Lifecycle endpoint: UC registers/requests credentials using its local uc_key.
     register_rest_route('tmon-admin/v1', '/uc/key/register', [
         'methods' => 'POST',
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_admin_route_auth_ok($request); },
         'callback' => function($request){
             $site_url = esc_url_raw($request->get_param('site_url'));
             $uc_key = sanitize_text_field($request->get_param('uc_key'));
@@ -461,7 +461,7 @@ add_action('rest_api_init', function() {
     // Lifecycle endpoint: UC refreshes token/keys using current hub shared key.
     register_rest_route('tmon-admin/v1', '/uc/key/refresh', [
         'methods' => 'POST',
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_admin_route_auth_ok($request); },
         'callback' => function($request){
             $site_url = esc_url_raw($request->get_param('site_url'));
             $rotate_hub_key = !empty($request->get_param('rotate_hub_key'));
@@ -496,7 +496,7 @@ add_action('rest_api_init', function() {
     // Read-only: list provisioned devices for Unit Connector (authenticated via hub shared key)
     register_rest_route('tmon-admin/v1', '/provisioned-devices', [
         'methods' => 'GET',
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_admin_route_auth_ok($request); },
         'callback' => function($request){
             // Authenticate via shared hub key in header X-TMON-HUB (or X-TMON-ADMIN for compatibility)
             $expected = tmon_admin_get_expected_uc_key();
@@ -653,7 +653,7 @@ add_action('rest_api_init', function() {
 
     register_rest_route('tmon/v1', '/admin/uc-backfill', [
         'methods' => 'POST',
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_admin_route_auth_ok($request); },
         'callback' => function($request) {
             // Validate hub key when present
             $expected = get_option('tmon_admin_uc_key','');
@@ -952,20 +952,20 @@ add_action('rest_api_init', function () {
     register_rest_route('tmon-admin/v1', '/device/diagnostics', [
         'methods' => 'POST',
         'callback' => 'tmon_admin_receive_device_diagnostics',
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_admin_route_auth_ok($request); },
     ]);
 
     register_rest_route('tmon-admin/v1', '/device/diagnostics', [
         'methods' => 'GET',
         'callback' => 'tmon_admin_list_device_diagnostics',
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_admin_route_auth_ok($request); },
     ]);
 });
 
 add_action('rest_api_init', function () {
     register_rest_route('tmon-admin/v1', '/uc/sync-devices', [
         'methods' => 'POST',
-        'permission_callback' => '__return_true',
+        'permission_callback' => function($request) { return tmon_admin_route_auth_ok($request); },
         'callback' => function (WP_REST_Request $request) {
             $expected = get_option('tmon_admin_uc_key', '') ?: get_option('tmon_admin_hub_shared_key', '');
             $provided = '';

@@ -308,18 +308,18 @@ add_action( 'rest_api_init', function () {
 		register_rest_route( $ns, '/device/field-data', array(
 			'methods'             => 'POST',
 			'callback'            => 'tmon_uc_handle_field_data',
-			'permission_callback' => '__return_true', // device posts may be unauthenticated (we store/inspect)
+			'permission_callback' => 'tmon_uc_rest_permission_check',
 		) );
 
 		register_rest_route( $ns, '/device/commands', array(
-			array( 'methods' => 'GET',  'callback' => 'tmon_uc_handle_commands_get',  'permission_callback' => '__return_true' ),
-			array( 'methods' => 'POST', 'callback' => 'tmon_uc_handle_commands_post', 'permission_callback' => '__return_true' ),
+			array( 'methods' => 'GET',  'callback' => 'tmon_uc_handle_commands_get',  'permission_callback' => 'tmon_uc_rest_permission_check' ),
+			array( 'methods' => 'POST', 'callback' => 'tmon_uc_handle_commands_post', 'permission_callback' => 'tmon_uc_rest_permission_check' ),
 		) );
 
 		// Admin-scoped commands (devices try admin path first)
 		register_rest_route( $ns, '/admin/device/commands', array(
-			array( 'methods' => 'GET',  'callback' => 'tmon_uc_handle_commands_get',  'permission_callback' => '__return_true' ),
-			array( 'methods' => 'POST', 'callback' => 'tmon_uc_handle_commands_post', 'permission_callback' => '__return_true' ),
+			array( 'methods' => 'GET',  'callback' => 'tmon_uc_handle_commands_get',  'permission_callback' => 'tmon_uc_rest_permission_check' ),
+			array( 'methods' => 'POST', 'callback' => 'tmon_uc_handle_commands_post', 'permission_callback' => 'tmon_uc_rest_permission_check' ),
 		) );
 
 		register_rest_route( $ns, '/device/command/confirm', array(
@@ -330,7 +330,7 @@ add_action( 'rest_api_init', function () {
 
 		register_rest_route( $ns, '/device/file', array(
 			array( 'methods' => 'POST', 'callback' => 'tmon_uc_handle_file_post', 'permission_callback' => 'tmon_uc_rest_permission_check' ),
-			array( 'methods' => 'GET',  'callback' => function( $r ){ return rest_ensure_response( array('ok'=>false,'message'=>'file download not implemented') ); }, 'permission_callback' => '__return_true' ),
+			array( 'methods' => 'GET',  'callback' => function( $r ){ return rest_ensure_response( array('ok'=>false,'message'=>'file download not implemented') ); }, 'permission_callback' => function() { return current_user_can('manage_options'); } ),
 		) );
 
 		register_rest_route( $ns, '/admin/device/settings-applied', array(
@@ -348,7 +348,7 @@ add_action( 'rest_api_init', function () {
 		register_rest_route( $ns, '/device/settings/(?P<unit_id>[\w\-\_]+)', array(
 			'methods'             => 'GET',
 			'callback'            => 'tmon_uc_handle_settings_get',
-			'permission_callback' => '__return_true',
+			'permission_callback' => 'tmon_uc_rest_permission_check',
 			'args'                => array( 'unit_id' => array( 'required' => true ) ),
 		) );
 
@@ -356,7 +356,7 @@ add_action( 'rest_api_init', function () {
 		register_rest_route( $ns, '/admin/device/check-in', array(
 			'methods'             => 'POST',
 			'callback'            => 'tmon_uc_handle_checkin',
-			'permission_callback' => '__return_true',
+			'permission_callback' => function($request) { return tmon_uc_route_auth_ok($request); },
 		) );
 	}
 
@@ -364,14 +364,14 @@ add_action( 'rest_api_init', function () {
 	register_rest_route( 'tmon-admin/v1', '/device/check-in', array(
 		'methods'             => 'POST',
 		'callback'            => 'tmon_uc_handle_checkin',
-		'permission_callback' => '__return_true',
+		'permission_callback' => function($request) { return tmon_uc_route_auth_ok($request); },
 	) );
 
 	// Backwards compat: v2 checkin path
 	register_rest_route( 'tmon-admin/v2', '/device/checkin', array(
 		'methods'             => 'POST',
 		'callback'            => 'tmon_uc_handle_checkin',
-		'permission_callback' => '__return_true',
+		'permission_callback' => function($request) { return tmon_uc_route_auth_ok($request); },
 	) );
 
 } );

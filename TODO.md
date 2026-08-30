@@ -20,7 +20,8 @@ Immediate tasks
 - [x] Require base ACK before trimming remote `field_data.log`, and append delivered remote records to local `data_history.log`.
 - [x] Add fast retry when persisted remote next-sync is already overdue.
 - [x] Stop aggressive LoRa watchdog resets from interrupting in-flight chunk reception; refresh activity timestamp on every RX path.
-- [x] Protect sensitive UC/Admin endpoints: public check-in/status/version remain public, but all other device/installation/admin-sensitive routes now require manage_options or a valid hub/admin header.
+- [x] Protect sensitive UC/Admin endpoints: public check-in/status/version remain public, but all other device/installation/admin-sensitive routes now require manage_options or a valid hub/admin header. This is enforced via the shared `tmon_admin_route_auth_ok` and `tmon_uc_route_auth_ok` callbacks, while bootstrap/status/version endpoints remain intentionally public.
+- [x] Clean tracked generated artifacts (`__pycache__`, `manifest.json.bak`, `micropython/pwd`) out of Git tracking while keeping repository ignores in place.
 - [x] Switch LoRa secure metadata envelope to pipe-separated fields and add CLI `hmactest` parity check.
 - [x] Reduce remote LoRa field payload to essential keys, use larger chunk size, and add base timeout-ACK recovery for incomplete FIELD_DATA bursts.
 - [x] Enforce SX1262-safe packet ceiling (`LORA_MAX_PACKET_SIZE`) with safe send wrapper and adaptive chunk-size fallback for secured payload overhead.
