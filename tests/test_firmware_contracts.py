@@ -290,6 +290,32 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertEqual(diag['chunk_size'], 96)
         self.assertEqual(diag['remote_nodes'], 2)
 
+    def test_lora_session_receive_and_uid_contracts(self):
+        lora_path = os.path.join(ROOT, 'micropython', 'lora.py')
+        with open(lora_path, 'r', encoding='utf-8') as handle:
+            source = handle.read()
+
+        listener_start = source.index('async def ensure_lora_listening():')
+        listener_end = source.index('\nasync def init_lora():', listener_start)
+        listener = source[listener_start:listener_end]
+        self.assertNotIn('lora.recv(', listener)
+        self.assertIn('startReceive', listener)
+        self.assertIn('setBlockingCallback(False, callback=_lora_irq_callback)', source)
+        self.assertIn('def _usable_unit_id():', source)
+        self.assertIn("uid.lower() in ('none', 'null', 'unknown', 'n/a')", source)
+        self.assertIn("parts[0] == 'READY' and parts[1] == uid", source)
+        self.assertIn("parts[0] == 'ACK'", source)
+        self.assertIn("parts[1] == uid and parts[2] == 'NEXT'", source)
+        self.assertIn("await _record_lora_session_failure('READY timeout')", source)
+        self.assertIn("await _record_lora_session_failure('Final ACK timeout')", source)
+
+        remote_path = os.path.join(ROOT, 'micropython', 'remote_node.py')
+        with open(remote_path, 'r', encoding='utf-8') as handle:
+            remote_source = handle.read()
+        self.assertIn('_usable_unit_id()', remote_source)
+        self.assertIn('load_persisted_node_type', remote_source)
+        self.assertIn("expected remote role but persisted/runtime role is", remote_source)
+
 
 if __name__ == '__main__':
     unittest.main()

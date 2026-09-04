@@ -13,7 +13,7 @@ except Exception:
     random = None
 
 from sampling import sampleEnviroment
-from lora import init_lora, ensure_lora_listening, send_field_data_controlled
+from lora import init_lora, ensure_lora_listening, send_field_data_controlled, _usable_unit_id
 from utils import (
     debug_print,
     log_exception,
@@ -143,9 +143,15 @@ async def _run_remote_cycle_once():
 
     sync_success = False
     next_epoch = None
+    lora_init_ok = False
+
+    if not _usable_unit_id():
+        await debug_print('remote_sleep: UNIT_ID not provisioned; skipping LoRa TX', 'ERROR')
+        return _compute_next_sync_epoch(_now_epoch()) - _now_epoch(), False
 
     try:
-        if not await init_lora():
+        lora_init_ok = await init_lora()
+        if not lora_init_ok:
             raise RuntimeError('remote_sleep: LoRa init failed')
 
         await ensure_lora_listening()
@@ -164,7 +170,11 @@ async def _run_remote_cycle_once():
             # No valid ACK – treat as failed sync
             next_epoch = _compute_next_sync_epoch(now_epoch)
             sync_success = False
-            await debug_print("remote_sleep: No valid ACK – sync failed", "REMOTE_NODE")
+            await debug_print(
+                'remote_sleep: No valid ACK – sync failed uid=%s node_type=%s lora_init=%s' %
+                (_usable_unit_id(), getattr(settings, 'NODE_TYPE', ''), lora_init_ok),
+                'ERROR'
+            )
 
     except Exception as e:
         await debug_print(f"remote_sleep: LoRa cycle error: {e}", "ERROR")
@@ -186,6 +196,22 @@ async def _run_remote_cycle_once():
 
 
 def run_remote_deep_sleep():
+    try:
+        from utils import load_persisted_node_type
+        persisted_role = load_persisted_node_type()
+    except Exception:
+        persisted_role = None
+    runtime_role = str(getattr(settings, 'NODE_TYPE', '') or '').strip().lower()
+    if str(persisted_role or '').strip().lower() != 'remote':
+        try:
+            asyncio.run(debug_print(
+                'remote_sleep: expected remote role but persisted/runtime role is %s/%s' %
+                (persisted_role or '', runtime_role), 'ERROR'
+            ))
+        except Exception:
+            pass
+        return
+
     sleep_s = max(30, _safe_int(getattr(settings, 'LORA_SYNC_RATE', 300), 300))
     sync_success = False
 

@@ -222,6 +222,7 @@ proxy_last_ts = {}
 last_rx_ts = 0
 last_lora_activity_ts = 0
 lora_rx_queue = SimpleQueue(maxsize=10)
+lora_rx_pending = False
 _sec_log_last = {}
 _sec_log_count = {}
 
@@ -699,7 +700,7 @@ async def _log_security_error(key, message, interval_s=5):
     await _sec_log(message, min_interval_s=interval_s)
 
 async def hard_reset_lora():
-    global lora
+    global lora, lora_rx_pending
     await debug_print("Hard LoRa reset + full pin isolation (v2.01.6)", "LORA")
     if lora:
         try:
@@ -744,23 +745,87 @@ async def hard_reset_lora():
         pass
 
     lora = None
+    lora_rx_pending = False
     gc.collect()
     await asyncio.sleep_ms(500)
     await debug_print("Hard reset sequence complete", "LORA")
 
 async def ensure_lora_listening():
     global lora
-    if lora is None or not hasattr(lora, 'recv'):
+    if lora is None:
         return False
     try:
-        lora.recv(0, False, 0)
-        return True
-    except Exception:
-        lora = None
+        if hasattr(lora, 'startReceive'):
+            state = lora.startReceive()
+            if state not in (0, None, True):
+                await debug_print('ensure_lora_listening startReceive state=%s' % state, 'WARN')
+            return True
+        if hasattr(lora, 'setOperatingMode'):
+            mode = getattr(lora, 'MODE_RX', getattr(lora, 'RX', 1))
+            lora.setOperatingMode(mode)
+            return True
+        await debug_print('ensure_lora_listening: no RX arming API', 'ERROR')
+        return False
+    except Exception as e:
+        await debug_print('ensure_lora_listening error: %s' % e, 'ERROR')
+        try:
+            await log_error('ensure_lora_listening: %s' % e)
+        except Exception:
+            pass
         return False
 
+
+def _lora_irq_callback(events=0):
+    global lora_rx_pending, last_lora_activity_ts
+    last_lora_activity_ts = time.time()
+    try:
+        rx_done = getattr(lora, 'RX_DONE', 0)
+        if events is None or (events & rx_done):
+            lora_rx_pending = True
+    except Exception:
+        lora_rx_pending = True
+
+
+def _lora_rx_ready():
+    try:
+        if lora is not None and hasattr(lora, '_events'):
+            rx_done = getattr(lora, 'RX_DONE', 0)
+            if rx_done and (lora._events() & rx_done):
+                return True
+    except Exception as e:
+        try:
+            asyncio.create_task(debug_print('LoRa RX event check error: %s' % e, 'WARN'))
+        except Exception:
+            pass
+    return bool(globals().get('lora_rx_pending', False))
+
+
+async def _record_lora_session_failure(reason):
+    await debug_print(reason, 'ERROR')
+    try:
+        await log_error(reason)
+    except Exception:
+        pass
+    try:
+        if sdata is not None:
+            sdata.error_count = int(getattr(sdata, 'error_count', 0) or 0) + 1
+    except Exception:
+        pass
+    try:
+        label = 'No READY' if 'READY' in reason else ('No HELLO' if 'HELLO' in reason else 'No ACK')
+        await display_message('LoRa ' + label, 2)
+    except Exception:
+        pass
+
+
+def _usable_unit_id():
+    uid = str(getattr(settings, 'UNIT_ID', '') or '').strip()
+    if not uid or uid.lower() in ('none', 'null', 'unknown', 'n/a'):
+        return ''
+    return uid
+
 async def init_lora():
-    global lora
+    global lora, lora_rx_pending
     await debug_print("LoRa bulletproof init sequence (v2.01.6)", "LORA")
     await display_message("LoRa Init...", 1)
     for attempt in range(20):
@@ -788,7 +853,11 @@ async def init_lora():
             )
             await debug_print(f'begin() attempt {attempt+1}: status {status}', 'LORA')
             if status == 0:
-                lora.setBlockingCallback(False)
+                lora_rx_pending = False
+                try:
+                    lora.setBlockingCallback(False, callback=_lora_irq_callback)
+                except TypeError:
+                    lora.setBlockingCallback(False, _lora_irq_callback)
                 await ensure_lora_listening()
                 await debug_print("LoRa initialized successfully", "LORA")
                 await display_message("LoRa OK", 1.5)
@@ -1912,7 +1981,7 @@ async def _secure_message(msg_str, remote_uid=None):
 
         # Simple-mode / diagnostics path: when HMAC is disabled, keep payload plain
         # and optionally append only CRC.
-        if not bool(getattr(settings, 'LORA_HMAC_ENABLED', True)):
+        if not bool(getattr(settings, 'LORA_HMAC_ENABLED', False)):
             if bool(getattr(settings, 'LORA_CRC_ENABLED', False) or getattr(settings, 'CRC_ON', False)):
                 c = crc16_ccitt(msg_str.encode() if not isinstance(msg_str, bytes) else msg_str)
                 return '%s|CRC:%s' % (msg_str, _format_crc(c))
@@ -1929,7 +1998,7 @@ async def _secure_message(msg_str, remote_uid=None):
 
         parts = [msg_str, 'CNT:%d' % counter]
 
-        if getattr(settings, 'LORA_HMAC_ENABLED', True):
+        if getattr(settings, 'LORA_HMAC_ENABLED', False):
             secret = str(getattr(settings, 'LORA_HMAC_SECRET', '') or '')
             trunc = int(getattr(settings, 'LORA_HMAC_TRUNCATE', 16))
             material = lora_hmac_material(msg_str, counter)
@@ -1977,7 +2046,7 @@ async def _unsecure_message(msg_str, remote_uid=None):
         if '|' not in raw:
             if raw.startswith('HELLO:') or raw.startswith('READY:') or raw.startswith('ACK:') or raw.startswith('END:') or raw.startswith('FWD:') or raw.startswith('TYPE:'):
                 return raw
-            if getattr(settings, 'LORA_HMAC_REJECT_UNSIGNED', True) and getattr(settings, 'LORA_HMAC_ENABLED', True):
+            if getattr(settings, 'LORA_HMAC_REJECT_UNSIGNED', False) and getattr(settings, 'LORA_HMAC_ENABLED', False):
                 await _sec_log('Invalid secure format (no CNT/HMAC)')
                 return None
             return raw
@@ -2000,10 +2069,10 @@ async def _unsecure_message(msg_str, remote_uid=None):
             elif pu.upper().startswith('HMAC:'):
                 hmac_hex = pu[5:].strip()
 
-        hmac_enabled = bool(getattr(settings, 'LORA_HMAC_ENABLED', True))
+        hmac_enabled = bool(getattr(settings, 'LORA_HMAC_ENABLED', False))
 
         if hmac_enabled and hmac_hex is None:
-            if getattr(settings, 'LORA_HMAC_REJECT_UNSIGNED', True):
+            if getattr(settings, 'LORA_HMAC_REJECT_UNSIGNED', False):
                 await _sec_log('Invalid secure format (no CNT/HMAC)')
                 return None
             return body
@@ -2282,6 +2351,7 @@ async def wait_for_next_sync_ack(timeout_s=None, expected_batch_id=None):
     When expected_batch_id is provided, only ACKs with matching BID are accepted.
     Returns the next delay in seconds, or None on timeout / failure.
     """
+    global lora_rx_pending
     if str(getattr(settings, 'NODE_TYPE', 'base')).lower() != 'remote':
         return None
 
@@ -2293,7 +2363,10 @@ async def wait_for_next_sync_ack(timeout_s=None, expected_batch_id=None):
         timeout_s = 90
 
     end_ts = time.time() + timeout_s
-    my_uid = str(getattr(settings, 'UNIT_ID', ''))
+    my_uid = _usable_unit_id()
+    if not my_uid:
+        await _record_lora_session_failure('Remote session blocked: UNIT_ID not provisioned')
+        return None
 
     await debug_print(f"Waiting for ACK (timeout {timeout_s}s) ...", "REMOTE_NODE")
 
@@ -2303,7 +2376,11 @@ async def wait_for_next_sync_ack(timeout_s=None, expected_batch_id=None):
                 await asyncio.sleep_ms(100)
                 continue
 
-            # Try to receive a packet
+            if not _lora_rx_ready():
+                await asyncio.sleep_ms(80)
+                continue
+            lora_rx_pending = False
+
             try:
                 # Prefer non-blocking style receive if available
                 if hasattr(lora, 'recv'):
@@ -2316,7 +2393,8 @@ async def wait_for_next_sync_ack(timeout_s=None, expected_batch_id=None):
                     msg, err = lora.recv()
                 except Exception:
                     msg, err = None, -1
-            except Exception:
+            except Exception as e:
+                await debug_print('remote RX wait error: %s' % e, 'WARN')
                 msg, err = None, -1
 
             if err == 0 and msg:
@@ -2329,7 +2407,7 @@ async def wait_for_next_sync_ack(timeout_s=None, expected_batch_id=None):
                 if msg_str and msg_str.startswith('ACK:'):
                     parts = msg_str.split(':')
                     # Expected format: ACK:<uid>:NEXT:<seconds>
-                    if len(parts) >= 4 and parts[1] == my_uid and parts[2] == 'NEXT':
+                    if len(parts) >= 4 and parts[0] == 'ACK' and parts[1] == my_uid and parts[2] == 'NEXT':
                         ack_bid = None
                         if len(parts) >= 6:
                             i = 4
@@ -2353,22 +2431,24 @@ async def wait_for_next_sync_ack(timeout_s=None, expected_batch_id=None):
                             return delay
                         except Exception:
                             pass
-        except Exception:
-            pass
+        except Exception as e:
+            await debug_print('remote RX wait error: %s' % e, 'WARN')
 
         await asyncio.sleep_ms(80)
 
-    await debug_print("ACK wait timed out", "REMOTE_NODE")
+    await _record_lora_session_failure('Final ACK timeout')
     return None
 
 
 async def send_hello_and_wait_ready(use_fwd=False):
     """Simple mode remote greeting: direct HELLO -> wait for READY."""
+    global lora_rx_pending
     if str(getattr(settings, 'NODE_TYPE', 'base')).lower() != 'remote':
         return None
 
-    uid = str(getattr(settings, 'UNIT_ID', '') or '')
+    uid = _usable_unit_id()
     if not uid:
+        await _record_lora_session_failure('Remote session blocked: UNIT_ID not provisioned')
         return None
     try:
         secret = str(getattr(settings, 'LORA_HMAC_SECRET', '') or '')
@@ -2398,7 +2478,7 @@ async def send_hello_and_wait_ready(use_fwd=False):
         await asyncio.sleep_ms(400)
 
     if not sent_any:
-        await debug_print("HELLO failed all attempts", "ERROR")
+        await _record_lora_session_failure('HELLO TX failed all attempts')
         return None
 
     timeout = _safe_int(getattr(settings, 'LORA_HELLO_TIMEOUT_S', 15), 15)
@@ -2411,10 +2491,10 @@ async def send_hello_and_wait_ready(use_fwd=False):
                 await asyncio.sleep_ms(100)
                 continue
 
-            try:
-                lora.recv(0, False, 0)
-            except Exception:
-                pass
+            if not _lora_rx_ready():
+                await asyncio.sleep_ms(80)
+                continue
+            lora_rx_pending = False
 
             msg, err = lora.recv(0) if hasattr(lora, 'recv') else (None, -1)
             if err == 0 and msg:
@@ -2422,7 +2502,8 @@ async def send_hello_and_wait_ready(use_fwd=False):
                 clear = await _unsecure_message(raw)
                 if not clear:
                     continue
-                if clear.startswith("READY:") and uid in clear:
+                parts = clear.split(':')
+                if len(parts) >= 2 and parts[0] == 'READY' and parts[1] == uid:
                     await debug_print(f"READY received: {clear}", "REMOTE_NODE")
 
                     parts = str(clear).split(':')
@@ -2448,20 +2529,24 @@ async def send_hello_and_wait_ready(use_fwd=False):
                     )
                     await debug_print("=== SIMPLE SESSION READY ===", "REMOTE_NODE")
                     return clear
-        except Exception:
-            pass
+        except Exception as e:
+            await debug_print('remote RX wait error: %s' % e, 'WARN')
         await asyncio.sleep_ms(80)
 
-    await debug_print("No READY - session failed", "WARN")
+    await _record_lora_session_failure('READY timeout')
     return None
 
 
 async def send_field_data_controlled(payload):
     """Remote controlled simple session: HELLO -> READY -> chunks -> END -> FINAL ACK."""
+    global lora_rx_pending
     if str(getattr(settings, 'NODE_TYPE', 'base')).lower() != 'remote':
         return None
 
-    uid = str(getattr(settings, 'UNIT_ID', '') or '')
+    uid = _usable_unit_id()
+    if not uid:
+        await _record_lora_session_failure('Remote session blocked: UNIT_ID not provisioned')
+        return None
 
     if payload is None:
         ts_now = time.time()
@@ -2485,17 +2570,10 @@ async def send_field_data_controlled(payload):
                 'h': getattr(sdata, 'cur_humid', None),
                 'rssi': getattr(sdata, 'lora_SigStr', None),
             }
-
-    ready_msg = await send_hello_and_wait_ready(use_fwd=False)
-    if not ready_msg:
-        await debug_print("No READY - aborting session", "WARN")
-        await debug_print("=== SIMPLE SESSION FAILED ===", "REMOTE_NODE")
-        return None
-
     chunk_size = _safe_int(getattr(settings, 'LORA_CHUNK_SIZE', 100), 100)
     try:
         parts = str(ready_msg).split(':')
-        if parts and parts[0] == 'READY' and uid in parts:
+        if len(parts) >= 2 and parts[0] == 'READY' and parts[1] == uid:
             if 'CHUNKSZ' in parts:
                 chunk_size = max(48, int(parts[parts.index('CHUNKSZ') + 1]))
     except Exception:
@@ -2531,11 +2609,11 @@ async def send_field_data_controlled(payload):
             ok = await _safe_send(secured.encode())
             await debug_print(f"Chunk {i}/{total} sent (ok={ok})", "REMOTE_NODE")
             if not ok:
-                await debug_print(f"Chunk {i} TX failed", "ERROR")
+                await _record_lora_session_failure(f"Chunk {i} TX failed")
                 await debug_print("=== SIMPLE SESSION FAILED ===", "REMOTE_NODE")
                 return None
         except Exception as e:
-            await debug_print(f"Chunk {i} send exception: {e}", "ERROR")
+            await _record_lora_session_failure(f"Chunk {i} send exception: {e}")
             await debug_print("=== SIMPLE SESSION FAILED ===", "REMOTE_NODE")
             return None
         await asyncio.sleep_ms(300)
@@ -2550,7 +2628,7 @@ async def send_field_data_controlled(payload):
         ok = await _safe_send(secured.encode())
         await debug_print(f"END sent (total={total}, ok={ok})", "REMOTE_NODE")
     except Exception as e:
-        await debug_print(f"END send failed: {e}", "ERROR")
+        await _record_lora_session_failure(f"END TX failure: {e}")
         await debug_print("=== SIMPLE SESSION FAILED ===", "REMOTE_NODE")
         return None
 
@@ -2563,6 +2641,10 @@ async def send_field_data_controlled(payload):
         try:
             if lora is None:
                 break
+            if not _lora_rx_ready():
+                await asyncio.sleep_ms(80)
+                continue
+            lora_rx_pending = False
             try:
                 msg, err = lora.recv(0)
             except TypeError:
@@ -2572,7 +2654,7 @@ async def send_field_data_controlled(payload):
                 clear = await _unsecure_message(raw)
                 if clear and clear.startswith('ACK:'):
                     parts = clear.split(':')
-                    if len(parts) >= 4 and parts[1] == uid and parts[2] == 'NEXT':
+                    if len(parts) >= 4 and parts[0] == 'ACK' and parts[1] == uid and parts[2] == 'NEXT':
                         ack_bid = None
                         ack_cmd = None
                         if len(parts) >= 6:
@@ -2601,11 +2683,11 @@ async def send_field_data_controlled(payload):
                         await debug_print(f"FINAL ACK received: {clear}", "REMOTE_NODE")
                         await debug_print("=== SIMPLE SESSION SUCCESS ===", "REMOTE_NODE")
                         return delay
-        except Exception:
-            pass
+        except Exception as e:
+            await debug_print('remote RX wait error: %s' % e, 'WARN')
         await asyncio.sleep_ms(100)
 
-    await debug_print("Final ACK timeout", "WARN")
+    await _record_lora_session_failure('Final ACK timeout')
     await debug_print("=== SIMPLE SESSION FAILED ===", "REMOTE_NODE")
     return None
 
@@ -3112,7 +3194,7 @@ async def handle_ota_job(job):
 
 # ===================== MAIN LOOP =====================
 async def connectLora():
-    global lora, last_rx_ts, last_lora_activity_ts, _crc_selftest_done
+    global lora, lora_rx_pending, last_rx_ts, last_lora_activity_ts, _crc_selftest_done
     if not getattr(settings, 'ENABLE_LORA', True):
         return False
 
@@ -3207,9 +3289,6 @@ async def connectLora():
                     await asyncio.sleep(8)
                     continue
 
-            if _is_lora_hub_node() or str(getattr(settings, 'NODE_TYPE', '')).lower() == 'remote':
-                await ensure_lora_listening()
-
             if current_time - last_rx_ts > 70:
                 sdata.lora_SigStr = -120
                 sdata.LORA_CONNECTED = False
@@ -3275,7 +3354,8 @@ async def connectLora():
                     retry_count = 0
 
                 elif state == STATE_WAIT_RESPONSE:
-                    if lora and hasattr(lora, '_events') and (lora._events() & lora.RX_DONE):
+                    if _lora_rx_ready():
+                        lora_rx_pending = False
                         last_lora_activity_ts = time.time()
                         msg, err = lora.recv()
                         if err == 0 and msg:
@@ -3284,7 +3364,7 @@ async def connectLora():
                             if msg_str and msg_str.startswith('ACK:'):
                                 parts = msg_str.split(':')
                                 # STRICT UID CHECK - prevents accepting ACK meant for another remote
-                                if len(parts) >= 4 and parts[1] == settings.UNIT_ID and parts[2] == 'NEXT':
+                                if len(parts) >= 4 and parts[0] == 'ACK' and parts[1] == _usable_unit_id() and parts[2] == 'NEXT':
                                     await debug_print("Remote: ACK received for this node", "REMOTE_NODE")
                                     next_delay = int(parts[3])
                                     ack_cmd = None
@@ -3375,7 +3455,8 @@ async def connectLora():
                             continue
 
             else:  # BASE NODE
-                if lora and hasattr(lora, '_events') and (lora._events() & lora.RX_DONE):
+                if _lora_rx_ready():
+                    lora_rx_pending = False
                     last_lora_activity_ts = current_time
                     msg, err = lora.recv()
                     if err == 0 and msg:
@@ -3386,9 +3467,9 @@ async def connectLora():
                         except Exception as e:
                             await debug_print(f"RAW RX log error: {e}", "LORA_RX")
                         await handle_incoming_packet(msg)
-                    await ensure_lora_listening()
+                        await ensure_lora_listening()
 
-            await asyncio.sleep_ms(25)
+                    await asyncio.sleep_ms(int(float(getattr(settings, 'LORA_LOOP_INTERVAL_S', 0.08)) * 1000))
 
         except Exception as e:
             await log_error(f"Main LoRa loop error: {e}")

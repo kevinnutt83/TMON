@@ -9,6 +9,7 @@ Goals
 - Security: remove hard-coded secrets, use persisted secure storage for credentials.
 
 Immediate tasks
+- [ ] Fix silent LoRa remote/base session failures and enforce non-destructive RX polling.
 - [x] Add unit/host tests for firmware version/manifest contract and staged validation coverage.
 - [x] Add unit/host tests for WPREST auth headers and compact field-data payload shaping.
 - [x] Add unit/host tests for LoRa HMAC parity helpers and session material determinism.
