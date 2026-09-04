@@ -133,6 +133,22 @@ if (!function_exists('tmon_admin_route_auth_ok')) {
     }
 }
 
+if (!function_exists('tmon_admin_uc_registration_auth_ok')) {
+    function tmon_admin_uc_registration_auth_ok($request) {
+        if (function_exists('current_user_can') && current_user_can('manage_options')) {
+            return true;
+        }
+        $expected = (string) get_option('tmon_admin_uc_key', '');
+        $provided = (string) ($request->get_header('X-TMON-ADMIN') ?: '');
+        $submitted = (string) $request->get_param('uc_key');
+        if ($expected === '') {
+            return $submitted !== '';
+        }
+        return ($provided !== '' && hash_equals($expected, $provided))
+            || ($submitted !== '' && hash_equals($expected, $submitted));
+    }
+}
+
 add_action('rest_api_init', function() {
     register_rest_route('tmon-admin/v1', '/status', [
         'methods' => 'GET',
@@ -362,7 +378,7 @@ add_action('rest_api_init', function() {
     // Pairing: UC calls hub; hub saves mapping and responds with hub_key
     register_rest_route('tmon-admin/v1', '/uc/pair', [
         'methods' => 'POST',
-        'permission_callback' => function($request) { return tmon_admin_route_auth_ok($request); },
+        'permission_callback' => 'tmon_admin_uc_registration_auth_ok',
         'callback' => function($request){
             $site_url = esc_url_raw($request->get_param('site_url'));
             $norm_url = function_exists('tmon_admin_normalize_url') ? tmon_admin_normalize_url($site_url) : $site_url;
@@ -424,7 +440,7 @@ add_action('rest_api_init', function() {
     // Lifecycle endpoint: UC registers/requests credentials using its local uc_key.
     register_rest_route('tmon-admin/v1', '/uc/key/register', [
         'methods' => 'POST',
-        'permission_callback' => function($request) { return tmon_admin_route_auth_ok($request); },
+        'permission_callback' => 'tmon_admin_uc_registration_auth_ok',
         'callback' => function($request){
             $site_url = esc_url_raw($request->get_param('site_url'));
             $uc_key = sanitize_text_field($request->get_param('uc_key'));
@@ -449,10 +465,27 @@ add_action('rest_api_init', function() {
             update_option('tmon_admin_uc_sites', $map);
 
             $hub_key = tmon_admin_get_or_create_uc_shared_key(false);
+            $norm_url = function_exists('tmon_admin_normalize_url') ? tmon_admin_normalize_url($site_url) : $site_url;
+            if (function_exists('tmon_admin_ensure_tables')) { tmon_admin_ensure_tables(); }
+            global $wpdb;
+            $uc_table = $wpdb->prefix . 'tmon_uc_sites';
+            if ($wpdb && $wpdb->get_var($wpdb->prepare('SHOW TABLES LIKE %s', $uc_table))) {
+                $now = current_time('mysql');
+                $wpdb->replace($uc_table, [
+                    'normalized_url' => $norm_url,
+                    'uc_key' => $uc_key,
+                    'hub_key' => $hub_key,
+                    'read_token' => $read_token,
+                    'last_seen' => $now,
+                    'created_at' => $paired_at,
+                    'updated_at' => $now,
+                ]);
+            }
             return rest_ensure_response([
                 'status' => 'ok',
                 'hub_key' => $hub_key,
                 'read_token' => $read_token,
+                'site_url' => $site_url,
                 'paired_at' => $paired_at,
             ]);
         }

@@ -42,7 +42,7 @@ except ImportError:
     sdata = None
     settings = None
 
-from utils import free_pins, debug_print, TMON_AI, stage_remote_field_data, stage_remote_files, record_field_data, build_sdata_snapshot, get_machine_id, persist_custom_settings
+from utils import free_pins, debug_print, TMON_AI, stage_remote_field_data, stage_remote_files, record_field_data, get_machine_id, persist_custom_settings
 from relay import toggle_relay
 from sampling import findLowestTemp, findHighestTemp, findLowestBar, findHighestBar, findLowestHumid, findHighestHumid
 try:
@@ -1491,10 +1491,11 @@ async def base_packet_processor():
 
             # Cleanup old partial bursts (prevent memory leak) - safe even if keys were popped in process_remote_burst
             chunks_dict = st.get('chunks', {})
-            for t in list(chunks_dict):
-                if current_time - st.get('last_rx', 0) > 60:
-                    del chunks_dict[t]
-                    await debug_print(f"Discarded partial {t} chunks for {uid} (timeout)", "BASE_NODE")
+            if isinstance(chunks_dict, dict):
+                for t in list(chunks_dict):
+                    if current_time - st.get('last_rx', 0) > 60:
+                        del chunks_dict[t]
+                        await debug_print(f"Discarded partial {t} chunks for {uid} (timeout)", "BASE_NODE")
 
             await _maybe_force_ack_on_silence(uid, st)
             lora_rx_queue.task_done()
@@ -1502,6 +1503,20 @@ async def base_packet_processor():
         except Exception as e:
             await log_error(f"Background packet processor error: {e}")
             await asyncio.sleep(1)
+
+
+def _session_field_chunks(st):
+    """Return indexed FIELD_DATA chunks from burst or simple-session state."""
+    chunks = st.get('chunks') if isinstance(st, dict) else None
+    if isinstance(chunks, list):
+        return {index: value for index, value in enumerate(chunks) if value}
+    if isinstance(chunks, dict):
+        field_chunks = chunks.get('FIELD_DATA', chunks)
+        if isinstance(field_chunks, list):
+            return {index: value for index, value in enumerate(field_chunks) if value}
+        if isinstance(field_chunks, dict):
+            return field_chunks
+    return {}
 
 
 async def check_incomplete_bursts():
@@ -1513,8 +1528,8 @@ async def check_incomplete_bursts():
             for uid, st in list(info.items()):
                 if not isinstance(st, dict):
                     continue
-                field_chunks = (st.get('chunks') or {}).get('FIELD_DATA')
-                if not isinstance(field_chunks, dict) or not field_chunks:
+                field_chunks = _session_field_chunks(st)
+                if not field_chunks:
                     continue
 
                 last_ts = float(st.get('last_chunk_ts') or 0)
@@ -1530,18 +1545,19 @@ async def check_incomplete_bursts():
                     have = len(field_chunks)
                     total = int(st.get('chunk_total') or 0)
                     batch_id = st.get('batch_id')
-                    await debug_print(
-                        f"FORCING ACK {uid} after {silent:.0f}s silence "
-                        f"(have {have}/{total})", "BASE_NODE"
-                    )
+                    assembled = _assemble_simple_session_field_data(st)
+                    if assembled is None:
+                        missing = [index for index in range(total) if index not in field_chunks]
+                        await debug_print(
+                            f"Simple session partial {uid} have={have}/{total} missing={missing}", "WARN"
+                        )
+                        continue
+                    if not st.get('staged_ok') and callable(globals().get('process_remote_field_data')):
+                        await process_remote_field_data(uid, st, send_ack=False)
+                        st['staged_ok'] = True
+                        st['last_good_payload_ts'] = now
                     await _send_final_ack(uid, batch_id=batch_id, reason='checker')
-
-                    # Clear so we don't keep firing
-                    st.get('chunks', {}).pop('FIELD_DATA', None)
-                    st.pop('chunk_first_ts', None)
-                    st.pop('last_chunk_ts', None)
-                    st.pop('chunk_total', None)
-                    st.pop('batch_id', None)
+                    st['session_active'] = False
         except Exception as e:
             await log_error(f"check_incomplete_bursts: {e}")
         await asyncio.sleep(2)
@@ -1650,6 +1666,7 @@ async def handle_simple_session_hub(clear):
         st['session_active'] = True
         st['chunks'] = []
         st['chunk_total'] = None
+        st['staged_ok'] = False
         try:
             import utime as _t
             st['last_hello_ts'] = _t.time()
@@ -1689,6 +1706,7 @@ async def handle_simple_session_hub(clear):
                 while len(ch) <= idx:
                     ch.append(None)
                 ch[idx] = data_b64
+            st['last_chunk_ts'] = time.time()
             await debug_print('Chunk %s %s/%s bytes=%s' % (uid, idx, total, len(data_b64 or '')), 'BASE_NODE')
         return True
 
@@ -1722,8 +1740,10 @@ async def handle_simple_session_hub(clear):
             assembled = _assemble_simple_session_field_data(st)
             if assembled is None:
                 await debug_print('Simple session assemble failed for %s have=%s total=%s' % (remote_uid, len([item for item in _simple_session_chunk_slots(st) if item]), st.get('chunk_total')), 'WARN')
-            elif callable(globals().get('process_remote_field_data')):
+            elif not st.get('staged_ok') and callable(globals().get('process_remote_field_data')):
                 await process_remote_field_data(remote_uid, st, send_ack=False)
+                st['staged_ok'] = True
+                st['last_good_payload_ts'] = time.time()
         except Exception as e:
             await debug_print('field process skip: %s' % e, 'WARN')
 
@@ -1734,6 +1754,9 @@ async def handle_simple_session_hub(clear):
         except Exception:
             pass
         next_delay = max(30, next_delay)
+
+        if assembled is None and not st.get('staged_ok'):
+            return True
 
         ack = 'ACK:%s:NEXT:%d' % (remote_uid, next_delay)
         use_bid = batch_id or st.get('batch_id')
@@ -1760,8 +1783,6 @@ async def handle_simple_session_hub(clear):
         await debug_print('FINAL ACK to %s ok=%s next=%d assembled=%s' % (remote_uid, ok, next_delay, bool(assembled)), 'BASE_NODE')
 
         st['session_active'] = False
-        st['chunks'] = []
-        st['chunk_total'] = None
         try:
             await ensure_lora_listening()
         except Exception:
@@ -1791,6 +1812,10 @@ async def handle_incoming_packet(msg):
                 uid_hint = msg_str.split('|', 1)[0].split(':', 2)[1].strip()
         except Exception:
             uid_hint = None
+
+    if msg_str.count('CRC:') > 1 or msg_str.count('TYPE:') > 1:
+        await debug_print('Dropped collided frame', 'WARN')
+        return
 
     msg_str = await _unsecure_message(msg_str, remote_uid=uid_hint)
     if not msg_str:
@@ -2266,19 +2291,17 @@ async def _unsecure_message(msg_str, remote_uid=None):
         await _sec_log('unsecure_message error: %s' % e)
         return None
 
-async def _send_with_retry(data, retries=6):
+async def _send_with_retry(data, retries=3):
     global lora
     if lora is None or not hasattr(lora, 'send'):
-        return
-    max_size = int(getattr(settings, 'LORA_MAX_PACKET_SIZE', 240))
+        return False
+    max_size = int(getattr(settings, 'LORA_MAX_PACKET_SIZE', 200))
     if len(data) > max_size:
         await log_error(f"Payload too large: {len(data)} (max {max_size})")
-        return
-    base_delay = getattr(settings, 'LORA_RETRY_BASE_DELAY_S', 2)
-    max_backoff = getattr(settings, 'LORA_MAX_BACKOFF_S', 90)
-    for att in range(retries):
+        return False
+    last_err = None
+    for att in range(max(1, int(retries))):
         try:
-            await ensure_lora_listening()
             if bool(getattr(settings, 'LORA_ENABLE_CAD', False)) and hasattr(lora, 'cad'):
                 for cad_try in range(3):
                     if not lora.cad(getattr(settings, 'CAD_SYMBOLS', 3)):
@@ -2288,24 +2311,26 @@ async def _send_with_retry(data, retries=6):
                     await debug_print("CAD still busy after 3 tries - sending anyway", "LORA")
 
             lora.send(data)
-            if await _wait_tx_done():
+            ok = await _wait_tx_done()
+            try:
                 await ensure_lora_listening()
-                return
+            except Exception:
+                pass
+            if ok:
+                return True
         except Exception as e:
-            await log_error(f"TX attempt {att+1} failed: {e}")
-            if lora is None:
+            last_err = e
+            await debug_print('TX attempt %s failed: %s' % (att + 1, e), 'WARN')
+        await asyncio.sleep(0.15 * (att + 1))
+    if last_err is not None:
+        await debug_print('TX failed after retries: %s' % last_err, 'WARN')
+        if int(retries) >= int(getattr(settings, 'LORA_TX_EXCEPTION_RESET_COUNT', 3) or 3):
+            try:
                 await hard_reset_lora()
                 await init_lora()
-                return
-            delay = min(max_backoff, base_delay * (2 ** att))
-            delay += random.uniform(0, base_delay)
-            await asyncio.sleep(delay)
-    await debug_print("TX failed after retries", "WARN")
-    try:
-        await hard_reset_lora()
-        await init_lora()
-    except Exception as e:
-        await log_error(f"TX recovery failed: {e}")
+            except Exception as recovery_error:
+                await log_error('TX exception recovery failed: %s' % recovery_error)
+    return False
 
 
 async def _safe_send(data: bytes, remote_uid=None):
@@ -2320,32 +2345,27 @@ async def _safe_send(data: bytes, remote_uid=None):
         return False
 
     try:
-        await _send_with_retry(data)
-        return True
+        return await _send_with_retry(data)
     except Exception as e:
         await log_error(f"_safe_send error: {e}")
         return False
 
-async def _wait_tx_done(timeout=5):
+async def _wait_tx_done(timeout=None):
     global lora
     if lora is None:
         return False
+    if timeout is None:
+        timeout = float(getattr(settings, 'LORA_TX_DONE_WAIT_S', 1.5) or 1.5)
+    timeout = max(0.2, float(timeout))
     tx_start = time.time()
     while time.time() - tx_start < timeout:
         try:
-            if lora._events() & lora.TX_DONE:
+            if hasattr(lora, '_events') and (lora._events() & getattr(lora, 'TX_DONE', 0)):
                 return True
         except Exception:
             pass
-        await asyncio.sleep(0.01)
-    await debug_print("TX timeout - forcing radio recovery", "WARN")
-    await log_error("TX timeout")
-    lora = None
-    await hard_reset_lora()
-    try:
-        await init_lora()
-    except Exception as e:
-        await log_error(f"TX timeout recovery init failed: {e}")
+        await asyncio.sleep(0.02)
+    return lora is not None
     return False
 
 def calculate_next_delay(node_id):
@@ -2651,11 +2671,17 @@ async def send_field_data_controlled(payload):
         return None
 
     if payload is None:
-        payload = build_sdata_snapshot(include_meta=True)
-        payload['unit_id'] = uid
-        payload['node_type'] = 'remote'
-        payload['ts'] = int(time.time())
-        payload['fw'] = getattr(settings, 'FIRMWARE_VERSION', '')
+        payload = {
+            'unit_id': uid,
+            'node_type': 'remote',
+            'ts': time.time(),
+            'fw': getattr(settings, 'FIRMWARE_VERSION', ''),
+            'volt': getattr(sdata, 'sys_voltage', None),
+            'temp_f': getattr(sdata, 'cur_temp_f', None) or getattr(sdata, 'cur_device_temp_f', None),
+            'humid': getattr(sdata, 'cur_humid', None),
+            'bar': getattr(sdata, 'cur_bar_pres', None),
+            'rssi': getattr(sdata, 'lora_SigStr', None),
+        }
     chunk_size = _safe_int(getattr(settings, 'LORA_CHUNK_SIZE', 100), 100)
     try:
         parts = str(ready_msg).split(':')
@@ -2667,6 +2693,10 @@ async def send_field_data_controlled(payload):
 
     try:
         raw_json = ujson.dumps(payload)
+        if bool(getattr(settings, 'LORA_MINIMAL_TELEMETRY', True)) and len(raw_json) > 360:
+            payload.pop('rssi', None)
+            payload.pop('bar', None)
+            raw_json = ujson.dumps(payload)
         full_b64 = _ub.b2a_base64(raw_json.encode()).rstrip(b'\n').decode()
     except Exception as e:
         await debug_print(f"Payload encode failed: {e}", "ERROR")
@@ -2702,7 +2732,7 @@ async def send_field_data_controlled(payload):
             await _record_lora_session_failure(f"Chunk {i} send exception: {e}")
             await debug_print("=== SIMPLE SESSION FAILED ===", "REMOTE_NODE")
             return None
-        await asyncio.sleep_ms(300)
+        await asyncio.sleep_ms(500)
 
     if batch_id:
         end_msg = f"END:{uid}:{total}:BID:{batch_id}"

@@ -11,6 +11,7 @@ Goals
 Immediate tasks
 - [x] Fix silent LoRa remote/base session failures and enforce non-destructive RX polling, including simple-session chunk assembly and a single final ACK.
 - [x] Require explicit first-provision role assignment before finalizing firmware provisioning.
+- [x] Stabilize LoRa simple-session TX recovery, partial-burst retention, and UC hub-pairing diagnostics.
 - [x] Add unit/host tests for firmware version/manifest contract and staged validation coverage.
 - [x] Add unit/host tests for WPREST auth headers and compact field-data payload shaping.
 - [x] Add unit/host tests for LoRa HMAC parity helpers and session material determinism.

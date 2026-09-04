@@ -315,7 +315,16 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn('ch[idx] = data_b64', source)
         self.assertNotIn('ch[idx] = clear', source)
         self.assertIn("ack += ':CMD:%s' % encoded_cmd", source)
-        self.assertIn('payload = build_sdata_snapshot(include_meta=True)', source)
+        self.assertIn("'temp_f': getattr(sdata, 'cur_temp_f', None)", source)
+        self.assertIn("payload.pop('rssi', None)", source)
+        self.assertIn('async def _wait_tx_done(timeout=None):', source)
+        wait_start = source.index('async def _wait_tx_done(timeout=None):')
+        self.assertNotIn('hard_reset_lora', source[wait_start:])
+        self.assertIn('_session_field_chunks(st)', source)
+        send_start = source.index('async def _send_with_retry(')
+        wait_start = source.index('async def _wait_tx_done(', send_start)
+        self.assertNotIn('ensure_lora_listening()', source[send_start:source.index('lora.send(data)')])
+        self.assertNotIn('hard_reset_lora', source[wait_start:])
 
         remote_path = os.path.join(ROOT, 'micropython', 'remote_node.py')
         with open(remote_path, 'r', encoding='utf-8') as handle:

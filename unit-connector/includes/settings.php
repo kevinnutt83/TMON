@@ -109,12 +109,11 @@ if (!function_exists('tmon_uc_is_valid_unit_id')) {
 
 // Core pairing routine reused by admin-post and AJAX to avoid duplicate requests
 function tmon_uc_pair_with_hub_core($mode = 'pair') {
-    static $result = [];
-    $cache_key = (string) $mode;
-    if (isset($result[$cache_key])) return $result[$cache_key];
-
     $hub = trim(get_option('tmon_uc_hub_url', home_url()));
     if (stripos($hub, 'http') !== 0) { $hub = 'https://' . ltrim($hub, '/'); }
+    if (function_exists('tmon_uc_normalize_url') && tmon_uc_normalize_url($hub) === tmon_uc_normalize_url(home_url())) {
+        return ['status' => 'error', 'message' => 'hub_url_matches_uc_site', 'paired' => false];
+    }
     $local_key = get_option('tmon_uc_admin_key', '');
     if (!$local_key) {
         try { $local_key = bin2hex(random_bytes(24)); } catch (Exception $e) { $local_key = wp_generate_password(48, false, false); }
@@ -138,6 +137,7 @@ function tmon_uc_pair_with_hub_core($mode = 'pair') {
 
     $last_error = '';
     $last_body = null;
+    $last_code = 0;
     foreach ($endpoints as $index => $endpoint) {
         $headers = $base_headers;
         $headers['X-TMON-ADMIN'] = $local_key;
@@ -160,8 +160,10 @@ function tmon_uc_pair_with_hub_core($mode = 'pair') {
             continue;
         }
         $code = wp_remote_retrieve_response_code($resp);
-        $body = json_decode(wp_remote_retrieve_body($resp), true);
-        $last_body = $body;
+        $raw_body = wp_remote_retrieve_body($resp);
+        $body = json_decode($raw_body, true);
+        $last_body = is_array($body) ? $body : $raw_body;
+        $last_code = $code;
         if ($code === 200 && is_array($body)) {
             $hub_key = '';
             if (!empty($body['hub_key'])) {
@@ -200,7 +202,7 @@ function tmon_uc_pair_with_hub_core($mode = 'pair') {
                 if (function_exists('tmon_uc_backfill_provisioned_from_admin')) {
                     tmon_uc_backfill_provisioned_from_admin();
                 }
-                return $result[$cache_key] = [
+                return [
                     'status' => 'ok',
                     'paired' => true,
                     'hub_key' => $hub_key,
@@ -210,7 +212,9 @@ function tmon_uc_pair_with_hub_core($mode = 'pair') {
             }
         }
     }
-    return $result[$cache_key] = ['status' => 'error', 'message' => $last_error ?: 'bad_response', 'paired' => false, 'body' => $last_body];
+    $server_message = is_array($last_body) ? ($last_body['message'] ?? $last_body['error'] ?? 'invalid_response') : trim((string) $last_body);
+    if ($server_message === '') $server_message = $last_error ?: 'invalid_response';
+    return ['status' => 'error', 'message' => 'http_' . intval($last_code) . ': ' . $server_message, 'paired' => false, 'body' => $last_body, 'hub' => $hub];
 }
 
 // Add core purge helpers to ensure UC mirror, staged options, pairing keys, and files are removed.
@@ -411,8 +415,12 @@ add_action('wp_ajax_tmon_uc_pair_with_hub_ajax', function(){
     if (isset($res['status']) && $res['status'] === 'ok' && !empty($res['paired'])) {
         wp_send_json_success($res);
     }
-    $msg = isset($res['message']) ? $res['message'] : 'pair_failed';
-    wp_send_json_error(['message'=>$msg, 'body'=>$res['body'] ?? null], 400);
+    wp_send_json_success([
+        'paired' => false,
+        'message' => $res['message'] ?? 'pair_failed',
+        'body' => $res['body'] ?? null,
+        'hub' => $res['hub'] ?? get_option('tmon_uc_hub_url', ''),
+    ]);
 });
 
 // Admin-post: forward a claim to hub via proxy endpoint, authenticated by hub shared key

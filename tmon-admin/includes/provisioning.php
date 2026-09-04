@@ -714,7 +714,7 @@ if (!function_exists('tmon_admin_render_provisioning_page')) {
 		echo '<option value="">Select a type</option>';
 		foreach (array_keys($role_options) as $p) { echo '<option value="'.esc_attr($p).'">'.esc_html($p).'</option>'; }
 		echo '</select></td></tr>';
-		echo '<tr><th scope="row"><label for="site_url">Site URL</label></th><td><input name="site_url" type="url" id="site_url" value="" class="regular-text" placeholder="https://example.com"></td></tr>';
+		echo '<tr><th scope="row"><label for="site_url">Site URL</label></th><td><input name="site_url" type="url" id="site_url" value="" class="regular-text" placeholder="https://example.com" required></td></tr>';
 		echo '<tr><th scope="row"><label for="settings_staged">Stage settings</label></th><td><label><input name="settings_staged" type="checkbox" id="settings_staged" value="1"> Mark settings as staged for next push</label></td></tr>';
 		echo '</table>';
 		echo '<p class="submit"><input type="submit" name="save_provision" id="save_provision" class="button button-primary" value="Save & Provision"></p>';
@@ -1138,6 +1138,10 @@ add_action('admin_post_tmon_admin_provision_device', function(){
 	$ok = false;
 	if (!in_array($role, array('base', 'wifi', 'remote'), true)) {
 		wp_safe_redirect(add_query_arg('tmon_provision_error', 'role_required', wp_get_referer() ?: admin_url('admin.php?page=tmon-admin-provisioning')));
+		exit;
+	}
+	if (!$site_url) {
+		wp_safe_redirect(add_query_arg('tmon_provision_error', 'site_url_required', wp_get_referer() ?: admin_url('admin.php?page=tmon-admin-provisioning')));
 		exit;
 	}
 	$registry_violation = '';
