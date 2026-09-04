@@ -12,7 +12,8 @@ from utils import (
     checkLogDirectory, debug_print, load_persisted_unit_name,
     load_persisted_unit_id, persist_unit_id, get_machine_id,
     periodic_provision_check, load_persisted_wordpress_api_url,
-    load_persisted_node_type, load_persisted_custom_settings, log_exception
+    load_persisted_node_type, load_persisted_custom_settings, log_exception,
+    persist_node_type
 )
 from lora import connectLora, log_error, TMON_AI, check_missed_syncs, periodic_wp_sync
 from ota import check_for_update, apply_pending_update
@@ -219,6 +220,16 @@ async def first_boot_provision():
         ok = (resp is not None and getattr(resp, 'status_code', 0) == 200)
         if ok:
             try:
+                resp_json = resp.json()
+            except Exception:
+                resp_json = {}
+            site_val = (resp_json.get('site_url') or resp_json.get('wordpress_api_url') or '').strip()
+            role_val = (resp_json.get('role') or '').strip().lower()
+            assigned = bool(resp_json.get('provisioned') or resp_json.get('staged_exists'))
+            if not (assigned and site_val and role_val in ('base', 'wifi', 'remote')):
+                await debug_print('first_boot_provision: awaiting explicit role and site assignment', 'PROVISION')
+                return
+            try:
                 # Ensure parent dir exists (fixes OSError ENOENT)
                 try:
                     from config_persist import ensure_dir
@@ -240,10 +251,6 @@ async def first_boot_provision():
                 settings.UNIT_PROVISIONED = True
             except Exception as e:
                 await log_exception('first_boot_provision.set_provisioned', e)
-            try:
-                resp_json = resp.json()
-            except Exception:
-                resp_json = {}
             try:
                 unit_name = (resp_json.get('unit_name') or '').strip()
                 if unit_name:
@@ -267,13 +274,12 @@ async def first_boot_provision():
             except Exception as e:
                 await log_exception('first_boot_provision.display_provisioned', e)
             try:
-                site_val = (resp_json.get('site_url') or resp_json.get('wordpress_api_url') or '').strip()
-                role_val = (resp_json.get('role') or '').strip()
                 if site_val:
                     from utils import persist_wordpress_api_url
                     persist_wordpress_api_url(site_val)
                 if role_val:
                     settings.NODE_TYPE = role_val
+                    persist_node_type(role_val)
             except Exception as e:
                 await log_exception('first_boot_provision.persist_site_or_role', e)
             try:

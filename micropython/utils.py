@@ -1829,12 +1829,7 @@ async def periodic_provision_check():
                 wp_url_set = bool(str(getattr(settings, 'WORDPRESS_API_URL', '')).strip())
                 uid_set = bool(str(getattr(settings, 'UNIT_ID', '')).strip())
                 if hub and flag_file and flag_exists and wp_url_set and uid_set:
-                    await debug_print('prov: provisioned', 'PROVISION')
-                    try:
-                        settings.UNIT_PROVISIONED = True
-                    except Exception:
-                        pass
-                    return
+                    await debug_print('prov: checking assigned role', 'PROVISION')
             except Exception:
                 pass
 
@@ -1890,7 +1885,7 @@ async def periodic_provision_check():
                             persist_wordpress_api_url(site_val)
 
                         unit_name = (resp_json.get('unit_name') or '').strip()
-                        role_val = (resp_json.get('role') or '').strip()
+                        role_val = (resp_json.get('role') or '').strip().lower()
                         plan_val = (resp_json.get('plan') or '').strip()
                         fw_ver = (resp_json.get('firmware') or '').strip()
 
@@ -1903,7 +1898,7 @@ async def periodic_provision_check():
                                 persist_unit_name(unit_name)  # ensure UNIT_Name.txt is written (remotes too)
                             except Exception:
                                 pass
-                        if role_val:
+                        if role_val in ('base', 'wifi', 'remote'):
                             try:
                                 settings.NODE_TYPE = role_val
                             except Exception:
@@ -1923,7 +1918,7 @@ async def periodic_provision_check():
                             except Exception:
                                 pass
 
-                        if (provisioned or staged) and site_val:
+                        if (provisioned or staged) and site_val and role_val in ('base', 'wifi', 'remote'):
                             try:
                                 with open(flag_file, 'w') as f:
                                     f.write('ok')

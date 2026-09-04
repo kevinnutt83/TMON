@@ -42,7 +42,7 @@ except ImportError:
     sdata = None
     settings = None
 
-from utils import free_pins, debug_print, TMON_AI, stage_remote_field_data, stage_remote_files, record_field_data, get_machine_id, persist_custom_settings
+from utils import free_pins, debug_print, TMON_AI, stage_remote_field_data, stage_remote_files, record_field_data, build_sdata_snapshot, get_machine_id, persist_custom_settings
 from relay import toggle_relay
 from sampling import findLowestTemp, findHighestTemp, findLowestBar, findHighestBar, findLowestHumid, findHighestHumid
 try:
@@ -1081,29 +1081,34 @@ async def process_remote_burst(uid, st):
         save_remote_node_info()
 
 
-async def process_remote_field_data(uid, st):
+async def process_remote_field_data(uid, st, send_ack=True):
     """
     Process a fully assembled FIELD_DATA payload from a remote node,
-    stage the records, and send an ACK with the next sync delay.
+    stage the records, and optionally send an ACK with the next sync delay.
     """
     try:
+        if not isinstance(st, dict):
+            st = {}
         payload = st.get('data', {}).get('FIELD_DATA')
+        if payload is None:
+            payload = _assemble_simple_session_field_data(st)
 
         defaults = {}
         batch_id = None
         if isinstance(payload, dict) and 'data' in payload:
             records = payload.get('data')
-            batch_id = payload.get('batch_id')
+            batch_id = payload.get('batch_id') or st.get('batch_id')
             defaults = {
                 'unit_id': payload.get('unit_id') or uid,
                 'machine_id': payload.get('machine_id'),
-                'firmware_version': payload.get('firmware_version'),
+                'firmware_version': payload.get('firmware_version') or payload.get('fw'),
                 'NODE_TYPE': payload.get('NODE_TYPE') or payload.get('node_type') or 'remote',
             }
         elif isinstance(payload, list):
             records = payload
         elif isinstance(payload, dict):
             records = [payload]
+            batch_id = payload.get('batch_id') or st.get('batch_id')
         else:
             records = None
 
@@ -1119,6 +1124,8 @@ async def process_remote_field_data(uid, st):
                 merged['node_type'] = merged.get('node_type') or merged.get('NODE_TYPE') or 'remote'
                 merged['ingested_via'] = 'lora_base'
                 merged['remote_unit_id'] = uid
+                if 'fw' in merged and not merged.get('firmware_version'):
+                    merged['firmware_version'] = merged.get('fw')
                 merged_records.append(merged)
 
             if merged_records:
@@ -1133,30 +1140,24 @@ async def process_remote_field_data(uid, st):
                 except Exception:
                     pass
 
-                # Send ACK immediately so the remote can decide whether to sleep.
-                try:
-                    ack_msg = f"ACK:{uid}:NEXT:{next_delay}"
-                    if batch_id:
-                        ack_msg += f":BID:{batch_id}"
-                    ack_msg = await _secure_message(ack_msg, remote_uid=uid)
-                    await _safe_send(ack_msg.encode(), remote_uid=uid)
-                    if batch_id:
+                if send_ack:
+                    try:
+                        ack_msg = f"ACK:{uid}:NEXT:{next_delay}"
+                        if batch_id:
+                            ack_msg += f":BID:{batch_id}"
+                        ack_msg = await _secure_message(ack_msg, remote_uid=uid)
+                        await _safe_send(ack_msg.encode(), remote_uid=uid)
                         await debug_print(
                             f"Sent FIELD_DATA ACK to {uid} next={next_delay}s bid={batch_id}",
                             "BASE_NODE"
                         )
-                    else:
-                        await debug_print(
-                            f"Sent FIELD_DATA ACK with next delay {next_delay}s to {uid}",
-                            "BASE_NODE"
-                        )
-                    try:
-                        from oled import display_message
-                        await display_message("ACK Sent", 0.8)
-                    except Exception:
-                        pass
-                except Exception as ack_e:
-                    await log_error(f"FIELD_DATA ACK send error to {uid}: {ack_e}")
+                        try:
+                            from oled import display_message
+                            await display_message("ACK Sent", 0.8)
+                        except Exception:
+                            pass
+                    except Exception as ack_e:
+                        await log_error(f"FIELD_DATA ACK send error to {uid}: {ack_e}")
 
                 # Stage after ACK so the radio window is not blocked by local IO.
                 try:
@@ -1177,6 +1178,8 @@ async def process_remote_field_data(uid, st):
                 st['data'].pop('FIELD_DATA', None)
             if isinstance(st.get('chunks'), dict):
                 st['chunks'].pop('FIELD_DATA', None)
+            elif isinstance(st.get('chunks'), list):
+                st['chunks'] = []
         except Exception:
             pass
 
@@ -1544,6 +1547,81 @@ async def check_incomplete_bursts():
         await asyncio.sleep(2)
 
 
+def _simple_session_parse_chunk(clear):
+    """Return uid, index, total, base64 data, and optional batch id from a chunk."""
+    uid = ''
+    idx = -1
+    total = 0
+    data_b64 = None
+    batch_id = None
+    try:
+        _msg_type, parsed_uid, chunk, parsed_b64 = _remote_parse_type_message(clear)
+        if parsed_uid:
+            uid = str(parsed_uid).strip()
+        if parsed_b64:
+            data_b64 = str(parsed_b64).strip()
+        if chunk and '/' in str(chunk):
+            first, last = str(chunk).split('/', 1)
+            idx, total = int(first), int(last)
+    except Exception:
+        pass
+    try:
+        for part in str(clear).replace(',', ' ').split():
+            if part.startswith('UID:') and not uid:
+                uid = part[4:].strip()
+            elif part.startswith('CHUNK:') and idx < 0:
+                first, last = part[6:].strip().split('/', 1)
+                idx, total = int(first), int(last)
+            elif part.startswith('BID:') and batch_id is None:
+                batch_id = part[4:].strip()
+            elif part.startswith('DATA:') and data_b64 is None:
+                data_b64 = part[5:].strip()
+    except Exception:
+        pass
+    return uid, idx, total, data_b64, batch_id
+
+
+def _simple_session_chunk_slots(st):
+    """Normalize simple-session chunks to indexed base64 slots."""
+    chunks = st.get('chunks')
+    if isinstance(chunks, list):
+        return chunks
+    st['chunks'] = []
+    return st['chunks']
+
+
+def _assemble_simple_session_field_data(st):
+    """Decode complete simple-session base64 data into FIELD_DATA."""
+    if not isinstance(st, dict):
+        return None
+    slots = _simple_session_chunk_slots(st)
+    try:
+        total = int(st.get('chunk_total') or 0)
+    except Exception:
+        total = 0
+    total = total or len(slots)
+    parts = []
+    for index in range(total):
+        item = slots[index] if index < len(slots) else None
+        if not item:
+            return None
+        parts.append(str(item).strip())
+    try:
+        encoded = ''.join(parts)
+        encoded += '=' * ((-len(encoded)) % 4)
+        raw = _ub.a2b_base64(encoded)
+        payload = ujson.loads(raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw))
+    except Exception:
+        return None
+    if not isinstance(st.get('data'), dict):
+        st['data'] = {}
+    st['data']['FIELD_DATA'] = payload
+    if not isinstance(st.get('types'), set):
+        st['types'] = set(st.get('types') or [])
+    st['types'].add('FIELD_DATA')
+    return payload
+
+
 async def handle_simple_session_hub(clear):
     """
     SIMPLE SESSION ONLY:
@@ -1596,29 +1674,22 @@ async def handle_simple_session_hub(clear):
         return True
 
     if 'FIELD_DATA_CHUNK' in clear or clear.startswith('TYPE:FIELD_DATA_CHUNK'):
-        uid = ''
-        idx = -1
-        total = 0
-        try:
-            for part in clear.replace(',', ' ').split():
-                if part.startswith('UID:'):
-                    uid = part[4:].strip()
-                if part.startswith('CHUNK:'):
-                    frac = part[6:].strip()
-                    a, b = frac.split('/')
-                    idx, total = int(a), int(b)
-        except Exception:
-            pass
+        uid, idx, total, data_b64, batch_id = _simple_session_parse_chunk(clear)
         if uid:
-            st = getattr(settings, 'REMOTE_NODE_INFO', {}).setdefault(uid, {})
+            if not hasattr(settings, 'REMOTE_NODE_INFO') or settings.REMOTE_NODE_INFO is None:
+                settings.REMOTE_NODE_INFO = {}
+            st = settings.REMOTE_NODE_INFO.setdefault(uid, {})
             st['session_active'] = True
-            st['chunk_total'] = total
-            ch = st.setdefault('chunks', [])
+            if total > 0:
+                st['chunk_total'] = total
+            if batch_id:
+                st['batch_id'] = batch_id
+            ch = _simple_session_chunk_slots(st)
             if idx >= 0:
                 while len(ch) <= idx:
                     ch.append(None)
-                ch[idx] = clear
-            await debug_print('Chunk %s %s/%s' % (uid, idx, total), 'BASE_NODE')
+                ch[idx] = data_b64
+            await debug_print('Chunk %s %s/%s bytes=%s' % (uid, idx, total, len(data_b64 or '')), 'BASE_NODE')
         return True
 
     if clear.startswith('END:'):
@@ -1630,12 +1701,29 @@ async def handle_simple_session_hub(clear):
                 total = int(parts[2])
         except Exception:
             total = 0
-        await debug_print('END from %s total=%s' % (remote_uid, total), 'BASE_NODE')
-
+        batch_id = None
         try:
-            st = getattr(settings, 'REMOTE_NODE_INFO', {}).get(remote_uid, {})
-            if st.get('chunks') and callable(globals().get('process_remote_field_data')):
-                await process_remote_field_data(remote_uid, st)
+            if 'BID' in parts:
+                batch_id = parts[parts.index('BID') + 1]
+        except Exception as e:
+            batch_id = None
+        await debug_print('END from %s total=%s bid=%s' % (remote_uid, total, batch_id), 'BASE_NODE')
+
+        assembled = None
+        st = {}
+        try:
+            if not hasattr(settings, 'REMOTE_NODE_INFO') or settings.REMOTE_NODE_INFO is None:
+                settings.REMOTE_NODE_INFO = {}
+            st = settings.REMOTE_NODE_INFO.setdefault(remote_uid, {})
+            if total > 0:
+                st['chunk_total'] = total
+            if batch_id:
+                st['batch_id'] = batch_id
+            assembled = _assemble_simple_session_field_data(st)
+            if assembled is None:
+                await debug_print('Simple session assemble failed for %s have=%s total=%s' % (remote_uid, len([item for item in _simple_session_chunk_slots(st) if item]), st.get('chunk_total')), 'WARN')
+            elif callable(globals().get('process_remote_field_data')):
+                await process_remote_field_data(remote_uid, st, send_ack=False)
         except Exception as e:
             await debug_print('field process skip: %s' % e, 'WARN')
 
@@ -1648,6 +1736,20 @@ async def handle_simple_session_hub(clear):
         next_delay = max(30, next_delay)
 
         ack = 'ACK:%s:NEXT:%d' % (remote_uid, next_delay)
+        use_bid = batch_id or st.get('batch_id')
+        if use_bid:
+            ack += ':BID:%s' % use_bid
+        try:
+            pending_cmd = await _fetch_remote_pending_command(remote_uid, st.get('MACHINE_ID'))
+            if isinstance(pending_cmd, dict):
+                encoded_cmd = _encode_ack_command(pending_cmd)
+                if encoded_cmd:
+                    ack += ':CMD:%s' % encoded_cmd
+            ota_hint = _remote_lora_ota_jobs.get(remote_uid)
+            if isinstance(ota_hint, dict) and ota_hint.get('session'):
+                ack += ':OTA:%s:VER:%s' % (ota_hint['session'], getattr(settings, 'FIRMWARE_VERSION', ''))
+        except Exception as e:
+            await debug_print('ACK relay skip: %s' % e, 'WARN')
         try:
             secured = await _secure_message(ack, remote_uid=remote_uid)
             data = secured.encode() if isinstance(secured, str) else secured
@@ -1655,11 +1757,11 @@ async def handle_simple_session_hub(clear):
         except Exception as e:
             ok = False
             await debug_print('ACK send error: %s' % e, 'ERROR')
-        await debug_print('FINAL ACK to %s ok=%s next=%d' % (remote_uid, ok, next_delay), 'BASE_NODE')
+        await debug_print('FINAL ACK to %s ok=%s next=%d assembled=%s' % (remote_uid, ok, next_delay, bool(assembled)), 'BASE_NODE')
 
-        st = getattr(settings, 'REMOTE_NODE_INFO', {}).get(remote_uid, {})
         st['session_active'] = False
         st['chunks'] = []
+        st['chunk_total'] = None
         try:
             await ensure_lora_listening()
         except Exception:
@@ -2549,27 +2651,11 @@ async def send_field_data_controlled(payload):
         return None
 
     if payload is None:
-        ts_now = time.time()
-        if bool(getattr(settings, 'LORA_MINIMAL_TELEMETRY', True)):
-            payload = {
-                'unit_id': uid,
-                'ts': ts_now,
-                'fw': getattr(settings, 'FIRMWARE_VERSION', ''),
-                'volt': getattr(sdata, 'sys_voltage', None),
-                'temp_f': getattr(sdata, 'cur_temp_f', None),
-                'humid': getattr(sdata, 'cur_humid', None),
-            }
-        else:
-            payload = {
-                'unit_id': uid,
-                'node_type': 'remote',
-                'ts': ts_now,
-                'fw': getattr(settings, 'FIRMWARE_VERSION', ''),
-                'v': getattr(sdata, 'sys_voltage', None),
-                't': (getattr(sdata, 'cur_temp_f', None) or getattr(sdata, 'cur_device_temp_f', None)),
-                'h': getattr(sdata, 'cur_humid', None),
-                'rssi': getattr(sdata, 'lora_SigStr', None),
-            }
+        payload = build_sdata_snapshot(include_meta=True)
+        payload['unit_id'] = uid
+        payload['node_type'] = 'remote'
+        payload['ts'] = int(time.time())
+        payload['fw'] = getattr(settings, 'FIRMWARE_VERSION', '')
     chunk_size = _safe_int(getattr(settings, 'LORA_CHUNK_SIZE', 100), 100)
     try:
         parts = str(ready_msg).split(':')

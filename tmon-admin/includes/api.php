@@ -1096,11 +1096,15 @@ if (!function_exists('tmon_admin_handle_device_check_in')) {
 		}
 
 		// Response extension
+        $assigned_role = $staged_meta['role'] ?? ($prov_row['role'] ?? '');
+        if (!(($provisioned || !empty($staged_meta['staged_exists'])) && in_array($assigned_role, ['base', 'wifi', 'remote'], true))) {
+            $assigned_role = '';
+        }
         $response_extra = [
             'staged_exists'     => (bool) ($staged_meta['staged_exists'] ?? false),
             'wordpress_api_url' => $wordpress_api_url,
             'site_url'          => $wordpress_api_url, // alias for clarity
-            'role'              => $staged_meta['role'] ?? ($prov_row['role'] ?? ''),
+            'role'              => $assigned_role,
             'plan'              => $staged_meta['plan'] ?? ($prov_row['plan'] ?? ''),
             'firmware'          => $staged_meta['firmware'] ?? ($prov_row['firmware'] ?? ''),
             'firmware_url'      => $staged_meta['firmware_url'] ?? ($prov_row['firmware_url'] ?? ''),

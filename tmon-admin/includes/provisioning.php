@@ -14,7 +14,7 @@ function tmon_admin_maybe_migrate_provisioned_devices() {
 
     // Add missing columns one by one (id/unit_id/machine_id assumed present)
     if (empty($have['role'])) {
-        $wpdb->query("ALTER TABLE $table ADD COLUMN role VARCHAR(32) DEFAULT 'base'");
+		$wpdb->query("ALTER TABLE $table ADD COLUMN role VARCHAR(32) NULL DEFAULT NULL");
     }
     if (empty($have['company_id'])) {
         $wpdb->query("ALTER TABLE $table ADD COLUMN company_id BIGINT UNSIGNED NULL");
@@ -132,8 +132,9 @@ function tmon_admin_maybe_migrate_tmon_devices_columns() {
     if (empty($cols['provisioned'])) $wpdb->query("ALTER TABLE $table ADD COLUMN provisioned TINYINT(1) DEFAULT 0");
     if (empty($cols['wordpress_api_url'])) $wpdb->query("ALTER TABLE $table ADD COLUMN wordpress_api_url VARCHAR(255) DEFAULT ''");
     if (empty($cols['provisioned_at'])) $wpdb->query("ALTER TABLE $table ADD COLUMN provisioned_at DATETIME DEFAULT NULL");
-	if (empty($cols['role'])) $wpdb->query("ALTER TABLE $table ADD COLUMN role VARCHAR(32) DEFAULT 'base'");
+	if (empty($cols['role'])) $wpdb->query("ALTER TABLE $table ADD COLUMN role VARCHAR(32) NULL DEFAULT NULL");
 	if (empty($cols['plan'])) $wpdb->query("ALTER TABLE $table ADD COLUMN plan VARCHAR(64) DEFAULT 'standard'");
+	if (!empty($cols['role'])) $wpdb->query("ALTER TABLE $table MODIFY COLUMN role VARCHAR(32) NULL DEFAULT NULL");
 }
 add_action('admin_init', 'tmon_admin_maybe_migrate_tmon_devices_columns');
 
@@ -1135,6 +1136,10 @@ add_action('admin_post_tmon_admin_provision_device', function(){
 	$settings_staged = isset($_POST['settings_staged']) ? wp_unslash($_POST['settings_staged']) : '';
 
 	$ok = false;
+	if (!in_array($role, array('base', 'wifi', 'remote'), true)) {
+		wp_safe_redirect(add_query_arg('tmon_provision_error', 'role_required', wp_get_referer() ?: admin_url('admin.php?page=tmon-admin-provisioning')));
+		exit;
+	}
 	$registry_violation = '';
 	if ($unit_id && $machine_id) {
 		$registry_violation = tmon_admin_registry_violation_message($unit_id, $machine_id);

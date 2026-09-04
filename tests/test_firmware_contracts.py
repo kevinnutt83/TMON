@@ -308,6 +308,14 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("parts[1] == uid and parts[2] == 'NEXT'", source)
         self.assertIn("await _record_lora_session_failure('READY timeout')", source)
         self.assertIn("await _record_lora_session_failure('Final ACK timeout')", source)
+        self.assertIn('def _assemble_simple_session_field_data(', source)
+        self.assertIn('def _simple_session_parse_chunk(', source)
+        self.assertTrue("st['data']['FIELD_DATA']" in source or 'st["data"]["FIELD_DATA"]' in source)
+        self.assertIn('send_ack=False', source)
+        self.assertIn('ch[idx] = data_b64', source)
+        self.assertNotIn('ch[idx] = clear', source)
+        self.assertIn("ack += ':CMD:%s' % encoded_cmd", source)
+        self.assertIn('payload = build_sdata_snapshot(include_meta=True)', source)
 
         remote_path = os.path.join(ROOT, 'micropython', 'remote_node.py')
         with open(remote_path, 'r', encoding='utf-8') as handle:

@@ -34,7 +34,7 @@ function tmon_admin_install_schema() {
 		unit_id VARCHAR(64) NOT NULL,
 		machine_id VARCHAR(64) NOT NULL,
 		unit_name VARCHAR(128) DEFAULT '',
-		role VARCHAR(32) DEFAULT 'base',
+		role VARCHAR(32) NULL DEFAULT NULL,
 		company_id BIGINT UNSIGNED NULL,
 		plan VARCHAR(64) DEFAULT 'standard',
 		status VARCHAR(32) DEFAULT 'active',
@@ -106,13 +106,16 @@ function tmon_admin_install_schema() {
 		'wordpress_api_url' => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN wordpress_api_url VARCHAR(255) DEFAULT ''",
 		'last_seen'         => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN last_seen DATETIME NULL DEFAULT NULL",
 		'canBill'           => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN canBill TINYINT(1) NOT NULL DEFAULT 0",
-		'role'              => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN role VARCHAR(32) DEFAULT 'base'",
+		'role'              => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN role VARCHAR(32) NULL DEFAULT NULL",
 		'plan'              => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN plan VARCHAR(64) DEFAULT 'standard'",
 		'provisioned'       => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN provisioned TINYINT(1) DEFAULT 0",
 		'provisioned_at'    => "ALTER TABLE {$wpdb->prefix}tmon_devices ADD COLUMN provisioned_at DATETIME DEFAULT NULL",
 	]);
 
 	// Hub shared key
+	$wpdb->query("ALTER TABLE {$wpdb->prefix}tmon_provisioned_devices MODIFY COLUMN role VARCHAR(32) NULL DEFAULT NULL");
+	$wpdb->query("ALTER TABLE {$wpdb->prefix}tmon_devices MODIFY COLUMN role VARCHAR(32) NULL DEFAULT NULL");
+
 	if (!get_option('tmon_admin_uc_key')) {
 		update_option('tmon_admin_uc_key', wp_generate_password(32, false, false));
 	}

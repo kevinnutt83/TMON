@@ -475,6 +475,9 @@ add_action('rest_api_init', function() {
 					$safe[$k] = $v;
 				}
 			}
+            if (($safe['NODE_TYPE'] ?? '') === 'remote') {
+                $safe['ENABLE_WIFI'] = false;
+            }
 			$map = get_option('tmon_uc_staged_settings', array());
 			if (!is_array($map)) $map = array();
 			$map[$unit] = array('settings' => $safe, 'ts' => current_time('timestamp'), 'who' => wp_get_current_user()->user_login);

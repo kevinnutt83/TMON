@@ -48,7 +48,7 @@ if ( ! function_exists('tmon_admin_install_schema') ) {
 			unit_id VARCHAR(64) NOT NULL,
 			machine_id VARCHAR(64) NOT NULL,
 			unit_name VARCHAR(128) DEFAULT '',
-			role VARCHAR(32) DEFAULT 'base',
+			role VARCHAR(32) NULL DEFAULT NULL,
 			company_id BIGINT UNSIGNED NULL,
 			plan VARCHAR(64) DEFAULT 'standard',
 			status VARCHAR(32) DEFAULT 'active',
