@@ -176,17 +176,10 @@ def _net_bars_from_rssi(rssi, cuts):
     return 0
 
 
-def _draw_bars(o, x, y, bars):
-    try:
-        for i in range(3):
-            h = 3 + i * 3
-            bx = x + i * 6
-            by = y + 9 - h
-            o.rect(bx, by, 4, h, 1)
-            if i < bars:
-                o.fill_rect(bx + 1, by + 1, 2, h - 2, 1)
-    except Exception:
-        pass
+def _radio_level(connected, rssi, thresholds):
+    if not connected:
+        return 0
+    return _net_bars_from_rssi(rssi, thresholds)
 
 
 def _measure_text_w(text):
@@ -265,6 +258,30 @@ def _lora_state_label():
     except Exception:
         pass
     return 'WAIT'
+
+
+def _header_radio_line():
+    parts = []
+    if getattr(settings, 'ENABLE_WIFI', False):
+        level = _radio_level(
+            bool(_safe_attr(sdata, 'WIFI_CONNECTED', False)),
+            _safe_attr(sdata, 'wifi_rssi', None),
+            (-60, -80, -90),
+        )
+        parts.append('W%d' % level)
+    else:
+        parts.append('W-')
+    if getattr(settings, 'ENABLE_LORA', False):
+        level = _radio_level(
+            _lora_state_label() == 'OK',
+            _safe_attr(sdata, 'lora_SigStr', None),
+            (-60, -90, -120),
+        )
+        parts.append('L%d' % level)
+    else:
+        parts.append('L-')
+    parts.append('WP+' if getattr(settings, 'WORDPRESS_API_URL', '') else 'WP-')
+    return ' '.join(parts)[:MAX_TEXT_CHARS]
 
 
 def _next_sync_label():
@@ -349,15 +366,23 @@ def _render_lora_diag_page(o):
     y = BODY_TOP
     diag = get_diagnostics_snapshot() or {}
     lora = diag.get('lora', {}) if isinstance(diag, dict) else {}
-    _draw_body_line(o, y, f"Miss {lora.get('missed_syncs', 0)}")
-    y += BODY_LINE_H
-    _draw_body_line(o, y, f"Nodes {lora.get('remote_nodes', 0)}")
-    y += BODY_LINE_H
-    last_hb = lora.get('last_heartbeat_ts', 0)
-    age = int(time.time() - last_hb) if last_hb else None
-    _draw_body_line(o, y, f"HB {age if age is not None else '--'}s")
-    y += BODY_LINE_H
-    _draw_body_line(o, y, f"Conn {'Y' if _safe_attr(sdata, 'LORA_CONNECTED', False) else 'N'}")
+    _draw_body_line(o, y, 'Miss %s' % lora.get('missed_syncs', 0)); y += BODY_LINE_H
+    nodes = lora.get('remote_nodes', 0)
+    try:
+        nodes = len(getattr(settings, 'REMOTE_NODE_INFO', {}) or {}) or nodes
+    except Exception:
+        pass
+    _draw_body_line(o, y, 'Nodes %s' % nodes); y += BODY_LINE_H
+    last_hb = lora.get('last_heartbeat_ts', 0) or _safe_attr(sdata, 'lora_last_rx_ts', 0)
+    if last_hb:
+        age = max(0, int(time.time() - float(last_hb)))
+        hb = '%ds' % age if age < 1000 else 'old'
+    else:
+        hb = '--'
+    _draw_body_line(o, y, 'HB %s' % hb); y += BODY_LINE_H
+    _draw_body_line(o, y, 'LoRa %s' % _lora_state_label()); y += BODY_LINE_H
+    rssi = _safe_attr(sdata, 'lora_SigStr', None)
+    _draw_body_line(o, y, 'RSSI %s' % ('--' if rssi is None else int(rssi)))
 
 
 def _render_health_page(o):
@@ -401,13 +426,13 @@ async def _render_loop():
             # ----- Header -----
             oled.fill_rect(0, 0, 128, HEADER_HEIGHT, 0)
             try:
-                voltage = _safe_attr(sdata, 'sys_voltage', 0.0)
-                name = str(_safe_attr(settings, 'UNIT_Name', '') or _safe_attr(settings, 'UNIT_ID', ''))[-6:]
+                voltage = _safe_attr(sdata, 'sys_voltage', None)
+                name = str(_safe_attr(settings, 'UNIT_Name', '') or _safe_attr(settings, 'UNIT_ID', '') or '').strip()[:6] or 'TMON'
                 role = str(_safe_attr(settings, 'NODE_TYPE', '?') or '?')[0:1].upper()
-                identity = '%s %s' % (name, role)
-                txt = '%.2fV' % voltage
-                oled.text(identity[:9], 2, 0)
-                oled.text(txt, 128 - _measure_text_w(txt) - 2, 0)
+                identity = name if name[:1].upper() == role else '%s %s' % (name, role)
+                voltage_text = '--.-V' if voltage is None else '%.2fV' % float(voltage)
+                oled.text(identity[:10], 2, 0)
+                oled.text(voltage_text, 128 - _measure_text_w(voltage_text) - 2, 0)
             except Exception:
                 pass
 
@@ -415,13 +440,7 @@ async def _render_loop():
                 oled.text(_banner_text(_status_banner_text, _status_banner_level)[:MAX_TEXT_CHARS], 2, 8)
             elif getattr(settings, 'DISPLAY_NET_BARS', True):
                 try:
-                    if getattr(settings, 'ENABLE_WIFI', False):
-                        oled.text('W', 2, 8)
-                        _draw_bars(oled, 12, 8, _net_bars_from_rssi(_safe_attr(sdata, 'wifi_rssi', None), (-60, -80, -90)) if getattr(sdata, 'WIFI_CONNECTED', False) else 0)
-
-                    if getattr(settings, 'ENABLE_LORA', False):
-                        oled.text('L', 56, 8)
-                        _draw_bars(oled, 66, 8, _net_bars_from_rssi(_safe_attr(sdata, 'lora_SigStr', None), (-60, -90, -120)) if _lora_state_label() == 'OK' else 0)
+                    oled.text(_header_radio_line(), 2, 8)
                 except Exception:
                     pass
 
@@ -446,9 +465,11 @@ async def _render_loop():
             # ----- Footer -----
             oled.fill_rect(0, BODY_BOTTOM, 128, FOOTER_HEIGHT, 0)
             try:
-                uname = str(_safe_attr(settings, 'UNIT_Name', '') or _safe_attr(settings, 'UNIT_ID', ''))[:8]
+                short_names = ('Sum', 'Run', 'Net', 'LoRa', 'Health')
+                title = _page_title(_page_index)
+                left = short_names[_page_index] if 0 <= _page_index < len(short_names) else title[:6]
                 page = '%d/%d' % (_page_index + 1, len(PAGE_NAMES))
-                oled.text(uname, 2, BODY_BOTTOM)
+                oled.text(left, 2, BODY_BOTTOM)
                 oled.text(page, 128 - _measure_text_w(page) - 2, BODY_BOTTOM)
             except Exception:
                 pass

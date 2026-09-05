@@ -243,6 +243,9 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn('BODY_LINE_H = 8', oled_source)
         self.assertNotIn('BODY_LINE_H = 7', oled_source)
         self.assertIn('BODY_TOP + i * BODY_LINE_H', oled_source)
+        self.assertNotIn('y + 9 - h', oled_source)
+        self.assertIn('def _header_radio_line():', oled_source)
+        self.assertIn('y % 8 == 0', oled_source)
 
         with open(os.path.join(ROOT, 'micropython', 'lora.py'), 'r', encoding='utf-8') as handle:
             lora_source = handle.read()
