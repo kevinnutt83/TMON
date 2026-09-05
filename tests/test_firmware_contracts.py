@@ -246,6 +246,8 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertNotIn('y + 9 - h', oled_source)
         self.assertIn('def _header_radio_line():', oled_source)
         self.assertIn('y % 8 == 0', oled_source)
+        self.assertIn('time.ticks_ms()', oled_source)
+        self.assertIn('time.ticks_diff(', oled_source)
 
         with open(os.path.join(ROOT, 'micropython', 'lora.py'), 'r', encoding='utf-8') as handle:
             lora_source = handle.read()
@@ -254,6 +256,11 @@ class FirmwareContractTests(unittest.TestCase):
         handler = lora_source[handler_start:handler_end]
         self.assertIn('_stage_remote_lora_ota_job(remote_uid, remote_fw)', handler)
         self.assertIn('await _send_lora_ota_job(remote_uid)', handler)
+        self.assertIn("remote_fw = ''", lora_source)
+        self.assertIn('Chunk {i}/{total} repeated', lora_source)
+        self.assertIn('last_chunk_ticks', lora_source)
+        self.assertIn('Silence ACK withheld for partial session', lora_source)
+        self.assertIn('jitter_ms = sum(ord(char) for char in uid) % 801', lora_source)
 
     def test_scheduler_and_routines_contracts(self):
         with open(os.path.join(ROOT, 'micropython', 'main.py'), 'r', encoding='utf-8') as handle:

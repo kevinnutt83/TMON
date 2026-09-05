@@ -128,9 +128,11 @@ def _sync_utc_clock():
 		ntptime.host = getattr(settings, 'NTP_HOST', 'pool.ntp.org')
 		ntptime.settime()
 		settings.CLOCK_SYNCED = True
+		print('clock utc=%s synced=%s' % (time.time(), settings.CLOCK_SYNCED))
 		return True
 	except Exception as exc:
 		record_exception('ntp', exc, status='WARN')
+		print('clock utc=%s synced=%s' % (time.time(), False))
 		return False
 
 async def connectToWifiNetwork():

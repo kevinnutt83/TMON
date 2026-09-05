@@ -161,7 +161,7 @@ SOIL_PROBE_PIN = 8
 
 # ===================== Remote Deep Sleep Control =====================
 REMOTE_REQUIRE_SUCCESSFUL_SYNC_BEFORE_SLEEP = True
-REMOTE_ACK_WAIT_S = 40
+REMOTE_ACK_WAIT_S = 75
 REMOTE_FAILED_SYNC_RETRY_S = 60
 LORA_SESSION_ENABLED = True
 LORA_SIMPLE_SESSION_ONLY = True
@@ -532,6 +532,6 @@ REST_HEADER_CONFIRM = 'X-TMON-CONFIRM'
 # Keep chunk sizes large enough to reduce field-data burst count while staying below
 # the SX1262-safe transmit ceiling for secured payloads.
 LORA_MAX_PACKET_SIZE = 200
-LORA_CHUNK_SIZE = 120
+LORA_CHUNK_SIZE = 180
 OTA_TEMP_FILE = '/ota_temp.py'
 

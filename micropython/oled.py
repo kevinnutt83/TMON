@@ -34,9 +34,8 @@ _body_override_lines = None
 _body_override_until = 0
 _last_render_sig = None
 _show_voltage = True
-_last_flip_time = 0
 _page_index = 0
-_last_page_flip_time = 0
+_last_page_flip_ticks = 0
 _loop_started = False
 
 # ---------------------------------------------------------------------------
@@ -48,10 +47,9 @@ BODY_TOP = HEADER_HEIGHT
 BODY_BOTTOM = 64 - FOOTER_HEIGHT
 BODY_HEIGHT = BODY_BOTTOM - BODY_TOP
 
-FLIP_INTERVAL_S = int(getattr(settings, 'OLED_HEADER_FLIP_S', 4))
-RENDER_INTERVAL_S = 0.4
+RENDER_INTERVAL_MS = 400
 MAX_TEXT_CHARS = 16
-PAGE_INTERVAL_S = int(getattr(settings, 'OLED_PAGE_ROTATE_INTERVAL_S', 8))
+PAGE_INTERVAL_MS = int(getattr(settings, 'OLED_PAGE_ROTATE_INTERVAL_S', 8) * 1000)
 PAGE_NAMES = ('Summary', 'Runtime', 'Network', 'LoRa Diag', 'Health')
 BODY_LINE_H = 8
 
@@ -251,9 +249,9 @@ def _draw_body_line(o, y, text):
 def _lora_state_label():
     if bool(getattr(sdata, 'LORA_CONNECTED', False)):
         return 'OK'
-    last = getattr(sdata, 'lora_last_rx_ts', 0) or getattr(sdata, 'lora_last_init_ts', 0)
+    last = getattr(sdata, 'lora_last_rx_ticks', 0)
     try:
-        if last and (time.time() - float(last)) < 120:
+        if last and time.ticks_diff(time.ticks_ms(), last) < 120000:
             return 'OK'
     except Exception:
         pass
@@ -261,27 +259,17 @@ def _lora_state_label():
 
 
 def _header_radio_line():
-    parts = []
-    if getattr(settings, 'ENABLE_WIFI', False):
-        level = _radio_level(
-            bool(_safe_attr(sdata, 'WIFI_CONNECTED', False)),
-            _safe_attr(sdata, 'wifi_rssi', None),
-            (-60, -80, -90),
-        )
-        parts.append('W%d' % level)
-    else:
-        parts.append('W-')
-    if getattr(settings, 'ENABLE_LORA', False):
-        level = _radio_level(
-            _lora_state_label() == 'OK',
-            _safe_attr(sdata, 'lora_SigStr', None),
-            (-60, -90, -120),
-        )
-        parts.append('L%d' % level)
-    else:
-        parts.append('L-')
-    parts.append('WP+' if getattr(settings, 'WORDPRESS_API_URL', '') else 'WP-')
-    return ' '.join(parts)[:MAX_TEXT_CHARS]
+    def _fmt_rssi(rssi):
+        try:
+            return '--' if rssi is None else '%d' % int(rssi)
+        except Exception:
+            return '--'
+    wifi_rssi = _safe_attr(sdata, 'wifi_rssi', None)
+    lora_rssi = _safe_attr(sdata, 'lora_SigStr', None)
+    wifi = 'W%s' % (_fmt_rssi(wifi_rssi) if _safe_attr(sdata, 'WIFI_CONNECTED', False) else '--')
+    lora = 'L%s' % (_fmt_rssi(lora_rssi) if _lora_state_label() == 'OK' else '--')
+    wp = 'WP+' if getattr(settings, 'WORDPRESS_API_URL', '') else 'WP-'
+    return '%s %s %s' % (wifi, lora, wp)
 
 
 def _next_sync_label():
@@ -402,26 +390,26 @@ def _render_health_page(o):
 # Main Render Loop
 # ---------------------------------------------------------------------------
 async def _render_loop():
-    global _last_render_sig, _show_voltage, _last_flip_time
-    global _body_override_lines, _body_override_until, _page_index, _last_page_flip_time
+    global _last_render_sig, _body_override_lines, _body_override_until
+    global _page_index, _last_page_flip_ticks
 
     if not oled:
         return
 
     oled.poweron()
     oled.contrast(255)
+    _last_page_flip_ticks = time.ticks_ms()
 
     while True:
         try:
-            nowt = time.time()
-
-            if nowt - _last_flip_time >= FLIP_INTERVAL_S:
-                _show_voltage = not _show_voltage
-                _last_flip_time = nowt
-
-            if nowt - _last_page_flip_time >= PAGE_INTERVAL_S:
+            now_ticks = time.ticks_ms()
+            if time.ticks_diff(now_ticks, _last_page_flip_ticks) >= PAGE_INTERVAL_MS:
                 _page_index = (_page_index + 1) % max(1, len(PAGE_NAMES))
-                _last_page_flip_time = nowt
+                _last_page_flip_ticks = now_ticks
+
+            if getattr(sdata, 'lora_session_busy', False):
+                await asyncio.sleep_ms(RENDER_INTERVAL_MS)
+                continue
 
             # ----- Header -----
             oled.fill_rect(0, 0, 128, HEADER_HEIGHT, 0)
@@ -478,7 +466,7 @@ async def _render_loop():
         except Exception:
             pass
 
-        await asyncio.sleep(RENDER_INTERVAL_S)
+        await asyncio.sleep_ms(RENDER_INTERVAL_MS)
 
 
 # ---------------------------------------------------------------------------
