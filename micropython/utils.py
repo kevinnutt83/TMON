@@ -458,22 +458,44 @@ def get_machine_id():
     except Exception:
         return ''
 
+UNIX_FROM_2000 = 946684800
+
 def get_unix_time():
+    """Return Unix epoch timestamp (1970-based), converting from 2000-epoch if needed."""
     try:
         epoch_year = time.gmtime(0)[0] if hasattr(time, 'gmtime') else 1970
         t = int(time.time())
         if epoch_year >= 2000:
-            return t + 946684800
+            return t + UNIX_FROM_2000
         return t
     except Exception:
         return int(time.time())
 
-def _utc_iso(epoch):
+def utc_epoch():
+    """Alias for get_unix_time() - returns Unix epoch timestamp."""
+    return get_unix_time()
+
+def _utc_iso(epoch_2000_based):
+    """Format a 2000-epoch timestamp as ISO string. Caller must pre-convert if needed."""
     try:
-        value = time.gmtime(int(epoch))
+        value = time.gmtime(int(epoch_2000_based))
         return '%04d-%02d-%02dT%02d:%02d:%02dZ' % value[:6]
     except Exception:
         return ''
+
+def utc_iso(epoch=None):
+    """ISO 8601 string from Unix timestamp, handling 2000-epoch gmtime().
+    
+    On this firmware, gmtime() is 2000-based. Convert Unix -> 2000-based before formatting.
+    """
+    try:
+        e = int(epoch if epoch is not None else utc_epoch())
+    except Exception:
+        return ''
+    # gmtime() on this firmware is 2000-based. Feed it 2000-based seconds.
+    if e >= 1_000_000_000:
+        e = e - UNIX_FROM_2000
+    return _utc_iso(e)
 
 
 def _sanitize_log_text(message, max_len=96):

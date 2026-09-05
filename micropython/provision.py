@@ -344,21 +344,33 @@ async def first_boot_provision():
                 device_settings.UNIT_PROVISIONED = True
             except Exception as e:
                 await log_exception('first_boot_provision.set_provisioned', e)
+            unit_id_changed = False
+            unit_name_changed = False
             try:
                 unit_name = (resp_json.get('unit_name') or '').strip()
                 if unit_name:
-                    persist_unit_name(unit_name)
-                    device_settings.UNIT_Name = unit_name
-                    await debug_print('first_boot_provision: UNIT_Name persisted', 'PROVISION')
+                    old_name = str(getattr(device_settings, 'UNIT_Name', '')).strip()
+                    if unit_name != old_name or not old_name:
+                        persist_unit_name(unit_name)
+                        device_settings.UNIT_Name = unit_name
+                        unit_name_changed = True
+                        await debug_print('first_boot_provision: UNIT_Name persisted', 'PROVISION')
+                    else:
+                        await debug_print('first_boot_provision: UNIT_Name already set', 'PROVISION')
             except Exception as e:
                 await log_exception('first_boot_provision.persist_unit_name', e)
             try:
                 new_uid = resp_json.get('unit_id')
                 if new_uid and str(new_uid).strip():
-                    if str(new_uid).strip() != str(getattr(device_settings, 'UNIT_ID', '')):
-                        device_settings.UNIT_ID = str(new_uid).strip()
+                    old_uid = str(getattr(device_settings, 'UNIT_ID', '')).strip()
+                    new_uid_str = str(new_uid).strip()
+                    if new_uid_str != old_uid or not old_uid:
+                        device_settings.UNIT_ID = new_uid_str
                         persist_unit_id(device_settings.UNIT_ID)
+                        unit_id_changed = True
                         await debug_print('first_boot_provision: UNIT_ID persisted', 'PROVISION')
+                    else:
+                        await debug_print('first_boot_provision: UNIT_ID already set', 'PROVISION')
             except Exception as e:
                 await log_exception('first_boot_provision.persist_unit_id', e)
             try:
@@ -373,10 +385,14 @@ async def first_boot_provision():
                     persist_node_type(role_val)
             except Exception as e:
                 await log_exception('first_boot_provision.persist_site_or_role', e)
-            try:
-                machine.soft_reset()
-            except Exception as e:
-                await log_exception('first_boot_provision.soft_reset', e)
+            # Only soft reset if unit_id or unit_name actually changed
+            if unit_id_changed or unit_name_changed:
+                try:
+                    machine.soft_reset()
+                except Exception as e:
+                    await log_exception('first_boot_provision.soft_reset', e)
+            else:
+                await debug_print('first_boot_provision: identities unchanged, no reset', 'PROVISION')
         else:
             try:
                 await display_message("Provision Failed", 2)
