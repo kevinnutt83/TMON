@@ -11,6 +11,7 @@ import settings
 import machine
 import gc
 import random
+import sdata
 
 from config_persist import write_text, read_json, set_flag, is_flag_set, write_json, write_json_atomic, read_text
 
@@ -578,12 +579,7 @@ async def debug_print(message, status):
     if should_print:
         safe_msg = _sanitize_log_text(message)
         try:
-            unixt = get_unix_time()
-            ts = time.localtime(unixt) if hasattr(time, 'localtime') else None
-            if ts:
-                timestamp = f"{ts[0]:04}-{ts[1]:02}-{ts[2]:02} {ts[3]:02}:{ts[4]:02}:{ts[5]:02}"
-            else:
-                timestamp = str(unixt)
+            timestamp = utc_iso()[0:19].replace('T', ' ')
         except Exception:
             timestamp = '0'
         print(f"[{timestamp}] [{status}] {safe_msg}")
@@ -1204,43 +1200,45 @@ def _compact_field_record(record):
 
 def record_field_data():
     """Append the current device telemetry snapshot for transport and storage."""
-    entry = {}
-    node_type = getattr(settings, 'NODE_TYPE', 'base')
-    entry['unit_id'] = getattr(settings, 'UNIT_ID', '')
-    entry['node_type'] = node_type
-    entry['ts'] = utc_epoch()
-    entry['ts_iso'] = utc_iso(entry['ts'])
-    entry['fw'] = getattr(settings, 'FIRMWARE_VERSION', '')
-    temp_f = getattr(sdata, 'cur_device_temp_f', None) or getattr(sdata, 'cur_temp_f', None)
-    if temp_f is not None:
-        entry['temp_f'] = float(temp_f)
-    humid = getattr(sdata, 'cur_device_humid', None) or getattr(sdata, 'cur_humid', None)
-    if humid is not None:
-        entry['humid'] = float(humid)
-    bar = getattr(sdata, 'cur_device_bar_pres', None) or getattr(sdata, 'cur_bar_pres', None)
-    if bar is not None:
-        entry['bar'] = float(bar)
-    volt = getattr(sdata, 'sys_voltage', None)
-    if volt is not None:
-        entry['volt'] = float(volt)
-    rssi = getattr(sdata, 'wifi_rssi', None)
-    if rssi is not None:
-        entry['rssi'] = int(rssi)
-    lora_rssi = getattr(sdata, 'lora_SigStr', None)
-    if lora_rssi is not None:
-        entry['lora_rssi'] = int(lora_rssi)
-    if bool(getattr(settings, 'FIELD_DATA_INCLUDE_IO', False)):
-        full_snap = build_sdata_snapshot(include_meta=False)
-        for k in ['relay1', 'relay2', 'relay3', 'relay4', 'frostwatch_active', 'heatwatch_active']:
-            if k in full_snap:
-                entry[k] = full_snap[k]
-
     try:
-        from utils import led_status_flash
-        led_status_flash('FIELD_LOG')
-        append_field_data_entry(entry)
+        entry = {}
+        node_type = getattr(settings, 'NODE_TYPE', 'base')
+        entry['unit_id'] = getattr(settings, 'UNIT_ID', '')
+        entry['node_type'] = node_type
+        entry['ts'] = utc_epoch()
+        entry['ts_iso'] = utc_iso(entry['ts'])
+        entry['fw'] = getattr(settings, 'FIRMWARE_VERSION', '')
+        temp_f = getattr(sdata, 'cur_device_temp_f', None) or getattr(sdata, 'cur_temp_f', None)
+        if temp_f is not None:
+            entry['temp_f'] = float(temp_f)
+        humid = getattr(sdata, 'cur_device_humid', None) or getattr(sdata, 'cur_humid', None)
+        if humid is not None:
+            entry['humid'] = float(humid)
+        bar = getattr(sdata, 'cur_device_bar_pres', None) or getattr(sdata, 'cur_bar_pres', None)
+        if bar is not None:
+            entry['bar'] = float(bar)
+        volt = getattr(sdata, 'sys_voltage', None)
+        if volt is not None:
+            entry['volt'] = float(volt)
+        rssi = getattr(sdata, 'wifi_rssi', None)
+        if rssi is not None:
+            entry['rssi'] = int(rssi)
+        lora_rssi = getattr(sdata, 'lora_SigStr', None)
+        if lora_rssi is not None:
+            entry['lora_rssi'] = int(lora_rssi)
+        if bool(getattr(settings, 'FIELD_DATA_INCLUDE_IO', False)):
+            full_snap = build_sdata_snapshot(include_meta=False)
+            for k in ['relay1', 'relay2', 'relay3', 'relay4', 'frostwatch_active', 'heatwatch_active']:
+                if k in full_snap:
+                    entry[k] = full_snap[k]
+        try:
+            from utils import led_status_flash
+            led_status_flash('FIELD_LOG')
+            append_field_data_entry(entry)
+        except Exception as e:
+            print('Error recording field data: %s' % e)
     except Exception as e:
-        print(f"Error recording field data: {e}")
+        print('Error in record_field_data: %s' % e)
 
 async def send_field_data_log():
     """Send field_data.log to WordPress and rotate on confirmation."""

@@ -1556,9 +1556,15 @@ async def check_incomplete_bursts():
                     assembled = _assemble_simple_session_field_data(st)
                     if assembled is None:
                         missing = [index for index in range(total) if index not in field_chunks]
-                        await debug_print(
-                            f"Simple session partial {uid} have={have}/{total} missing={missing}", "WARN"
-                        )
+                        # Rate-limit this log to once per 30s per uid
+                        last_log_key = f'_burst_incomplete_{uid}'
+                        last_log_time = getattr(globals(), last_log_key, 0)
+                        now = time.time()
+                        if now - last_log_time >= 30:
+                            await debug_print(
+                                f"Simple session partial {uid} have={have}/{total} missing={missing}", "WARN"
+                            )
+                            globals()[last_log_key] = now
                         continue
                     if not st.get('staged_ok') and callable(globals().get('process_remote_field_data')):
                         await process_remote_field_data(uid, st, send_ack=False)
