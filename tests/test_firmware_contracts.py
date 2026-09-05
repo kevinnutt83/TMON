@@ -252,6 +252,24 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn('_stage_remote_lora_ota_job(remote_uid, remote_fw)', handler)
         self.assertIn('await _send_lora_ota_job(remote_uid)', handler)
 
+    def test_scheduler_and_routines_contracts(self):
+        with open(os.path.join(ROOT, 'micropython', 'main.py'), 'r', encoding='utf-8') as handle:
+            source = handle.read()
+        self.assertIn('run_once=False', source)
+        self.assertIn("'run_once': bool(run_once)", source)
+        self.assertIn("tm.add_task(first_boot_provision, 'first_boot_provision', 30, run_once=True)", source)
+        field_start = source.index('async def periodic_field_data_task():')
+        field_end = source.index('\n# Periodic command poll task', field_start)
+        self.assertNotIn('while True', source[field_start:field_end])
+
+        with open(os.path.join(ROOT, 'micropython', 'routines.py'), 'r', encoding='utf-8') as handle:
+            routines_source = handle.read()
+        self.assertIn("'DEBUG_ROUTINES'", open(SETTINGS_PATH, 'r', encoding='utf-8').read())
+        self.assertIn('def validate_routine(routine):', routines_source)
+        self.assertIn("ALLOWED_ACTIONS = {'relay', 'log', 'flag', 'record', 'sleep_skip'}", routines_source)
+        self.assertNotIn('exec(', routines_source)
+        self.assertNotIn('eval(', routines_source)
+
     def test_lora_hmac_parity_helpers_are_stable(self):
         lora_path = os.path.join(ROOT, 'micropython', 'lora.py')
         with open(lora_path, 'r', encoding='utf-8') as handle:

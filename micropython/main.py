@@ -19,6 +19,7 @@ from lora import connectLora, log_error, TMON_AI, check_missed_syncs, periodic_w
 from ota import check_for_update, apply_pending_update
 from oled import update_display, display_message
 from settings_apply import load_applied_settings_on_boot, settings_apply_loop
+from routines import run_routines_once
 try:
     from log_rotate import log_rotate_loop, rotate_logs_if_needed
 except Exception:
@@ -157,7 +158,7 @@ class TaskManager:
     def __init__(self):
         self.tasks = []
         self._task_names = set()
-    def add_task(self, coro_func, name, interval):
+    def add_task(self, coro_func, name, interval, run_once=False):
         task_name = str(name)
         if task_name in self._task_names:
             return False
@@ -165,7 +166,8 @@ class TaskManager:
         self.tasks.append({
             'coro_func': coro_func,
             'name': task_name,
-            'interval': interval,
+            'interval': max(1, int(interval)),
+            'run_once': bool(run_once),
             'last_run': 0,
             'task': None
         })
@@ -176,15 +178,14 @@ class TaskManager:
         await asyncio.gather(*(t['task'] for t in self.tasks if t['task'] is not None))
     async def _task_wrapper(self, t):
         while True:
-            start = time.ticks_ms()
             try:
                 await t['coro_func']()
             except Exception as e:
                 await log_exception(f"Task {t['name']}", e)
+            if t.get('run_once'):
+                return
             t['last_run'] = time.ticks_ms()
-            elapsed = (t['last_run'] - start) // 1000
-            sleep_time = max(0, t['interval'] - elapsed)
-            await asyncio.sleep(sleep_time)
+            await asyncio.sleep(t['interval'])
 
 # First-boot provisioning check-in
 async def first_boot_provision():
@@ -331,27 +332,19 @@ async def sample_task():
 # Periodic field data task
 async def periodic_field_data_task():
     from utils import send_field_data_log
-    from lora import send_field_data_controlled
-    while True:
-        if not is_provisioned():
-            await asyncio.sleep(2)
-            continue
-        try:
-            if getattr(settings, 'DEVICE_SUSPENDED', False):
-                await debug_print("suspended: skip sfd send", "WARN")
-            else:
-                if str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'remote':
-                    await send_field_data_controlled(None)
-                else:
-                    await send_field_data_log()
-        except Exception as e:
-            await log_exception('periodic_field_data_task', e)
-        try:
-            from utils import maybe_gc
-            maybe_gc("field_data_send", min_interval_ms=12000, mem_free_below=40 * 1024)
-        except Exception:
-            pass
-        await asyncio.sleep(settings.FIELD_DATA_SEND_INTERVAL)
+    if not is_provisioned() or getattr(settings, 'DEVICE_SUSPENDED', False):
+        return
+    if str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'remote':
+        return
+    try:
+        await send_field_data_log()
+    except Exception as e:
+        await log_exception('periodic_field_data_task', e)
+    try:
+        from utils import maybe_gc
+        maybe_gc("field_data_send", min_interval_ms=12000, mem_free_below=40 * 1024)
+    except Exception:
+        pass
 
 # Periodic command poll task
 async def periodic_command_poll_task():
@@ -359,26 +352,18 @@ async def periodic_command_poll_task():
         from wprest import poll_device_commands
     except Exception:
         poll_device_commands = None
-    interval = int(getattr(settings, 'COMMANDS_POLL_INTERVAL_S', 20))
-    jitter = float(getattr(settings, 'COMMANDS_POLL_JITTER_S', 0))
-    while True:
-        if not is_provisioned():
-            await asyncio.sleep(2)
-            continue
-        if poll_device_commands and not getattr(settings, 'DEVICE_SUSPENDED', False):
-            try:
-                await poll_device_commands()
-            except Exception as e:
-                await log_exception('periodic_command_poll_task', e)
-            try:
-                from utils import maybe_gc
-                maybe_gc("cmd_poll", min_interval_ms=12000, mem_free_below=40 * 1024)
-            except Exception:
-                pass
-        sleep_s = max(2, interval)
-        if jitter > 0 and random:
-            sleep_s += random.uniform(0, jitter)
-        await asyncio.sleep(sleep_s)
+    if not is_provisioned() or getattr(settings, 'DEVICE_SUSPENDED', False):
+        return
+    if poll_device_commands:
+        try:
+            await poll_device_commands()
+        except Exception as e:
+            await log_exception('periodic_command_poll_task', e)
+        try:
+            from utils import maybe_gc
+            maybe_gc("cmd_poll", min_interval_ms=12000, mem_free_below=40 * 1024)
+        except Exception:
+            pass
 
 
 async def periodic_diagnostics_task():
@@ -386,37 +371,31 @@ async def periodic_diagnostics_task():
         from wprest import send_diagnostics_to_wp
     except Exception:
         send_diagnostics_to_wp = None
-    interval = int(getattr(settings, 'DIAGNOSTIC_SEND_INTERVAL_S', 300))
-    while True:
-        if not is_provisioned():
-            await asyncio.sleep(2)
-            continue
-        if not bool(getattr(settings, 'ENABLE_DIAGNOSTICS_UPLOAD', True)):
-            await asyncio.sleep(interval)
-            continue
-        if send_diagnostics_to_wp and not getattr(settings, 'DEVICE_SUSPENDED', False):
-            try:
-                await send_diagnostics_to_wp()
-            except Exception as e:
-                await log_exception('periodic_diagnostics_task', e)
-        await asyncio.sleep(interval)
+    if not is_provisioned() or not bool(getattr(settings, 'ENABLE_DIAGNOSTICS_UPLOAD', True)):
+        return
+    if send_diagnostics_to_wp and not getattr(settings, 'DEVICE_SUSPENDED', False):
+        try:
+            await send_diagnostics_to_wp()
+        except Exception as e:
+            await log_exception('periodic_diagnostics_task', e)
 
 
 node_role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
 
 # ========================== TASK SETUP ==========================
 tm = TaskManager()
-tm.add_task(first_boot_provision, 'first_boot_provision', 0)
+tm.add_task(first_boot_provision, 'first_boot_provision', 30, run_once=True)
 if settings.SAMPLE_TEMP or getattr(settings, 'SAMPLE_HUMID', False) or getattr(settings, 'SAMPLE_BAR', False):
     tm.add_task(sample_task, 'sample', 30)
 tm.add_task(periodic_field_data_task, 'field_data', settings.FIELD_DATA_SEND_INTERVAL)
 if node_role != 'remote':
-    tm.add_task(periodic_command_poll_task, 'command_poll', 10)
+    tm.add_task(periodic_command_poll_task, 'command_poll', 20)
 tm.add_task(check_for_update, 'ota_check', 3600)
 tm.add_task(apply_pending_update, 'ota_apply', settings.OTA_APPLY_INTERVAL_S)
 if settings.ENABLE_OLED:
     tm.add_task(update_display, 'display', settings.OLED_UPDATE_INTERVAL_S)
 tm.add_task(settings_apply_loop, 'settings_apply', 60)
+tm.add_task(run_routines_once, 'routines', 30)
 if engine_loop:
     tm.add_task(engine_loop, 'engine', settings.ENGINE_POLL_INTERVAL_S)
 if node_role != 'remote':
@@ -432,7 +411,10 @@ try:
 except Exception as e:
     _record_startup_exception('add_wp_sync_task', e)
 if user_commands_task:
-    tm.add_task(user_commands_task, 'user_commands', 0)
+    try:
+        asyncio.create_task(user_commands_task())
+    except Exception as e:
+        _record_startup_exception('start_user_commands', e)
 
 # ========================== MAIN ENTRY POINT ==========================
 async def main():

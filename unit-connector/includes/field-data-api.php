@@ -293,7 +293,8 @@ function tmon_uc_receive_field_data($request) {
     $flatten = function($rec) {
         if (!is_array($rec)) return [];
         $out = [];
-        $out['timestamp'] = $rec['timestamp'] ?? ($rec['time'] ?? current_time('mysql'));
+        $out['timestamp'] = $rec['ts'] ?? ($rec['timestamp'] ?? ($rec['time'] ?? ''));
+        $out['server_ts'] = $rec['server_ts'] ?? null;
         $out['unit_id']   = $rec['unit_id'] ?? '';
         $out['machine_id']= $rec['machine_id'] ?? '';
         $out['name']      = $rec['name'] ?? '';
@@ -461,6 +462,10 @@ function tmon_uc_receive_field_data($request) {
         }
 
         foreach ($targets as $t) {
+            $t['server_ts'] = time();
+            if (!isset($t['ts']) && isset($t['timestamp'])) {
+                $t['ts'] = $t['timestamp'];
+            }
             $rec_unit = isset($t['unit_id']) ? sanitize_text_field($t['unit_id']) : $unit_id;
             $rec_machine = isset($t['machine_id']) ? sanitize_text_field($t['machine_id']) : $machine_id;
 

@@ -1414,6 +1414,42 @@ async def poll_device_commands():
                     await debug_print(f'poll_device_commands: suspend command failed: {se}', 'ERROR')
                     if cmd_id is not None:
                         confirm_items.append((cmd_id, 'failed', {'reason': 'suspend_command_error'}))
+            elif ctype == 'debug_set':
+                allowed = {'DEBUG', 'DEBUG_LORA', 'DEBUG_FIELD_DATA', 'DEBUG_WPREST', 'DEBUG_PROVISION', 'DEBUG_OTA', 'DEBUG_BASE_NODE', 'DEBUG_REMOTE_NODE', 'DEBUG_USER_CMD', 'DEBUG_ROUTINES'}
+                updates = {key: bool(value) for key, value in payload.items() if key in allowed}
+                if updates:
+                    persist_custom_settings(updates)
+                    for key, value in updates.items():
+                        setattr(settings, key, value)
+                    handled_any = True
+                    if cmd_id is not None:
+                        confirm_items.append((cmd_id, 'done', {'updated': updates}))
+            elif ctype == 'reboot':
+                handled_any = True
+                if cmd_id is not None:
+                    confirm_items.append((cmd_id, 'done', {'rebooting': True}))
+                try:
+                    import machine
+                    machine.soft_reset()
+                except Exception:
+                    pass
+            elif ctype in ('routine_upsert', 'routine_delete', 'routine_clear'):
+                try:
+                    from routines import upsert_routine, delete_routine, _load, _save
+                    if ctype == 'routine_upsert':
+                        ok = upsert_routine(payload)
+                    elif ctype == 'routine_delete':
+                        ok = delete_routine(payload.get('id'))
+                    else:
+                        routines = _load()
+                        routines[:] = []
+                        ok = _save()
+                    handled_any = bool(ok)
+                    if cmd_id is not None:
+                        confirm_items.append((cmd_id, 'done' if ok else 'failed', {'type': ctype}))
+                except Exception as routine_error:
+                    if cmd_id is not None:
+                        confirm_items.append((cmd_id, 'failed', {'reason': str(routine_error)}))
             else:
                 await debug_print(f'poll_device_commands: unsupported command type {ctype}', 'WARN')
                 if cmd_id is not None and bool(getattr(settings, 'COMMAND_ACK_UNSUPPORTED', True)):

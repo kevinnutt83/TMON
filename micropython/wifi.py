@@ -121,6 +121,18 @@ def _refresh_rssi(wlan):
 		record_exception('wifi._refresh_rssi', e, status='WARN')
 		sdata.wifi_rssi = 0
 
+def _sync_utc_clock():
+	try:
+		import ntptime
+		settings = get_settings()
+		ntptime.host = getattr(settings, 'NTP_HOST', 'pool.ntp.org')
+		ntptime.settime()
+		settings.CLOCK_SYNCED = True
+		return True
+	except Exception as exc:
+		record_exception('ntp', exc, status='WARN')
+		return False
+
 async def connectToWifiNetwork():
 	s = get_settings()
 	# Enforce explicit early return for remote nodes
@@ -145,6 +157,7 @@ async def connectToWifiNetwork():
 	if wlan.isconnected():
 		_refresh_rssi(wlan)
 		sdata.WIFI_CONNECTED = True
+		_sync_utc_clock()
 		await debug_print("wifi: already connected", "WIFI")
 		# Friendly OLED notice
 		try:
@@ -189,6 +202,7 @@ async def connectToWifiNetwork():
 			if wlan.isconnected():
 				await debug_print("Connected.", "WIFI")
 				sdata.WIFI_CONNECTED = True
+				_sync_utc_clock()
 				try:
 					s.net_wifi_MAC = wlan.config('mac')
 					s.net_wifi_IP = wlan.ifconfig()[0]

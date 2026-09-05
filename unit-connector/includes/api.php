@@ -566,7 +566,7 @@ add_action('rest_api_init', function() {
 
             $params = $request->get_json_params();
             $unit = sanitize_text_field($params['unit_id'] ?? ($params['device_id'] ?? ''));
-            $cmd  = sanitize_text_field($params['command'] ?? '');
+            $cmd  = sanitize_text_field($params['command'] ?? ($params['type'] ?? ''));
             $data = isset($params['params']) ? $params['params'] : ($params['payload'] ?? []);
 
             if (!$unit || !$cmd) return new WP_REST_Response(['ok'=>false,'msg'=>'unit_id and command required'],400);

@@ -83,6 +83,19 @@ $name_nonce = wp_create_nonce('tmon_uc_nonce');
     	<button id="tmon_update_unit_name_btn" class="button">Update name</button>
     	<span id="tmon_unit_name_status" style="margin-left:12px;"></span>
     </div>
+    <div class="card" style="margin-top:16px;padding:12px;">
+        <h2>Commands</h2>
+        <p class="description">Remote units receive queued commands during their next LoRa ACK window.</p>
+        <select id="tmon-command-type">
+            <option value="settings_update">settings_update</option><option value="relay_ctrl">relay_ctrl</option>
+            <option value="suspend">suspend</option><option value="resume">resume</option>
+            <option value="debug_set">debug_set</option><option value="routine_upsert">routine_upsert</option>
+            <option value="routine_delete">routine_delete</option><option value="reboot">reboot</option>
+        </select>
+        <textarea id="tmon-command-payload" rows="5" style="width:100%;font-family:monospace;margin-top:8px;">{}</textarea>
+        <p><button class="button button-primary" id="tmon-command-send">Send command</button><span id="tmon-command-status" style="margin-left:8px;"></span></p>
+        <p><button class="button" id="tmon-debug-enable">Enable diagnostics</button> <button class="button" id="tmon-debug-disable">Disable diagnostics</button></p>
+    </div>
 </div>
 <script>
 (function(){
@@ -103,6 +116,28 @@ $name_nonce = wp_create_nonce('tmon_uc_nonce');
 
     var machineEl = document.getElementById('tmon-device-machine');
     var updatedEl = document.getElementById('tmon-device-updated');
+    var commandType = document.getElementById('tmon-command-type');
+    var commandPayload = document.getElementById('tmon-command-payload');
+    var commandStatus = document.getElementById('tmon-command-status');
+
+    function sendCommand(type, payload) {
+        var unit = picker.value;
+        if (!unit) { commandStatus.textContent = 'Choose a unit first'; return; }
+        commandStatus.textContent = 'Queueing...';
+        fetch('<?php echo esc_url_raw(rest_url('tmon/v1/device/command')); ?>', {
+            method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({unit_id: unit, command: type, type: type, payload: payload})
+        }).then(function(r){ return r.json(); }).then(function(res){
+            commandStatus.textContent = res && res.ok ? ('Queued #' + res.id) : 'Queue failed';
+        }).catch(function(){ commandStatus.textContent = 'Queue failed'; });
+    }
+
+    document.getElementById('tmon-command-send').addEventListener('click', function(){
+        try { sendCommand(commandType.value, JSON.parse(commandPayload.value)); }
+        catch(e) { commandStatus.textContent = 'Invalid JSON'; }
+    });
+    document.getElementById('tmon-debug-enable').addEventListener('click', function(){ sendCommand('debug_set', {DEBUG: true}); });
+    document.getElementById('tmon-debug-disable').addEventListener('click', function(){ sendCommand('debug_set', {DEBUG: false}); });
 
     function updateNameInputFromPicker() {
         var opt = (picker && picker.options && picker.selectedIndex >= 0) ? picker.options[picker.selectedIndex] : null;

@@ -151,6 +151,16 @@ ALLOWLIST = {
     'COMMAND_CONFIRM_DELAY_S': _to_float,
     'COMMANDS_RESULT_TIMEOUT_S': _to_int,
     'COMMAND_ACK_UNSUPPORTED': _to_bool,
+    'DEBUG': _to_bool,
+    'DEBUG_LORA': _to_bool,
+    'DEBUG_FIELD_DATA': _to_bool,
+    'DEBUG_WPREST': _to_bool,
+    'DEBUG_PROVISION': _to_bool,
+    'DEBUG_OTA': _to_bool,
+    'DEBUG_BASE_NODE': _to_bool,
+    'DEBUG_REMOTE_NODE': _to_bool,
+    'DEBUG_USER_CMD': _to_bool,
+    'DEBUG_ROUTINES': _to_bool,
 
     # Higher-level configuration.
     'NODE_TYPE': _to_str,
@@ -1265,28 +1275,7 @@ async def apply_staged_settings_once():
 async def settings_apply_loop(
     interval_s=60
 ):
-
-    while True:
-
-        try:
-
-            await apply_staged_settings_once()
-
-        except Exception as e:
-
-            await log_exception(
-                'settings_apply.settings_apply_loop',
-                e
-            )
-
-        try:
-
-            import uasyncio as _a
-
-            await _a.sleep(
-                int(interval_s)
-            )
-
-        except Exception:
-
-            break
+    try:
+        await apply_staged_settings_once()
+    except Exception as e:
+        await log_exception('settings_apply.settings_apply_loop', e)

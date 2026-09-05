@@ -9,6 +9,7 @@ Goals
 - Security: remove hard-coded secrets, use persisted secure storage for credentials.
 
 Immediate tasks
+- [x] Fix task scheduling, command dispatch, UTC timestamps, debug controls, and constrained device routines.
 - [x] Complete OLED 8px layout, durable remote field-data backhaul, and simple-session LoRa OTA delivery.
 - [x] Fix silent LoRa remote/base session failures and enforce non-destructive RX polling, including simple-session chunk assembly and a single final ACK.
 - [x] Require explicit first-provision role assignment before finalizing firmware provisioning.

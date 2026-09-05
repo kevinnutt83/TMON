@@ -468,6 +468,13 @@ def get_unix_time():
     except Exception:
         return int(time.time())
 
+def _utc_iso(epoch):
+    try:
+        value = time.gmtime(int(epoch))
+        return '%04d-%02d-%02dT%02d:%02d:%02dZ' % value[:6]
+    except Exception:
+        return ''
+
 
 def _sanitize_log_text(message, max_len=96):
     try:
@@ -1229,10 +1236,14 @@ def _compact_field_record(record):
 def record_field_data():
     """Append the current device telemetry snapshot for transport and storage."""
     entry = build_sdata_snapshot(include_meta=True)
-    entry['timestamp'] = int(get_unix_time())
+    entry['ts'] = int(get_unix_time())
+    entry['timestamp'] = entry['ts']
+    entry['ts_iso'] = _utc_iso(entry['ts'])
+    if not bool(getattr(settings, 'CLOCK_SYNCED', False)):
+        entry['clock_unsynced'] = True
     try:
         ts = time.localtime()
-        entry['ts_iso'] = f"{ts[0]:04}-{ts[1]:02}-{ts[2]:02} {ts[3]:02}:{ts[4]:02}:{ts[5]:02}"
+        pass
     except Exception:
         pass
 
@@ -1293,6 +1304,7 @@ async def send_field_data_log():
         if now - _last_missing_wp_url_error_ts >= 300:
             _last_missing_wp_url_error_ts = now
             await debug_print('sfd: no WP url', 'ERROR')
+        await debug_print('sfd: cycle lines=0 sent=0 skipped=no_url', 'FIELD_DATA')
         return
     WORDPRESS_API_URL = local_url
 
@@ -1312,7 +1324,7 @@ async def send_field_data_log():
     max_retries = 5
     try:
         if _send_field_data_lock.locked():
-            await debug_print('send_field_data_log: another send in progress, skipping this cycle', 'DEBUG')
+            await debug_print('sfd: cycle lines=0 sent=0 skipped=locked', 'ERROR')
             return
 
         async with _send_field_data_lock:
@@ -1384,6 +1396,7 @@ async def send_field_data_log():
 
             if not payload_items:
                 await debug_print('sfd: no payloads', 'DEBUG')
+                await debug_print('sfd: cycle lines=%d sent=0 skipped=empty' % total_lines, 'FIELD_DATA')
                 return
 
             import urequests as requests
@@ -1481,7 +1494,7 @@ async def send_field_data_log():
                             WORDPRESS_API_URL + '/wp-json/tmon/v1/device/field-data',
                             headers=headers,
                             data=encoded,
-                            timeout=10
+                            timeout=8
                         )
                         try:
                             await debug_print(f'sfd: resp {resp.status_code}', 'DEBUG')
@@ -1573,6 +1586,7 @@ async def send_field_data_log():
             else:
                 await debug_print('sfd: all delivered, clear backlog', 'DEBUG')
                 clear_backlog()
+            await debug_print('sfd: cycle lines=%d sent=%d skipped=%s' % (total_lines, len(sent_indices), 'ok' if sent_indices else 'failed'), 'FIELD_DATA')
     except Exception as e:
         await debug_print(f'sfd: exception {type(e).__name__}: {e}', 'ERROR')
         await log_error(f'sfd: failed send: {type(e).__name__}: {e}', 'field_data')
@@ -1820,18 +1834,16 @@ async def send_field_data_via_lora():
     return ack_next_delay_hint
 
 async def periodic_field_data_send():
-    while True:
+    try:
+        if str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'remote':
+            await send_field_data_via_lora()
+        else:
+            await send_field_data_log()
+    except Exception as e:
         try:
-            if str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'remote':
-                await send_field_data_via_lora()
-            else:
-                await send_field_data_log()
-        except Exception as e:
-            try:
-                await debug_print(f'periodic_field_data_send: {e}', 'ERROR')
-            except Exception:
-                pass
-        await asyncio.sleep(settings.FIELD_DATA_SEND_INTERVAL)
+            await debug_print(f'periodic_field_data_send: {e}', 'ERROR')
+        except Exception:
+            pass
 
 # --- provisioning loop (restored, single definition) ---
 _provision_reboot_guard_written = False
@@ -1845,7 +1857,7 @@ async def periodic_provision_check():
     flag_file = getattr(settings, 'PROVISIONED_FLAG_FILE', settings.LOG_DIR + '/provisioned.flag')
     guard_file = getattr(settings, 'PROVISION_REBOOT_GUARD_FILE', settings.LOG_DIR + '/provision_reboot.flag')
 
-    while True:
+    if True:
         try:
             try:
                 flag_exists = False
@@ -1999,7 +2011,7 @@ async def periodic_provision_check():
             except Exception:
                 pass
 
-        await _a.sleep(interval)
+        return
 
 def compute_bars(rssi, cuts=None):
     try:
@@ -2042,23 +2054,8 @@ def is_http_allowed_for_node():
         return True
 
 def start_background_tasks():
-    try:
-        import uasyncio as _a
-        if not hasattr(settings, '_BG_TASKS_STARTED'):
-            settings._BG_TASKS_STARTED = True
-            try:
-                _a.create_task(periodic_provision_check())
-            except Exception:
-                pass
-            try:
-                wp_url = str(getattr(settings, 'WORDPRESS_API_URL', '')).strip()
-                role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
-                if role == 'remote' or (wp_url and role in ('base', 'wifi')):
-                    _a.create_task(periodic_field_data_send())
-            except Exception:
-                pass
-    except Exception:
-        pass
+    # main.py TaskManager owns periodic provisioning and field-data work.
+    settings._BG_TASKS_STARTED = True
 
 # NEW: base-node helpers to stage remote data for Unit Connector forwarding
 def stage_remote_field_data(remote_unit_id, records):
