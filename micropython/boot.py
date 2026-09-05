@@ -82,9 +82,9 @@ async def boot():
                     inet_ok = False
                 if inet_ok:
                     try:
-                        from main import first_boot_provision
-                        await first_boot_provision()
                         import provision
+                        if callable(getattr(provision, 'first_boot_provision', None)):
+                            await provision.first_boot_provision()
                         mid = getattr(settings, 'MACHINE_ID', None)
                         prov = provision.fetch_provisioning(unit_id=getattr(settings, 'UNIT_ID', None), machine_id=mid, base_url=getattr(settings, 'TMON_ADMIN_API_URL', None))
                         if isinstance(prov, dict) and prov:
@@ -101,4 +101,24 @@ async def boot():
     except Exception as e:
         await log_exception('boot', e)
 
-asyncio.run(boot())
+def boot_sync():
+    """Sync setup only."""
+    pass
+
+
+def go():
+    """Run boot async, then start app once."""
+    try:
+        asyncio.run(boot())
+    except Exception:
+        pass
+    # Only import main AFTER first asyncio.run has returned
+    import main as tmon_main
+    try:
+        print('[BOOT] start app loop')
+        tmon_main.start()
+    except Exception as e:
+        print(f'[BOOT] app start failed: {e}')
+
+
+go()

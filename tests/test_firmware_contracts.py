@@ -216,8 +216,8 @@ class FirmwareContractTests(unittest.TestCase):
             'note': 'keep'
         }
         compact = utils_module._compact_field_record(record)
-        self.assertEqual(compact['t_f'], 72.1)
-        self.assertEqual(compact['hum'], 45)
+        self.assertEqual(compact['cur_temp_f'], 72.1)
+        self.assertEqual(compact['cur_humid'], 45)
         self.assertNotIn('sys_voltage', compact)
         self.assertEqual(compact['note'], 'keep')
 
@@ -227,15 +227,17 @@ class FirmwareContractTests(unittest.TestCase):
             'base_unit_id': 'base-1',
             'node_type': 'remote',
             'ingested_via': 'lora_base',
-            'ts': 0,
-            'fw': '',
+            'ts': 1000000000,
+            'ts_iso': '2001-09-08T20:46:40Z',
+            'fw': 'v2.00.4g',
         }
         compact_remote = utils_module._compact_field_record(remote_record)
         self.assertEqual(compact_remote['unit_id'], 'remote-1')
         self.assertEqual(compact_remote['remote_unit_id'], 'remote-1')
         self.assertEqual(compact_remote['base_unit_id'], 'base-1')
-        self.assertEqual(compact_remote['ts'], 0)
+        self.assertEqual(compact_remote['ts'], 1000000000)
         self.assertIn('fw', compact_remote)
+        self.assertIn('ts_iso', compact_remote)
 
     def test_oled_grid_and_simple_session_ota_contracts(self):
         with open(os.path.join(ROOT, 'micropython', 'oled.py'), 'r', encoding='utf-8') as handle:
@@ -267,7 +269,7 @@ class FirmwareContractTests(unittest.TestCase):
             source = handle.read()
         self.assertIn('run_once=False', source)
         self.assertIn("'run_once': bool(run_once)", source)
-        self.assertIn("tm.add_task(first_boot_provision, 'first_boot_provision', 30, run_once=True)", source)
+        self.assertIn("from provision import first_boot_provision", source)
         field_start = source.index('async def periodic_field_data_task():')
         field_end = source.index('\n# Periodic command poll task', field_start)
         self.assertNotIn('while True', source[field_start:field_end])

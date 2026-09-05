@@ -3665,21 +3665,22 @@ async def connectLora():
                             continue
 
             else:  # BASE NODE
-                if _lora_rx_ready():
-                    lora_rx_pending = False
-                    last_lora_activity_ts = current_time
-                    msg, err = lora.recv()
-                    if err == 0 and msg:
-                        # TEMP DIAGNOSTIC - log every raw packet the radio sees
-                        try:
-                            raw_preview = msg.rstrip(b'\x00')[:80]
-                            await debug_print(f"RAW RX ({len(msg)} bytes): {raw_preview!r}", "LORA_RX")
-                        except Exception as e:
-                            await debug_print(f"RAW RX log error: {e}", "LORA_RX")
-                        await handle_incoming_packet(msg)
-                        await ensure_lora_listening()
-
-                    await asyncio.sleep_ms(int(float(getattr(settings, 'LORA_LOOP_INTERVAL_S', 0.08)) * 1000))
+                if not _lora_rx_ready():
+                    await asyncio.sleep_ms(20)
+                    continue
+                lora_rx_pending = False
+                last_lora_activity_ts = current_time
+                msg, err = lora.recv()
+                if err == 0 and msg:
+                    # TEMP DIAGNOSTIC - log every raw packet the radio sees
+                    try:
+                        raw_preview = msg.rstrip(b'\x00')[:80]
+                        await debug_print(f"RAW RX ({len(msg)} bytes): {raw_preview!r}", "LORA_RX")
+                    except Exception as e:
+                        await debug_print(f"RAW RX log error: {e}", "LORA_RX")
+                    await handle_incoming_packet(msg)
+                    await ensure_lora_listening()
+                await asyncio.sleep_ms(5)
 
         except Exception as e:
             await log_error(f"Main LoRa loop error: {e}")

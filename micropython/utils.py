@@ -1149,132 +1149,69 @@ def build_sdata_snapshot(include_meta=True):
     return entry
 
 def _compact_field_record(record):
-    """Optionally compact telemetry keys and omit default/empty values.
+    """Keep identity fields and omit zero/null sensor values.
 
-    This is opt-in via settings.FIELD_DATA_COMPACT_KEYS to keep compatibility safe.
+    Always keep: unit_id, remote_unit_id, base_unit_id, node_type, ingested_via, ts, ts_iso, fw.
+    Never pad missing sensors to 0.
     """
     if not isinstance(record, dict):
         return record
 
-    if not bool(getattr(settings, 'FIELD_DATA_COMPACT_KEYS', False)):
-        return record
-
-    skip_defaults = bool(getattr(settings, 'FIELD_DATA_SKIP_DEFAULTS', True))
-    key_map = {
-        'cur_temp_f': 't_f',
-        'cur_temp_c': 't_c',
-        'cur_humid': 'hum',
-        'cur_bar_pres': 'bar',
-        'sys_voltage': 'v',
-        'free_mem': 'fm',
-        'loop_runtime': 'lr',
-        'script_runtime': 'sr',
-        'cur_device_temp_f': 'dt_f',
-        'cur_device_temp_c': 'dt_c',
-        'cur_device_humid': 'dh',
-        'cur_device_bar_pres': 'db',
-        'cur_soil_moisture': 'sm',
-        'cur_soil_temp_f': 'st_f',
-        'cur_soil_temp_c': 'st_c',
-        'engine1_speed_rpm': 'e1r',
-        'engine2_speed_rpm': 'e2r',
-        'engine1_batt_v': 'e1v',
-        'engine2_batt_v': 'e2v',
-        'cpu_temp': 'cpu',
-        'error_count': 'ec',
-    }
-
-    device_enabled = bool(
-        getattr(settings, 'SAMPLE_DEVICE_TEMP', False)
-        or getattr(settings, 'SAMPLE_DEVICE_HUMID', False)
-        or getattr(settings, 'SAMPLE_DEVICE_BAR', False)
-    )
-    probe_enabled = bool(
-        getattr(settings, 'SAMPLE_PROBE_TEMP', False)
-        or getattr(settings, 'SAMPLE_PROBE_HUMID', False)
-        or getattr(settings, 'SAMPLE_PROBE_BAR', False)
-        or getattr(settings, 'SAMPLE_TEMP', False)
-        or getattr(settings, 'SAMPLE_HUMID', False)
-        or getattr(settings, 'SAMPLE_BAR', False)
-    )
-    force_keep = set()
-    if device_enabled:
-        force_keep.update(['device_temp_c', 'device_temp_f', 'device_humid', 'device_bar'])
-    if probe_enabled:
-        force_keep.update(['probe_temp_c', 'probe_temp_f', 'probe_humid', 'probe_bar'])
-
     identity_keys = {
         'unit_id', 'remote_unit_id', 'base_unit_id', 'node_type', 'ingested_via',
-        'ts', 'timestamp', 'machine_id', 'fw', 'firmware_version',
+        'ts', 'ts_iso', 'timestamp', 'machine_id', 'fw', 'firmware_version',
     }
-
-    def _keep_val(k, v):
-        if k in identity_keys:
-            return True
-        if k in force_keep:
-            return True
-        if not skip_defaults:
-            return True
-        if v is None or v == '':
-            return False
-        if v is False:
-            return False
-        if isinstance(v, (int, float)) and v == 0:
-            return False
-        if isinstance(v, (list, tuple, dict)) and len(v) == 0:
-            return False
-        return True
 
     compact = {}
     for k, v in record.items():
-        if not _keep_val(k, v):
+        # Always keep identity fields
+        if k in identity_keys:
+            compact[k] = v
             continue
-        nk = key_map.get(k, k)
-        compact[nk] = v
+        # Omit None, empty strings, False
+        if v is None or v == '' or v is False:
+            continue
+        # Omit zero for numeric fields (voltage 0 is unread, not a valid reading)
+        if isinstance(v, (int, float)) and v == 0:
+            continue
+        # Omit empty collections
+        if isinstance(v, (list, tuple, dict)) and len(v) == 0:
+            continue
+        compact[k] = v
     return compact
 
 def record_field_data():
     """Append the current device telemetry snapshot for transport and storage."""
-    entry = build_sdata_snapshot(include_meta=True)
-    entry['ts'] = int(get_unix_time())
-    entry['timestamp'] = entry['ts']
-    entry['ts_iso'] = _utc_iso(entry['ts'])
-    if not bool(getattr(settings, 'CLOCK_SYNCED', False)):
-        entry['clock_unsynced'] = True
-    try:
-        ts = time.localtime()
-        pass
-    except Exception:
-        pass
-
-    if getattr(settings, 'NODE_TYPE', 'base') not in ('base', 'remote', 'wifi'):
-        return
-
-    device_enabled = bool(
-        getattr(settings, 'SAMPLE_DEVICE_TEMP', False)
-        or getattr(settings, 'SAMPLE_DEVICE_HUMID', False)
-        or getattr(settings, 'SAMPLE_DEVICE_BAR', False)
-    )
-    probe_enabled = bool(
-        getattr(settings, 'SAMPLE_PROBE_TEMP', False)
-        or getattr(settings, 'SAMPLE_PROBE_HUMID', False)
-        or getattr(settings, 'SAMPLE_PROBE_BAR', False)
-        or getattr(settings, 'SAMPLE_TEMP', False)
-        or getattr(settings, 'SAMPLE_HUMID', False)
-        or getattr(settings, 'SAMPLE_BAR', False)
-    )
-
-    if device_enabled:
-        entry['device_temp_c'] = entry.get('cur_device_temp_c', None)
-        entry['device_temp_f'] = entry.get('cur_device_temp_f', None)
-        entry['device_humid'] = entry.get('cur_device_humid', None)
-        entry['device_bar'] = entry.get('cur_device_bar_pres', None)
-
-    if probe_enabled:
-        entry['probe_temp_c'] = entry.get('cur_temp_c', None)
-        entry['probe_temp_f'] = entry.get('cur_temp_f', None)
-        entry['probe_humid'] = entry.get('cur_humid', None)
-        entry['probe_bar'] = entry.get('cur_bar_pres', None)
+    entry = {}
+    node_type = getattr(settings, 'NODE_TYPE', 'base')
+    entry['unit_id'] = getattr(settings, 'UNIT_ID', '')
+    entry['node_type'] = node_type
+    entry['ts'] = utc_epoch()
+    entry['ts_iso'] = utc_iso(entry['ts'])
+    entry['fw'] = getattr(settings, 'FIRMWARE_VERSION', '')
+    temp_f = getattr(sdata, 'cur_device_temp_f', None) or getattr(sdata, 'cur_temp_f', None)
+    if temp_f is not None:
+        entry['temp_f'] = float(temp_f)
+    humid = getattr(sdata, 'cur_device_humid', None) or getattr(sdata, 'cur_humid', None)
+    if humid is not None:
+        entry['humid'] = float(humid)
+    bar = getattr(sdata, 'cur_device_bar_pres', None) or getattr(sdata, 'cur_bar_pres', None)
+    if bar is not None:
+        entry['bar'] = float(bar)
+    volt = getattr(sdata, 'sys_voltage', None)
+    if volt is not None:
+        entry['volt'] = float(volt)
+    rssi = getattr(sdata, 'wifi_rssi', None)
+    if rssi is not None:
+        entry['rssi'] = int(rssi)
+    lora_rssi = getattr(sdata, 'lora_SigStr', None)
+    if lora_rssi is not None:
+        entry['lora_rssi'] = int(lora_rssi)
+    if bool(getattr(settings, 'FIELD_DATA_INCLUDE_IO', False)):
+        full_snap = build_sdata_snapshot(include_meta=False)
+        for k in ['relay1', 'relay2', 'relay3', 'relay4', 'frostwatch_active', 'heatwatch_active']:
+            if k in full_snap:
+                entry[k] = full_snap[k]
 
     try:
         from utils import led_status_flash

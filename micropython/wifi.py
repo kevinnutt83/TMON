@@ -124,15 +124,25 @@ def _refresh_rssi(wlan):
 def _sync_utc_clock():
 	try:
 		import ntptime
+		from utils import utc_epoch, utc_iso
 		settings = get_settings()
 		ntptime.host = getattr(settings, 'NTP_HOST', 'pool.ntp.org')
 		ntptime.settime()
-		settings.CLOCK_SYNCED = True
-		print('clock utc=%s synced=%s' % (time.time(), settings.CLOCK_SYNCED))
-		return True
+		utc = utc_epoch()
+		if 1_700_000_000 <= utc <= 1_900_000_000:  # 2023-2030
+			settings.CLOCK_SYNCED = True
+			print('clock raw=%s unix=%s synced=True iso=%s' % (time.time(), utc, utc_iso(utc)))
+			return True
+		else:
+			print('clock raw=%s unix=%s synced=False' % (time.time(), utc))
+			return False
 	except Exception as exc:
 		record_exception('ntp', exc, status='WARN')
-		print('clock utc=%s synced=%s' % (time.time(), False))
+		try:
+			from utils import utc_epoch
+			print('clock raw=%s unix=%s synced=False' % (time.time(), utc_epoch()))
+		except Exception:
+			print('clock sync failed')
 		return False
 
 async def connectToWifiNetwork():

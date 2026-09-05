@@ -273,5 +273,118 @@ def apply_settings(settings_doc):
     # Additional device-specific settings application here
     return True
 
+async def first_boot_provision():
+    """Async provisioning on first boot: check-in with Admin, get unit_id/name/role, persist."""
+    try:
+        flag = getattr(device_settings, 'PROVISIONED_FLAG_FILE', None)
+        if not flag:
+            flag = getattr(device_settings, 'LOG_DIR', '/logs') + '/provisioned.flag'
+    except Exception:
+        flag = '/logs/provisioned.flag'
+    
+    already = False
+    try:
+        os.stat(flag)
+        already = True
+    except Exception:
+        already = False
+    if already:
+        return
+    
+    hub = getattr(device_settings, 'TMON_ADMIN_API_URL', '')
+    if not hub or not requests:
+        return
+    
+    try:
+        from wifi import connectToWifiNetwork
+        from utils import get_machine_id, debug_print, log_exception, persist_unit_name, persist_unit_id, persist_wordpress_api_url, persist_node_type
+        from oled import display_message
+        import machine
+        
+        await connectToWifiNetwork()
+        mid = get_machine_id()
+        body = {
+            'unit_id': getattr(device_settings, 'UNIT_ID', ''),
+            'machine_id': mid,
+            'firmware_version': getattr(device_settings, 'FIRMWARE_VERSION', ''),
+            'node_type': getattr(device_settings, 'NODE_TYPE', ''),
+        }
+        url = hub.rstrip('/') + '/wp-json/tmon-admin/v1/device/check-in'
+        try:
+            resp = requests.post(url, json=body, timeout=10)
+        except TypeError:
+            resp = requests.post(url, json=body)
+        
+        ok = (resp is not None and getattr(resp, 'status_code', 0) == 200)
+        if ok:
+            try:
+                resp_json = resp.json()
+            except Exception:
+                resp_json = {}
+            site_val = (resp_json.get('site_url') or resp_json.get('wordpress_api_url') or '').strip()
+            role_val = (resp_json.get('role') or '').strip().lower()
+            assigned = bool(resp_json.get('provisioned') or resp_json.get('staged_exists'))
+            if not (assigned and site_val and role_val in ('base', 'wifi', 'remote')):
+                await debug_print('first_boot_provision: awaiting explicit role and site assignment', 'PROVISION')
+                return
+            try:
+                from config_persist import ensure_dir as _ensure_dir
+                _ensure_dir(getattr(device_settings, 'LOG_DIR', '/logs'))
+            except Exception:
+                try:
+                    os.mkdir(getattr(device_settings, 'LOG_DIR', '/logs'))
+                except OSError:
+                    pass
+            try:
+                with open(flag, 'w') as f:
+                    f.write('ok')
+            except Exception as e:
+                await log_exception('first_boot_provision.write_flag', e)
+            try:
+                device_settings.UNIT_PROVISIONED = True
+            except Exception as e:
+                await log_exception('first_boot_provision.set_provisioned', e)
+            try:
+                unit_name = (resp_json.get('unit_name') or '').strip()
+                if unit_name:
+                    persist_unit_name(unit_name)
+                    device_settings.UNIT_Name = unit_name
+                    await debug_print('first_boot_provision: UNIT_Name persisted', 'PROVISION')
+            except Exception as e:
+                await log_exception('first_boot_provision.persist_unit_name', e)
+            try:
+                new_uid = resp_json.get('unit_id')
+                if new_uid and str(new_uid).strip():
+                    if str(new_uid).strip() != str(getattr(device_settings, 'UNIT_ID', '')):
+                        device_settings.UNIT_ID = str(new_uid).strip()
+                        persist_unit_id(device_settings.UNIT_ID)
+                        await debug_print('first_boot_provision: UNIT_ID persisted', 'PROVISION')
+            except Exception as e:
+                await log_exception('first_boot_provision.persist_unit_id', e)
+            try:
+                await display_message("Provisioned", 2)
+            except Exception as e:
+                await log_exception('first_boot_provision.display_provisioned', e)
+            try:
+                if site_val:
+                    persist_wordpress_api_url(site_val)
+                if role_val:
+                    device_settings.NODE_TYPE = role_val
+                    persist_node_type(role_val)
+            except Exception as e:
+                await log_exception('first_boot_provision.persist_site_or_role', e)
+            try:
+                machine.soft_reset()
+            except Exception as e:
+                await log_exception('first_boot_provision.soft_reset', e)
+        else:
+            try:
+                await display_message("Provision Failed", 2)
+            except Exception as e:
+                await log_exception('first_boot_provision.display_failed', e)
+    except Exception as e:
+        await log_exception('first_boot_provision', e)
+
+
 # Exported helpers
-__all__ = ['fetch_provisioning', 'apply_settings']
+__all__ = ['fetch_provisioning', 'apply_settings', 'first_boot_provision']

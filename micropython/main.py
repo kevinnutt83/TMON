@@ -184,117 +184,11 @@ class TaskManager:
                 await log_exception(f"Task {t['name']}", e)
             if t.get('run_once'):
                 return
+            await debug_print('task %s ok' % t['name'], 'DEBUG')
             t['last_run'] = time.ticks_ms()
             await asyncio.sleep(t['interval'])
 
 # First-boot provisioning check-in
-async def first_boot_provision():
-    try:
-        flag = settings.PROVISIONED_FLAG_FILE
-    except Exception:
-        flag = settings.LOG_DIR + '/provisioned.flag'
-    already = False
-    try:
-        if os.stat(flag):
-            already = True
-    except Exception:
-        already = False
-    if already:
-        return
-    hub = getattr(settings, 'TMON_ADMIN_API_URL', '')
-    if not hub or not requests:
-        return
-    try:
-        await connectToWifiNetwork()
-        mid = get_machine_id()
-        body = {
-            'unit_id': settings.UNIT_ID,
-            'machine_id': mid,
-            'firmware_version': getattr(settings, 'FIRMWARE_VERSION', ''),
-            'node_type': getattr(settings, 'NODE_TYPE', ''),
-        }
-        url = hub.rstrip('/') + '/wp-json/tmon-admin/v1/device/check-in'
-        try:
-            resp = requests.post(url, json=body, timeout=10)
-        except TypeError:
-            resp = requests.post(url, json=body)
-        ok = (resp is not None and getattr(resp, 'status_code', 0) == 200)
-        if ok:
-            try:
-                resp_json = resp.json()
-            except Exception:
-                resp_json = {}
-            site_val = (resp_json.get('site_url') or resp_json.get('wordpress_api_url') or '').strip()
-            role_val = (resp_json.get('role') or '').strip().lower()
-            assigned = bool(resp_json.get('provisioned') or resp_json.get('staged_exists'))
-            if not (assigned and site_val and role_val in ('base', 'wifi', 'remote')):
-                await debug_print('first_boot_provision: awaiting explicit role and site assignment', 'PROVISION')
-                return
-            try:
-                # Ensure parent dir exists (fixes OSError ENOENT)
-                try:
-                    from config_persist import ensure_dir
-                    ensure_dir(settings.LOG_DIR)
-                except Exception:
-                    try:
-                        import uos as _os
-                    except Exception:
-                        import os as _os
-                    try:
-                        _os.mkdir(settings.LOG_DIR)
-                    except OSError:
-                        pass
-                with open(flag, 'w') as f:
-                    f.write('ok')
-            except Exception as e:
-                await log_exception('first_boot_provision.write_flag', e)
-            try:
-                settings.UNIT_PROVISIONED = True
-            except Exception as e:
-                await log_exception('first_boot_provision.set_provisioned', e)
-            try:
-                unit_name = (resp_json.get('unit_name') or '').strip()
-                if unit_name:
-                    from utils import persist_unit_name
-                    persist_unit_name(unit_name)
-                    settings.UNIT_Name = unit_name
-                    await debug_print('first_boot_provision: UNIT_Name persisted', 'PROVISION')
-            except Exception as e:
-                await log_exception('first_boot_provision.persist_unit_name', e)
-            try:
-                new_uid = resp_json.get('unit_id')
-                if new_uid and str(new_uid).strip():
-                    if str(new_uid).strip() != str(settings.UNIT_ID):
-                        settings.UNIT_ID = str(new_uid).strip()
-                        persist_unit_id(settings.UNIT_ID)
-                        await debug_print('first_boot_provision: UNIT_ID persisted', 'PROVISION')
-            except Exception as e:
-                await log_exception('first_boot_provision.persist_unit_id', e)
-            try:
-                await display_message("Provisioned", 2)
-            except Exception as e:
-                await log_exception('first_boot_provision.display_provisioned', e)
-            try:
-                if site_val:
-                    from utils import persist_wordpress_api_url
-                    persist_wordpress_api_url(site_val)
-                if role_val:
-                    settings.NODE_TYPE = role_val
-                    persist_node_type(role_val)
-            except Exception as e:
-                await log_exception('first_boot_provision.persist_site_or_role', e)
-            try:
-                machine.soft_reset()
-            except Exception as e:
-                await log_exception('first_boot_provision.soft_reset', e)
-        else:
-            try:
-                await display_message("Provision Failed", 2)
-            except Exception as e:
-                await log_exception('first_boot_provision.display_failed', e)
-    except Exception as e:
-        await log_exception('first_boot_provision', e)
-
 # Sample task
 async def sample_task():
     if not is_provisioned():
@@ -384,7 +278,11 @@ node_role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
 
 # ========================== TASK SETUP ==========================
 tm = TaskManager()
-tm.add_task(first_boot_provision, 'first_boot_provision', 30, run_once=True)
+try:
+    from provision import first_boot_provision as _first_boot_prov
+    tm.add_task(_first_boot_prov, 'first_boot_provision', 30, run_once=True)
+except Exception:
+    pass
 if settings.SAMPLE_TEMP or getattr(settings, 'SAMPLE_HUMID', False) or getattr(settings, 'SAMPLE_BAR', False):
     tm.add_task(sample_task, 'sample', 30)
 tm.add_task(periodic_field_data_task, 'field_data', settings.FIELD_DATA_SEND_INTERVAL)
@@ -442,18 +340,23 @@ try:
 except Exception:
     pass
 
-is_remote = str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'remote'
-use_deep_sleep = is_remote and bool(getattr(settings, 'REMOTE_DISABLE_CONNECTLORA_LOOP', True))
-
-if use_deep_sleep:
-    try:
-        from remote_node import run_remote_deep_sleep
-        run_remote_deep_sleep()
-    except Exception as e:
-        _record_startup_exception('run_remote_deep_sleep', e)
+def start():
+    """Called by boot.py after hardware init. Never run on import."""
+    is_remote = str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'remote'
+    use_deep_sleep = is_remote and bool(getattr(settings, 'REMOTE_DISABLE_CONNECTLORA_LOOP', True))
+    
+    if use_deep_sleep:
+        try:
+            from remote_node import run_remote_deep_sleep
+            run_remote_deep_sleep()
+        except Exception as e:
+            _record_startup_exception('run_remote_deep_sleep', e)
+            asyncio.run(main())
+    else:
+        # Continuous mode (or non-remote): run the full asyncio scheduler.
+        # connectLora() will be started inside main() because
+        # REMOTE_DISABLE_CONNECTLORA_LOOP is False.
         asyncio.run(main())
-else:
-    # Continuous mode (or non-remote): run the full asyncio scheduler.
-    # connectLora() will be started inside main() because
-    # REMOTE_DISABLE_CONNECTLORA_LOOP is False.
-    asyncio.run(main())
+
+
+# Do not call start() or asyncio.run here.
