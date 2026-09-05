@@ -221,6 +221,37 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertNotIn('sys_voltage', compact)
         self.assertEqual(compact['note'], 'keep')
 
+        remote_record = {
+            'unit_id': 'remote-1',
+            'remote_unit_id': 'remote-1',
+            'base_unit_id': 'base-1',
+            'node_type': 'remote',
+            'ingested_via': 'lora_base',
+            'ts': 0,
+            'fw': '',
+        }
+        compact_remote = utils_module._compact_field_record(remote_record)
+        self.assertEqual(compact_remote['unit_id'], 'remote-1')
+        self.assertEqual(compact_remote['remote_unit_id'], 'remote-1')
+        self.assertEqual(compact_remote['base_unit_id'], 'base-1')
+        self.assertEqual(compact_remote['ts'], 0)
+        self.assertIn('fw', compact_remote)
+
+    def test_oled_grid_and_simple_session_ota_contracts(self):
+        with open(os.path.join(ROOT, 'micropython', 'oled.py'), 'r', encoding='utf-8') as handle:
+            oled_source = handle.read()
+        self.assertIn('BODY_LINE_H = 8', oled_source)
+        self.assertNotIn('BODY_LINE_H = 7', oled_source)
+        self.assertIn('BODY_TOP + i * BODY_LINE_H', oled_source)
+
+        with open(os.path.join(ROOT, 'micropython', 'lora.py'), 'r', encoding='utf-8') as handle:
+            lora_source = handle.read()
+        handler_start = lora_source.index('async def handle_simple_session_hub(clear):')
+        handler_end = lora_source.index('\nasync def handle_incoming_packet(msg):', handler_start)
+        handler = lora_source[handler_start:handler_end]
+        self.assertIn('_stage_remote_lora_ota_job(remote_uid, remote_fw)', handler)
+        self.assertIn('await _send_lora_ota_job(remote_uid)', handler)
+
     def test_lora_hmac_parity_helpers_are_stable(self):
         lora_path = os.path.join(ROOT, 'micropython', 'lora.py')
         with open(lora_path, 'r', encoding='utf-8') as handle:

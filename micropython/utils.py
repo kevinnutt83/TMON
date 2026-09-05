@@ -48,6 +48,7 @@ SUSPENDED_FLAG = ''
 ERROR_LOG_FILE = ''
 PROVISION_LOG_FILE = ''
 CUSTOM_SETTINGS_FILE = ''
+_last_missing_wp_url_error_ts = 0
 _refresh_storage_paths()
 
 _CUSTOM_SETTINGS_MANAGED = set(getattr(settings, 'STAGED_SETTINGS_KEYS_ALLOW', [])) | set(getattr(settings, 'STAGED_SETTINGS_KEYS_DENY', [])) | {
@@ -1195,7 +1196,14 @@ def _compact_field_record(record):
     if probe_enabled:
         force_keep.update(['probe_temp_c', 'probe_temp_f', 'probe_humid', 'probe_bar'])
 
+    identity_keys = {
+        'unit_id', 'remote_unit_id', 'base_unit_id', 'node_type', 'ingested_via',
+        'ts', 'timestamp', 'machine_id', 'fw', 'firmware_version',
+    }
+
     def _keep_val(k, v):
+        if k in identity_keys:
+            return True
         if k in force_keep:
             return True
         if not skip_defaults:
@@ -1266,6 +1274,7 @@ def record_field_data():
 
 async def send_field_data_log():
     """Send field_data.log to WordPress and rotate on confirmation."""
+    global _last_missing_wp_url_error_ts
     try:
         load_persisted_wordpress_api_url()
         import wprest as _w
@@ -1280,7 +1289,10 @@ async def send_field_data_log():
     from wprest import WORDPRESS_API_URL as _wp_mod
     local_url = getattr(settings, 'WORDPRESS_API_URL', '') or _wp_mod
     if not local_url:
-        await debug_print('sfd: no WP url', 'ERROR')
+        now = time.time()
+        if now - _last_missing_wp_url_error_ts >= 300:
+            _last_missing_wp_url_error_ts = now
+            await debug_print('sfd: no WP url', 'ERROR')
         return
     WORDPRESS_API_URL = local_url
 
@@ -1330,14 +1342,30 @@ async def send_field_data_log():
                             batch.append(_compact_field_record(obj))
                             total_lines += 1
                             if len(batch) >= batch_size:
-                                current_items.append({'payload': {'unit_id': settings.UNIT_ID, 'data': batch}, 'source': 'log'})
+                                payload = {'unit_id': settings.UNIT_ID, 'data': batch}
+                                remote_info = {
+                                    rec.get('unit_id'): rec for rec in batch
+                                    if isinstance(rec, dict) and rec.get('unit_id') and
+                                    (rec.get('node_type') == 'remote' or rec.get('ingested_via') == 'lora_base')
+                                }
+                                if remote_info:
+                                    payload['REMOTE_NODE_INFO'] = remote_info
+                                current_items.append({'payload': payload, 'source': 'log'})
                                 batch = []
                                 if asyncio:
                                     await asyncio.sleep_ms(1)
                         except Exception as pe:
                             await debug_print(f'send_field_data_log: JSON parse error on a line: {pe}', 'ERROR')
             if batch:
-                current_items.append({'payload': {'unit_id': settings.UNIT_ID, 'data': batch}, 'source': 'log'})
+                payload = {'unit_id': settings.UNIT_ID, 'data': batch}
+                remote_info = {
+                    rec.get('unit_id'): rec for rec in batch
+                    if isinstance(rec, dict) and rec.get('unit_id') and
+                    (rec.get('node_type') == 'remote' or rec.get('ingested_via') == 'lora_base')
+                }
+                if remote_info:
+                    payload['REMOTE_NODE_INFO'] = remote_info
+                current_items.append({'payload': payload, 'source': 'log'})
 
             await debug_print(f'sfd: read {total_lines} lines, {len(current_items)} batches', 'DEBUG')
 
@@ -2040,20 +2068,17 @@ def stage_remote_field_data(remote_unit_id, records):
     missing, remote_unit_id is injected so the Unit Connector can distinguish
     remote vs base-origin records.
     """
-    try:
-        if not records:
-            return
-        for entry in records:
-            try:
-                if not isinstance(entry, dict):
-                    continue
-                if 'unit_id' not in entry and remote_unit_id:
-                    entry['unit_id'] = remote_unit_id
-                append_field_data_entry(entry)
-            except Exception:
-                pass
-    except Exception:
-        pass
+    if not records:
+        return
+    for entry in records:
+        if not isinstance(entry, dict):
+            continue
+        if 'unit_id' not in entry and remote_unit_id:
+            entry['unit_id'] = remote_unit_id
+        try:
+            append_field_data_entry(entry)
+        except Exception as exc:
+            debug_print('stage remote field data failed uid=%s: %s' % (remote_unit_id, exc), 'ERROR')
 
 def stage_remote_files(remote_unit_id, files):
     """Base helper: persist remote settings/state files under LOG_DIR/remotes/<unit_id>/.

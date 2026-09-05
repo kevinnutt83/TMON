@@ -421,7 +421,7 @@ async def _send_lora_ota_job(remote_uid):
     session = str(job.get('session') or '')
     version = str(job.get('version') or '')
     retries = max(1, _safe_int(getattr(settings, 'LORA_OTA_MAX_RETRIES', 3), 3))
-    chunk_len = max(96, _safe_int(getattr(settings, 'LORA_OTA_CHUNK_SIZE', 180), 180))
+    chunk_len = min(120, max(48, _safe_int(getattr(settings, 'LORA_OTA_CHUNK_SIZE', 120), 120)))
 
     meta = {
         'session': session,
@@ -430,8 +430,9 @@ async def _send_lora_ota_job(remote_uid):
         'files': [{'name': f.get('name'), 'sha256': f.get('sha256')} for f in files],
     }
     meta_b64 = _ub.b2a_base64(ujson.dumps(meta).encode()).rstrip(b'\n').decode()
-    await _send_chunked('LORA_OTA_META', meta_b64, target_uid=uid, chunk_len=chunk_len)
-    await asyncio.sleep(0.3)
+    if not await _send_chunked('LORA_OTA_META', meta_b64, target_uid=uid, chunk_len=chunk_len):
+        return False
+    await asyncio.sleep(0.5)
 
     for f in files:
         payload = {
@@ -446,15 +447,15 @@ async def _send_lora_ota_job(remote_uid):
         sent_ok = False
         for _ in range(retries):
             try:
-                await _send_chunked('LORA_OTA_FILE', payload_b64, target_uid=uid, chunk_len=chunk_len)
-                sent_ok = True
-                break
+                sent_ok = await _send_chunked('LORA_OTA_FILE', payload_b64, target_uid=uid, chunk_len=chunk_len)
+                if sent_ok:
+                    break
             except Exception:
                 await asyncio.sleep(0.5)
         if not sent_ok:
             await log_error(f'lora ota send failed file={f.get("name")} uid={uid}')
             return False
-        await asyncio.sleep(0.25)
+        await asyncio.sleep(0.5)
 
     apply_msg = {
         'session': session,
@@ -462,7 +463,8 @@ async def _send_lora_ota_job(remote_uid):
         'count': len(files),
     }
     apply_b64 = _ub.b2a_base64(ujson.dumps(apply_msg).encode()).rstrip(b'\n').decode()
-    await _send_chunked('LORA_OTA_APPLY', apply_b64, target_uid=uid, chunk_len=chunk_len)
+    if not await _send_chunked('LORA_OTA_APPLY', apply_b64, target_uid=uid, chunk_len=chunk_len):
+        return False
     job['sent'] = True
     return True
 
@@ -1119,11 +1121,12 @@ async def process_remote_field_data(uid, st, send_ack=True):
                     continue
                 merged = dict(defaults)
                 merged.update(record)
-                if not merged.get('unit_id'):
-                    merged['unit_id'] = uid
-                merged['node_type'] = merged.get('node_type') or merged.get('NODE_TYPE') or 'remote'
-                merged['ingested_via'] = 'lora_base'
+                merged['unit_id'] = uid
                 merged['remote_unit_id'] = uid
+                merged['base_unit_id'] = str(getattr(settings, 'UNIT_ID', '') or '')
+                merged['node_type'] = 'remote'
+                merged['ingested_via'] = 'lora_base'
+                merged['ts'] = merged.get('ts') or merged.get('timestamp') or time.time()
                 if 'fw' in merged and not merged.get('firmware_version'):
                     merged['firmware_version'] = merged.get('fw')
                 merged_records.append(merged)
@@ -1146,7 +1149,9 @@ async def process_remote_field_data(uid, st, send_ack=True):
                         if batch_id:
                             ack_msg += f":BID:{batch_id}"
                         ack_msg = await _secure_message(ack_msg, remote_uid=uid)
-                        await _safe_send(ack_msg.encode(), remote_uid=uid)
+                        ack_ok = await _safe_send(ack_msg.encode(), remote_uid=uid)
+                        if not ack_ok:
+                            await log_error('ACK TX failed for %s' % uid)
                         await debug_print(
                             f"Sent FIELD_DATA ACK to {uid} next={next_delay}s bid={batch_id}",
                             "BASE_NODE"
@@ -1176,10 +1181,7 @@ async def process_remote_field_data(uid, st, send_ack=True):
                 st['types'].discard('FIELD_DATA')
             if isinstance(st.get('data'), dict):
                 st['data'].pop('FIELD_DATA', None)
-            if isinstance(st.get('chunks'), dict):
-                st['chunks'].pop('FIELD_DATA', None)
-            elif isinstance(st.get('chunks'), list):
-                st['chunks'] = []
+            # Retain chunks until the next HELLO so a failed ACK can be retried.
         except Exception:
             pass
 
@@ -1741,6 +1743,7 @@ async def handle_simple_session_hub(clear):
             if assembled is None:
                 await debug_print('Simple session assemble failed for %s have=%s total=%s' % (remote_uid, len([item for item in _simple_session_chunk_slots(st) if item]), st.get('chunk_total')), 'WARN')
             elif not st.get('staged_ok') and callable(globals().get('process_remote_field_data')):
+                remote_fw = str(assembled.get('fw') or assembled.get('firmware_version') or '') if isinstance(assembled, dict) else ''
                 await process_remote_field_data(remote_uid, st, send_ack=False)
                 st['staged_ok'] = True
                 st['last_good_payload_ts'] = time.time()
@@ -1757,6 +1760,14 @@ async def handle_simple_session_hub(clear):
 
         if assembled is None and not st.get('staged_ok'):
             return True
+
+        ota_session_id = None
+        try:
+            ota_session_id = _stage_remote_lora_ota_job(remote_uid, remote_fw)
+            if ota_session_id:
+                await debug_print('LoRa OTA staged for %s: %s -> %s' % (remote_uid, remote_fw, getattr(settings, 'FIRMWARE_VERSION', '')), 'OTA')
+        except Exception as e:
+            await log_error('LoRa OTA stage error for %s: %s' % (remote_uid, e))
 
         ack = 'ACK:%s:NEXT:%d' % (remote_uid, next_delay)
         use_bid = batch_id or st.get('batch_id')
@@ -1781,6 +1792,15 @@ async def handle_simple_session_hub(clear):
             ok = False
             await debug_print('ACK send error: %s' % e, 'ERROR')
         await debug_print('FINAL ACK to %s ok=%s next=%d assembled=%s' % (remote_uid, ok, next_delay, bool(assembled)), 'BASE_NODE')
+
+        if ok and ota_session_id:
+            try:
+                await ensure_lora_listening()
+                await _send_lora_ota_job(remote_uid)
+            except Exception as e:
+                await log_error('LoRa OTA send error for %s: %s' % (remote_uid, e))
+        elif not ok:
+            await log_error('ACK TX failed for %s' % remote_uid)
 
         st['session_active'] = False
         try:
@@ -2419,16 +2439,19 @@ async def _send_chunked(msg_type, full_b64, target_uid=None, chunk_len=None):
                 oversized = True
                 break
 
-            await _safe_send(secured_bytes)
+            if not await _safe_send(secured_bytes, remote_uid=target_uid):
+                await log_error('Chunk TX failed for %s' % msg_type)
+                return False
             if num_chunks > 1:
-                await asyncio.sleep(random.uniform(0.08, 0.25))
+                await asyncio.sleep(0.5)
 
         if not oversized:
             if num_chunks > 1:
                 await asyncio.sleep(0.5)
-            return
+            return True
 
     await log_error(f"Unable to fit chunked payload under max packet size for {msg_type}")
+    return False
 
 
 async def send_remote_field_data_batch(payload):
@@ -2436,8 +2459,7 @@ async def send_remote_field_data_batch(payload):
         if not isinstance(payload, dict):
             return False
         payload_b64 = _ub.b2a_base64(ujson.dumps(payload).encode()).rstrip(b'\n').decode()
-        await _send_chunked('FIELD_DATA', payload_b64)
-        return True
+        return await _send_chunked('FIELD_DATA', payload_b64)
     except Exception as e:
         await log_error(f'send_remote_field_data_batch failed: {e}')
         return False
@@ -2773,6 +2795,8 @@ async def send_field_data_controlled(payload):
                     if len(parts) >= 4 and parts[0] == 'ACK' and parts[1] == uid and parts[2] == 'NEXT':
                         ack_bid = None
                         ack_cmd = None
+                        ack_ota_session = None
+                        ack_ota_ver = None
                         if len(parts) >= 6:
                             i = 4
                             while i + 1 < len(parts):
@@ -2780,7 +2804,10 @@ async def send_field_data_controlled(payload):
                                     ack_bid = parts[i + 1]
                                 elif parts[i] == 'CMD':
                                     ack_cmd = _decode_ack_command(parts[i + 1])
-                                    break
+                                elif parts[i] == 'OTA':
+                                    ack_ota_session = parts[i + 1]
+                                elif parts[i] == 'VER':
+                                    ack_ota_ver = parts[i + 1]
                                 i += 2
                         if batch_id and ack_bid and str(ack_bid) != str(batch_id):
                             await debug_print(
@@ -2797,6 +2824,24 @@ async def send_field_data_controlled(payload):
                         except Exception:
                             delay = None
                         await debug_print(f"FINAL ACK received: {clear}", "REMOTE_NODE")
+                        if ack_ota_session:
+                            _reset_remote_ota_rx()
+                            ota_deadline = time.time() + max(30, _safe_int(getattr(settings, 'REMOTE_OTA_WAIT_S', 90), 90))
+                            await debug_print('Remote: OTA window opened session=%s ver=%s' % (ack_ota_session, ack_ota_ver), 'OTA')
+                            await ensure_lora_listening()
+                            while time.time() < ota_deadline:
+                                if not _lora_rx_ready():
+                                    await asyncio.sleep_ms(80)
+                                    continue
+                                try:
+                                    ota_msg, ota_err = lora.recv(0)
+                                    if ota_err == 0 and ota_msg:
+                                        ota_clear = await _unsecure_message(ota_msg.rstrip(b'\x00').decode())
+                                        if ota_clear:
+                                            await _remote_handle_lora_ota_wire_message(ota_clear)
+                                except Exception as ota_error:
+                                    await debug_print('remote ota rx error: %s' % ota_error, 'WARN')
+                                await ensure_lora_listening()
                         await debug_print("=== SIMPLE SESSION SUCCESS ===", "REMOTE_NODE")
                         return delay
         except Exception as e:
