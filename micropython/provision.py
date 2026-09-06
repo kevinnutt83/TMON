@@ -282,14 +282,16 @@ async def first_boot_provision():
     except Exception:
         flag = '/logs/provisioned.flag'
     
+    # If provisioned.flag exists AND UNIT_ID is already set, skip (already provisioned).
     already = False
     try:
         os.stat(flag)
+        existing_uid = getattr(device_settings, 'UNIT_ID', '')
+        if existing_uid and str(existing_uid).strip():
+            return  # Already provisioned, nothing to do
         already = True
     except Exception:
         already = False
-    if already:
-        return
     
     hub = getattr(device_settings, 'TMON_ADMIN_API_URL', '')
     if not hub or not requests:

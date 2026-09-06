@@ -185,20 +185,58 @@ SENSITIVE = {
 # SETTINGS WHICH REQUIRE REBOOT WHEN THEY ACTUALLY CHANGE
 # ---------------------------------------------------------------------------
 
+# Settings that REQUIRE A REBOOT when they actually change.
+# Excludes WIFI_SSID/WIFI_PASS: base does not reboot for SSID changes it already has.
 REBOOT_KEYS = set([
     'NODE_TYPE',
-    'WIFI_SSID',
-    'WIFI_PASS',
-
     'RELAY_PIN1',
     'RELAY_PIN2',
-
     'ENGINE_ENABLED',
-
     'ENABLE_OLED',
     'ENABLE_LORA',
     'ENABLE_WIFI',
+    'LORA_FREQ',
+    'LORA_SF',
 ])
+
+# One reboot guard per hour (per unit_id) to prevent cascading resets.
+_REBOOT_GUARD_FILE = None
+def _get_reboot_guard_file():
+    global _REBOOT_GUARD_FILE
+    if _REBOOT_GUARD_FILE is None:
+        try:
+            _REBOOT_GUARD_FILE = getattr(settings, 'LOG_DIR', '/logs') + '/provision_reboot.guard'
+        except Exception:
+            _REBOOT_GUARD_FILE = '/logs/provision_reboot.guard'
+    return _REBOOT_GUARD_FILE
+
+def _can_reboot_now(reason=''):
+    """Check if a reboot is allowed (not within the guard window)."""
+    try:
+        from utils import utc_epoch
+        guard_file = _get_reboot_guard_file()
+        try:
+            with open(guard_file, 'r') as f:
+                guard_line = f.read().strip()
+            parts = guard_line.split('|')
+            if len(parts) >= 2:
+                stored_unit_id = parts[0]
+                stored_ts = int(parts[1])
+                current_unit_id = str(getattr(settings, 'UNIT_ID', ''))
+                now = utc_epoch()
+                if stored_unit_id == current_unit_id and (now - stored_ts) < 3600:
+                    return False
+        except (OSError, ValueError, IndexError):
+            pass
+        # Write new guard
+        try:
+            with open(guard_file, 'w') as f:
+                f.write('%s|%d|%s' % (getattr(settings, 'UNIT_ID', ''), utc_epoch(), reason))
+        except Exception:
+            pass
+        return True
+    except Exception:
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +300,17 @@ def _coerce_value(k, v):
     return v
 
 
+def _normalize_for_compare(v):
+    """Normalize a value for comparison: handle None, bool, strings."""
+    if v is None:
+        return ''
+    if isinstance(v, bool):
+        return '1' if v else '0'
+    s = str(v).strip()
+    if s.lower() in ('none', 'null'):
+        return ''
+    return s
+
 def _values_equal(a, b):
     """
     Conservative comparison helper.
@@ -285,12 +334,13 @@ def _values_equal(a, b):
             except Exception:
                 pass
 
-        # Strings.
-        if isinstance(a, str) or isinstance(b, str):
-            try:
-                return str(a) == str(b)
-            except Exception:
-                pass
+        # Strings and mixed types: normalize before comparing.
+        try:
+            norm_a = _normalize_for_compare(a)
+            norm_b = _normalize_for_compare(b)
+            return norm_a == norm_b
+        except Exception:
+            pass
 
     except Exception:
         pass
@@ -990,17 +1040,9 @@ async def apply_staged_settings_once():
         ) & REBOOT_KEYS
 
         if critical_changed:
-
+            changed_str = ','.join(sorted(list(critical_changed)))
             await debug_print(
-                'Critical settings changed: '
-                + ','.join(
-                    sorted(
-                        list(
-                            critical_changed
-                        )
-                    )
-                )
-                + '; performing soft reset',
+                'Critical settings changed: ' + changed_str + '; performing soft reset',
                 'PROVISION'
             )
 
@@ -1009,7 +1051,12 @@ async def apply_staged_settings_once():
             #
             # The local staged file has already been consumed and the
             # applied snapshot persisted BEFORE reboot.
+            # Check reboot guard: do not reboot if one was within the past hour.
             # -----------------------------------------------------------
+
+            if not _can_reboot_now(reason=changed_str):
+                await debug_print('prov: skip reset, guard fresh', 'PROVISION')
+                return False
 
             try:
 

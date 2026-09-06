@@ -129,6 +129,13 @@ try:
 except Exception as e:
     _record_startup_exception('load_persisted_custom_settings', e)
 
+# On a provisioned base, increase provision check interval to reduce noise
+try:
+    if is_provisioned():
+        settings.PROVISION_CHECK_INTERVAL_S = 300
+except Exception:
+    pass
+
 def get_script_runtime():
     now = time.ticks_ms()
     return (now - script_start_time) // 1000
