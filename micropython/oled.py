@@ -53,6 +53,30 @@ PAGE_INTERVAL_MS = int(getattr(settings, 'OLED_PAGE_ROTATE_INTERVAL_S', 8) * 100
 PAGE_NAMES = ('Summary', 'Runtime', 'Network', 'LoRa Diag', 'Health')
 BODY_LINE_H = 8
 
+_FONT5X7 = {
+    ' ': (0, 0, 0, 0, 0), '-': (8, 8, 8, 8, 8), '+': (8, 8, 62, 8, 8),
+    '.': (0, 0, 0, 0, 8), ':': (0, 20, 0, 20, 0), '/': (2, 4, 8, 16, 32),
+    '%': (25, 2, 4, 8, 19),
+    '0': (62, 81, 73, 69, 62), '1': (0, 66, 127, 64, 0),
+    '2': (98, 81, 73, 73, 70), '3': (34, 65, 73, 73, 54),
+    '4': (24, 20, 18, 127, 16), '5': (47, 73, 73, 73, 49),
+    '6': (62, 73, 73, 73, 50), '7': (1, 1, 121, 5, 3),
+    '8': (54, 73, 73, 73, 54), '9': (38, 73, 73, 73, 62),
+    'A': (126, 9, 9, 9, 126), 'B': (127, 73, 73, 73, 54),
+    'C': (62, 65, 65, 65, 34), 'D': (127, 65, 65, 34, 28),
+    'E': (127, 73, 73, 73, 65), 'F': (127, 9, 9, 9, 1),
+    'G': (62, 65, 73, 73, 122), 'H': (127, 8, 8, 8, 127),
+    'I': (0, 65, 127, 65, 0), 'J': (32, 64, 65, 63, 1),
+    'K': (127, 8, 20, 34, 65), 'L': (127, 64, 64, 64, 64),
+    'M': (127, 2, 12, 2, 127), 'N': (127, 4, 8, 16, 127),
+    'O': (62, 65, 65, 65, 62), 'P': (127, 9, 9, 9, 6),
+    'Q': (62, 65, 81, 33, 94), 'R': (127, 9, 25, 41, 70),
+    'S': (38, 73, 73, 73, 50), 'T': (1, 1, 127, 1, 1),
+    'U': (63, 64, 64, 64, 63), 'V': (31, 32, 64, 32, 31),
+    'W': (63, 64, 56, 64, 63), 'X': (99, 20, 8, 20, 99),
+    'Y': (7, 8, 112, 8, 7), 'Z': (97, 81, 73, 69, 67),
+}
+
 # ---------------------------------------------------------------------------
 # SSD1309 Driver
 # ---------------------------------------------------------------------------
@@ -185,6 +209,26 @@ def _measure_text_w(text):
         return max(0, len(str(text)) * 8)
     except Exception:
         return 0
+
+
+def _measure_text5_w(text):
+    try:
+        return max(0, len(str(text)) * 6)
+    except Exception:
+        return 0
+
+
+def _text5(o, text, x, y):
+    try:
+        for char in str(text).upper():
+            glyph = _FONT5X7.get(char, _FONT5X7[' '])
+            for col, bits in enumerate(glyph):
+                for row in range(7):
+                    if bits & (1 << row):
+                        o.pixel(x + col, y + row, 1)
+            x += 6
+    except Exception:
+        pass
 
 
 def _compact_label(txt, max_chars):
@@ -419,16 +463,16 @@ async def _render_loop():
                 role = str(_safe_attr(settings, 'NODE_TYPE', '?') or '?')[0:1].upper()
                 identity = name if name[:1].upper() == role else '%s %s' % (name, role)
                 voltage_text = '--.-V' if voltage is None else '%.2fV' % float(voltage)
-                oled.text(identity[:10], 2, 0)
-                oled.text(voltage_text, 128 - _measure_text_w(voltage_text) - 2, 0)
+                _text5(oled, identity[:10], 2, 0)
+                _text5(oled, voltage_text, 128 - _measure_text5_w(voltage_text) - 2, 0)
             except Exception:
                 pass
 
             if _status_banner_text and (_status_banner_persist or time.time() < _status_banner_until):
-                oled.text(_banner_text(_status_banner_text, _status_banner_level)[:MAX_TEXT_CHARS], 2, 8)
+                    _text5(oled, _banner_text(_status_banner_text, _status_banner_level)[:20], 2, 8)
             elif getattr(settings, 'DISPLAY_NET_BARS', True):
                 try:
-                    oled.text(_header_radio_line(), 2, 8)
+                    _text5(oled, _header_radio_line(), 2, 8)
                 except Exception:
                     pass
 
@@ -457,8 +501,10 @@ async def _render_loop():
                 title = _page_title(_page_index)
                 left = short_names[_page_index] if 0 <= _page_index < len(short_names) else title[:6]
                 page = '%d/%d' % (_page_index + 1, len(PAGE_NAMES))
-                oled.text(left, 2, BODY_BOTTOM)
-                oled.text(page, 128 - _measure_text_w(page) - 2, BODY_BOTTOM)
+                footer_identity = str(_safe_attr(settings, 'UNIT_Name', '') or _safe_attr(settings, 'UNIT_ID', '') or 'TMON')[:4]
+                _text5(oled, footer_identity, 2, BODY_BOTTOM)
+                _text5(oled, page, 54, BODY_BOTTOM)
+                _text5(oled, left, 82, BODY_BOTTOM)
             except Exception:
                 pass
 

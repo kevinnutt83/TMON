@@ -1935,8 +1935,8 @@ async def handle_incoming_packet(msg):
     await debug_print(f"Base RX: {msg_str[:120]}...", "BASE_NODE")
     last_rx_ts = time.time()
     last_lora_activity_ts = last_rx_ts
-    sdata.lora_SigStr = lora.getRSSI() if hasattr(lora, 'getRSSI') else -60
-    sdata.lora_snr = lora.getSNR() if hasattr(lora, 'getSNR') else 0
+    sdata.lora_SigStr = lora.getRSSI() if hasattr(lora, 'getRSSI') else None
+    sdata.lora_snr = lora.getSNR() if hasattr(lora, 'getSNR') else None
     sdata.LORA_CONNECTED = True
 
     # Lightweight parse → queue (unchanged)
@@ -2402,6 +2402,13 @@ async def _send_with_retry(data, retries=3):
 
             lora.send(data)
             ok = await _wait_tx_done()
+            if ok:
+                try:
+                    if hasattr(lora, 'getRSSI'):
+                        sdata.lora_last_tx_rssi = lora.getRSSI()
+                    sdata.lora_last_tx_ts = time.time()
+                except Exception:
+                    pass
             try:
                 await ensure_lora_listening()
             except Exception:
@@ -2766,20 +2773,16 @@ def _minimal_remote_payload():
     """Build minimal remote payload with short keys, omitting None values."""
     full_payload = {
         'unit_id': _usable_unit_id(),
-        'node_type': 'remote',
         'ts': int(time.time()),
-        'fw': getattr(settings, 'FIRMWARE_VERSION', ''),
-        'temp_f': getattr(sdata, 'cur_temp_f', None) or getattr(sdata, 'cur_device_temp_f', None),
-        'humid': getattr(sdata, 'cur_humid', None) or getattr(sdata, 'cur_device_humid', None),
+        'temp_f': getattr(sdata, 'cur_device_temp_f', None),
+        'humid': getattr(sdata, 'cur_device_humid', None),
         'volt': getattr(sdata, 'sys_voltage', None),
     }
     full_payload.pop('rssi', None)
     
     payload = {
         'u': full_payload['unit_id'],
-        'n': full_payload['node_type'],
         'ts': full_payload['ts'],
-        'fw': full_payload['fw'],
     }
     if full_payload['temp_f'] is not None:
         payload['t'] = full_payload['temp_f']
@@ -2801,8 +2804,7 @@ async def send_field_data_controlled(payload):
         await _record_lora_session_failure('Remote session blocked: UNIT_ID not provisioned')
         return None
 
-    if payload is None:
-        payload = _minimal_remote_payload()
+    payload = _minimal_remote_payload()
 
     max_pkt = int(getattr(settings, 'LORA_MAX_PACKET_SIZE', 200) or 200)
     
@@ -2818,10 +2820,19 @@ async def send_field_data_controlled(payload):
     await asyncio.sleep_ms(400)
 
     total = 1
-    await debug_print(f"lora tx bytes={len(raw_json)} max={max_pkt} chunks={total}", "REMOTE_NODE")
+    optional_keys = ('v', 'h', 't', 'ts')
+    while True:
+        chunk_msg = f"TYPE:FIELD_DATA_CHUNK,UID:{uid},CHUNK:0/1,DATA:{full_b64}"
+        if len(chunk_msg) <= max_pkt - 70 or not optional_keys:
+            break
+        payload.pop(optional_keys[0], None)
+        optional_keys = optional_keys[1:]
+        raw_json = ujson.dumps(payload)
+        full_b64 = _ub.b2a_base64(raw_json.encode()).rstrip(b'\n').decode()
+
+    await debug_print(f"lora tx bytes={len(raw_json)} max={max_pkt} chunks=1", "REMOTE_NODE")
 
     i = 0
-    chunk_msg = f"TYPE:FIELD_DATA_CHUNK,UID:{uid},CHUNK:{i}/{total},DATA:{full_b64}"
     try:
         secured = await _secure_message(chunk_msg)
         secured_bytes = secured.encode() if isinstance(secured, str) else secured
@@ -2830,7 +2841,10 @@ async def send_field_data_controlled(payload):
             sdata.lora_session_busy = False
             return None
         ok = await _safe_send(secured_bytes)
-        await debug_print(f"sent chunk {i}/{total} ok={ok} bytes={len(secured_bytes)}", "LORA")
+        await debug_print(
+            f"lora tx bytes={len(raw_json)} max={max_pkt} chunks=1 idx=0 ok={ok}",
+            "REMOTE_NODE"
+        )
         if not ok:
             await _record_lora_session_failure(f"Chunk {i} TX failed")
             sdata.lora_session_busy = False
@@ -3639,7 +3653,7 @@ async def connectLora():
                                         await debug_print("Remote: received command via ACK", "REMOTE_NODE")
                                         await _apply_remote_command_from_ack(ack_cmd)
                                     last_rx_ts = time.time()
-                                    sdata.lora_SigStr = lora.getRSSI() if hasattr(lora, 'getRSSI') else -60
+                                    sdata.lora_SigStr = lora.getRSSI() if hasattr(lora, 'getRSSI') else None
                                     sdata.lora_snr = lora.getSNR() if hasattr(lora, 'getSNR') else 0
                                     sdata.LORA_CONNECTED = True
                                     if ack_ota_session:

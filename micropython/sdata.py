@@ -3,20 +3,21 @@
 # Performance/health metrics for reporting
 loop_runtime = 0
 script_runtime = 0
-sys_voltage = 0
+sys_voltage = None
 free_mem = 0
 cpu_temp = 0
 error_count = 0
 last_error = ''
 
 # LoRa Information
-lora_SigStr = 0
-lora_snr = 0
+lora_SigStr = None
+lora_snr = None
 
 # NEW: LoRa activity/connection flags used by OLED header refresh logic
 LORA_CONNECTED = False
 lora_last_rx_ts = 0
 lora_last_tx_ts = 0
+lora_last_tx_rssi = None
 lora_last_init_ts = 0
 
 # Engine controller metrics
@@ -27,18 +28,18 @@ engine2_batt_v = 0
 engine_last_poll_ts = 0
 
 # Exterior BME280 probe data. This sensor is mounted outside the enclosure.
-cur_temp_c = 0
-cur_temp_f = 0
-cur_bar_pres = 0
-cur_humid = 0
+cur_temp_c = None
+cur_temp_f = None
+cur_bar_pres = None
+cur_humid = None
 # NEW: indicate sampling in progress so OLED can render sampling-only content
 sampling_active = False
 
 # Device enclosure interior BME280 data.
-cur_device_temp_c = 0.0
-cur_device_temp_f = 0.0
-cur_device_bar_pres = 0.0
-cur_device_humid = 0.0
+cur_device_temp_c = None
+cur_device_temp_f = None
+cur_device_bar_pres = None
+cur_device_humid = None
 
 # Base Station Data Variables
 lowest_temp_f = 0

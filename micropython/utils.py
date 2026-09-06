@@ -984,16 +984,18 @@ def update_sys_voltage():
     import sdata
     try:
         adc = machine.ADC(machine.Pin(settings.SYS_VOLTAGE_PIN))
-        raw = adc.read_u16()
+        raw = adc.read_u16() if hasattr(adc, 'read_u16') else adc.read()
+        if raw <= 4095:
+            raw = raw * 65535 // 4095
         voltage = (raw / 65535) * settings.SYS_VOLTAGE_MAX
         sdata.sys_voltage = voltage
         return voltage
     except Exception:
         try:
-            sdata.sys_voltage = 0
+            sdata.sys_voltage = None
         except Exception:
             pass
-        return 0
+        return None
 
 # --- free pins
 async def free_pins():

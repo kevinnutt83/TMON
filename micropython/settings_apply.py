@@ -1033,11 +1033,9 @@ async def apply_staged_settings_once():
         # repeatedly returns the same configuration.
         # ---------------------------------------------------------------
 
-        critical_changed = (
-            set(effective_changed_keys)
-            | set(persisted_changed_keys)
-            | set(persisted_added_keys)
-        ) & REBOOT_KEYS
+        # Reboot only for values that changed in the live runtime. A missing
+        # or stale applied snapshot must not turn an idempotent apply into a reset.
+        critical_changed = set(effective_changed_keys) & REBOOT_KEYS
 
         if critical_changed:
             changed_str = ','.join(sorted(list(critical_changed)))
