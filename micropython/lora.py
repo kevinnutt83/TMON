@@ -14,6 +14,10 @@ import random
 import ubinascii as _ub
 import gc
 try:
+    import uctypes
+except ImportError:
+    uctypes = None
+try:
     import utime as time
 except ImportError:
     import time
@@ -23,10 +27,6 @@ try:
 except ImportError:
     machine = None
     sys = None
-try:
-    import _thread
-except Exception:
-    _thread = None
 try:
     import threading
 except Exception:
@@ -45,6 +45,30 @@ except ImportError:
 from utils import free_pins, debug_print, TMON_AI, stage_remote_field_data, stage_remote_files, record_field_data, get_machine_id, persist_custom_settings
 from relay import toggle_relay
 from sampling import findLowestTemp, findHighestTemp, findLowestBar, findHighestBar, findLowestHumid, findHighestHumid
+
+_ALIGN = 32
+_SCRATCH_RAW = bytearray(256 + _ALIGN + 64)
+
+
+def _aligned_view(buf, size):
+    if uctypes is None:
+        return memoryview(buf)[:size]
+    addr = uctypes.addressof(buf)
+    offset = (_ALIGN - (addr % _ALIGN)) % _ALIGN
+    return memoryview(buf)[offset:offset + size]
+
+
+_TX = _aligned_view(_SCRATCH_RAW, 256)
+
+
+def _fill_tx(value):
+    if isinstance(value, str):
+        value = value.encode()
+    length = len(value)
+    if length > 200:
+        raise ValueError('tx %d' % length)
+    _TX[:length] = value
+    return memoryview(_TX)[:length]
 try:
     import wprest as _wp
     register_with_wp = getattr(_wp, 'register_with_wp', None)
@@ -828,8 +852,26 @@ def _usable_unit_id():
         return ''
     return uid
 
+
+def validate_radio_pins():
+    reserved = (33, 34, 35, 36, 37)
+    names = ('CLK_PIN', 'MOSI_PIN', 'MISO_PIN', 'CS_PIN', 'IRQ_PIN', 'RST_PIN', 'BUSY_PIN')
+    conflicts = []
+    for name in names:
+        value = getattr(settings, name, None)
+        if value in reserved:
+            conflicts.append('%s=%s' % (name, value))
+    if conflicts:
+        message = 'LoRa pins overlap PSRAM GPIOs: ' + ','.join(conflicts)
+        print(message)
+        return False
+    return True
+
 async def init_lora():
     global lora, lora_rx_pending
+    if not validate_radio_pins():
+        await debug_print('LoRa init aborted; choose radio pins outside GPIO 33-37', 'ERROR')
+        return False
     await debug_print("LoRa bulletproof init sequence (v2.01.6)", "LORA")
     await display_message("LoRa Init...", 1)
     for attempt in range(20):
@@ -2400,7 +2442,8 @@ async def _send_with_retry(data, retries=3):
                 else:
                     await debug_print("CAD still busy after 3 tries - sending anyway", "LORA")
 
-            lora.send(data)
+            tx_view = _fill_tx(data)
+            lora.send(tx_view)
             ok = await _wait_tx_done()
             if ok:
                 try:
@@ -3363,32 +3406,16 @@ async def handle_ota_job(job):
             except Exception:
                 pass
 
-        # Try to offload to a thread if available, else run in-process (blocking fallback)
+        # Try to offload to a managed thread if available, else run in-process.
         try:
-            if _thread:
+            if threading:
                 try:
-                    _thread.start_new_thread(_ota_worker, ())
+                    t = threading.Thread(target=_ota_worker, daemon=True)
+                    t.start()
                 except Exception:
-                    # fallback to CPython threading module
-                    if threading:
-                        try:
-                            t = threading.Thread(target=_ota_worker, daemon=True)
-                            t.start()
-                        except Exception:
-                            _ota_worker()
-                    else:
-                        _ota_worker()
-            else:
-                # No _thread; try CPython threading module
-                if threading:
-                    try:
-                        t = threading.Thread(target=_ota_worker, daemon=True)
-                        t.start()
-                    except Exception:
-                        _ota_worker()
-                else:
-                    # No threading available; perform blocking call but still report status
                     _ota_worker()
+            else:
+                _ota_worker()
         except Exception as e:
             await debug_print(f'OTA worker start failed: {e}', 'ERROR')
             return

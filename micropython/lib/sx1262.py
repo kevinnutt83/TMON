@@ -3,6 +3,23 @@
 from _sx126x import *
 from sx126x import SX126X
 
+try:
+    import uctypes
+except ImportError:
+    uctypes = None
+
+
+def _align32(size):
+    raw = bytearray(size + 32)
+    if uctypes is None:
+        return raw, memoryview(raw)[:size]
+    addr = uctypes.addressof(raw)
+    offset = (32 - (addr % 32)) % 32
+    return raw, memoryview(raw)[offset:offset + size]
+
+
+_RX_RAW, _RX = _align32(256)
+
 _SX126X_PA_CONFIG_SX1262 = const(0x00)
 
 # Define necessary constants
@@ -250,15 +267,14 @@ class SX1262(SX126X):
         if len_ == 0:
             length = SX126X_MAX_PACKET_LENGTH
 
-        data = bytearray(length)
-        data_mv = memoryview(data)
-
-        state = super().receive(data_mv, length, timeout_en, timeout_ms)
+        state = super().receive(_RX, length, timeout_en, timeout_ms)
 
         if state == ERR_NONE or state == ERR_CRC_MISMATCH:
             if len_ == 0:
                 length = super().getPacketLength(False)
-                data = data[:length]
+                data = _RX[:length]
+            else:
+                data = _RX
 
         else:
             return b'', state
@@ -266,7 +282,7 @@ class SX1262(SX126X):
         return  bytes(data), state
 
     def _transmit(self, data):
-        if isinstance(data, bytes) or isinstance(data, bytearray):
+        if isinstance(data, (bytes, bytearray, memoryview)):
             pass
         else:
             return 0, ERR_INVALID_PACKET_TYPE
@@ -282,23 +298,20 @@ class SX1262(SX126X):
         if len_ < length and len_ != 0:
             length = len_
 
-        data = bytearray(length)
-        data_mv = memoryview(data)
-
-        state = super().readData(data_mv, length)
+        state = super().readData(_RX, length)
 
         state2 = super().startReceive()
         if state2 != ERR_NONE:
             return b'', state2
 
         if state == ERR_NONE or state == ERR_CRC_MISMATCH:
-            return bytes(data), state
+            return bytes(_RX[:length]), state
 
         else:
             return b'', state
 
     def _startTransmit(self, data):
-        if isinstance(data, bytes) or isinstance(data, bytearray):
+        if isinstance(data, (bytes, bytearray, memoryview)):
             pass
         else:
             return 0, ERR_INVALID_PACKET_TYPE

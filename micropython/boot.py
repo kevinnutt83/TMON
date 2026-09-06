@@ -10,8 +10,18 @@
 from wifi import connectToWifiNetwork
 import settings
 from utils import flash_led, log_exception
+import gc
 import uasyncio as asyncio
 from oled import display_message
+
+try:
+    gc.collect()
+    import lora as _lora_early
+    _lora_early.validate_radio_pins()
+    from utils import bench_mem_paths
+    bench_mem_paths()
+except Exception as e:
+    print('[BOOT] memory alignment setup failed: %s' % e)
 
 try:
     from config_persist import ensure_dir as _ensure_dir

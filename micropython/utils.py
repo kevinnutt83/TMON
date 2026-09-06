@@ -12,8 +12,59 @@ import machine
 import gc
 import random
 import sdata
+try:
+    import uctypes
+except ImportError:
+    uctypes = None
 
 from config_persist import write_text, read_json, set_flag, is_flag_set, write_json, write_json_atomic, read_text
+
+
+def bench_mem_paths():
+    gc.collect()
+    n = 256
+    raw = bytearray(n + 32)
+    if uctypes is None:
+        aligned = memoryview(raw)[:n]
+        address = 0
+    else:
+        address = uctypes.addressof(raw)
+        offset = (32 - (address % 32)) % 32
+        aligned = memoryview(raw)[offset:offset + n]
+        address += offset
+    junk = bytearray(n)
+    src = b'\xA5' * n
+
+    def _once(destination):
+        t0 = time.ticks_us()
+        destination[:] = src
+        return time.ticks_diff(time.ticks_us(), t0)
+
+    aligned_us = _once(aligned)
+    heap_us = _once(junk)
+    message = 'membench align_us=%d heap_us=%d free=%d addr=0x%x' % (
+        aligned_us, heap_us, gc.mem_free(), address)
+    print(message)
+    try:
+        sdata.mem_align_us = aligned_us
+        sdata.mem_heap_us = heap_us
+        sdata.free_mem = gc.mem_free()
+    except Exception:
+        pass
+    return aligned_us, heap_us
+
+
+def gc_maybe(reason='tick'):
+    gc.collect()
+    try:
+        sdata.free_mem = gc.mem_free()
+        sdata.mem_alloc = gc.mem_alloc()
+    except Exception:
+        pass
+    if getattr(sdata, 'free_mem', 0) and sdata.free_mem < int(
+        getattr(settings, 'MEM_GC_THRESHOLD', 32768)
+    ):
+        gc.collect()
 
 # Runtime storage helpers for SD/internal log root resolution.
 def _current_log_dir():

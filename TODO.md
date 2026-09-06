@@ -24,9 +24,10 @@ Immediate tasks
 - [x] Run static checks for Python 3 vs MicroPython compatibility (type hints, imports).
 - [x] Re-verify the current slice after the host harness fix for MicroPython crypto module compatibility.
 - [x] Increase remote LoRa ACK wait window so remotes do not deep-sleep before the base confirms the final chunked batch.
-- [ ] Force remote LoRa telemetry to one compact chunk and expose live board sensor/RSSI values.
-- [ ] Render OLED header/footer with the compact 5x7 chrome font.
-- [ ] Prevent no-op staged provisioning settings from triggering a soft reset.
+- [x] Force remote LoRa telemetry to one compact chunk and expose live board sensor/RSSI values.
+- [x] Render OLED header/footer with the compact 5x7 chrome font.
+- [x] Prevent no-op staged provisioning settings from triggering a soft reset.
+- [x] Align SX1262 TX/RX/status buffers, benchmark heap paths at boot, and reject PSRAM GPIO conflicts.
 - Replace global LoRa replay counter with per-remote replay window + persisted counter file (`/logs/lora_counters.json`).
 - [x] Require base ACK before trimming remote `field_data.log`, and append delivered remote records to local `data_history.log`.
 - [x] Add fast retry when persisted remote next-sync is already overdue.

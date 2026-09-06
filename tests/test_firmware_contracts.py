@@ -419,7 +419,7 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn('_session_field_chunks(st)', source)
         send_start = source.index('async def _send_with_retry(')
         wait_start = source.index('async def _wait_tx_done(', send_start)
-        self.assertNotIn('ensure_lora_listening()', source[send_start:source.index('lora.send(data)')])
+        self.assertNotIn('ensure_lora_listening()', source[send_start:source.index('lora.send(tx_view)')])
         self.assertNotIn('hard_reset_lora', source[wait_start:])
 
         remote_path = os.path.join(ROOT, 'micropython', 'remote_node.py')

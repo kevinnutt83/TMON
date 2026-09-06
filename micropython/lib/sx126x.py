@@ -2,6 +2,11 @@
 
 from _sx126x import *
 
+try:
+    import uctypes
+except ImportError:
+    uctypes = None
+
 from sys import implementation
 
 if implementation.name == 'micropython':
@@ -42,6 +47,20 @@ if implementation.name == 'circuitpython':
 
     def yield_():
         sleep(0.001)
+
+
+def _align32(size):
+    raw = bytearray(size + 32)
+    if uctypes is None:
+        return raw, memoryview(raw)[:size]
+    addr = uctypes.addressof(raw)
+    offset = (32 - (addr % 32)) % 32
+    return raw, memoryview(raw)[offset:offset + size]
+
+
+_RAW1, _B1 = _align32(1)
+_RAW2, _B2 = _align32(2)
+_RAW3, _B3 = _align32(3)
 
 class SX126X:
 
@@ -973,10 +992,8 @@ class SX126X:
             return (snrPkt - 256)/4.0
 
     def getPacketLength(self, update=True):
-        rxBufStatus = bytearray(2)
-        rxBufStatus_mv = memoryview(rxBufStatus)
-        self.SPIreadCommand([SX126X_CMD_GET_RX_BUFFER_STATUS], 1, rxBufStatus_mv, 2)
-        return rxBufStatus[0]
+        self.SPIreadCommand([SX126X_CMD_GET_RX_BUFFER_STATUS], 1, _B2, 2)
+        return _B2[0]
 
     def fixedPacketLengthMode(self, len_=SX126X_MAX_PACKET_LENGTH):
         return self.setPacketMode(SX126X_GFSK_PACKET_FIXED, len_)
@@ -1130,10 +1147,8 @@ class SX126X:
         return self.SPIwriteCommand([SX126X_CMD_SET_DIO_IRQ_PARAMS], 1, data, 8)
 
     def getIrqStatus(self):
-        data = bytearray(2)
-        data_mv = memoryview(data)
-        self.SPIreadCommand([SX126X_CMD_GET_IRQ_STATUS], 1, data_mv, 2)
-        return int((data[0] << 8) | data[1])
+        self.SPIreadCommand([SX126X_CMD_GET_IRQ_STATUS], 1, _B2, 2)
+        return int((_B2[0] << 8) | _B2[1])
 
     def clearIrqStatus(self, clearIrqParams=SX126X_IRQ_ALL):
         data = [int((clearIrqParams >> 8) & 0xFF), int(clearIrqParams & 0xFF)]
@@ -1228,23 +1243,17 @@ class SX126X:
         return self.SPIwriteCommand([SX126X_CMD_SET_REGULATOR_MODE], 1, data, 1)
 
     def getStatus(self):
-        data = bytearray(1)
-        data_mv = memoryview(data)
-        self.SPIreadCommand([SX126X_CMD_GET_STATUS], 1, data_mv, 1)
-        return data[0]
+        self.SPIreadCommand([SX126X_CMD_GET_STATUS], 1, _B1, 1)
+        return _B1[0]
 
     def getPacketStatus(self):
-        data = bytearray(3)
-        data_mv = memoryview(data)
-        self.SPIreadCommand([SX126X_CMD_GET_PACKET_STATUS], 1, data_mv, 3)
-        return (data[0] << 16) | (data[1] << 8) | data[2]
+        self.SPIreadCommand([SX126X_CMD_GET_PACKET_STATUS], 1, _B3, 3)
+        return (_B3[0] << 16) | (_B3[1] << 8) | _B3[2]
 
     def getDeviceErrors(self):
-        data = bytearray(2)
-        data_mv = memoryview(data)
-        self.SPIreadCommand([SX126X_CMD_GET_DEVICE_ERRORS], 1, data_mv, 2)
+        self.SPIreadCommand([SX126X_CMD_GET_DEVICE_ERRORS], 1, _B2, 2)
         # Combine high/low bytes correctly; previous implementation used bitwise AND, masking out flags
-        opError = ((data[0] & 0xFF) << 8) | (data[1] & 0xFF)
+        opError = ((_B2[0] & 0xFF) << 8) | (_B2[1] & 0xFF)
         return opError
 
     def clearDeviceErrors(self):
