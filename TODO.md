@@ -28,6 +28,7 @@ Immediate tasks
 - [x] Render OLED header/footer with the compact 5x7 chrome font.
 - [x] Prevent no-op staged provisioning settings from triggering a soft reset.
 - [x] Align SX1262 TX/RX/status buffers, benchmark heap paths at boot, and warn on the Pico-LoRa HAT's PSRAM GPIO mapping.
+- [x] Keep base LoRa RX scheduled after initialization failures and add a 60-second RX heartbeat.
 - Replace global LoRa replay counter with per-remote replay window + persisted counter file (`/logs/lora_counters.json`).
 - [x] Require base ACK before trimming remote `field_data.log`, and append delivered remote records to local `data_history.log`.
 - [x] Add fast retry when persisted remote next-sync is already overdue.

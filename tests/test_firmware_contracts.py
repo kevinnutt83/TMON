@@ -350,8 +350,12 @@ class FirmwareContractTests(unittest.TestCase):
     def test_remote_loop_gate_and_lora_diagnostics_contract(self):
         with open(os.path.join(ROOT, 'micropython', 'main.py'), 'r', encoding='utf-8') as handle:
             main_text = handle.read()
+        with open(os.path.join(ROOT, 'micropython', 'lora.py'), 'r', encoding='utf-8') as handle:
+            lora_text = handle.read()
         self.assertIn('REMOTE_DISABLE_CONNECTLORA_LOOP', main_text)
         self.assertIn('use_deep_sleep = is_remote and bool(getattr(settings, \'REMOTE_DISABLE_CONNECTLORA_LOOP\', True))', main_text)
+        self.assertIn("'rx listen lora=%s busy=%s'", lora_text)
+        self.assertIn("'init failed; retry in 5s (no abort)'", lora_text)
 
         settings_mod = types.ModuleType('settings')
         settings_mod.LOG_DIR = '/logs'

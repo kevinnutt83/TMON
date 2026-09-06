@@ -923,13 +923,10 @@ async def init_lora():
             lora = None
         await asyncio.sleep(1.5)
 
-    await debug_print("LoRa init FAILED after 20 attempts - triggering MCU reset", "FATAL")
-    await display_message("LoRa FAIL - REBOOT", 5)
+    await debug_print("LoRa init FAILED after 20 attempts; connectLora will retry", "ERROR")
+    await display_message("LoRa FAIL - RETRY", 2)
     await free_pins()
     lora = None
-    if machine and hasattr(machine, 'reset'):
-        await asyncio.sleep(1)
-        machine.reset()
     return False
 
 command_handlers = {
@@ -3512,8 +3509,9 @@ async def connectLora():
     await display_message("LoRa Starting...", 1)
 
     async with pin_lock:
-        if not await init_lora():
-            return False
+        initialized = await init_lora()
+    if not initialized:
+        await log_error('LoRa init failed; keeping RX task alive for retry')
     last_lora_activity_ts = time.time()
     if not _crc_selftest_done:
         try:
@@ -3559,9 +3557,19 @@ async def connectLora():
         response_timeout = 30
 
     last_heartbeat_ts = 0
+    last_rx_heartbeat_ticks = time.ticks_ms()
     while True:
         try:
             current_time = time.time()
+
+            if _is_lora_hub_node() and time.ticks_diff(time.ticks_ms(), last_rx_heartbeat_ticks) >= 60000:
+                last_rx_heartbeat_ticks = time.ticks_ms()
+                await debug_print(
+                    'rx listen lora=%s busy=%s' % (
+                        lora is not None,
+                        getattr(sdata, 'lora_session_busy', False)),
+                    'LORA'
+                )
 
             # ---------- Safer LoRa health watchdog ----------
             # Only re-init if there has been NO activity for a long time.
@@ -3587,7 +3595,8 @@ async def connectLora():
 
             if lora is None or not hasattr(lora, '_events'):
                 if not await init_lora():
-                    await asyncio.sleep(8)
+                    await debug_print('init failed; retry in 5s (no abort)', 'LORA')
+                    await asyncio.sleep(5)
                     continue
 
             if current_time - last_rx_ts > 70:
