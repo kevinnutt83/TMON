@@ -825,6 +825,15 @@ def _lora_rx_ready():
             asyncio.create_task(debug_print('LoRa RX event check error: %s' % e, 'WARN'))
         except Exception:
             pass
+    try:
+        # Some boards do not deliver DIO1 interrupts reliably; poll the radio
+        # buffer so HELLO/READY/ACK waits and hub RX remain functional.
+        if lora is not None and hasattr(lora, 'getPacketLength'):
+            length = lora.getPacketLength()
+            if 0 < length <= int(getattr(settings, 'LORA_MAX_PACKET_SIZE', 200)):
+                return True
+    except Exception:
+        pass
     return bool(globals().get('lora_rx_pending', False))
 
 
@@ -878,6 +887,20 @@ async def init_lora():
     global lora, lora_rx_pending
     warn_psram_pins()
     await debug_print("LoRa bulletproof init sequence (v2.01.6)", "LORA")
+    await debug_print(
+        'lora rf freq=%s sf=%s bw=%s sync=0x%02X pwr=%s' % (
+            getattr(settings, 'FREQ', 915.0), getattr(settings, 'SF', 10),
+            getattr(settings, 'BW', 125.0), getattr(settings, 'SYNC_WORD', 0xF4),
+            getattr(settings, 'POWER', 17)),
+        'LORA'
+    )
+    await debug_print(
+        'lora pins cs=%s rst=%s busy=%s irq=%s clk=%s' % (
+            getattr(settings, 'CS_PIN', 14), getattr(settings, 'RST_PIN', 40),
+            getattr(settings, 'BUSY_PIN', 13), getattr(settings, 'IRQ_PIN', 4),
+            getattr(settings, 'CLK_PIN', 35)),
+        'LORA'
+    )
     await display_message("LoRa Init...", 1)
     for attempt in range(20):
         await hard_reset_lora()
@@ -905,6 +928,11 @@ async def init_lora():
             await debug_print(f'begin() attempt {attempt+1}: status {status}', 'LORA')
             if status == 0:
                 lora_rx_pending = False
+                try:
+                    if hasattr(lora, 'setDio2AsRfSwitch'):
+                        lora.setDio2AsRfSwitch(True)
+                except Exception as e:
+                    await debug_print('DIO2 RF switch setup failed: %r' % (e,), 'WARN')
                 try:
                     lora.setBlockingCallback(False, callback=_lora_irq_callback)
                 except TypeError:
@@ -2849,6 +2877,11 @@ async def send_field_data_controlled(payload):
         await _record_lora_session_failure('Remote session blocked: UNIT_ID not provisioned')
         return None
 
+    ready = await send_hello_and_wait_ready(use_fwd=False)
+    if not ready:
+        await debug_print('READY not received; sending one-chunk payload best-effort', 'WARN')
+    await ensure_lora_listening()
+
     payload = _minimal_remote_payload()
 
     max_pkt = int(getattr(settings, 'LORA_MAX_PACKET_SIZE', 200) or 200)
@@ -3765,7 +3798,24 @@ async def connectLora():
                             continue
 
             else:  # BASE NODE
-                if not _lora_rx_ready():
+                irq = 0
+                try:
+                    if hasattr(lora, 'getIrqStatus'):
+                        irq = lora.getIrqStatus()
+                        if irq:
+                            await debug_print('irq=0x%04x' % irq, 'LORA')
+                except Exception as e:
+                    await debug_print('IRQ poll failed: %r' % (e,), 'WARN')
+
+                rx_done = getattr(lora, 'RX_DONE', 0)
+                packet_ready = bool(irq & rx_done) or bool(lora_rx_pending)
+                if not packet_ready:
+                    try:
+                        length = lora.getPacketLength() if hasattr(lora, 'getPacketLength') else 0
+                        packet_ready = 0 < length <= int(getattr(settings, 'LORA_MAX_PACKET_SIZE', 200))
+                    except Exception:
+                        packet_ready = False
+                if not packet_ready:
                     await asyncio.sleep_ms(20)
                     continue
                 lora_rx_pending = False

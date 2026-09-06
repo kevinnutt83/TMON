@@ -155,6 +155,8 @@ async def _run_remote_cycle_once():
             raise RuntimeError('remote_sleep: LoRa init failed')
 
         await ensure_lora_listening()
+        await debug_print('remote_sleep: waiting 20s for base LoRa startup', 'REMOTE_NODE')
+        await asyncio.sleep(20)
         next_delay = await send_field_data_controlled(None)
         ack_ok = (next_delay is not None)
 

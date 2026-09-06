@@ -356,6 +356,9 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn('use_deep_sleep = is_remote and bool(getattr(settings, \'REMOTE_DISABLE_CONNECTLORA_LOOP\', True))', main_text)
         self.assertIn("'rx listen lora=%s busy=%s'", lora_text)
         self.assertIn("'init failed; retry in 5s (no abort)'", lora_text)
+        self.assertIn('READY not received; sending one-chunk payload best-effort', lora_text)
+        self.assertIn("'irq=0x%04x' % irq", lora_text)
+        self.assertIn('getPacketLength()', lora_text)
 
         settings_mod = types.ModuleType('settings')
         settings_mod.LOG_DIR = '/logs'
