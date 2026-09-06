@@ -3,6 +3,11 @@
 from _sx126x import *
 
 try:
+    import settings as _radio_settings
+except ImportError:
+    _radio_settings = None
+
+try:
     import uctypes
 except ImportError:
     uctypes = None
@@ -68,9 +73,9 @@ class SX126X:
         self._irq = irq
         if implementation.name == 'micropython':
           try:
-              self.spi = SPI(spi_bus, mode=SPI.MASTER, baudrate=2000000, pins=(clk, mosi, miso))        # Pycom variant uPy
+              self.spi = SPI(spi_bus, mode=SPI.MASTER, baudrate=int(getattr(_radio_settings, 'LORA_SPI_BAUD', 2000000)), pins=(clk, mosi, miso))        # Pycom variant uPy
           except:
-              self.spi = SPI(spi_bus, baudrate=2000000, sck=Pin(clk), mosi=Pin(mosi), miso=Pin(miso))   # Generic variant uPy
+              self.spi = SPI(spi_bus, baudrate=int(getattr(_radio_settings, 'LORA_SPI_BAUD', 2000000)), sck=Pin(clk), mosi=Pin(mosi), miso=Pin(miso))   # Generic variant uPy
           self.cs = Pin(cs, mode=Pin.OUT)
           self.irq = Pin(irq, mode=Pin.IN)
           self.rst = Pin(rst, mode=Pin.OUT)
@@ -80,7 +85,7 @@ class SX126X:
           self.spi = busio.SPI(clk, MOSI=mosi, MISO=miso)
           while not self.spi.try_lock():
               pass
-          self.spi.configure(baudrate=2000000, phase=0, polarity=0, bits=8)
+          self.spi.configure(baudrate=int(getattr(_radio_settings, 'LORA_SPI_BAUD', 2000000)), phase=0, polarity=0, bits=8)
           self.spi.unlock()
           self.cs = digitalio.DigitalInOut(cs)
           self.cs.switch_to_output(value=True)

@@ -17,7 +17,7 @@ from oled import display_message
 try:
     gc.collect()
     import lora as _lora_early
-    _lora_early.validate_radio_pins()
+    _lora_early.warn_psram_pins()
     from utils import bench_mem_paths
     bench_mem_paths()
 except Exception as e:

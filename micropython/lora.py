@@ -853,25 +853,30 @@ def _usable_unit_id():
     return uid
 
 
-def validate_radio_pins():
-    reserved = (33, 34, 35, 36, 37)
-    names = ('CLK_PIN', 'MOSI_PIN', 'MISO_PIN', 'CS_PIN', 'IRQ_PIN', 'RST_PIN', 'BUSY_PIN')
+_psram_pin_warning_shown = False
+
+
+def warn_psram_pins():
+    global _psram_pin_warning_shown
+    if _psram_pin_warning_shown:
+        return
+    reserved = set(getattr(settings, 'PSRAM_RESERVED_PINS', (33, 34, 35, 36, 37)))
+    names = ('CLK_PIN', 'MOSI_PIN', 'MISO_PIN', 'CS_PIN')
     conflicts = []
     for name in names:
         value = getattr(settings, name, None)
         if value in reserved:
             conflicts.append('%s=%s' % (name, value))
     if conflicts:
-        message = 'LoRa pins overlap PSRAM GPIOs: ' + ','.join(conflicts)
+        message = 'LoRa pins share S3R2 PSRAM IOs: ' + ','.join(conflicts)
         print(message)
-        return False
-    return True
+        _psram_pin_warning_shown = True
+        if getattr(settings, 'PSRAM_PIN_POLICY', 'warn') == 'abort':
+            print('PSRAM_PIN_POLICY=abort ignored on this board')
 
 async def init_lora():
     global lora, lora_rx_pending
-    if not validate_radio_pins():
-        await debug_print('LoRa init aborted; choose radio pins outside GPIO 33-37', 'ERROR')
-        return False
+    warn_psram_pins()
     await debug_print("LoRa bulletproof init sequence (v2.01.6)", "LORA")
     await display_message("LoRa Init...", 1)
     for attempt in range(20):

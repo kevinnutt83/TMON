@@ -146,6 +146,11 @@ BME280_PROBE_SDA_PIN = 2
 OLED_SCL_PIN = 38
 OLED_SDA_PIN = 39
 SPI_BUS = 1
+# The Pico-LoRa HAT uses these ESP32-S3 GPIOs through the Pico header.
+# They overlap the S3R2 in-package PSRAM bus, but are the working HAT mapping.
+PSRAM_RESERVED_PINS = (33, 34, 35, 36, 37)
+PSRAM_PIN_POLICY = 'warn'
+LORA_SPI_BAUD = 2000000
 CLK_PIN = 35
 MOSI_PIN = 36
 MISO_PIN = 37
