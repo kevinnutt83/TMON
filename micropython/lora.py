@@ -1882,6 +1882,18 @@ async def handle_incoming_packet(msg):
         await debug_print("Dropped inbound packet: secure decode failed", "WARN")
         return
 
+    valid_prefixes = ('HELLO:', 'END:', 'TYPE:', 'T:', 'FWD:', 'ACK:')
+    if not any(msg_str.startswith(prefix) for prefix in valid_prefixes):
+        await debug_print(f"Dropped invalid prefix: {msg_str[:20]!r}", "WARN")
+        try:
+            if lora:
+                lora.standby()
+                await asyncio.sleep_ms(50)
+                startReceive()
+        except Exception:
+            pass
+        return
+
     try:
         sdata.lora_last_rx_ts = time.time()
         sdata.lora_last_rx_ticks = time.ticks_ms()
@@ -2750,8 +2762,36 @@ def _lora_data_budget():
     return max(48, max_pkt - overhead)
 
 
+def _minimal_remote_payload():
+    """Build minimal remote payload with short keys, omitting None values."""
+    full_payload = {
+        'unit_id': _usable_unit_id(),
+        'node_type': 'remote',
+        'ts': int(time.time()),
+        'fw': getattr(settings, 'FIRMWARE_VERSION', ''),
+        'temp_f': getattr(sdata, 'cur_temp_f', None) or getattr(sdata, 'cur_device_temp_f', None),
+        'humid': getattr(sdata, 'cur_humid', None) or getattr(sdata, 'cur_device_humid', None),
+        'volt': getattr(sdata, 'sys_voltage', None),
+    }
+    full_payload.pop('rssi', None)
+    
+    payload = {
+        'u': full_payload['unit_id'],
+        'n': full_payload['node_type'],
+        'ts': full_payload['ts'],
+        'fw': full_payload['fw'],
+    }
+    if full_payload['temp_f'] is not None:
+        payload['t'] = full_payload['temp_f']
+    if full_payload['humid'] is not None:
+        payload['h'] = full_payload['humid']
+    if full_payload['volt'] is not None:
+        payload['v'] = full_payload['volt']
+    return payload
+
+
 async def send_field_data_controlled(payload):
-    """Remote controlled simple session: HELLO -> READY -> chunks -> END -> FINAL ACK."""
+    """Remote controlled simple session: HELLO -> READY -> chunk 0 -> END -> FINAL ACK."""
     global lora_rx_pending
     if str(getattr(settings, 'NODE_TYPE', 'base')).lower() != 'remote':
         return None
@@ -2762,28 +2802,10 @@ async def send_field_data_controlled(payload):
         return None
 
     if payload is None:
-        payload = {
-            'unit_id': uid,
-            'node_type': 'remote',
-            'ts': int(time.time()),
-            'fw': getattr(settings, 'FIRMWARE_VERSION', ''),
-        }
-        for key, value in (
-            ('volt', getattr(sdata, 'sys_voltage', None)),
-            ('temp_f', getattr(sdata, 'cur_temp_f', None) or getattr(sdata, 'cur_device_temp_f', None)),
-            ('humid', getattr(sdata, 'cur_humid', None)),
-        ):
-            if value is not None:
-                payload[key] = value
-    chunk_size = _lora_data_budget()
-    try:
-        parts = str(ready_msg).split(':')
-        if len(parts) >= 2 and parts[0] == 'READY' and parts[1] == uid:
-            if 'CHUNKSZ' in parts:
-                chunk_size = min(chunk_size, max(48, int(parts[parts.index('CHUNKSZ') + 1])))
-    except Exception:
-        pass
+        payload = _minimal_remote_payload()
 
+    max_pkt = int(getattr(settings, 'LORA_MAX_PACKET_SIZE', 200) or 200)
+    
     try:
         raw_json = ujson.dumps(payload)
         full_b64 = _ub.b2a_base64(raw_json.encode()).rstrip(b'\n').decode()
@@ -2795,54 +2817,44 @@ async def send_field_data_controlled(payload):
 
     await asyncio.sleep_ms(400)
 
-    total = (len(full_b64) + chunk_size - 1) // chunk_size if full_b64 else 1
-    max_pkt = int(getattr(settings, 'LORA_MAX_PACKET_SIZE', 200) or 200)
+    total = 1
     await debug_print(f"lora tx bytes={len(raw_json)} max={max_pkt} chunks={total}", "REMOTE_NODE")
 
-    batch_id = None
+    i = 0
+    chunk_msg = f"TYPE:FIELD_DATA_CHUNK,UID:{uid},CHUNK:{i}/{total},DATA:{full_b64}"
     try:
-        if isinstance(payload, dict):
-            batch_id = payload.get('batch_id')
-    except Exception:
-        batch_id = None
-
-    for i in range(total):
-        start = i * chunk_size
-        part = full_b64[start:start + chunk_size]
-        chunk_msg = f"TYPE:FIELD_DATA_CHUNK,UID:{uid},CHUNK:{i}/{total},DATA:{part}"
-        try:
-            secured = await _secure_message(chunk_msg)
-            secured_bytes = secured.encode() if isinstance(secured, str) else secured
-            if len(secured_bytes) > max_pkt:
-                await debug_print(f"Payload too large: {len(secured_bytes)} > {max_pkt}; aborting", "REMOTE_NODE")
-                sdata.lora_session_busy = False
-                return None
-            ok = await _safe_send(secured_bytes)
-            await debug_print(f"Chunk {i}/{total} sent (ok={ok})", "REMOTE_NODE")
-            if not ok:
-                await _record_lora_session_failure(f"Chunk {i} TX failed")
-                sdata.lora_session_busy = False
-                return None
-        except Exception as e:
-            await _record_lora_session_failure(f"Chunk {i} exception: {e}")
+        secured = await _secure_message(chunk_msg)
+        secured_bytes = secured.encode() if isinstance(secured, str) else secured
+        if len(secured_bytes) > max_pkt:
+            await debug_print(f"Payload too large: {len(secured_bytes)} > {max_pkt}; aborting", "REMOTE_NODE")
             sdata.lora_session_busy = False
             return None
-        if i == 0 and total > 1:
-            await asyncio.sleep_ms(400)
-            repeat_ok = await _safe_send(secured_bytes)
-            await debug_print(f"Chunk {i}/{total} repeated (ok={repeat_ok})", "REMOTE_NODE")
-            if not repeat_ok:
-                await _record_lora_session_failure('Chunk 0 repeat TX failed')
-                sdata.lora_session_busy = False
-                return None
-        await asyncio.sleep_ms(450)
+        ok = await _safe_send(secured_bytes)
+        await debug_print(f"sent chunk {i}/{total} ok={ok} bytes={len(secured_bytes)}", "LORA")
+        if not ok:
+            await _record_lora_session_failure(f"Chunk {i} TX failed")
+            sdata.lora_session_busy = False
+            return None
+    except Exception as e:
+        await _record_lora_session_failure(f"Chunk {i} exception: {e}")
+        sdata.lora_session_busy = False
+        return None
+
+    await asyncio.sleep_ms(300)
+    repeat_ok = await _safe_send(secured_bytes)
+    await debug_print(f"Chunk {i}/{total} repeated (ok={repeat_ok})", "LORA")
+    if not repeat_ok:
+        await _record_lora_session_failure('Chunk 0 repeat TX failed')
+        sdata.lora_session_busy = False
+        return None
+    await asyncio.sleep_ms(300)
 
     end_msg = f"END:{uid}:{total}"
 
     try:
         secured = await _secure_message(end_msg)
         ok = await _safe_send(secured.encode())
-        await debug_print(f"END sent (total={total}, ok={ok})", "REMOTE_NODE")
+        await debug_print(f"END:{uid}:{total} sent ok={ok}", "LORA")
     except Exception as e:
         await _record_lora_session_failure(f"END TX failure: {e}")
         await debug_print("=== SIMPLE SESSION FAILED ===", "REMOTE_NODE")
@@ -2851,7 +2863,7 @@ async def send_field_data_controlled(payload):
 
     await debug_print("Waiting for final ACK...", "REMOTE_NODE")
     await ensure_lora_listening()
-    ack_timeout = _safe_int(getattr(settings, 'REMOTE_ACK_WAIT_S', 75), 75)
+    ack_timeout = _safe_int(getattr(settings, 'REMOTE_ACK_WAIT_S', 90), 90)
     ack_timeout = max(10, ack_timeout)
     end_ticks = time.ticks_ms() + ack_timeout * 1000
 
@@ -3716,7 +3728,7 @@ async def connectLora():
                 await asyncio.sleep_ms(5)
 
         except Exception as e:
-            await log_error(f"Main LoRa loop error: {e}")
+            await log_error(f"Main LoRa loop error: {e!r}")
             await display_message("LoRa Err", 2)
             lora = None
             if settings.NODE_TYPE == 'remote':
