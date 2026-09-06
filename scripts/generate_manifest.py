@@ -31,6 +31,22 @@ SKIP_NAMES = {'manifest.json', 'manifest.json.bak', 'pwd'}
 SKIP_SUFFIXES = ('.pyc', '.bak', '~')
 SKIP_DIRS = {'__pycache__', '.git'}
 
+REQUIRED_LIB_FILES = {
+    'lib/_sx126x.py',
+    'lib/sx1262.py',
+    'lib/sx126x.py',
+    'lib/ssd1306.py',
+    'lib/BME280.py',
+    'lib/dht.py',
+    'lib/urequests.py',
+}
+
+def is_device_file(rel):
+    rel = rel.replace('\\', '/')
+    if rel.startswith('lib/'):
+        return rel in REQUIRED_LIB_FILES
+    return rel.endswith('.py') or rel == 'version.txt'
+
 
 def build_manifest(version=None):
     files = {}
@@ -45,6 +61,8 @@ def build_manifest(version=None):
             if rel.endswith(SKIP_SUFFIXES) or rel.startswith('.'):
                 continue
             if any(rel.endswith(suffix) for suffix in SKIP_SUFFIXES):
+                continue
+            if not is_device_file(rel):
                 continue
             path = os.path.join(root, fn)
             files[rel.replace('\\','/')] = 'sha256:' + sha256_hex(path)

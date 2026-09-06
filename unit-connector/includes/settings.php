@@ -214,7 +214,18 @@ function tmon_uc_pair_with_hub_core($mode = 'pair') {
     }
     $server_message = is_array($last_body) ? ($last_body['message'] ?? $last_body['error'] ?? 'invalid_response') : trim((string) $last_body);
     if ($server_message === '') $server_message = $last_error ?: 'invalid_response';
-    return ['status' => 'error', 'message' => 'http_' . intval($last_code) . ': ' . $server_message, 'paired' => false, 'body' => $last_body, 'hub' => $hub];
+    $http_code = intval($last_code);
+    if ($http_code <= 0 && $last_error !== '') {
+        $http_code = 0;
+    }
+    return [
+        'status' => 'error',
+        'message' => 'http_' . $http_code . ': ' . $server_message,
+        'http' => $http_code,
+        'paired' => false,
+        'body' => $last_body,
+        'hub' => $hub,
+    ];
 }
 
 // Add core purge helpers to ensure UC mirror, staged options, pairing keys, and files are removed.
@@ -418,6 +429,7 @@ add_action('wp_ajax_tmon_uc_pair_with_hub_ajax', function(){
     wp_send_json_success([
         'paired' => false,
         'message' => $res['message'] ?? 'pair_failed',
+        'http' => $res['http'] ?? 0,
         'body' => $res['body'] ?? null,
         'hub' => $res['hub'] ?? get_option('tmon_uc_hub_url', ''),
     ]);
@@ -594,56 +606,6 @@ add_action('admin_post_tmon_uc_stage_settings', function(){
     exit;
 });
 
-// After pairing, auto-refresh provisioned devices from Admin hub
-add_action('admin_post_tmon_uc_pair_with_hub', function(){
-    if (!current_user_can('manage_options')) wp_die('Insufficient permissions');
-    check_admin_referer('tmon_uc_pair_with_hub');
-    $hub = trim(get_option('tmon_uc_hub_url', home_url()));
-    if (stripos($hub, 'http') !== 0) { $hub = 'https://' . ltrim($hub, '/'); }
-    $local_key = get_option('tmon_uc_admin_key', '');
-    if (!$local_key) {
-        try { $local_key = bin2hex(random_bytes(24)); } catch (Exception $e) { $local_key = wp_generate_password(48, false, false); }
-        update_option('tmon_uc_admin_key', $local_key);
-    }
-    $endpoint = rtrim($hub, '/') . '/wp-json/tmon-admin/v1/uc/pair';
-    $resp = wp_remote_post($endpoint, [
-        'timeout' => 15,
-        'headers' => ['Content-Type' => 'application/json', 'Accept'=>'application/json', 'User-Agent'=>'TMON-UC/1.0'],
-        'body' => wp_json_encode([
-            'site_url' => home_url(),
-            'uc_key'   => $local_key,
-        ]),
-    ]);
-    if (is_wp_error($resp)) {
-        wp_safe_redirect(admin_url('admin.php?page=tmon-settings&paired=0&msg=' . urlencode($resp->get_error_message())));
-        exit;
-    }
-    $code = wp_remote_retrieve_response_code($resp);
-    $body = json_decode(wp_remote_retrieve_body($resp), true);
-    if ($code === 200 && is_array($body) && !empty($body['hub_key'])) {
-        update_option('tmon_uc_hub_shared_key', sanitize_text_field($body['hub_key']));
-        if (!empty($body['read_token'])) update_option('tmon_uc_hub_read_token', sanitize_text_field($body['read_token']));
-        // Track normalized pairing
-        $paired = get_option('tmon_uc_paired_sites', []);
-        if (!is_array($paired)) $paired = [];
-        $norm = tmon_uc_normalize_url($hub);
-        $paired[$norm] = [
-            'site'      => $hub,
-            'paired_at' => current_time('mysql', true),
-            'read_token'=> isset($body['read_token']) ? sanitize_text_field($body['read_token']) : '',
-        ];
-        update_option('tmon_uc_paired_sites', $paired, false);
-        // Backfill devices
-        if (function_exists('tmon_uc_backfill_provisioned_from_admin')) {
-            tmon_uc_backfill_provisioned_from_admin();
-        }
-        wp_safe_redirect(admin_url('admin.php?page=tmon-uc-hub&paired=1'));
-    } else {
-        wp_safe_redirect(admin_url('admin.php?page=tmon-uc-hub&paired=0&msg=bad_response'));
-    }
-    exit;
-});
-
 // Robust fetch from Admin hub to UC cache (used by cron and manual refresh)
 function tmon_uc_backfill_provisioned_from_admin() {
     $hub = trim(get_option('tmon_uc_hub_url', ''));
@@ -742,20 +704,6 @@ if (!function_exists('tmon_uc_normalize_url')) {
 		return $port ? ($host . ':' . $port) : $host;
 	}
 }
-
-// Pair with hub: persist keys and normalized pairing; backfill devices to UC cache (fallback redirect handler)
-add_action('admin_post_tmon_uc_pair_with_hub', function(){
-    if (!current_user_can('manage_options')) wp_die('Insufficient permissions');
-    check_admin_referer('tmon_uc_pair_with_hub');
-    $res = tmon_uc_pair_with_hub_core();
-    if (isset($res['status']) && $res['status'] === 'ok' && !empty($res['paired'])) {
-        wp_safe_redirect(admin_url('admin.php?page=tmon-uc-hub&paired=1'));
-    } else {
-        $msg = isset($res['message']) ? $res['message'] : 'pair_failed';
-        wp_safe_redirect(admin_url('admin.php?page=tmon-uc-hub&paired=0&msg=' . urlencode($msg)));
-    }
-    exit;
-});
 
     // Manual refresh of provisioned devices from Admin hub
     add_action('admin_post_tmon_uc_refresh_devices', function(){

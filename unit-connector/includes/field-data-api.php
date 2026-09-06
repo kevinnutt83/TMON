@@ -8,6 +8,25 @@ function tmon_uc_read_permission($request) {
     return false;
 }}
 
+if (!function_exists('tmon_record_epoch')) {
+function tmon_record_epoch($row) {
+    if (is_array($row) && isset($row['ts']) && is_numeric($row['ts'])) {
+        $value = (int) $row['ts'];
+        if ($value > 0 && $value < 1000000000) $value += 946684800;
+        if ($value >= 1700000000 && $value <= 1900000000) return $value;
+    }
+    if (is_array($row) && !empty($row['ts_iso'])) {
+        $value = strtotime((string) $row['ts_iso']);
+        if ($value >= 1700000000 && $value <= 1900000000) return $value;
+    }
+    if (is_array($row) && isset($row['timestamp']) && is_numeric($row['timestamp'])) {
+        $value = (int) $row['timestamp'];
+        if ($value > 0 && $value < 1000000000) $value += 946684800;
+        if ($value >= 1700000000 && $value <= 1900000000) return $value;
+    }
+    return time();
+}}
+
 add_action('rest_api_init', function() {
     register_rest_route('tmon/v1', '/device/field-data', array(
         'methods' => 'POST',
@@ -154,8 +173,10 @@ function tmon_uc_rest_list_field_data($request) {
         $payload = json_decode($r['data'], true);
         if (!is_array($payload)) $payload = [];
         $payload['unit_id'] = $r['unit_id'];
-        // Provide a site-local ISO8601 string in addition to raw DB value using WP timezone helpers
-        $payload['ts_iso'] = date_i18n(DATE_ISO8601, tmon_uc_mysql_to_local_timestamp($r['created_at']));
+        $payload['device_ts'] = tmon_record_epoch($payload);
+        $payload['server_ts'] = isset($payload['server_ts']) && is_numeric($payload['server_ts'])
+            ? (int) $payload['server_ts'] : tmon_uc_mysql_to_local_timestamp($r['created_at']);
+        $payload['ts_iso'] = gmdate('c', $payload['device_ts']);
         $out[] = $payload;
     }
     return rest_ensure_response(['status'=>'ok','rows'=>$out]);
@@ -294,6 +315,7 @@ function tmon_uc_receive_field_data($request) {
         if (!is_array($rec)) return [];
         $out = [];
         $out['timestamp'] = $rec['ts'] ?? ($rec['timestamp'] ?? ($rec['time'] ?? ''));
+        $out['device_ts'] = tmon_record_epoch($rec);
         $out['server_ts'] = $rec['server_ts'] ?? null;
         $out['unit_id']   = $rec['unit_id'] ?? '';
         $out['machine_id']= $rec['machine_id'] ?? '';
@@ -466,6 +488,7 @@ function tmon_uc_receive_field_data($request) {
             if (!isset($t['ts']) && isset($t['timestamp'])) {
                 $t['ts'] = $t['timestamp'];
             }
+            $t['device_ts'] = tmon_record_epoch($t);
             $rec_unit = isset($t['unit_id']) ? sanitize_text_field($t['unit_id']) : $unit_id;
             $rec_machine = isset($t['machine_id']) ? sanitize_text_field($t['machine_id']) : $machine_id;
 

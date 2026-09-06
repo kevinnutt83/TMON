@@ -260,7 +260,8 @@ add_action('rest_api_init', function() {
     register_rest_route('tmon/v1', '/device/ota-jobs/(?P<unit_id>[\w-]+)', [
         'methods' => 'GET',
         'callback' => 'tmon_uc_api_device_ota_jobs',
-        'permission_callback' => 'tmon_uc_jwt_verify',
+        // The unit_id path segment is the device credential for read-only polling.
+        'permission_callback' => '__return_true',
     ]);
     register_rest_route('tmon/v1', '/device/ota-job-complete', [
         'methods' => 'POST',
@@ -281,7 +282,7 @@ add_action('rest_api_init', function() {
 function tmon_uc_api_device_ota_jobs($request) {
     global $wpdb;
     $unit_id = $request->get_param('unit_id');
-    $jobs = $wpdb->get_results($wpdb->prepare("SELECT id, job_type, payload FROM {$wpdb->prefix}tmon_ota_jobs WHERE unit_id = %s AND status = 'pending'", $unit_id));
+    $jobs = $wpdb->get_results($wpdb->prepare("SELECT id, job_type, payload FROM {$wpdb->prefix}tmon_ota_jobs WHERE unit_id = %s AND status IN ('pending', 'staged')", $unit_id));
     $result = [];
     foreach ($jobs as $job) {
         $result[] = [
@@ -290,7 +291,7 @@ function tmon_uc_api_device_ota_jobs($request) {
             'payload' => json_decode($job->payload, true),
         ];
     }
-    return rest_ensure_response(['status' => 'ok', 'jobs' => $result]);
+    return rest_ensure_response(['ok' => true, 'status' => 'ok', 'jobs' => $result]);
 }
 
 function tmon_uc_api_device_ota_job_complete($request) {

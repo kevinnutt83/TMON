@@ -149,6 +149,29 @@ if (!function_exists('tmon_admin_uc_registration_auth_ok')) {
     }
 }
 
+if (!function_exists('tmon_admin_record_epoch')) {
+    function tmon_admin_record_epoch($row) {
+        if (is_array($row) && isset($row['device_ts']) && is_numeric($row['device_ts'])) {
+            $value = (int) $row['device_ts'];
+            if ($value >= 1700000000 && $value <= 1900000000) return $value;
+        }
+        if (is_array($row) && isset($row['ts']) && is_numeric($row['ts'])) {
+            $value = (int) $row['ts'];
+            if ($value > 0 && $value < 1000000000) $value += 946684800;
+            if ($value >= 1700000000 && $value <= 1900000000) return $value;
+        }
+        if (is_array($row) && !empty($row['ts_iso'])) {
+            $value = strtotime((string) $row['ts_iso']);
+            if ($value >= 1700000000 && $value <= 1900000000) return $value;
+        }
+        if (is_array($row) && isset($row['server_ts']) && is_numeric($row['server_ts'])) {
+            $value = (int) $row['server_ts'];
+            if ($value >= 1700000000 && $value <= 1900000000) return $value;
+        }
+        return time();
+    }
+}
+
 add_action('rest_api_init', function() {
     register_rest_route('tmon-admin/v1', '/status', [
         'methods' => 'GET',
@@ -199,16 +222,19 @@ add_action('rest_api_init', function() {
             // Normalize a consistent display name on each row
             foreach ($all as &$row) {
                 if (is_array($row)) {
+                    $row['device_ts'] = tmon_admin_record_epoch($row);
+                    $row['server_ts'] = (isset($row['server_ts']) && is_numeric($row['server_ts'])) ? (int) $row['server_ts'] : time();
+                    $row['ts_iso'] = gmdate('c', $row['device_ts']);
                     if (empty($row['name'])) {
                         $row['name'] = !empty($row['unit_name']) ? $row['unit_name'] : (!empty($row['unit_id']) ? $row['unit_id'] : '');
                     }
                 }
             }
             unset($row);
-            // Sort by ts_iso desc
+            // Sort by normalized device time, with server time as fallback.
             usort($all, function($a,$b){
-                $ta = isset($a['ts_iso']) ? strtotime($a['ts_iso']) : 0;
-                $tb = isset($b['ts_iso']) ? strtotime($b['ts_iso']) : 0;
+                $ta = tmon_admin_record_epoch($a);
+                $tb = tmon_admin_record_epoch($b);
                 return $tb <=> $ta;
             });
             return rest_ensure_response(['rows'=>$all]);

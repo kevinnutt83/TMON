@@ -157,6 +157,11 @@ jQuery(function($){
                 if (resp.data && resp.data.paired_sites) renderPairs(resp.data.paired_sites);
             } else {
                 var msg = (resp && resp.data && resp.data.message) ? resp.data.message : 'Pairing failed';
+                if (resp && resp.data && resp.data.http) msg += ' (HTTP ' + resp.data.http + ')';
+                if (resp && resp.data && resp.data.body) {
+                    var body = typeof resp.data.body === 'string' ? resp.data.body : JSON.stringify(resp.data.body);
+                    msg += ': ' + body.substring(0, 240);
+                }
                 $status.html('<div class="notice notice-error is-dismissible"><p>'+esc(msg)+'</p></div>');
             }
         }, 'json').fail(function(xhr){
