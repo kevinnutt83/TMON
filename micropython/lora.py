@@ -2225,7 +2225,8 @@ async def crc_selftest():
     c = crc16_ccitt(sample.encode())
     wire = _format_crc(c)
     ok, detail = verify_app_crc(sample, wire)
-    await debug_print('CRC selftest %s %s (wire=CRC:%s)' % (ok, detail, wire), 'LORA')
+    status = 'ok' if ok else 'failed'
+    await debug_print('CRC selftest %s %s (wire=CRC:%s)' % (status, detail, wire), 'LORA')
 
 
 async def _unsecure_message(msg_str, remote_uid=None):
@@ -2265,6 +2266,14 @@ async def _unsecure_message(msg_str, remote_uid=None):
             elif pu.upper().startswith('HMAC:'):
                 hmac_hex = pu[5:].strip()
 
+        # Drop malformed: two CRC: tokens or invalid body prefix
+        if raw.count('CRC:') > 1:
+            await _sec_log('Malformed envelope: multiple CRC tokens')
+            return None
+        if not body.startswith(('HELLO:', 'READY:', 'ACK:', 'END:', 'TYPE:', 'FWD:')):
+            await _sec_log('Malformed envelope: invalid prefix %s' % body[:20])
+            return None
+        
         hmac_enabled = bool(getattr(settings, 'LORA_HMAC_ENABLED', False))
 
         if hmac_enabled and hmac_hex is None:
@@ -2795,42 +2804,45 @@ async def send_field_data_controlled(payload):
     for i in range(total):
         start = i * chunk_size
         part = full_b64[start:start + chunk_size]
-        if batch_id:
-            chunk_msg = f"TYPE:FIELD_DATA_CHUNK,UID:{uid},CHUNK:{i}/{total},BID:{batch_id},DATA:{part}"
-        else:
-            chunk_msg = f"TYPE:FIELD_DATA_CHUNK,UID:{uid},CHUNK:{i}/{total},DATA:{part}"
-        try:
-            secured = await _secure_message(chunk_msg)
-            ok = await _safe_send(secured.encode())
-            await debug_print(f"Chunk {i}/{total} sent (ok={ok})", "REMOTE_NODE")
-            if not ok:
-                await _record_lora_session_failure(f"Chunk {i} TX failed")
-                await debug_print("=== SIMPLE SESSION FAILED ===", "REMOTE_NODE")
+        for i in range(total):
+            if len(full_b64) > 0 and len(secured.encode() if isinstance(secured, str) else secured) > max_pkt:
+                await debug_print(f"Payload too large: {len(secured.encode())} > {max_pkt}; aborting", "REMOTE_NODE")
                 sdata.lora_session_busy = False
                 return None
-        except Exception as e:
-            await _record_lora_session_failure(f"Chunk {i} send exception: {e}")
-            await debug_print("=== SIMPLE SESSION FAILED ===", "REMOTE_NODE")
-            sdata.lora_session_busy = False
-            return None
-        if i == 0:
-            await asyncio.sleep_ms(250)
+            start = i * chunk_size
+            part = full_b64[start:start + chunk_size]
+            chunk_msg = f"TYPE:FIELD_DATA_CHUNK,UID:{uid},CHUNK:{i}/{total},DATA:{part}"
             try:
-                repeat_ok = await _safe_send(secured.encode())
-                await debug_print(f"Chunk {i}/{total} repeated (ok={repeat_ok})", "REMOTE_NODE")
-                if not repeat_ok:
-                    await _record_lora_session_failure('Chunk 0 repeat TX failed')
+                secured = await _secure_message(chunk_msg)
+                secured_bytes = secured.encode() if isinstance(secured, str) else secured
+                if len(secured_bytes) > max_pkt:
+                    await debug_print(f"Chunk {i} secured payload {len(secured_bytes)} > {max_pkt}; aborting", "REMOTE_NODE")
+                    sdata.lora_session_busy = False
+                    return None
+                ok = await _safe_send(secured_bytes)
+                if not ok:
+                    await _record_lora_session_failure(f"Chunk {i} TX failed")
                     sdata.lora_session_busy = False
                     return None
             except Exception as e:
-                await _record_lora_session_failure(f'Chunk 0 repeat exception: {e}')
+                await _record_lora_session_failure(f"Chunk {i} exception: {e}")
                 sdata.lora_session_busy = False
                 return None
-        await asyncio.sleep_ms(450)
+            if i == 0 and total > 1:
+                await asyncio.sleep_ms(400)
+                try:
+                    repeat_ok = await _safe_send(secured_bytes)
+                    await debug_print(f"Chunk {i}/{total} repeated (ok={repeat_ok})", "REMOTE_NODE")
+                    if not repeat_ok:
+                        await _record_lora_session_failure('Chunk 0 repeat TX failed')
+                        sdata.lora_session_busy = False
+                        return None
+                except Exception as e:
+                    await _record_lora_session_failure(f'Chunk 0 repeat exception: {e}')
+                    sdata.lora_session_busy = False
+                    return None
+            await asyncio.sleep_ms(450)
 
-    if batch_id:
-        end_msg = f"END:{uid}:{total}:BID:{batch_id}"
-    else:
         end_msg = f"END:{uid}:{total}"
 
     try:

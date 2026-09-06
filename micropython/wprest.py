@@ -48,6 +48,8 @@ WORDPRESS_PASSWORD = getattr(settings, 'WORDPRESS_PASSWORD', None)
 LAST_REST_ERROR = {}
 REST_ERROR_STREAK = 0
 LAST_REST_SUCCESS_TS = 0
+LAST_OTA_401_WARN_TS = 0
+LAST_DIAG_FAIL_TS = 0
 LAST_DIAG_PUSH_TS = 0
 _DIAG_PUSH_ACTIVE = False
 
@@ -551,6 +553,7 @@ async def send_settings_to_wp():
 
 # Addition for OTA polling
 async def poll_ota_jobs():
+    global LAST_OTA_401_WARN_TS
     wp_url = _current_wp_url()
     if not wp_url:
         await debug_print('No WordPress API URL set', 'ERROR')
@@ -579,6 +582,12 @@ async def poll_ota_jobs():
                     _mark_rest_success()
                     return jobs if isinstance(jobs, list) else []
                 if code == 404:
+                    return []
+                if code == 401:
+                    now = _now_ts()
+                    if now - LAST_OTA_401_WARN_TS >= 300:
+                        LAST_OTA_401_WARN_TS = now
+                        await debug_print("wprest: OTA request unauthorized (401); backing off", "WARN")
                     return []
                 if code != 405:
                     await _record_rest_failure('poll_ota_jobs', code, p, 'unexpected_status')
@@ -667,15 +676,21 @@ async def send_ota_job_status(job_id, status, info=None):
 
 
 async def send_diagnostics_to_wp(extra=None):
+    global LAST_DIAG_FAIL_TS
     """Push compact diagnostics payload to WP/UC/Admin diagnostic routes."""
     try:
         wp_url = _current_wp_url()
         if not wp_url:
             await debug_print('send_diagnostics_to_wp: no WP url', 'WARN')
             return False
+        if not globals().get("ENABLE_DIAGNOSTICS_UPLOAD", True):
+            return
+        if _now_ts() - LAST_DIAG_FAIL_TS < 300:
+            return
         try:
             import sdata as _sd
         except Exception:
+            LAST_DIAG_FAIL_TS = _now_ts()
             _sd = None
         diag = get_diagnostics_snapshot() or {}
         dsys = diag.get('system', {}) if isinstance(diag, dict) else {}
