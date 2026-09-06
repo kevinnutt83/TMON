@@ -4,6 +4,7 @@ import hmac
 import importlib.util
 import os
 import sys
+import tempfile
 import types
 import unittest
 
@@ -238,6 +239,37 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertEqual(compact_remote['ts'], 1000000000)
         self.assertIn('fw', compact_remote)
         self.assertIn('ts_iso', compact_remote)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            backlog_path = os.path.join(temp_dir, 'field_data_backlog.log')
+            with open(backlog_path, 'w', encoding='utf-8') as handle:
+                handle.write('{"data":[1]}\n')
+                handle.write('{"truncated"\n')
+            utils_module.FIELD_DATA_BACKLOG = backlog_path
+            utils_module.checkLogDirectory = lambda: None
+            self.assertEqual(utils_module.read_backlog(), [{'data': [1]}])
+
+    def test_lora_ack_and_wp_retry_contracts(self):
+        with open(os.path.join(ROOT, 'micropython', 'lora.py'), 'r', encoding='utf-8') as handle:
+            lora_source = handle.read()
+        checker_start = lora_source.index('async def check_incomplete_bursts():')
+        checker_end = lora_source.index('\n\ndef _simple_session_parse_chunk', checker_start)
+        checker = lora_source[checker_start:checker_end]
+        self.assertIn("if st.get('ack_sent'):", checker)
+        self.assertIn("await asyncio.sleep(5)", checker)
+        self.assertIn('>= 60000', checker)
+        self.assertIn("st['ack_sent'] = True", lora_source)
+        self.assertIn("st['chunks'] = []", lora_source)
+
+        with open(WPREST_PATH, 'r', encoding='utf-8') as handle:
+            wprest_source = handle.read()
+        settings_start = wprest_source.index('async def send_settings_to_wp():')
+        settings_end = wprest_source.index('\n# Addition for OTA polling', settings_start)
+        settings_sender = wprest_source[settings_start:settings_end]
+        self.assertIn("candidate_paths = ['/wp-json/tmon/v1/device/settings-applied']", settings_sender)
+        self.assertIn('route missing; not backlogging', settings_sender)
+        self.assertIn('if last_response is None:', settings_sender)
+        self.assertIn("candidate_paths = ['/wp-json/tmon/v1/device/diagnostics']", wprest_source)
 
     def test_oled_grid_and_simple_session_ota_contracts(self):
         with open(os.path.join(ROOT, 'micropython', 'oled.py'), 'r', encoding='utf-8') as handle:

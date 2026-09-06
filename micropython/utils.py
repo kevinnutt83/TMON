@@ -135,9 +135,26 @@ def read_backlog():
             os.stat(FIELD_DATA_BACKLOG)
         except OSError:
             return []
+        valid = []
+        malformed = False
         with open(FIELD_DATA_BACKLOG, 'r') as f:
-            lines = f.readlines()
-        return [ujson.loads(line) for line in lines if line.strip()]
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    entry = ujson.loads(line)
+                    if isinstance(entry, dict):
+                        valid.append(entry)
+                    else:
+                        malformed = True
+                except Exception:
+                    malformed = True
+        if malformed:
+            with open(FIELD_DATA_BACKLOG, 'w') as f:
+                for entry in valid:
+                    f.write(ujson.dumps(entry) + '\n')
+            print('WARN: discarded malformed backlog entries')
+        return valid
     except Exception as e:
         print(f"Error reading backlog: {e}")
         return []

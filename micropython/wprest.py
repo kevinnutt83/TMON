@@ -492,32 +492,8 @@ async def send_settings_to_wp():
                 except Exception:
                     pass
 
-        # Candidate endpoint variants
-        candidate_paths = []
-        try:
-            candidate_paths.append(getattr(settings, 'UC_SETTINGS_APPLIED_PATH', '/wp-json/tmon/v1/admin/device/settings-applied'))
-        except Exception:
-            candidate_paths.append('/wp-json/tmon/v1/admin/device/settings-applied')
-
-        candidate_paths.extend([
-            '/wp-json/tmon/v1/device/settings-applied',
-            '/wp-json/unit-connector/v1/device/settings-applied',
-            '/wp-json/tmon-unit-connector/v1/device/settings-applied',
-        ])
-
-        try:
-            candidate_paths.append(getattr(settings, 'ADMIN_SETTINGS_PATH', '/wp-json/tmon/v1/admin/device/settings'))
-        except Exception:
-            candidate_paths.append('/wp-json/tmon/v1/admin/device/settings')
-
-        candidate_paths.extend([
-            '/wp-json/tmon/v1/device/settings',
-            '/wp-json/tmon-admin/v1/device/settings'
-        ])
-
-        # Reorder auth modes: try Basic (App Password) first (common for device endpoints),
-        # then admin token, then hub/read/none. This reduces 403 when admin token isn't set.
-        auth_modes = ['basic', 'admin', 'hub', 'read', None, 'none']
+        candidate_paths = ['/wp-json/tmon/v1/device/settings-applied']
+        auth_modes = ['basic']
 
         last_response = None
         for p in candidate_paths:
@@ -551,17 +527,21 @@ async def send_settings_to_wp():
                         except Exception:
                             pass
                         return True
-                    elif code not in (404, 405):
+                    if code == 404:
+                        await debug_print('wprest: send_settings route missing; not backlogging', 'WARN')
+                        return False
+                    elif code != 405:
                         await _record_rest_failure('send_settings_to_wp', code, p, 'unexpected_status', {'auth': str(mode), 'body': body})
                 except Exception as e:
                     await _record_rest_failure('send_settings_to_wp', 0, p, 'request_exception', {'auth': str(mode), 'exception': format_exception(e)})
                     await debug_print(f'wprest: send_settings {p} auth={mode} exc {format_exception(e)}', 'ERROR')
-        # If all failed, append to backlog for retry
-        try:
-            append_to_backlog(payload)
-            await debug_print('wprest: send_settings failed all; backlogged', 'WARN')
-        except Exception:
-            pass
+        # Only transport failures are eligible for backlog, never HTTP error bodies.
+        if last_response is None:
+            try:
+                append_to_backlog(payload)
+                await debug_print('wprest: send_settings transport failure; backlogged', 'WARN')
+            except Exception:
+                pass
         await debug_print(f'wprest: send_settings failed last {last_response}', 'ERROR')
         return False
     except Exception as e:
@@ -576,20 +556,15 @@ async def poll_ota_jobs():
         await debug_print('No WordPress API URL set', 'ERROR')
         return []
     unit_id = getattr(settings, 'UNIT_ID', '')
-    candidate_paths = [
-        f'/wp-json/tmon/v1/device/ota_jobs/{unit_id}',
-        f'/wp-json/tmon-admin/v1/device/ota-jobs/{unit_id}',
-        f'/wp-json/unit-connector/v1/device/ota-jobs/{unit_id}',
-    ]
-    max_attempts = int(getattr(settings, 'OTA_POLL_MAX_ATTEMPTS', 3))
-    base_backoff = float(getattr(settings, 'OTA_POLL_RETRY_BASE_S', 2))
+    candidate_paths = [f'/wp-json/tmon/v1/device/ota-jobs/{unit_id}']
+    max_attempts = 1
     for attempt in range(max_attempts):
         for p in candidate_paths:
             resp = None
             try:
                 url = wp_url.rstrip('/') + p
                 try:
-                    resp = requests.get(url, headers=_auth_headers(), timeout=8)
+                    resp = requests.get(url, headers=_auth_headers(), timeout=3)
                 except TypeError:
                     resp = requests.get(url, headers=_auth_headers())
                 code, _body_text, parsed = _extract_response(resp, max_chars=1200)
@@ -603,7 +578,9 @@ async def poll_ota_jobs():
                         await asyncio.sleep_ms(5)
                     _mark_rest_success()
                     return jobs if isinstance(jobs, list) else []
-                if code not in (404, 405):
+                if code == 404:
+                    return []
+                if code != 405:
                     await _record_rest_failure('poll_ota_jobs', code, p, 'unexpected_status')
                     await debug_print(f'poll_ota_jobs {p} returned {code}', 'WARN')
             except Exception as e:
@@ -617,11 +594,7 @@ async def poll_ota_jobs():
                     pass
                 if asyncio:
                     await asyncio.sleep_ms(5)
-        if attempt < max_attempts - 1:
-            delay = base_backoff * (2 ** attempt)
-            if asyncio:
-                await asyncio.sleep(delay)
-    await debug_print('poll_ota_jobs exhausted retries', 'WARN')
+    await debug_print('poll_ota_jobs unavailable', 'WARN')
     return []
 
 
@@ -727,14 +700,9 @@ async def send_diagnostics_to_wp(extra=None):
             'rest_error': get_last_rest_error(),
             'extra': extra or {},
         }
-        candidate_paths = [
-            '/wp-json/tmon/v1/device/diagnostics',
-            '/wp-json/tmon-admin/v1/device/diagnostics',
-            '/wp-json/unit-connector/v1/device/diagnostics',
-        ]
-        auth_modes = ['basic', 'admin', 'hub', 'read', 'none']
-        max_attempts = int(getattr(settings, 'DIAGNOSTIC_MAX_ATTEMPTS', 2))
-        base_backoff = float(getattr(settings, 'DIAGNOSTIC_RETRY_BASE_S', 2))
+        candidate_paths = ['/wp-json/tmon/v1/device/diagnostics']
+        auth_modes = ['basic']
+        max_attempts = 1
         last_failure = {}
         for attempt in range(max_attempts):
             for p in candidate_paths:
@@ -744,7 +712,7 @@ async def send_diagnostics_to_wp(extra=None):
                         headers = _auth_headers(auth_mode)
                         url = wp_url.rstrip('/') + p
                         try:
-                            resp = requests.post(url, json=payload, headers=headers, timeout=8)
+                            resp = requests.post(url, json=payload, headers=headers, timeout=5)
                         except TypeError:
                             resp = requests.post(url, json=payload, headers=headers)
                         code, _body_text, parsed = _extract_response(resp)
@@ -771,9 +739,6 @@ async def send_diagnostics_to_wp(extra=None):
                             pass
                         if asyncio:
                             await asyncio.sleep_ms(5)
-            if attempt < max_attempts - 1:
-                if asyncio:
-                    await asyncio.sleep(base_backoff * (2 ** attempt))
         if last_failure:
             await debug_print(
                 'send_diagnostics_to_wp all attempts failed '

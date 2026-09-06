@@ -1219,6 +1219,9 @@ async def process_remote_state_files(uid, st):
 async def _send_final_ack(remote_uid, batch_id=None, reason='', remote_machine_id=None):
     """Send a final ACK to a remote and include optional batch marker."""
     try:
+        st = getattr(settings, 'REMOTE_NODE_INFO', {}).get(str(remote_uid), {})
+        if isinstance(st, dict) and st.get('ack_sent'):
+            return None
         next_delay = calculate_next_delay(remote_uid)
         ack_msg = f"ACK:{remote_uid}:NEXT:{next_delay}"
         if batch_id:
@@ -1260,6 +1263,11 @@ async def _send_final_ack(remote_uid, batch_id=None, reason='', remote_machine_i
             st['next_expected'] = now + int(next_delay)
             st['last_sync_ts'] = now
             st['missed_syncs'] = 0
+            st['ack_sent'] = True
+            st['ack_sent_ticks'] = time.ticks_ms()
+            st['session_active'] = False
+            st['chunks'] = []
+            st['last_chunk_ticks'] = 0
             save_remote_node_info()
             await debug_print(
                 f"Registered {remote_uid} next_sync in {next_delay}s",
@@ -1276,6 +1284,8 @@ async def _send_final_ack(remote_uid, batch_id=None, reason='', remote_machine_i
 
 async def _maybe_force_ack_on_silence(remote_uid, st):
     try:
+        if st.get('ack_sent'):
+            return
         silent_need_ms = int(float(getattr(settings, 'LORA_SESSION_SILENCE_S', 5)) * 1000)
         last = int(st.get('last_chunk_ticks') or 0)
         if last <= 0 or time.ticks_diff(time.ticks_ms(), last) < silent_need_ms:
@@ -1349,7 +1359,10 @@ async def base_packet_processor():
                 st['last_rx'] = now
                 st['session_active'] = True
                 st['saw_end'] = False
+                st['ack_sent'] = False
+                st['staged_ok'] = False
                 st['chunks'] = {'FIELD_DATA': {}}
+                st['chunk_total'] = 0
                 st['base_uid'] = str(getattr(settings, 'UNIT_ID', '') or '')
                 st['chunk_first_ts'] = now
                 st['last_chunk_ts'] = now
@@ -1536,6 +1549,8 @@ async def check_incomplete_bursts():
             for uid, st in list(info.items()):
                 if not isinstance(st, dict):
                     continue
+                if st.get('ack_sent'):
+                    continue
                 field_chunks = _session_field_chunks(st)
                 if not field_chunks:
                     continue
@@ -1556,15 +1571,14 @@ async def check_incomplete_bursts():
                     assembled = _assemble_simple_session_field_data(st)
                     if assembled is None:
                         missing = [index for index in range(total) if index not in field_chunks]
-                        # Rate-limit this log to once per 30s per uid
-                        last_log_key = f'_burst_incomplete_{uid}'
-                        last_log_time = getattr(globals(), last_log_key, 0)
-                        now = time.time()
-                        if now - last_log_time >= 30:
+                        # Rate-limit this log to once per minute per uid.
+                        last_log_time = st.get('last_incomplete_log_ticks')
+                        now = time.ticks_ms()
+                        if last_log_time is None or time.ticks_diff(now, last_log_time) >= 60000:
                             await debug_print(
                                 f"Simple session partial {uid} have={have}/{total} missing={missing}", "WARN"
                             )
-                            globals()[last_log_key] = now
+                            st['last_incomplete_log_ticks'] = now
                         continue
                     if not st.get('staged_ok') and callable(globals().get('process_remote_field_data')):
                         await process_remote_field_data(uid, st, send_ack=False)
@@ -1574,7 +1588,7 @@ async def check_incomplete_bursts():
                     st['session_active'] = False
         except Exception as e:
             await log_error(f"check_incomplete_bursts: {e}")
-        await asyncio.sleep(2)
+        await asyncio.sleep(5)
 
 
 def _simple_session_parse_chunk(clear):
@@ -1682,6 +1696,8 @@ async def handle_simple_session_hub(clear):
         st['chunks'] = []
         st['chunk_total'] = None
         st['staged_ok'] = False
+        st['ack_sent'] = False
+        st.pop('ack_sent_ticks', None)
         try:
             import utime as _t
             st['last_hello_ts'] = _t.time()
@@ -1821,6 +1837,11 @@ async def handle_simple_session_hub(clear):
             await log_error('ACK TX failed for %s' % remote_uid)
 
         st['session_active'] = False
+        if ok:
+            st['ack_sent'] = True
+            st['ack_sent_ticks'] = time.ticks_ms()
+            st['chunks'] = []
+            st['last_chunk_ticks'] = 0
         sdata.lora_session_busy = False
         try:
             await ensure_lora_listening()
