@@ -359,6 +359,10 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn('READY not received; sending one-chunk payload best-effort', lora_text)
         self.assertIn("'irq=0x%04x' % irq", lora_text)
         self.assertIn('getPacketLength()', lora_text)
+        self.assertIn("await debug_print('startReceive armed', 'LORA')", lora_text)
+        self.assertIn('last_irq_log_ticks', lora_text)
+        self.assertIn("skipped=lora_startup", main_text)
+        self.assertIn("skipped=lora_busy", main_text)
 
         settings_mod = types.ModuleType('settings')
         settings_mod.LOG_DIR = '/logs'

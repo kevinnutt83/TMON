@@ -237,6 +237,12 @@ async def periodic_field_data_task():
         return
     if str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'remote':
         return
+    if getattr(sdata, 'lora_session_busy', False):
+        await debug_print('sfd: cycle lines=0 sent=0 skipped=lora_busy', 'FIELD_DATA')
+        return
+    if time.time() < getattr(sdata, 'lora_rx_pause_until', 0):
+        await debug_print('sfd: cycle lines=0 sent=0 skipped=lora_startup', 'FIELD_DATA')
+        return
     try:
         await send_field_data_log()
     except Exception as e:

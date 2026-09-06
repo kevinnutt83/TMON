@@ -21,6 +21,7 @@ LORA_CONNECTED = False
 lora_last_rx_ts = 0
 lora_last_tx_ts = 0
 lora_last_tx_rssi = None
+lora_rx_pause_until = 0
 lora_last_init_ts = 0
 
 # Engine controller metrics

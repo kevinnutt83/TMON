@@ -942,6 +942,7 @@ async def init_lora():
                 await display_message("LoRa OK", 1.5)
                 sdata.lora_last_init_ts = time.time()
                 sdata.lora_last_rx_ticks = time.ticks_ms()
+                sdata.lora_rx_pause_until = time.time() + 90
                 return True
             elif status == -2:
                 await debug_print("Status -2 detected - aggressive reset already performed", "WARN")
@@ -3552,6 +3553,8 @@ async def connectLora():
         except Exception as e:
             await log_error(f"crc_selftest failed: {e}")
         _crc_selftest_done = True
+    await ensure_lora_listening()
+    await debug_print('startReceive armed', 'LORA')
 
     if _is_lora_hub_node():
         asyncio.create_task(base_packet_processor())
@@ -3591,6 +3594,7 @@ async def connectLora():
 
     last_heartbeat_ts = 0
     last_rx_heartbeat_ticks = time.ticks_ms()
+    last_irq_log_ticks = last_rx_heartbeat_ticks
     while True:
         try:
             current_time = time.time()
@@ -3802,10 +3806,13 @@ async def connectLora():
                 try:
                     if hasattr(lora, 'getIrqStatus'):
                         irq = lora.getIrqStatus()
-                        if irq:
-                            await debug_print('irq=0x%04x' % irq, 'LORA')
                 except Exception as e:
                     await debug_print('IRQ poll failed: %r' % (e,), 'WARN')
+
+                now_ticks = time.ticks_ms()
+                if irq or time.ticks_diff(now_ticks, last_irq_log_ticks) >= 10000:
+                    last_irq_log_ticks = now_ticks
+                    await debug_print('irq=0x%04x' % irq, 'LORA')
 
                 rx_done = getattr(lora, 'RX_DONE', 0)
                 packet_ready = bool(irq & rx_done) or bool(lora_rx_pending)

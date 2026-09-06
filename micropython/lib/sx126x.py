@@ -997,8 +997,9 @@ class SX126X:
             return (snrPkt - 256)/4.0
 
     def getPacketLength(self, update=True):
-        self.SPIreadCommand([SX126X_CMD_GET_RX_BUFFER_STATUS], 1, _B2, 2)
-        return _B2[0]
+        rxBufStatus = bytearray(2)
+        self.SPIreadCommand([SX126X_CMD_GET_RX_BUFFER_STATUS], 1, rxBufStatus, 2)
+        return rxBufStatus[0]
 
     def fixedPacketLengthMode(self, len_=SX126X_MAX_PACKET_LENGTH):
         return self.setPacketMode(SX126X_GFSK_PACKET_FIXED, len_)
@@ -1152,8 +1153,9 @@ class SX126X:
         return self.SPIwriteCommand([SX126X_CMD_SET_DIO_IRQ_PARAMS], 1, data, 8)
 
     def getIrqStatus(self):
-        self.SPIreadCommand([SX126X_CMD_GET_IRQ_STATUS], 1, _B2, 2)
-        return int((_B2[0] << 8) | _B2[1])
+        data = bytearray(2)
+        self.SPIreadCommand([SX126X_CMD_GET_IRQ_STATUS], 1, data, 2)
+        return int((data[0] << 8) | data[1])
 
     def clearIrqStatus(self, clearIrqParams=SX126X_IRQ_ALL):
         data = [int((clearIrqParams >> 8) & 0xFF), int(clearIrqParams & 0xFF)]
