@@ -76,7 +76,7 @@ def _read_firmware_version():
                     return value
         except Exception:
             pass
-    return 'v2.00.4g'
+    return 'v2.00.4h'
 
 
 FIRMWARE_VERSION = _read_firmware_version()
