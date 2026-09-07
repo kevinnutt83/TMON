@@ -1293,6 +1293,10 @@ async def process_remote_field_data(uid, st, send_ack=True):
                 try:
                     stage_remote_field_data(uid, merged_records)
                     await debug_print(f"Staged {len(merged_records)} remote field records from {uid}", "BASE_NODE")
+                    await debug_print(
+                        'Staged remote %s keys=%s' % (uid, ','.join(merged_records[0].keys())),
+                        'BASE_NODE'
+                    )
                 except Exception as stage_e:
                     await log_error(f"stage_remote_field_data error for {uid}: {stage_e}")
 
@@ -1742,6 +1746,17 @@ def _valid_unit_uid(uid):
     return all(('a' <= char <= 'z') or ('0' <= char <= '9') for char in value[5:])
 
 
+def _chunk_data_ok(data):
+    cleaned = _clean_b64(data)
+    if len(cleaned) < 8:
+        return False
+    try:
+        raw = _ub.a2b_base64(cleaned)
+        return isinstance(ujson.loads(raw.decode('utf-8')), dict)
+    except Exception:
+        return False
+
+
 def _simple_session_parse_chunk(clear):
     """Return uid, index, total, base64 data, and optional batch id from a chunk."""
     uid = ''
@@ -1918,13 +1933,7 @@ async def handle_simple_session_hub(clear):
                 while len(ch) <= idx:
                     ch.append(None)
                 candidate = _clean_b64(data_b64)
-                candidate_ok = False
-                try:
-                    decoded = _ub.a2b_base64(candidate)
-                    ujson.loads(decoded.decode('utf-8'))
-                    candidate_ok = True
-                except Exception:
-                    candidate_ok = False
+                candidate_ok = _chunk_data_ok(candidate)
                 existing = ch[idx]
                 if candidate_ok and (not existing or len(candidate) >= len(existing)):
                     ch[idx] = candidate
@@ -1992,7 +2001,12 @@ async def handle_simple_session_hub(clear):
         next_delay = max(30, next_delay)
 
         if assembled is None and not st.get('staged_ok'):
-            await debug_print('assemble failed; ACK anyway for %s' % remote_uid, 'WARN')
+            await debug_print('assemble failed; no ACK uid=%s' % remote_uid, 'WARN')
+            st['simple_chunks'] = []
+            st['session_active'] = False
+            st['chunk_total'] = 0
+            sdata.lora_session_busy = False
+            return True
 
         ota_session_id = None
         try:

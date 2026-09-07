@@ -499,8 +499,24 @@ function tmon_uc_receive_field_data($request) {
                 $t['ts'] = $t['timestamp'];
             }
             $t['device_ts'] = tmon_record_epoch($t);
-            $rec_unit = isset($t['unit_id']) ? sanitize_text_field($t['unit_id']) : $unit_id;
-            $rec_machine = isset($t['machine_id']) ? sanitize_text_field($t['machine_id']) : $machine_id;
+            $poster = sanitize_text_field((string) $unit_id);
+            $rec_unit = isset($t['unit_id']) ? sanitize_text_field((string) $t['unit_id']) : '';
+            $is_bridged = (!empty($t['node_type']) && strtolower($t['node_type']) === 'remote')
+                || ($rec_unit !== '' && $poster !== '' && $rec_unit !== $poster);
+            if ($rec_unit === '') {
+                $rec_unit = $poster;
+            }
+            $rec_machine = '';
+            if (!$is_bridged && !empty($t['machine_id'])) {
+                $rec_machine = sanitize_text_field((string) $t['machine_id']);
+            } elseif (!$is_bridged) {
+                $rec_machine = sanitize_text_field((string) $machine_id);
+            }
+            if ($is_bridged) {
+                $t['origin'] = 'remote_via_base';
+                $t['source_unit_id'] = $poster;
+                $t['machine_id'] = '';
+            }
 
             // Canonicalize common sensor aliases so stored field_data always contains chart-friendly keys.
             if (!isset($t['t_f'])) {

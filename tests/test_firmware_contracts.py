@@ -443,6 +443,9 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("if (isset($record_unit_ids[$remote_unit])) continue;", field_api)
         self.assertIn("$rec['humid']", field_api)
         self.assertIn("$rec['volt']", field_api)
+        self.assertIn("if (!$is_bridged && !empty($t['machine_id']))", field_api)
+        self.assertIn("$t['machine_id'] = '';", field_api)
+        self.assertNotIn("|| !empty($data['bridge'])", field_api)
 
         settings_mod = types.ModuleType('settings')
         settings_mod.LOG_DIR = '/logs'
@@ -496,6 +499,7 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn('def _simple_session_parse_chunk(', source)
         self.assertIn('def _clean_b64(value):', source)
         self.assertIn('def _valid_unit_uid(uid):', source)
+        self.assertIn('def _chunk_data_ok(data):', source)
         self.assertIn("st.get('simple_chunks')", source)
         self.assertIn('candidate = _clean_b64(data_b64)', source)
         self.assertIn('ch[idx] = candidate', source)
@@ -503,13 +507,15 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("Dropped invalid HELLO uid=", source)
         self.assertIn("Dropped invalid CHUNK uid=", source)
         self.assertIn("Dropped invalid END uid=", source)
+        self.assertIn("assemble failed; no ACK uid=%s", source)
+        self.assertIn("candidate_ok = _chunk_data_ok(candidate)", source)
         self.assertIn('lora.recv(length)', source)
         namespace = {}
         tree = ast.parse(source)
         for node in tree.body:
             if isinstance(node, ast.Assign) and any(getattr(target, 'id', '') == '_B64_KEEP' for target in node.targets):
                 exec(compile(ast.Module(body=[node], type_ignores=[]), lora_path, 'exec'), namespace)
-            if isinstance(node, ast.FunctionDef) and node.name in {'_clean_b64', '_valid_unit_uid'}:
+            if isinstance(node, ast.FunctionDef) and node.name in {'_clean_b64', '_valid_unit_uid', '_chunk_data_ok'}:
                 exec(compile(ast.Module(body=[node], type_ignores=[]), lora_path, 'exec'), namespace)
         self.assertEqual(namespace['_clean_b64']('eyJ1IjoieCJ9CRC:21CE\x00TYPE:X'), 'eyJ1IjoieCJ9')
         self.assertTrue(namespace['_valid_unit_uid']('unit-l7riag'))
