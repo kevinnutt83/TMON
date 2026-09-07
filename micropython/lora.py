@@ -1917,8 +1917,20 @@ async def handle_simple_session_hub(clear):
             if idx >= 0:
                 while len(ch) <= idx:
                     ch.append(None)
-                ch[idx] = _clean_b64(data_b64)
-                st['assemble_fail_count'] = 0
+                candidate = _clean_b64(data_b64)
+                candidate_ok = False
+                try:
+                    decoded = _ub.a2b_base64(candidate)
+                    ujson.loads(decoded.decode('utf-8'))
+                    candidate_ok = True
+                except Exception:
+                    candidate_ok = False
+                existing = ch[idx]
+                if candidate_ok and (not existing or len(candidate) >= len(existing)):
+                    ch[idx] = candidate
+                    st['assemble_fail_count'] = 0
+                elif not candidate_ok:
+                    await debug_print('Dropped invalid CHUNK data uid=%s idx=%s' % (uid, idx), 'WARN')
             st['last_chunk_ticks'] = time.ticks_ms()
             await debug_print('Chunk %s %s/%s bytes=%s' % (uid, idx, total, len(data_b64 or '')), 'BASE_NODE')
         else:
@@ -3041,6 +3053,7 @@ def _minimal_remote_payload():
 async def send_field_data_controlled(payload):
     """Remote controlled simple session: HELLO -> READY -> chunk 0 -> END -> FINAL ACK."""
     global lora_rx_pending
+    batch_id = None
     if str(getattr(settings, 'NODE_TYPE', 'base')).lower() != 'remote':
         return None
 
@@ -3104,14 +3117,7 @@ async def send_field_data_controlled(payload):
         sdata.lora_session_busy = False
         return None
 
-    await asyncio.sleep_ms(300)
-    repeat_ok = await _safe_send(secured_bytes)
-    await debug_print(f"Chunk {i}/{total} repeated (ok={repeat_ok})", "LORA")
-    if not repeat_ok:
-        await _record_lora_session_failure('Chunk 0 repeat TX failed')
-        sdata.lora_session_busy = False
-        return None
-    await asyncio.sleep_ms(300)
+    await asyncio.sleep_ms(400)
 
     end_msg = f"END:{uid}:{total}"
 
@@ -3140,11 +3146,17 @@ async def send_field_data_controlled(payload):
                 continue
             msg = await _read_lora_packet()
             if msg:
-                raw = msg.rstrip(b'\x00').decode()
-                clear = await _unsecure_message(raw)
-                if clear and clear.startswith('ACK:'):
-                    parts = clear.split(':')
-                    if len(parts) >= 4 and parts[0] == 'ACK' and parts[1] == uid and parts[2] == 'NEXT':
+                try:
+                    raw = bytes(msg).rstrip(b'\x00').decode('ascii')
+                    clear = await _unsecure_message(raw)
+                except Exception:
+                    continue
+                if not clear or not clear.startswith('ACK:'):
+                    continue
+                parts = clear.split(':')
+                if len(parts) < 4 or parts[1] != uid or parts[2] != 'NEXT':
+                    continue
+                if parts[0] == 'ACK':
                         ack_bid = None
                         ack_cmd = None
                         ack_ota_session = None
