@@ -42,7 +42,7 @@ except ImportError:
     sdata = None
     settings = None
 
-from utils import free_pins, debug_print, TMON_AI, stage_remote_field_data, stage_remote_files, record_field_data, get_machine_id, persist_custom_settings
+from utils import free_pins, debug_print, TMON_AI, stage_remote_field_data, stage_remote_files, record_field_data, get_machine_id, persist_custom_settings, utc_iso
 from relay import toggle_relay
 from sampling import findLowestTemp, findHighestTemp, findLowestBar, findHighestBar, findLowestHumid, findHighestHumid
 
@@ -414,10 +414,14 @@ def _stage_remote_lora_ota_job(remote_uid, remote_ver):
     base_ver = ''
     if not _is_lora_hub_node():
         return None
-    if not bool(getattr(settings, 'ENABLE_LORA_OTA', True)):
+    if not bool(getattr(settings, 'ENABLE_LORA_OTA', False)):
         return None
     base_ver = str(getattr(settings, 'FIRMWARE_VERSION', '') or '').strip()
-    if not base_ver or not _is_newer_version(remote_ver, base_ver):
+    remote_ver = str(remote_ver or '').strip()
+    if not remote_ver or remote_ver == base_ver or not _is_newer_version(remote_ver, base_ver):
+        return None
+    if any(isinstance(info, dict) and info.get('session_active')
+           for info in (getattr(settings, 'REMOTE_NODE_INFO', {}) or {}).values()):
         return None
 
     files = _read_local_firmware_files()
@@ -782,9 +786,12 @@ async def hard_reset_lora():
 
 IRQ_RX_DONE = 0x0002
 IRQ_TX_DONE = 0x0001
+IRQ_PREAMBLE = 0x0004
+IRQ_HEADER_VALID = 0x0010
 IRQ_CRC_ERR = 0x0040
 IRQ_HEADER_ERR = 0x0020
 IRQ_TIMEOUT = 0x0200
+IRQ_RX_CLEAR = IRQ_PREAMBLE | IRQ_HEADER_VALID | IRQ_HEADER_ERR | IRQ_CRC_ERR | IRQ_RX_DONE
 IRQ_RX = IRQ_RX_DONE | IRQ_CRC_ERR | IRQ_HEADER_ERR | IRQ_TIMEOUT
 IRQ_ALL = 0x03FF
 
@@ -1203,6 +1210,28 @@ async def process_remote_burst(uid, st):
         save_remote_node_info()
 
 
+def _canonicalize_remote_record(uid, payload, rssi=None):
+    payload = dict(payload or {})
+    ts = payload.get('ts') or payload.get('timestamp')
+    if not isinstance(ts, (int, float)) or ts < 1600000000:
+        ts = int(time.time())
+    return {
+        'unit_id': str(uid),
+        'remote_unit_id': str(uid),
+        'base_unit_id': str(getattr(settings, 'UNIT_ID', '') or ''),
+        'node_type': 'remote',
+        'ingested_via': 'lora_base',
+        'temp_f': payload.get('temp_f', payload.get('t')),
+        'humid': payload.get('humid', payload.get('h')),
+        'volt': payload.get('volt', payload.get('v')),
+        'bar': payload.get('bar', payload.get('b')),
+        'fw': payload.get('fw') or payload.get('firmware_version') or '',
+        'ts': int(ts),
+        'ts_iso': utc_iso(int(ts)),
+        'lora_rssi': rssi if rssi is not None else getattr(sdata, 'lora_SigStr', None),
+    }
+
+
 async def process_remote_field_data(uid, st, send_ack=True):
     """
     Process a fully assembled FIELD_DATA payload from a remote node,
@@ -1241,15 +1270,7 @@ async def process_remote_field_data(uid, st, send_ack=True):
                     continue
                 merged = dict(defaults)
                 merged.update(record)
-                merged['unit_id'] = uid
-                merged['remote_unit_id'] = uid
-                merged['base_unit_id'] = str(getattr(settings, 'UNIT_ID', '') or '')
-                merged['node_type'] = 'remote'
-                merged['ingested_via'] = 'lora_base'
-                merged['ts'] = merged.get('ts') or merged.get('timestamp') or time.time()
-                if 'fw' in merged and not merged.get('firmware_version'):
-                    merged['firmware_version'] = merged.get('fw')
-                merged_records.append(merged)
+                merged_records.append(_canonicalize_remote_record(uid, merged))
 
             if merged_records:
                 next_delay = calculate_next_delay(uid)
@@ -1980,6 +2001,14 @@ async def handle_simple_session_hub(clear):
 
     return False
 
+def _looks_collided(message):
+    text = str(message or '')
+    control_starts = text.count('HELLO:') + text.count('END:') + text.count('READY:') + text.count('ACK:')
+    if control_starts > 1:
+        return True
+    return text.split(',DATA:', 1)[0].count('TYPE:') > 1
+
+
 async def handle_incoming_packet(msg):
     global last_rx_ts, last_lora_activity_ts
     try:
@@ -2006,7 +2035,7 @@ async def handle_incoming_packet(msg):
         except Exception:
             uid_hint = None
 
-    if msg_str.count('CRC:') > 1 or msg_str.count('TYPE:') > 1:
+    if _looks_collided(msg_str):
         await debug_print('Dropped collided frame', 'WARN')
         return
 
@@ -3910,7 +3939,7 @@ async def connectLora():
                     await debug_print('IRQ poll failed: %r' % (e,), 'WARN')
 
                 now_ticks = time.ticks_ms()
-                if irq or time.ticks_diff(now_ticks, last_irq_log_ticks) >= 10000:
+                if (irq & (IRQ_RX_DONE | IRQ_CRC_ERR)) or time.ticks_diff(now_ticks, last_irq_log_ticks) >= 10000:
                     last_irq_log_ticks = now_ticks
                     status = _chip_status()
                     mode = (status >> 4) & 7
@@ -3921,6 +3950,20 @@ async def connectLora():
                     if mode != 5:
                         await debug_print('not in RX — re-arm', 'LORA')
                         arm_rx()
+
+                non_rx_done = irq & (IRQ_PREAMBLE | IRQ_HEADER_VALID | IRQ_HEADER_ERR | IRQ_CRC_ERR)
+                if non_rx_done and not (irq & IRQ_RX_DONE):
+                    if hasattr(lora, 'clearIrqStatus'):
+                        lora.clearIrqStatus(non_rx_done)
+                    await asyncio.sleep_ms(20)
+                    continue
+                if irq & (IRQ_CRC_ERR | IRQ_HEADER_ERR):
+                    await debug_print('RX CRC/header err irq=0x%04x' % irq, 'WARN')
+                    if hasattr(lora, 'clearIrqStatus'):
+                        lora.clearIrqStatus(irq)
+                    arm_rx()
+                    await asyncio.sleep_ms(20)
+                    continue
 
                 sessions_active = any(
                     isinstance(info, dict) and info.get('session_active')

@@ -35,6 +35,7 @@ Immediate tasks
 - [x] Decouple application CRC from SX1262 CRC and recover remotes missing persisted role or unit identity.
 - [x] Require SX1262 TX completion, preserve pending RX data, retry HELLO through READY windows, and pause beacons during sessions.
 - [x] Require RX_DONE before reading SX1262 buffers and suppress stale control-frame reprocessing.
+- [x] Normalize compact remote telemetry, clear non-packet IRQs, and disable opportunistic LoRa OTA.
 - Replace global LoRa replay counter with per-remote replay window + persisted counter file (`/logs/lora_counters.json`).
 - [x] Require base ACK before trimming remote `field_data.log`, and append delivered remote records to local `data_history.log`.
 - [x] Add fast retry when persisted remote next-sync is already overdue.
