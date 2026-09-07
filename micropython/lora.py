@@ -778,15 +778,49 @@ async def hard_reset_lora():
     await asyncio.sleep_ms(500)
     await debug_print("Hard reset sequence complete", "LORA")
 
+IRQ_RX = 0x0002 | 0x0004 | 0x0020 | 0x0040 | 0x0200
+IRQ_ALL = 0x03FF
+
+
+def arm_rx():
+    """Set continuous receive mode and restore the RX IRQ mask after TX."""
+    if lora is None:
+        return False
+    try:
+        try:
+            state = lora.startReceive(0xFFFFFF)
+        except TypeError:
+            state = lora.startReceive()
+        if state not in (0, None, True):
+            return False
+        if hasattr(lora, 'setDioIrqParams'):
+            lora.setDioIrqParams(IRQ_ALL, IRQ_RX, 0, 0)
+        return True
+    except Exception:
+        return False
+
+
+def _chip_status():
+    if lora is None or not hasattr(lora, 'getStatus'):
+        return 0
+    try:
+        status = lora.getStatus()
+        if isinstance(status, (bytes, bytearray)):
+            status = status[0]
+        return int(status) & 0xFF
+    except Exception:
+        return 0
+
+
 async def ensure_lora_listening():
     global lora
     if lora is None:
         return False
     try:
         if hasattr(lora, 'startReceive'):
-            state = lora.startReceive()
-            if state not in (0, None, True):
-                await debug_print('ensure_lora_listening startReceive state=%s' % state, 'WARN')
+            if not arm_rx():
+                await debug_print('ensure_lora_listening startReceive failed', 'WARN')
+                return False
             return True
         if hasattr(lora, 'setOperatingMode'):
             mode = getattr(lora, 'MODE_RX', getattr(lora, 'RX', 1))
@@ -937,7 +971,8 @@ async def init_lora():
                     lora.setBlockingCallback(False, callback=_lora_irq_callback)
                 except TypeError:
                     lora.setBlockingCallback(False, _lora_irq_callback)
-                await ensure_lora_listening()
+                if not arm_rx():
+                    await debug_print('RX arm failed after begin()', 'WARN')
                 await debug_print("LoRa initialized successfully", "LORA")
                 await display_message("LoRa OK", 1.5)
                 sdata.lora_last_init_ts = time.time()
@@ -3595,6 +3630,7 @@ async def connectLora():
     last_heartbeat_ts = 0
     last_rx_heartbeat_ticks = time.ticks_ms()
     last_irq_log_ticks = last_rx_heartbeat_ticks
+    last_beacon_ticks = last_rx_heartbeat_ticks
     while True:
         try:
             current_time = time.time()
@@ -3812,7 +3848,25 @@ async def connectLora():
                 now_ticks = time.ticks_ms()
                 if irq or time.ticks_diff(now_ticks, last_irq_log_ticks) >= 10000:
                     last_irq_log_ticks = now_ticks
-                    await debug_print('irq=0x%04x' % irq, 'LORA')
+                    status = _chip_status()
+                    mode = (status >> 4) & 7
+                    await debug_print(
+                        'irq=0x%04x status=0x%02x mode=%d' % (irq, status, mode),
+                        'LORA'
+                    )
+                    if mode != 5:
+                        await debug_print('not in RX — re-arm', 'LORA')
+                        arm_rx()
+
+                if (getattr(settings, 'LORA_BASE_BEACON_ENABLED', True) and
+                        time.ticks_diff(now_ticks, last_beacon_ticks) >=
+                        int(getattr(settings, 'LORA_BASE_BEACON_INTERVAL_S', 30)) * 1000):
+                    last_beacon_ticks = now_ticks
+                    beacon = 'BEACON:%s' % _usable_unit_id()
+                    beacon_secured = await _secure_message(beacon)
+                    beacon_ok = await _safe_send(beacon_secured.encode())
+                    await debug_print('BEACON sent ok=%s' % beacon_ok, 'LORA')
+                    arm_rx()
 
                 rx_done = getattr(lora, 'RX_DONE', 0)
                 packet_ready = bool(irq & rx_done) or bool(lora_rx_pending)

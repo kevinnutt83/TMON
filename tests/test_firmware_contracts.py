@@ -139,6 +139,9 @@ def stub_micro_python_modules():
     diagnostics = types.ModuleType('diagnostics')
     diagnostics.get_diagnostics_snapshot = lambda: {}
 
+    sdata = types.ModuleType('sdata')
+    sdata.free_mem = 0
+
     return {
         'ujson': ujson,
         'uasyncio': uasyncio,
@@ -148,6 +151,7 @@ def stub_micro_python_modules():
         'settings': settings,
         'config_persist': config_persist,
         'diagnostics': diagnostics,
+        'sdata': sdata,
     }
 
 
@@ -357,10 +361,15 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("'rx listen lora=%s busy=%s'", lora_text)
         self.assertIn("'init failed; retry in 5s (no abort)'", lora_text)
         self.assertIn('READY not received; sending one-chunk payload best-effort', lora_text)
-        self.assertIn("'irq=0x%04x' % irq", lora_text)
+        self.assertIn("'irq=0x%04x status=0x%02x mode=%d'", lora_text)
         self.assertIn('getPacketLength()', lora_text)
         self.assertIn("await debug_print('startReceive armed', 'LORA')", lora_text)
         self.assertIn('last_irq_log_ticks', lora_text)
+        self.assertIn('def arm_rx():', lora_text)
+        self.assertIn('lora.setDioIrqParams(IRQ_ALL, IRQ_RX, 0, 0)', lora_text)
+        self.assertIn('status=0x%02x mode=%d', lora_text)
+        self.assertIn("'not in RX — re-arm'", lora_text)
+        self.assertIn("'BEACON:%s' % _usable_unit_id()", lora_text)
         self.assertIn("skipped=lora_startup", main_text)
         self.assertIn("skipped=lora_busy", main_text)
 
