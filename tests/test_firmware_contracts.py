@@ -176,11 +176,15 @@ class FirmwareContractTests(unittest.TestCase):
             expected_version = handle.read().strip()
 
         self.assertEqual(manifest_module.read_version(), expected_version)
+        self.assertEqual(manifest_module.find_mp_dir(), os.path.join(ROOT, 'micropython'))
 
         manifest = manifest_module.build_manifest(version=expected_version)
         self.assertEqual(manifest['version'], expected_version)
         self.assertTrue(manifest['files'])
         self.assertIn('settings.py', manifest['files'])
+        self.assertIn('version.txt', manifest['files'])
+        self.assertIn('def emit_version(mp_dir, version):', open(MANIFEST_SCRIPT_PATH, 'r', encoding='utf-8').read())
+        self.assertIn('def emit_firmware_manifest_py(mp_dir, version):', open(MANIFEST_SCRIPT_PATH, 'r', encoding='utf-8').read())
 
     def test_manifest_metadata_and_hashes_are_consistent(self):
         manifest_module = load_module_from_path('generate_manifest', MANIFEST_SCRIPT_PATH)
@@ -514,11 +518,18 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn('send_ack=False', source)
         self.assertNotIn('ch[idx] = clear', source)
         self.assertIn("ack += ':CMD:%s' % encoded_cmd", source)
-        self.assertIn("'temp_f': getattr(sdata, 'cur_device_temp_f', None)", source)
+        self.assertIn("'t': getattr(sdata, 'cur_device_temp_f', None)", source)
         self.assertIn("CHUNK:0/1", source)
         self.assertIn("chunks=1 idx=0 ok=", source)
-        self.assertIn("'volt': getattr(sdata, 'sys_voltage', None)", source)
-        self.assertIn("payload.pop('rssi', None)", source)
+        self.assertIn("'v': getattr(sdata, 'sys_voltage', None)", source)
+        self.assertIn("return {key: value for key, value in payload.items() if value is not None and value != ''}", source)
+        payload_start = source.index('def _minimal_remote_payload():')
+        payload_end = source.index('\n\nasync def send_field_data_controlled', payload_start)
+        payload_source = source[payload_start:payload_end]
+        self.assertIn("'h': getattr(sdata, 'cur_device_humid', None)", payload_source)
+        self.assertIn("'b': getattr(sdata, 'cur_device_bar_pres', None)", payload_source)
+        self.assertIn("'v': getattr(sdata, 'sys_voltage', None)", payload_source)
+        self.assertIn("'fw': getattr(settings, 'FIRMWARE_VERSION', '') or ''", payload_source)
         controlled_start = source.index('async def send_field_data_controlled(payload):')
         controlled_end = source.index('\nasync def _send_remote_command_result', controlled_start)
         controlled = source[controlled_start:controlled_end]

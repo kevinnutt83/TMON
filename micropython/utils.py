@@ -1172,7 +1172,7 @@ def append_field_data_entry(entry: dict):
     try:
         checkLogDirectory()
         with open(settings.FIELD_DATA_LOG, 'a') as f:
-            f.write(ujson.dumps(entry) + '\n')
+            f.write(_field_data_line(entry) + '\n')
         gc.collect()
     except Exception as e:
         try:
@@ -1275,6 +1275,17 @@ FIELD_DATA_KEY_ORDER = (
 )
 
 
+def _field_data_line(record):
+    parts = []
+    for key in FIELD_DATA_KEY_ORDER:
+        if key in record:
+            parts.append('"%s":%s' % (key, ujson.dumps(record[key])))
+    for key, value in record.items():
+        if key not in FIELD_DATA_KEY_ORDER:
+            parts.append('"%s":%s' % (key, ujson.dumps(value)))
+    return '{' + ','.join(parts) + '}'
+
+
 def build_field_data_record(unit_id, node_type='base', payload=None, rssi=None, lora_rssi=None):
     payload = payload if isinstance(payload, dict) else {}
     ts = payload.get('ts') or payload.get('timestamp')
@@ -1290,6 +1301,8 @@ def build_field_data_record(unit_id, node_type='base', payload=None, rssi=None, 
         'ts': ts,
         'ts_iso': utc_iso(ts),
         'fw': payload.get('fw') or payload.get('firmware_version') or getattr(settings, 'FIRMWARE_VERSION', '') or '',
+        'rssi': None,
+        'lora_rssi': None,
     }
     values = (
         ('temp_f', payload.get('temp_f', payload.get('t'))),

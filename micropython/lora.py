@@ -3028,26 +3028,16 @@ def _lora_data_budget():
 
 def _minimal_remote_payload():
     """Build minimal remote payload with short keys, omitting None values."""
-    full_payload = {
-        'unit_id': _usable_unit_id(),
-        'ts': int(time.time()),
-        'temp_f': getattr(sdata, 'cur_device_temp_f', None),
-        'humid': getattr(sdata, 'cur_device_humid', None),
-        'volt': getattr(sdata, 'sys_voltage', None),
-    }
-    full_payload.pop('rssi', None)
-    
     payload = {
-        'u': full_payload['unit_id'],
-        'ts': full_payload['ts'],
+        'u': _usable_unit_id(),
+        't': getattr(sdata, 'cur_device_temp_f', None),
+        'h': getattr(sdata, 'cur_device_humid', None),
+        'b': getattr(sdata, 'cur_device_bar_pres', None),
+        'v': getattr(sdata, 'sys_voltage', None),
+        'ts': int(time.time()),
+        'fw': getattr(settings, 'FIRMWARE_VERSION', '') or '',
     }
-    if full_payload['temp_f'] is not None:
-        payload['t'] = full_payload['temp_f']
-    if full_payload['humid'] is not None:
-        payload['h'] = full_payload['humid']
-    if full_payload['volt'] is not None:
-        payload['v'] = full_payload['volt']
-    return payload
+    return {key: value for key, value in payload.items() if value is not None and value != ''}
 
 
 async def send_field_data_controlled(payload):
@@ -3072,7 +3062,10 @@ async def send_field_data_controlled(payload):
     max_pkt = int(getattr(settings, 'LORA_MAX_PACKET_SIZE', 200) or 200)
     
     try:
-        raw_json = ujson.dumps(payload)
+        try:
+            raw_json = ujson.dumps(payload, separators=(',', ':'))
+        except TypeError:
+            raw_json = ujson.dumps(payload)
         full_b64 = _ub.b2a_base64(raw_json.encode()).rstrip(b'\n').decode()
     except Exception as e:
         await debug_print(f"Payload encode failed: {e}", "ERROR")
@@ -3083,14 +3076,15 @@ async def send_field_data_controlled(payload):
     await asyncio.sleep_ms(400)
 
     total = 1
-    optional_keys = ('v', 'h', 't', 'ts')
     while True:
         chunk_msg = f"TYPE:FIELD_DATA_CHUNK,UID:{uid},CHUNK:0/1,DATA:{full_b64}"
-        if len(chunk_msg) <= max_pkt - 70 or not optional_keys:
+        if len(chunk_msg) <= max_pkt or 'fw' not in payload:
             break
-        payload.pop(optional_keys[0], None)
-        optional_keys = optional_keys[1:]
-        raw_json = ujson.dumps(payload)
+        payload.pop('fw', None)
+        try:
+            raw_json = ujson.dumps(payload, separators=(',', ':'))
+        except TypeError:
+            raw_json = ujson.dumps(payload)
         full_b64 = _ub.b2a_base64(raw_json.encode()).rstrip(b'\n').decode()
 
     await debug_print(f"lora tx bytes={len(raw_json)} max={max_pkt} chunks=1", "REMOTE_NODE")
