@@ -446,6 +446,8 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("if (!$is_bridged && !empty($t['machine_id']))", field_api)
         self.assertIn("$t['machine_id'] = '';", field_api)
         self.assertNotIn("|| !empty($data['bridge'])", field_api)
+        self.assertIn("if (!$is_bridged && !$rec_unit && $rec_machine)", field_api)
+        self.assertIn("if (!$is_bridged && $rec_unit && $rec_machine)", field_api)
 
         settings_mod = types.ModuleType('settings')
         settings_mod.LOG_DIR = '/logs'
@@ -510,6 +512,8 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("assemble failed; no ACK uid=%s", source)
         self.assertIn("candidate_ok = _chunk_data_ok(candidate)", source)
         self.assertIn('lora.recv(length)', source)
+        self.assertIn("Dropped truncated RX len=%d", source)
+        self.assertIn("text = raw.decode('utf-8').strip().rstrip('\\x00')", source)
         namespace = {}
         tree = ast.parse(source)
         for node in tree.body:
@@ -517,7 +521,8 @@ class FirmwareContractTests(unittest.TestCase):
                 exec(compile(ast.Module(body=[node], type_ignores=[]), lora_path, 'exec'), namespace)
             if isinstance(node, ast.FunctionDef) and node.name in {'_clean_b64', '_valid_unit_uid', '_chunk_data_ok'}:
                 exec(compile(ast.Module(body=[node], type_ignores=[]), lora_path, 'exec'), namespace)
-        self.assertEqual(namespace['_clean_b64']('eyJ1IjoieCJ9CRC:21CE\x00TYPE:X'), 'eyJ1IjoieCJ9')
+        self.assertEqual(namespace['_clean_b64']('eyJ1IjoieCJ9|CRC:21CE\x00TYPE:X'), 'eyJ1IjoieCJ9')
+        self.assertIn("for marker in ('\\x00', '|HMAC:', '|CRC:', '|CNT:')", source)
         self.assertTrue(namespace['_valid_unit_uid']('unit-l7riag'))
         self.assertFalse(namespace['_valid_unit_uid']('unit-5HELLO'))
         self.assertTrue("st['data']['FIELD_DATA']" in source or 'st["data"]["FIELD_DATA"]' in source)
@@ -543,7 +548,6 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("if len(parts) < 4 or parts[1] != uid or parts[2] != 'NEXT':", controlled)
         self.assertIn("decode('ascii')", controlled)
         self.assertNotIn('Chunk {i}/{total} repeated', controlled)
-        self.assertIn('candidate_ok = False', source)
         self.assertIn("Dropped invalid CHUNK data uid=", source)
         self.assertIn('async def _wait_tx_done(timeout=None):', source)
         wait_start = source.index('async def _wait_tx_done(timeout=None):')

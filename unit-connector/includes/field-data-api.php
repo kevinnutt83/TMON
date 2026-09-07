@@ -551,8 +551,8 @@ function tmon_uc_receive_field_data($request) {
             if (!isset($t['humid']) && isset($t['h'])) $t['humid'] = $t['h'];
             if (!isset($t['volt']) && isset($t['v'])) $t['volt'] = $t['v'];
 
-            // Resolve unit_id from existing mapping via machine_id when missing
-            if (!$rec_unit && $rec_machine) {
+            // Only direct reporters may resolve a missing owner from machine_id.
+            if (!$is_bridged && !$rec_unit && $rec_machine) {
                 $row = $wpdb->get_row($wpdb->prepare("SELECT unit_id FROM {$wpdb->prefix}tmon_devices WHERE machine_id=%s", $rec_machine), ARRAY_A);
                 if ($row && !empty($row['unit_id'])) {
                     $rec_unit = $row['unit_id'];
@@ -566,7 +566,7 @@ function tmon_uc_receive_field_data($request) {
             }
 
             // Persist machine_id to unit mapping if both present
-            if ($rec_unit && $rec_machine) {
+            if (!$is_bridged && $rec_unit && $rec_machine) {
                 $row = $wpdb->get_row($wpdb->prepare("SELECT unit_id, machine_id FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s OR machine_id=%s", $rec_unit, $rec_machine), ARRAY_A);
                 if ($row) {
                     // Update existing row to ensure mapping is set

@@ -43,6 +43,7 @@ Immediate tasks
 - [x] Generate firmware version and filesystem manifest artifacts with the OTA index.
 - [x] Keep remote telemetry sensor-complete with canonical ordered field-data logs.
 - [x] Preserve bridged remote ownership and withhold ACK from failed chunk assembly.
+- [x] Accept humid-first remote chunks and prevent base machine-ID ownership remapping.
 - Replace global LoRa replay counter with per-remote replay window + persisted counter file (`/logs/lora_counters.json`).
 - [x] Require base ACK before trimming remote `field_data.log`, and append delivered remote records to local `data_history.log`.
 - [x] Add fast retry when persisted remote next-sync is already overdue.

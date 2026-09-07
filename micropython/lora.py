@@ -1733,7 +1733,7 @@ def _clean_b64(value):
     if not value:
         return ''
     text = str(value)
-    for marker in ('\x00', '|CRC:', '|CNT:', '|HMAC:', ',TYPE:', ',HELLO:', ',END:', 'CRC:', 'TYPE:'):
+    for marker in ('\x00', '|HMAC:', '|CRC:', '|CNT:'):
         text = text.split(marker, 1)[0]
     cleaned = ''.join(char for char in text if char in _B64_KEEP).rstrip('=')
     return cleaned + ('=' * ((-len(cleaned)) % 4))
@@ -1748,12 +1748,27 @@ def _valid_unit_uid(uid):
 
 def _chunk_data_ok(data):
     cleaned = _clean_b64(data)
-    if len(cleaned) < 8:
+    if len(cleaned) < 4:
         return False
     try:
-        raw = _ub.a2b_base64(cleaned)
-        return isinstance(ujson.loads(raw.decode('utf-8')), dict)
-    except Exception:
+        raw = bytes(_ub.a2b_base64(cleaned))
+    except Exception as e:
+        try:
+            print('chunk b64 fail len=%d err=%s head=%r' % (len(cleaned), e, cleaned[:24]))
+        except Exception:
+            pass
+        return False
+    try:
+        text = raw.decode('utf-8').strip().rstrip('\x00') if raw else ''
+        if not text.startswith('{'):
+            print('chunk not json head=%r' % text[:32])
+            return False
+        return isinstance(ujson.loads(text), dict)
+    except Exception as e:
+        try:
+            print('chunk json fail err=%s head=%r' % (e, text[:40]))
+        except Exception:
+            pass
         return False
 
 
@@ -2733,6 +2748,9 @@ async def _read_lora_packet():
         if err == 0 and msg:
             raw = bytes(msg)[:length].rstrip(b'\x00')
             if not raw:
+                return None
+            if len(raw) <= 17 and (raw.startswith(b'TYPE:') or raw.startswith(b'HELLO:')):
+                await debug_print('Dropped truncated RX len=%d head=%r' % (len(raw), raw[:24]), 'WARN')
                 return None
             digest = (len(raw), raw[:24])
             now = time.ticks_ms()
