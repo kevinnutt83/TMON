@@ -33,6 +33,7 @@ Immediate tasks
 - [x] Poll and log base SX1262 IRQ status every 20 ms, with field-data POST deferred after radio init.
 - [x] Explicitly restore SX1262 continuous RX, DIO1 RX IRQ mask, RF switch, chip-mode diagnostics, and base beacon.
 - [x] Decouple application CRC from SX1262 CRC and recover remotes missing persisted role or unit identity.
+- [x] Require SX1262 TX completion, preserve pending RX data, retry HELLO through READY windows, and pause beacons during sessions.
 - Replace global LoRa replay counter with per-remote replay window + persisted counter file (`/logs/lora_counters.json`).
 - [x] Require base ACK before trimming remote `field_data.log`, and append delivered remote records to local `data_history.log`.
 - [x] Add fast retry when persisted remote next-sync is already overdue.
