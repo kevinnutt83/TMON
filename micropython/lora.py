@@ -42,7 +42,7 @@ except ImportError:
     sdata = None
     settings = None
 
-from utils import free_pins, debug_print, TMON_AI, stage_remote_field_data, stage_remote_files, record_field_data, get_machine_id, persist_custom_settings, utc_iso
+from utils import free_pins, debug_print, TMON_AI, stage_remote_field_data, stage_remote_files, record_field_data, get_machine_id, persist_custom_settings, build_field_data_record
 from relay import toggle_relay
 from sampling import findLowestTemp, findHighestTemp, findLowestBar, findHighestBar, findLowestHumid, findHighestHumid
 
@@ -1211,25 +1211,10 @@ async def process_remote_burst(uid, st):
 
 
 def _canonicalize_remote_record(uid, payload, rssi=None):
-    payload = dict(payload or {})
-    ts = payload.get('ts') or payload.get('timestamp')
-    if not isinstance(ts, (int, float)) or ts < 1600000000:
-        ts = int(time.time())
-    return {
-        'unit_id': str(uid),
-        'remote_unit_id': str(uid),
-        'base_unit_id': str(getattr(settings, 'UNIT_ID', '') or ''),
-        'node_type': 'remote',
-        'ingested_via': 'lora_base',
-        'temp_f': payload.get('temp_f', payload.get('t')),
-        'humid': payload.get('humid', payload.get('h')),
-        'volt': payload.get('volt', payload.get('v')),
-        'bar': payload.get('bar', payload.get('b')),
-        'fw': payload.get('fw') or payload.get('firmware_version') or '',
-        'ts': int(ts),
-        'ts_iso': utc_iso(int(ts)),
-        'lora_rssi': rssi if rssi is not None else getattr(sdata, 'lora_SigStr', None),
-    }
+    return build_field_data_record(
+        uid, node_type='remote', payload=payload,
+        lora_rssi=rssi if rssi is not None else getattr(sdata, 'lora_SigStr', None),
+    )
 
 
 async def process_remote_field_data(uid, st, send_ack=True):
@@ -1793,7 +1778,11 @@ def _assemble_simple_session_field_data(st):
         encoded += '=' * ((-len(encoded)) % 4)
         raw = _ub.a2b_base64(encoded)
         payload = ujson.loads(raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw))
-    except Exception:
+    except Exception as e:
+        try:
+            print('Simple session assemble error: %s' % e)
+        except Exception:
+            pass
         return None
     if not isinstance(st.get('data'), dict):
         st['data'] = {}
@@ -2652,15 +2641,21 @@ async def _read_lora_packet():
     if lora is None or not hasattr(lora, 'recv') or not _lora_rx_ready():
         return None
     try:
+        length = lora.getPacketLength(True) if hasattr(lora, 'getPacketLength') else 0
+        if length < 5 or length > 253:
+            lora_rx_pending = False
+            if hasattr(lora, 'clearIrqStatus'):
+                lora.clearIrqStatus()
+            return None
         try:
-            msg, err = lora.recv(0)
+            msg, err = lora.recv(length)
         except TypeError:
             msg, err = lora.recv()
         lora_rx_pending = False
         if hasattr(lora, 'clearIrqStatus'):
             lora.clearIrqStatus()
         if err == 0 and msg:
-            raw = bytes(msg).rstrip(b'\x00')
+            raw = bytes(msg)[:length].rstrip(b'\x00')
             if not raw:
                 return None
             digest = (len(raw), raw[:24])

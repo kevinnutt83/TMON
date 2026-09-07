@@ -323,13 +323,13 @@ function tmon_uc_receive_field_data($request) {
         // Common sensor aliases
         $out['temp_f']    = isset($rec['t_f']) ? $rec['t_f'] : ($rec['cur_temp_f'] ?? null);
         $out['temp_c']    = isset($rec['t_c']) ? $rec['t_c'] : ($rec['cur_temp_c'] ?? null);
-        $out['humidity']  = isset($rec['hum']) ? $rec['hum'] : ($rec['cur_humid'] ?? null);
+        $out['humidity']  = isset($rec['hum']) ? $rec['hum'] : ($rec['humid'] ?? ($rec['cur_humid'] ?? null));
         $out['pressure']  = isset($rec['bar']) ? $rec['bar'] : ($rec['cur_bar_pres'] ?? null);
         $out['probe_temp_f'] = $rec['probe_temp_f'] ?? ($rec['t_f'] ?? ($rec['cur_temp_f'] ?? null));
         $out['probe_temp_c'] = $rec['probe_temp_c'] ?? ($rec['t_c'] ?? ($rec['cur_temp_c'] ?? null));
         $out['probe_humid']  = $rec['probe_humid'] ?? ($rec['hum'] ?? ($rec['cur_humid'] ?? null));
         $out['probe_bar']    = $rec['probe_bar'] ?? ($rec['bar'] ?? ($rec['cur_bar_pres'] ?? null));
-        $out['voltage_v'] = isset($rec['v']) ? $rec['v'] : ($rec['sys_voltage'] ?? null);
+        $out['voltage_v'] = isset($rec['v']) ? $rec['v'] : ($rec['volt'] ?? ($rec['sys_voltage'] ?? null));
         $out['wifi_rssi'] = $rec['wifi_rssi'] ?? null;
         $out['lora_rssi'] = $rec['lora_SigStr'] ?? null;
         $out['free_mem']  = isset($rec['fm']) ? $rec['fm'] : ($rec['free_mem'] ?? null);
@@ -432,6 +432,12 @@ function tmon_uc_receive_field_data($request) {
     }
 
     $received = 0;
+    $record_unit_ids = [];
+    foreach ($records as $record_for_id) {
+        if (is_array($record_for_id) && isset($record_for_id['unit_id']) && $record_for_id['unit_id'] !== '') {
+            $record_unit_ids[sanitize_text_field($record_for_id['unit_id'])] = true;
+        }
+    }
     $envelope_defaults = [
         'unit_id' => $unit_id,
         'machine_id' => $machine_id,
@@ -460,24 +466,28 @@ function tmon_uc_receive_field_data($request) {
             $remote_map = $data['REMOTE_NODE_INFO'];
         }
 
-        // First, persist the primary record (base or direct remote),
-        // then persist each embedded remote record if provided.
+        $poster = $unit_id;
         $targets = [];
-        // Always include the primary record so base station data is stored.
         $primary = $rec;
-        if (!isset($primary['origin'])) {
-            $primary['origin'] = !empty($primary['machine_id']) ? 'direct_remote' : 'base';
+        $rec_unit = isset($primary['unit_id']) ? sanitize_text_field($primary['unit_id']) : $poster;
+        $is_bridged = ($rec_unit !== '' && $poster !== '' && $rec_unit !== $poster)
+            || (isset($primary['node_type']) && strtolower($primary['node_type']) === 'remote');
+        if ($is_bridged) {
+            $primary['origin'] = 'remote_via_base';
+            $primary['source_unit_id'] = $poster;
+        } elseif (!isset($primary['origin'])) {
+            $primary['origin'] = 'base';
         }
-        $primary['source_unit_id'] = $unit_id;
         $primary['source_node_type'] = $data['NODE_TYPE'] ?? ($data['node_type'] ?? ($primary['NODE_TYPE'] ?? null));
         $targets[] = $primary;
         if (!empty($remote_map)) {
-            // For each remote embedded record, prepare a per-remote target
             foreach ($remote_map as $rid => $rdata) {
                 if (!is_array($rdata)) continue;
                 $rdata['unit_id'] = isset($rdata['unit_id']) ? $rdata['unit_id'] : $rid;
+                $remote_unit = sanitize_text_field($rdata['unit_id']);
+                if (isset($record_unit_ids[$remote_unit])) continue;
                 $rdata['origin'] = 'remote_via_base';
-                $rdata['source_unit_id'] = $unit_id;
+                $rdata['source_unit_id'] = $poster;
                 $rdata['source_node_type'] = 'base';
                 $targets[] = $rdata;
             }
@@ -497,6 +507,7 @@ function tmon_uc_receive_field_data($request) {
                 if (isset($t['cur_temp_f'])) $t['t_f'] = $t['cur_temp_f'];
                 elseif (isset($t['probe_temp_f'])) $t['t_f'] = $t['probe_temp_f'];
                 elseif (isset($t['temp_f'])) $t['t_f'] = $t['temp_f'];
+                elseif (isset($t['t'])) $t['t_f'] = $t['t'];
             }
             if (!isset($t['t_c'])) {
                 if (isset($t['cur_temp_c'])) $t['t_c'] = $t['cur_temp_c'];
@@ -507,6 +518,8 @@ function tmon_uc_receive_field_data($request) {
                 if (isset($t['cur_humid'])) $t['hum'] = $t['cur_humid'];
                 elseif (isset($t['probe_humid'])) $t['hum'] = $t['probe_humid'];
                 elseif (isset($t['humidity'])) $t['hum'] = $t['humidity'];
+                elseif (isset($t['humid'])) $t['hum'] = $t['humid'];
+                elseif (isset($t['h'])) $t['hum'] = $t['h'];
             }
             if (!isset($t['bar'])) {
                 if (isset($t['cur_bar_pres'])) $t['bar'] = $t['cur_bar_pres'];
@@ -518,6 +531,9 @@ function tmon_uc_receive_field_data($request) {
                 elseif (isset($t['voltage_v'])) $t['v'] = $t['voltage_v'];
                 elseif (isset($t['volt'])) $t['v'] = $t['volt'];
             }
+            if (!isset($t['temp_f']) && isset($t['t'])) $t['temp_f'] = $t['t'];
+            if (!isset($t['humid']) && isset($t['h'])) $t['humid'] = $t['h'];
+            if (!isset($t['volt']) && isset($t['v'])) $t['volt'] = $t['v'];
 
             // Resolve unit_id from existing mapping via machine_id when missing
             if (!$rec_unit && $rec_machine) {

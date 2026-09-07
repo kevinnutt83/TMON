@@ -1268,34 +1268,69 @@ def _compact_field_record(record):
         compact[k] = v
     return compact
 
+
+FIELD_DATA_KEY_ORDER = (
+    'unit_id', 'node_type', 'ts', 'ts_iso', 'fw',
+    'temp_f', 'humid', 'bar', 'volt', 'rssi', 'lora_rssi',
+)
+
+
+def build_field_data_record(unit_id, node_type='base', payload=None, rssi=None, lora_rssi=None):
+    payload = payload if isinstance(payload, dict) else {}
+    ts = payload.get('ts') or payload.get('timestamp')
+    try:
+        ts = int(ts)
+    except Exception:
+        ts = 0
+    if ts < 1600000000:
+        ts = int(utc_epoch())
+    rec = {
+        'unit_id': str(unit_id or payload.get('unit_id') or payload.get('u') or ''),
+        'node_type': 'remote' if str(node_type).lower() == 'remote' else 'base',
+        'ts': ts,
+        'ts_iso': utc_iso(ts),
+        'fw': payload.get('fw') or payload.get('firmware_version') or getattr(settings, 'FIRMWARE_VERSION', '') or '',
+    }
+    values = (
+        ('temp_f', payload.get('temp_f', payload.get('t'))),
+        ('humid', payload.get('humid', payload.get('h'))),
+        ('bar', payload.get('bar', payload.get('b'))),
+        ('volt', payload.get('volt', payload.get('v'))),
+    )
+    for key, value in values:
+        if value is not None:
+            try:
+                rec[key] = float(value)
+            except Exception:
+                pass
+    wifi = payload.get('rssi') if rssi is None else rssi
+    lora = payload.get('lora_rssi') if lora_rssi is None else lora_rssi
+    if wifi is not None:
+        try:
+            rec['rssi'] = int(wifi)
+        except Exception:
+            pass
+    if lora is not None:
+        try:
+            rec['lora_rssi'] = int(lora)
+        except Exception:
+            pass
+    return rec
+
 def record_field_data():
     """Append the current device telemetry snapshot for transport and storage."""
     try:
-        entry = {}
-        node_type = getattr(settings, 'NODE_TYPE', 'base')
-        entry['unit_id'] = getattr(settings, 'UNIT_ID', '')
-        entry['node_type'] = node_type
-        entry['ts'] = utc_epoch()
-        entry['ts_iso'] = utc_iso(entry['ts'])
-        entry['fw'] = getattr(settings, 'FIRMWARE_VERSION', '')
-        temp_f = getattr(sdata, 'cur_device_temp_f', None) or getattr(sdata, 'cur_temp_f', None)
-        if temp_f is not None:
-            entry['temp_f'] = float(temp_f)
-        humid = getattr(sdata, 'cur_device_humid', None) or getattr(sdata, 'cur_humid', None)
-        if humid is not None:
-            entry['humid'] = float(humid)
-        bar = getattr(sdata, 'cur_device_bar_pres', None) or getattr(sdata, 'cur_bar_pres', None)
-        if bar is not None:
-            entry['bar'] = float(bar)
-        volt = getattr(sdata, 'sys_voltage', None)
-        if volt is not None:
-            entry['volt'] = float(volt)
-        rssi = getattr(sdata, 'wifi_rssi', None)
-        if rssi is not None:
-            entry['rssi'] = int(rssi)
-        lora_rssi = getattr(sdata, 'lora_SigStr', None)
-        if lora_rssi is not None:
-            entry['lora_rssi'] = int(lora_rssi)
+        payload = {
+            'ts': utc_epoch(),
+            'temp_f': getattr(sdata, 'cur_device_temp_f', None) or getattr(sdata, 'cur_temp_f', None),
+            'humid': getattr(sdata, 'cur_device_humid', None) or getattr(sdata, 'cur_humid', None),
+            'bar': getattr(sdata, 'cur_device_bar_pres', None) or getattr(sdata, 'cur_bar_pres', None),
+            'volt': getattr(sdata, 'sys_voltage', None),
+        }
+        entry = build_field_data_record(
+            getattr(settings, 'UNIT_ID', ''), getattr(settings, 'NODE_TYPE', 'base'), payload,
+            rssi=getattr(sdata, 'wifi_rssi', None), lora_rssi=getattr(sdata, 'lora_SigStr', None)
+        )
         if bool(getattr(settings, 'FIELD_DATA_INCLUDE_IO', False)):
             full_snap = build_sdata_snapshot(include_meta=False)
             for k in ['relay1', 'relay2', 'relay3', 'relay4', 'frostwatch_active', 'heatwatch_active']:
@@ -1382,13 +1417,8 @@ async def send_field_data_log():
                             total_lines += 1
                             if len(batch) >= batch_size:
                                 payload = {'unit_id': settings.UNIT_ID, 'data': batch}
-                                remote_info = {
-                                    rec.get('unit_id'): rec for rec in batch
-                                    if isinstance(rec, dict) and rec.get('unit_id') and
-                                    (rec.get('node_type') == 'remote' or rec.get('ingested_via') == 'lora_base')
-                                }
-                                if remote_info:
-                                    payload['REMOTE_NODE_INFO'] = remote_info
+                                if any(isinstance(rec, dict) and rec.get('node_type') == 'remote' for rec in batch):
+                                    payload['bridge'] = True
                                 current_items.append({'payload': payload, 'source': 'log'})
                                 batch = []
                                 if asyncio:
@@ -1397,13 +1427,8 @@ async def send_field_data_log():
                             await debug_print(f'send_field_data_log: JSON parse error on a line: {pe}', 'ERROR')
             if batch:
                 payload = {'unit_id': settings.UNIT_ID, 'data': batch}
-                remote_info = {
-                    rec.get('unit_id'): rec for rec in batch
-                    if isinstance(rec, dict) and rec.get('unit_id') and
-                    (rec.get('node_type') == 'remote' or rec.get('ingested_via') == 'lora_base')
-                }
-                if remote_info:
-                    payload['REMOTE_NODE_INFO'] = remote_info
+                if any(isinstance(rec, dict) and rec.get('node_type') == 'remote' for rec in batch):
+                    payload['bridge'] = True
                 current_items.append({'payload': payload, 'source': 'log'})
 
             await debug_print(f'sfd: read {total_lines} lines, {len(current_items)} batches', 'DEBUG')
@@ -2097,8 +2122,7 @@ def stage_remote_field_data(remote_unit_id, records):
     for entry in records:
         if not isinstance(entry, dict):
             continue
-        if 'unit_id' not in entry and remote_unit_id:
-            entry['unit_id'] = remote_unit_id
+        entry = build_field_data_record(remote_unit_id, 'remote', entry)
         try:
             append_field_data_entry(entry)
         except Exception as exc:

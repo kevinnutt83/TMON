@@ -226,6 +226,17 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertNotIn('sys_voltage', compact)
         self.assertEqual(compact['note'], 'keep')
 
+        canonical = utils_module.build_field_data_record(
+            'unit-l7riag', 'remote', {'u': 'unit-l7riag', 't': 77.2, 'ts': 842070764}
+        )
+        self.assertEqual(list(canonical)[:5], ['unit_id', 'node_type', 'ts', 'ts_iso', 'fw'])
+        self.assertEqual(canonical['unit_id'], 'unit-l7riag')
+        self.assertEqual(canonical['temp_f'], 77.2)
+        self.assertGreaterEqual(canonical['ts'], 1600000000)
+        self.assertIn('ts_iso', canonical)
+        self.assertNotIn('u', canonical)
+        self.assertNotIn('t', canonical)
+
         remote_record = {
             'unit_id': 'remote-1',
             'remote_unit_id': 'remote-1',
@@ -390,11 +401,11 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn('def _looks_collided(message):', lora_text)
         self.assertIn("text.split(',DATA:', 1)[0].count('TYPE:') > 1", lora_text)
         self.assertIn('def _canonicalize_remote_record(uid, payload, rssi=None):', lora_text)
-        self.assertIn("'temp_f': payload.get('temp_f', payload.get('t'))", lora_text)
-        self.assertIn("'ts_iso': utc_iso(int(ts))", lora_text)
+        self.assertIn('build_field_data_record(', lora_text)
         self.assertIn('ENABLE_LORA_OTA', lora_text)
         self.assertIn('IRQ_PREAMBLE', lora_text)
         self.assertIn('lora.clearIrqStatus(non_rx_done)', lora_text)
+        self.assertIn('lora.recv(length)', lora_text)
         self.assertIn("getattr(settings, 'LORA_CRC_ENABLED', False)", lora_text)
         self.assertIn("b.startswith('TYPE:')", lora_text)
         self.assertIn('assemble failed; ACK anyway', lora_text)
@@ -402,6 +413,13 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("skipped=lora_busy", main_text)
         self.assertIn("result = run_remote_deep_sleep()", main_text)
         self.assertIn("settings._REMOTE_DEEPSLEEP_ACTIVE = False", main_text)
+
+        with open(os.path.join(ROOT, 'unit-connector', 'includes', 'field-data-api.php'), 'r', encoding='utf-8') as handle:
+            field_api = handle.read()
+        self.assertIn("$is_bridged = ($rec_unit !== ''", field_api)
+        self.assertIn("if (isset($record_unit_ids[$remote_unit])) continue;", field_api)
+        self.assertIn("$rec['humid']", field_api)
+        self.assertIn("$rec['volt']", field_api)
 
         settings_mod = types.ModuleType('settings')
         settings_mod.LOG_DIR = '/logs'
