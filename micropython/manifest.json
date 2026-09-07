@@ -33,10 +33,10 @@
     "tmon.py": "sha256:32ba520a96ffdfd76578521e545340190550478022428e07fe6770528a7276ee",
     "user_commands.py": "sha256:d93600e031bee7b9bca2d697db39e1f416f736e0e988f2d62e77c73b1b08fb77",
     "utils.py": "sha256:f347b9576ac14f1195147dbfa0a2a0c7ec2a30fb745f20842df4127b68acb9b5",
-    "version.txt": "sha256:a67ce78c6007244d50276bd67bd8d3839b8ddf2b343c8684258b59df25a490d0",
+    "version.txt": "sha256:7d843429ce64528109902c3edf4ee6c8119f1142869d214d115fdafb9f143b58",
     "wifi.py": "sha256:e9b30173ed49be0e29d12be1fda99f96c443dd83965f5c38b0985a61e8085832",
     "wprest.py": "sha256:9092e43e5820e7c753fdd6352f16e4f0808a674c52d40abebd83160043d52c6a"
   },
   "name": "tmon-micropython",
-  "version": "v2.00.4h"
+  "version": "v2.00.4i"
 }
