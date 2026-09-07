@@ -39,6 +39,7 @@ Immediate tasks
 - [x] Canonicalize bridge field records and store Unit Connector samples under the sensing unit only.
 - [x] Sanitize simple-session base64, reject malformed unit IDs, and clear repeated failed assemblies.
 - [x] Fix remote ACK acceptance scope and preserve validated chunks against collided replacements.
+- [x] Verify OTA live-file commits at absolute root paths and persist version.txt before reset.
 - Replace global LoRa replay counter with per-remote replay window + persisted counter file (`/logs/lora_counters.json`).
 - [x] Require base ACK before trimming remote `field_data.log`, and append delivered remote records to local `data_history.log`.
 - [x] Add fast retry when persisted remote next-sync is already overdue.

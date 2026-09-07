@@ -312,6 +312,24 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn('Silence ACK withheld for partial session', lora_source)
         self.assertIn('jitter_ms = sum(ord(char) for char in uid) % 801', lora_source)
 
+        with open(os.path.join(ROOT, 'micropython', 'ota.py'), 'r', encoding='utf-8') as handle:
+            ota_source = handle.read()
+        self.assertIn('def _dest_path(name):', ota_source)
+        self.assertIn("return '/' + base if base else ''", ota_source)
+        self.assertIn('def _write_version(version):', ota_source)
+        self.assertIn("('/version.txt', 'version.txt')", ota_source)
+        self.assertIn('def _frozen_allowlist_files(allow):', ota_source)
+        self.assertIn('OTA: cannot override frozen', ota_source)
+        self.assertIn('live_hash = _sha256_file(final_path)', ota_source)
+        self.assertIn('OTA: apply completed ver=%s', ota_source)
+
+        ota_tree = ast.parse(ota_source)
+        ota_namespace = {}
+        for node in ota_tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == '_dest_path':
+                exec(compile(ast.Module(body=[node], type_ignores=[]), 'ota.py', 'exec'), ota_namespace)
+        self.assertEqual(ota_namespace['_dest_path']('settings.py'), '/settings.py')
+
     def test_scheduler_and_routines_contracts(self):
         with open(os.path.join(ROOT, 'micropython', 'main.py'), 'r', encoding='utf-8') as handle:
             source = handle.read()

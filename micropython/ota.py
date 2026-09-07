@@ -63,6 +63,10 @@ import ujson as json
 import os
 import binascii as _binascii
 import re as _re
+try:
+    import sys
+except ImportError:
+    sys = None
 
 def _safe_join(base: str, name: str) -> str:
     if not base.endswith('/'):
@@ -88,6 +92,68 @@ def _normalize_version(s: str) -> str:
     if not s:
         return ''
     return s.strip().replace('\n', '').replace('\r', '')
+
+
+def _dest_path(name):
+    base = str(name or '').replace('\\', '/').split('/')[-1]
+    return '/' + base if base else ''
+
+
+def _sha256_file(path):
+    try:
+        import uhashlib as _uh
+        digest = _uh.sha256()
+        with open(path, 'rb') as handle:
+            while True:
+                block = handle.read(1024)
+                if not block:
+                    break
+                digest.update(block)
+        return _binascii.hexlify(digest.digest()).decode().lower()
+    except Exception:
+        return ''
+
+
+def _write_version(version):
+    data = (_normalize_version(version) + '\n').encode()
+    for path in ('/version.txt', 'version.txt'):
+        tmp_path = path + '.tmp'
+        try:
+            with open(tmp_path, 'wb') as handle:
+                handle.write(data)
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+            try:
+                os.rename(tmp_path, path)
+            except Exception:
+                with open(path, 'wb') as handle:
+                    handle.write(data)
+            return path
+        except Exception:
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+    return ''
+
+
+def _frozen_allowlist_files(allow):
+    frozen = []
+    if sys is None:
+        return frozen
+    modules = getattr(sys, 'modules', {}) or {}
+    for name in allow:
+        module_name = str(name).rsplit('/', 1)[-1]
+        if module_name.endswith('.py'):
+            module_name = module_name[:-3]
+        module = modules.get(module_name)
+        if module is not None:
+            source = getattr(module, '__file__', None)
+            if not source or '.frozen' in str(source):
+                frozen.append(name)
+    return frozen
 
 def is_newer(remote: str, local: str) -> bool:
     # Simple string compare fallback; can be improved to semver later
@@ -196,6 +262,7 @@ async def _apply_lora_staged_update_if_present(pending_file, target_ver):
         if not isinstance(row, dict):
             continue
         name = str(row.get('name') or '').strip()
+        final_path = _dest_path(name)
         staged_path = str(row.get('staged_path') or '').strip()
         expected = str(row.get('sha256') or '').strip().lower()
         if not name or not staged_path:
@@ -220,25 +287,30 @@ async def _apply_lora_staged_update_if_present(pending_file, target_ver):
             return False
 
         try:
-            _ensure_dir(name)
             if getattr(settings, 'OTA_BACKUP_ENABLED', True):
                 try:
-                    with open(name, 'rb') as cur:
-                        _ensure_dir(backup_dir.rstrip('/') + '/' + name)
-                        with open(backup_dir.rstrip('/') + '/' + name, 'wb') as bf:
+                    with open(final_path, 'rb') as cur:
+                        with open(backup_dir.rstrip('/') + '/' + name.rsplit('/', 1)[-1], 'wb') as bf:
                             bf.write(cur.read())
                 except Exception:
                     pass
-            with open(name, 'wb') as wf:
+            with open(final_path, 'wb') as wf:
                 wf.write(blob)
+            live_hash = _sha256_file(final_path)
+            if not live_hash or (expected and live_hash != expected):
+                await debug_print(f'OTA: live hash mismatch for {final_path}', 'ERROR')
+                return False
+            await debug_print(f'OTA: applied {final_path} size={len(blob)} sha={live_hash[:12]}', 'OTA')
         except Exception as e:
             await log_exception(f'ota.lora_stage.write:{name}', e)
             return False
 
-    try:
-        settings.FIRMWARE_VERSION = str(staged.get('version') or target_ver or getattr(settings, 'FIRMWARE_VERSION', ''))
-    except Exception:
-        pass
+    target_ver = str(staged.get('version') or target_ver or getattr(settings, 'FIRMWARE_VERSION', ''))
+    version_path = _write_version(target_ver)
+    if not version_path:
+        await debug_print('OTA: failed to persist version file', 'ERROR')
+        return False
+    await debug_print(f'OTA: wrote {version_path} {target_ver}', 'OTA')
 
     # Cleanup staged artifacts and pending flag.
     for row in files:
@@ -288,6 +360,15 @@ async def apply_pending_update():
                 enoent = False
             if not enoent:
                 record_exception('ota.apply_pending_update.read_pending', e, status='WARN')
+            return False
+
+        ota_allow = list(getattr(settings, 'OTA_FILES_ALLOWLIST', []) or [])
+        for required in ('settings.py', 'ota.py', 'main.py', 'version.txt'):
+            if required not in ota_allow:
+                ota_allow.append(required)
+        frozen = _frozen_allowlist_files(ota_allow)
+        if frozen:
+            await debug_print('OTA: cannot override frozen %s; need full firmware flash' % ','.join(frozen), 'ERROR')
             return False
 
         # Prefer local LoRa-staged package when present.
@@ -412,9 +493,12 @@ async def apply_pending_update():
             await debug_print('OTA: manifest not available; aborting OTA apply', 'ERROR')
             return False
 
-        allow = getattr(settings, 'OTA_FILES_ALLOWLIST', [])
+        allow = ota_allow
         if not allow:
             allow = ['main.py']
+        for required in ('settings.py', 'ota.py', 'main.py', 'version.txt'):
+            if required not in allow:
+                allow.append(required)
 
         backup_dir = getattr(settings, 'OTA_BACKUP_DIR', '/ota/backup')
         if getattr(settings, 'OTA_BACKUP_ENABLED', True):
@@ -464,6 +548,9 @@ async def apply_pending_update():
             except Exception:
                 expected_hex = None
 
+            if name == 'version.txt' and not expected_hex:
+                continue
+
             download_ok = False
             attempts = 0
             last_error = ''
@@ -503,7 +590,10 @@ async def apply_pending_update():
 
                     # stream download to temp file and compute sha256
                     tmp_path = settings.LOG_DIR.rstrip('/') + f'/ota_tmp_{name}'
-                    final_path = name  # apply path
+                    final_path = _dest_path(name)
+                    if not final_path:
+                        last_error = 'invalid_destination'
+                        break
                     h = _uh.sha256()
                     total = 0
                     try:
@@ -620,19 +710,25 @@ async def apply_pending_update():
                         if getattr(settings, 'OTA_BACKUP_ENABLED', True):
                             try:
                                 with open(final_path, 'rb') as sf:
-                                    with open(backup_dir.rstrip('/') + '/' + name, 'wb') as bf:
+                                    with open(backup_dir.rstrip('/') + '/' + name.rsplit('/', 1)[-1], 'wb') as bf:
                                         bf.write(sf.read())
                             except Exception:
                                 pass
                         with open(final_path, 'wb') as out:
                             out.write(open(tmp_path, 'rb').read())
+                            if hasattr(out, 'flush'):
+                                out.flush()
+                        live_hash = _sha256_file(final_path)
+                        if not live_hash or live_hash != comp_hash:
+                            raise OSError('live hash mismatch for %s' % final_path)
+                        await debug_print(f'OTA: applied {final_path} size={total} sha={live_hash[:12]}', 'OTA')
                     except Exception as e:
                         await log_exception(f'ota.apply_write:{name}', e)
                         last_error = f'apply_error:{e}'
                         # restore from backup if available
                         if getattr(settings, 'OTA_RESTORE_ON_FAIL', True):
                             try:
-                                with open(backup_dir.rstrip('/') + '/' + name, 'rb') as bf:
+                                with open(backup_dir.rstrip('/') + '/' + name.rsplit('/', 1)[-1], 'rb') as bf:
                                     with open(final_path, 'wb') as f2:
                                         f2.write(bf.read())
                             except Exception:
@@ -641,6 +737,10 @@ async def apply_pending_update():
                         continue
 
                     # success
+                    try:
+                        os.remove(tmp_path)
+                    except Exception:
+                        pass
                     downloaded[name] = {'path': final_path, 'sha256': comp_hash}
                     download_ok = True
 
@@ -656,16 +756,17 @@ async def apply_pending_update():
                     # restore and abort
                 return False
 
-        # Success: update version and clear pending
-        try:
-            settings.FIRMWARE_VERSION = target_ver
-        except Exception as e:
-            record_exception('ota.apply_pending_update.set_version', e, status='WARN')
+        # Commit the on-disk version before clearing the pending marker or resetting.
+        version_path = _write_version(target_ver)
+        if not version_path:
+            await debug_print('OTA: apply aborted; version file unchanged', 'ERROR')
+            return False
+        await debug_print(f'OTA: wrote {version_path} {target_ver}', 'OTA')
         try:
             os.remove(pending_file)
         except Exception as e:
             record_exception('ota.apply_pending_update.clear_pending', e, status='WARN')
-        await debug_print('OTA: apply completed', 'OTA')
+        await debug_print('OTA: apply completed ver=%s' % target_ver, 'OTA')
         # Reboot device after OTA files are downloaded and applied
         try:
             from machine import soft_reset
