@@ -1746,30 +1746,65 @@ def _valid_unit_uid(uid):
     return all(('a' <= char <= 'z') or ('0' <= char <= '9') for char in value[5:])
 
 
-def _chunk_data_ok(data):
+def _chunk_data_ok(data, uid=None):
     cleaned = _clean_b64(data)
     if len(cleaned) < 4:
         return False
+    raw = None
     try:
         raw = bytes(_ub.a2b_base64(cleaned))
     except Exception as e:
-        try:
-            print('chunk b64 fail len=%d err=%s head=%r' % (len(cleaned), e, cleaned[:24]))
-        except Exception:
-            pass
-        return False
+        # FIFO cut mid-base64: retry after trimming trailing partial group
+        for n in (1, 2, 3):
+            try:
+                trial = cleaned[:-n] if n < len(cleaned) else ''
+                trial = trial.rstrip('=') + ('=' * ((-len(trial.rstrip('='))) % 4))
+                raw = bytes(_ub.a2b_base64(trial))
+                break
+            except Exception:
+                raw = None
+        if raw is None:
+            try:
+                print('chunk b64 fail len=%d err=%s head=%r' % (len(cleaned), e, cleaned[:24]))
+            except Exception:
+                pass
+            return False
     try:
         text = raw.decode('utf-8').strip().rstrip('\x00') if raw else ''
-        if not text.startswith('{'):
-            print('chunk not json head=%r' % text[:32])
-            return False
-        return isinstance(ujson.loads(text), dict)
+        if '{' in text:
+            text = text[text.index('{'):]
+        if '}' not in text:
+            # sensors cut off; identity header still lets us store the slot
+            return bool(uid)
+        return isinstance(ujson.loads(text[:text.rindex('}') + 1]), dict)
     except Exception as e:
         try:
-            print('chunk json fail err=%s head=%r' % (e, text[:40]))
+            print('chunk json fail head=%r' % (text[:40] if 'text' in locals() else data))
         except Exception:
             pass
+        return bool(uid)
+
+
+_SHORT_OK = ('HELLO:', 'END:', 'ACK:', 'READY:', 'BEACON:')
+_TRUNC_HEADS = (
+    'TYPE:FIELD_DATA_C', 'YPE:FIELD', 'IELD_DATA', 'DATA_CHUNK',
+    'CHUNK,UID:', 'HEHELLO', 'HELLO:uHELLO', 'JTEND:',
+)
+
+
+def _is_truncated_rx(raw):
+    if not raw:
+        return True
+    text = raw.decode('utf-8', 'ignore') if isinstance(raw, (bytes, bytearray)) else str(raw)
+    text = text.strip('\x00')
+    for bad in _TRUNC_HEADS:
+        if text.startswith(bad) or bad in text[:24]:
+            return True
+    if text.startswith(_SHORT_OK):
         return False
+    if len(raw) <= 24 and text.startswith('TYPE:') and 'DATA:' not in text:
+        return True
+    return False
 
 
 def _simple_session_parse_chunk(clear):
@@ -1948,7 +1983,7 @@ async def handle_simple_session_hub(clear):
                 while len(ch) <= idx:
                     ch.append(None)
                 candidate = _clean_b64(data_b64)
-                candidate_ok = _chunk_data_ok(candidate)
+                candidate_ok = _chunk_data_ok(candidate, uid=uid)
                 existing = ch[idx]
                 if candidate_ok and (not existing or len(candidate) >= len(existing)):
                     ch[idx] = candidate
@@ -2749,7 +2784,7 @@ async def _read_lora_packet():
             raw = bytes(msg)[:length].rstrip(b'\x00')
             if not raw:
                 return None
-            if len(raw) <= 17 and (raw.startswith(b'TYPE:') or raw.startswith(b'HELLO:')):
+            if _is_truncated_rx(raw):
                 await debug_print('Dropped truncated RX len=%d head=%r' % (len(raw), raw[:24]), 'WARN')
                 return None
             digest = (len(raw), raw[:24])
@@ -4048,8 +4083,11 @@ async def connectLora():
                     await asyncio.sleep_ms(20)
                     continue
 
-                sessions_active = any(
-                    isinstance(info, dict) and info.get('session_active')
+                sessions_active = bool(getattr(sdata, 'lora_session_busy', False)) or any(
+                    isinstance(info, dict) and (
+                        info.get('session_active') or
+                        time.time() - float(info.get('last_hello_ts', 0) or 0) < 20
+                    )
                     for info in (getattr(settings, 'REMOTE_NODE_INFO', {}) or {}).values()
                 )
                 if (getattr(settings, 'LORA_BASE_BEACON_ENABLED', True) and

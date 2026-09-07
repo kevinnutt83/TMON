@@ -431,7 +431,7 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn('lora.recv(length)', lora_text)
         self.assertIn("getattr(settings, 'LORA_CRC_ENABLED', False)", lora_text)
         self.assertIn("b.startswith('TYPE:')", lora_text)
-        self.assertIn('assemble failed; ACK anyway', lora_text)
+        self.assertIn('assemble failed; no ACK uid=%s', lora_text)
         self.assertIn("skipped=lora_startup", main_text)
         self.assertIn("skipped=lora_busy", main_text)
         self.assertIn("result = run_remote_deep_sleep()", main_text)
@@ -501,7 +501,7 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn('def _simple_session_parse_chunk(', source)
         self.assertIn('def _clean_b64(value):', source)
         self.assertIn('def _valid_unit_uid(uid):', source)
-        self.assertIn('def _chunk_data_ok(data):', source)
+        self.assertIn('def _chunk_data_ok(data, uid=None):', source)
         self.assertIn("st.get('simple_chunks')", source)
         self.assertIn('candidate = _clean_b64(data_b64)', source)
         self.assertIn('ch[idx] = candidate', source)
@@ -510,7 +510,8 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("Dropped invalid CHUNK uid=", source)
         self.assertIn("Dropped invalid END uid=", source)
         self.assertIn("assemble failed; no ACK uid=%s", source)
-        self.assertIn("candidate_ok = _chunk_data_ok(candidate)", source)
+        self.assertIn("candidate_ok = _chunk_data_ok(candidate, uid=uid)", source)
+        self.assertIn('def _is_truncated_rx(raw):', source)
         self.assertIn('lora.recv(length)', source)
         self.assertIn("Dropped truncated RX len=%d", source)
         self.assertIn("text = raw.decode('utf-8').strip().rstrip('\\x00')", source)
@@ -519,12 +520,18 @@ class FirmwareContractTests(unittest.TestCase):
         for node in tree.body:
             if isinstance(node, ast.Assign) and any(getattr(target, 'id', '') == '_B64_KEEP' for target in node.targets):
                 exec(compile(ast.Module(body=[node], type_ignores=[]), lora_path, 'exec'), namespace)
-            if isinstance(node, ast.FunctionDef) and node.name in {'_clean_b64', '_valid_unit_uid', '_chunk_data_ok'}:
+            if isinstance(node, ast.FunctionDef) and node.name in {'_clean_b64', '_valid_unit_uid', '_chunk_data_ok', '_is_truncated_rx'}:
+                exec(compile(ast.Module(body=[node], type_ignores=[]), lora_path, 'exec'), namespace)
+            if isinstance(node, ast.Assign) and any(getattr(target, 'id', '') in ('_SHORT_OK', '_TRUNC_HEADS') for target in node.targets):
                 exec(compile(ast.Module(body=[node], type_ignores=[]), lora_path, 'exec'), namespace)
         self.assertEqual(namespace['_clean_b64']('eyJ1IjoieCJ9|CRC:21CE\x00TYPE:X'), 'eyJ1IjoieCJ9')
         self.assertIn("for marker in ('\\x00', '|HMAC:', '|CRC:', '|CNT:')", source)
         self.assertTrue(namespace['_valid_unit_uid']('unit-l7riag'))
         self.assertFalse(namespace['_valid_unit_uid']('unit-5HELLO'))
+        self.assertFalse(namespace['_is_truncated_rx'](b'HELLO:unit-5axfdv'))
+        self.assertFalse(namespace['_is_truncated_rx'](b'END:unit-e9wjst:1'))
+        self.assertTrue(namespace['_is_truncated_rx'](b'TYPE:FIELD_DATA_C'))
+        self.assertTrue(namespace['_is_truncated_rx'](b'HEHELLO:unit-5axfdv'))
         self.assertTrue("st['data']['FIELD_DATA']" in source or 'st["data"]["FIELD_DATA"]' in source)
         self.assertIn('send_ack=False', source)
         self.assertNotIn('ch[idx] = clear', source)
