@@ -247,6 +247,8 @@ last_rx_ts = 0
 last_lora_activity_ts = 0
 lora_rx_queue = SimpleQueue(maxsize=10)
 lora_rx_pending = False
+_last_rx_digest = None
+_last_rx_ticks = 0
 _sec_log_last = {}
 _sec_log_count = {}
 
@@ -793,8 +795,7 @@ def arm_rx():
         return False
     try:
         irq = lora.getIrqStatus() if hasattr(lora, 'getIrqStatus') else 0
-        length = lora.getPacketLength() if hasattr(lora, 'getPacketLength') else 0
-        if (irq & IRQ_RX_DONE) or 0 < length <= int(getattr(settings, 'LORA_MAX_PACKET_SIZE', 200)):
+        if (irq & IRQ_RX_DONE) or bool(globals().get('lora_rx_pending', False)):
             return True
         try:
             state = lora.startReceive(0xFFFFFF)
@@ -858,26 +859,21 @@ def _lora_irq_callback(events=0):
 
 
 def _lora_rx_ready():
+    if lora is None:
+        return False
+    if bool(globals().get('lora_rx_pending', False)):
+        return True
     try:
-        if lora is not None and hasattr(lora, '_events'):
-            rx_done = getattr(lora, 'RX_DONE', 0)
-            if rx_done and (lora._events() & rx_done):
+        if hasattr(lora, 'getIrqStatus'):
+            rx_done = int(getattr(lora, 'RX_DONE', IRQ_RX_DONE) or IRQ_RX_DONE)
+            if int(lora.getIrqStatus() or 0) & rx_done:
                 return True
     except Exception as e:
         try:
             asyncio.create_task(debug_print('LoRa RX event check error: %s' % e, 'WARN'))
         except Exception:
             pass
-    try:
-        # Some boards do not deliver DIO1 interrupts reliably; poll the radio
-        # buffer so HELLO/READY/ACK waits and hub RX remain functional.
-        if lora is not None and hasattr(lora, 'getPacketLength'):
-            length = lora.getPacketLength()
-            if 0 < length <= int(getattr(settings, 'LORA_MAX_PACKET_SIZE', 200)):
-                return True
-    except Exception:
-        pass
-    return bool(globals().get('lora_rx_pending', False))
+    return False
 
 
 async def _record_lora_session_failure(reason):
@@ -1798,6 +1794,9 @@ async def handle_simple_session_hub(clear):
         return False
     clear = str(clear).strip()
 
+    if _is_lora_hub_node() and clear.startswith(('READY:', 'ACK:', 'BEACON:')):
+        return True
+
     if clear.startswith('FWD:'):
         await debug_print('Simple mode: ignore FWD frame', 'BASE_NODE')
         return True
@@ -1814,8 +1813,11 @@ async def handle_simple_session_hub(clear):
         if not hasattr(settings, 'REMOTE_NODE_INFO') or settings.REMOTE_NODE_INFO is None:
             settings.REMOTE_NODE_INFO = {}
         st = settings.REMOTE_NODE_INFO.setdefault(remote_uid, {})
+        if st.get('ready_sent') and time.ticks_diff(time.ticks_ms(), st.get('ready_sent_ticks', 0)) < 5000:
+            return True
         st['session_active'] = True
         sdata.lora_session_busy = True
+        sdata.lora_session_busy_ts = time.time()
         st['chunks'] = []
         st['chunk_total'] = None
         st['staged_ok'] = False
@@ -1838,6 +1840,9 @@ async def handle_simple_session_hub(clear):
             ok = False
             await debug_print('READY send error: %s' % e, 'ERROR')
         await debug_print('READY sent to %s ok=%s' % (remote_uid, ok), 'BASE_NODE')
+        if ok:
+            st['ready_sent'] = True
+            st['ready_sent_ticks'] = time.ticks_ms()
         try:
             await _wait_tx_done(0.4)
             await ensure_lora_listening()
@@ -1853,6 +1858,8 @@ async def handle_simple_session_hub(clear):
                 settings.REMOTE_NODE_INFO = {}
             st = settings.REMOTE_NODE_INFO.setdefault(uid, {})
             st['session_active'] = True
+            sdata.lora_session_busy = True
+            sdata.lora_session_busy_ts = time.time()
             if total > 0:
                 st['chunk_total'] = total
             if batch_id:
@@ -1975,7 +1982,11 @@ async def handle_simple_session_hub(clear):
 
 async def handle_incoming_packet(msg):
     global last_rx_ts, last_lora_activity_ts
-    msg_str = msg.rstrip(b'\x00').decode()
+    try:
+        msg_str = msg.rstrip(b'\x00').decode('utf-8')
+    except Exception:
+        await debug_print('Dropped non-utf8 inbound packet', 'WARN')
+        return
 
     uid_hint = None
     if _is_lora_hub_node():
@@ -2608,8 +2619,8 @@ async def _wait_tx_done(timeout=None):
 
 async def _read_lora_packet():
     """Read one SX1262 packet and log it before protocol filtering."""
-    global lora_rx_pending
-    if lora is None or not hasattr(lora, 'recv'):
+    global lora_rx_pending, _last_rx_digest, _last_rx_ticks
+    if lora is None or not hasattr(lora, 'recv') or not _lora_rx_ready():
         return None
     try:
         try:
@@ -2617,9 +2628,25 @@ async def _read_lora_packet():
         except TypeError:
             msg, err = lora.recv()
         lora_rx_pending = False
+        if hasattr(lora, 'clearIrqStatus'):
+            lora.clearIrqStatus()
         if err == 0 and msg:
-            await debug_print('RAW RX (%d): %r' % (len(msg), msg[:80]), 'LORA_RX')
-            return msg
+            raw = bytes(msg).rstrip(b'\x00')
+            if not raw:
+                return None
+            digest = (len(raw), raw[:24])
+            now = time.ticks_ms()
+            if digest == _last_rx_digest and time.ticks_diff(now, _last_rx_ticks) < 1000:
+                return None
+            _last_rx_digest = digest
+            _last_rx_ticks = now
+            try:
+                raw.decode('utf-8')
+            except Exception:
+                await debug_print('Dropped non-utf8 RX len=%d' % len(raw), 'WARN')
+                return None
+            await debug_print('RAW RX (%d): %r' % (len(raw), raw[:80]), 'LORA_RX')
+            return raw
     except Exception as e:
         await debug_print('read packet failed: %r' % (e,), 'WARN')
     return None
@@ -2874,7 +2901,7 @@ async def send_hello_and_wait_ready(use_fwd=False):
                     if not clear or clear.startswith('BEACON:'):
                         continue
                     parts = clear.split(':')
-                    if len(parts) >= 2 and parts[0] == 'READY' and parts[1] == uid:
+                    if len(parts) >= 2 and parts[0] == 'READY' and parts[1] == uid and 'BASE' in parts:
                         await debug_print(f"READY received: {clear}", "REMOTE_NODE")
                         base_uid = None
                         chunk_sz = _safe_int(getattr(settings, 'LORA_CHUNK_SIZE', 80), 80)
@@ -3666,6 +3693,12 @@ async def connectLora():
         try:
             current_time = time.time()
 
+            if getattr(sdata, 'lora_session_busy', False):
+                busy_since = float(getattr(sdata, 'lora_session_busy_ts', 0) or 0)
+                if busy_since and current_time - busy_since > 20:
+                    sdata.lora_session_busy = False
+                    await debug_print('LoRa session busy watchdog cleared', 'WARN')
+
             if _is_lora_hub_node() and time.ticks_diff(time.ticks_ms(), last_rx_heartbeat_ticks) >= 60000:
                 last_rx_heartbeat_ticks = time.ticks_ms()
                 await debug_print(
@@ -3906,12 +3939,6 @@ async def connectLora():
 
                 rx_done = getattr(lora, 'RX_DONE', 0)
                 packet_ready = bool(irq & rx_done) or bool(lora_rx_pending)
-                if not packet_ready:
-                    try:
-                        length = lora.getPacketLength() if hasattr(lora, 'getPacketLength') else 0
-                        packet_ready = 0 < length <= int(getattr(settings, 'LORA_MAX_PACKET_SIZE', 200))
-                    except Exception:
-                        packet_ready = False
                 if not packet_ready:
                     await asyncio.sleep_ms(20)
                     continue
