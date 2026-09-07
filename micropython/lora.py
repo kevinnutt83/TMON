@@ -531,21 +531,20 @@ def _remote_ota_stage_path(session, rel_name):
 
 
 def _remote_parse_type_message(msg_str):
-    parts = str(msg_str).split(',')
+    text = str(msg_str)
+    head, separator, data_b64 = text.partition(',DATA:')
+    parts = head.split(',')
     msg_type = None
     uid = None
-    data_b64 = None
     chunk = None
     for p in parts:
         if p.startswith('TYPE:'):
             msg_type = p[5:]
         elif p.startswith('UID:'):
             uid = p[4:]
-        elif p.startswith('DATA:'):
-            data_b64 = p[5:]
         elif p.startswith('CHUNK:'):
             chunk = p[6:]
-    return msg_type, uid, chunk, data_b64
+    return msg_type, uid, chunk, data_b64 if separator else None
 
 
 def _remote_decode_json_b64(data_b64):
@@ -1674,7 +1673,16 @@ async def check_incomplete_bursts():
                     continue
                 if st.get('ack_sent'):
                     continue
+                if int(st.get('assemble_fail_count') or 0) >= 3:
+                    st['simple_chunks'] = []
+                    st['session_active'] = False
+                    st['chunk_total'] = 0
+                    st['assemble_fail_count'] = 0
+                    sdata.lora_session_busy = False
+                    continue
                 field_chunks = _session_field_chunks(st)
+                if not field_chunks:
+                    field_chunks = {index: value for index, value in enumerate(st.get('simple_chunks', [])) if value}
                 if not field_chunks:
                     continue
 
@@ -1714,6 +1722,26 @@ async def check_incomplete_bursts():
         await asyncio.sleep(5)
 
 
+_B64_KEEP = frozenset('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=')
+
+
+def _clean_b64(value):
+    if not value:
+        return ''
+    text = str(value)
+    for marker in ('\x00', '|CRC:', '|CNT:', '|HMAC:', ',TYPE:', ',HELLO:', ',END:', 'CRC:', 'TYPE:'):
+        text = text.split(marker, 1)[0]
+    cleaned = ''.join(char for char in text if char in _B64_KEEP).rstrip('=')
+    return cleaned + ('=' * ((-len(cleaned)) % 4))
+
+
+def _valid_unit_uid(uid):
+    value = str(uid or '')
+    if not value.startswith('unit-') or len(value) < 10 or len(value) > 24:
+        return False
+    return all(('a' <= char <= 'z') or ('0' <= char <= '9') for char in value[5:])
+
+
 def _simple_session_parse_chunk(clear):
     """Return uid, index, total, base64 data, and optional batch id from a chunk."""
     uid = ''
@@ -1750,11 +1778,11 @@ def _simple_session_parse_chunk(clear):
 
 def _simple_session_chunk_slots(st):
     """Normalize simple-session chunks to indexed base64 slots."""
-    chunks = st.get('chunks')
-    if isinstance(chunks, list):
-        return chunks
-    st['chunks'] = []
-    return st['chunks']
+    slots = st.get('simple_chunks')
+    if not isinstance(slots, list):
+        slots = []
+        st['simple_chunks'] = slots
+    return slots
 
 
 def _assemble_simple_session_field_data(st):
@@ -1766,24 +1794,33 @@ def _assemble_simple_session_field_data(st):
         total = int(st.get('chunk_total') or 0)
     except Exception:
         total = 0
-    total = total or len(slots)
+    total = total or sum(1 for item in slots if item)
+    if total <= 0:
+        return None
     parts = []
     for index in range(total):
         item = slots[index] if index < len(slots) else None
         if not item:
             return None
-        parts.append(str(item).strip())
+        parts.append(_clean_b64(item))
     try:
         encoded = ''.join(parts)
-        encoded += '=' * ((-len(encoded)) % 4)
+        if len(encoded) < 8:
+            return None
         raw = _ub.a2b_base64(encoded)
         payload = ujson.loads(raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw))
     except Exception as e:
-        try:
-            print('Simple session assemble error: %s' % e)
-        except Exception:
-            pass
+        st['assemble_fail_count'] = int(st.get('assemble_fail_count') or 0) + 1
+        if st['assemble_fail_count'] <= 2:
+            try:
+                asyncio.create_task(debug_print(
+                    'Simple session assemble error: %s len=%d head=%r' % (e, len(encoded), encoded[:24]),
+                    'WARN'
+                ))
+            except Exception:
+                pass
         return None
+    st['assemble_fail_count'] = 0
     if not isinstance(st.get('data'), dict):
         st['data'] = {}
     st['data']['FIELD_DATA'] = payload
@@ -1816,8 +1853,9 @@ async def handle_simple_session_hub(clear):
             remote_uid = clear.split(':', 1)[1].strip().split('|')[0].strip()
         except Exception:
             remote_uid = ''
-        if not remote_uid or remote_uid.lower() in ('none', 'null', 'unknown', 'n/a'):
-            remote_uid = 'UNPROVISIONED'
+        if not _valid_unit_uid(remote_uid):
+            await debug_print('Dropped invalid HELLO uid=%r' % remote_uid, 'WARN')
+            return True
         await debug_print('HELLO from %s' % remote_uid, 'BASE_NODE')
 
         if not hasattr(settings, 'REMOTE_NODE_INFO') or settings.REMOTE_NODE_INFO is None:
@@ -1828,8 +1866,9 @@ async def handle_simple_session_hub(clear):
         st['session_active'] = True
         sdata.lora_session_busy = True
         sdata.lora_session_busy_ts = time.time()
-        st['chunks'] = []
+        st['simple_chunks'] = []
         st['chunk_total'] = None
+        st['assemble_fail_count'] = 0
         st['staged_ok'] = False
         st['ack_sent'] = False
         st.pop('ack_sent_ticks', None)
@@ -1863,7 +1902,7 @@ async def handle_simple_session_hub(clear):
 
     if 'FIELD_DATA_CHUNK' in clear or clear.startswith('TYPE:FIELD_DATA_CHUNK'):
         uid, idx, total, data_b64, batch_id = _simple_session_parse_chunk(clear)
-        if uid:
+        if _valid_unit_uid(uid):
             if not hasattr(settings, 'REMOTE_NODE_INFO') or settings.REMOTE_NODE_INFO is None:
                 settings.REMOTE_NODE_INFO = {}
             st = settings.REMOTE_NODE_INFO.setdefault(uid, {})
@@ -1878,14 +1917,20 @@ async def handle_simple_session_hub(clear):
             if idx >= 0:
                 while len(ch) <= idx:
                     ch.append(None)
-                ch[idx] = data_b64
+                ch[idx] = _clean_b64(data_b64)
+                st['assemble_fail_count'] = 0
             st['last_chunk_ticks'] = time.ticks_ms()
             await debug_print('Chunk %s %s/%s bytes=%s' % (uid, idx, total, len(data_b64 or '')), 'BASE_NODE')
+        else:
+            await debug_print('Dropped invalid CHUNK uid=%r' % uid, 'WARN')
         return True
 
     if clear.startswith('END:'):
         parts = clear.split(':')
         remote_uid = parts[1].strip() if len(parts) > 1 else 'unknown'
+        if not _valid_unit_uid(remote_uid):
+            await debug_print('Dropped invalid END uid=%r' % remote_uid, 'WARN')
+            return True
         total = 0
         try:
             if len(parts) > 2:
@@ -1907,6 +1952,9 @@ async def handle_simple_session_hub(clear):
             if not hasattr(settings, 'REMOTE_NODE_INFO') or settings.REMOTE_NODE_INFO is None:
                 settings.REMOTE_NODE_INFO = {}
             st = settings.REMOTE_NODE_INFO.setdefault(remote_uid, {})
+            st['session_active'] = True
+            sdata.lora_session_busy = True
+            sdata.lora_session_busy_ts = time.time()
             if total > 0:
                 st['chunk_total'] = total
             if batch_id:
@@ -1979,7 +2027,9 @@ async def handle_simple_session_hub(clear):
         if ok:
             st['ack_sent'] = True
             st['ack_sent_ticks'] = time.ticks_ms()
-            st['chunks'] = []
+            st['simple_chunks'] = []
+            st['chunk_total'] = 0
+            st['assemble_fail_count'] = 0
             st['last_chunk_ticks'] = 0
         sdata.lora_session_busy = False
         try:

@@ -226,6 +226,7 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertNotIn('sys_voltage', compact)
         self.assertEqual(compact['note'], 'keep')
 
+        utils_module.utc_epoch = lambda: 1788755564
         canonical = utils_module.build_field_data_record(
             'unit-l7riag', 'remote', {'u': 'unit-l7riag', 't': 77.2, 'ts': 842070764}
         )
@@ -471,9 +472,27 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("await _record_lora_session_failure('Final ACK timeout')", source)
         self.assertIn('def _assemble_simple_session_field_data(', source)
         self.assertIn('def _simple_session_parse_chunk(', source)
+        self.assertIn('def _clean_b64(value):', source)
+        self.assertIn('def _valid_unit_uid(uid):', source)
+        self.assertIn("st.get('simple_chunks')", source)
+        self.assertIn("ch[idx] = _clean_b64(data_b64)", source)
+        self.assertIn("st.get('assemble_fail_count')", source)
+        self.assertIn("Dropped invalid HELLO uid=", source)
+        self.assertIn("Dropped invalid CHUNK uid=", source)
+        self.assertIn("Dropped invalid END uid=", source)
+        self.assertIn('lora.recv(length)', source)
+        namespace = {}
+        tree = ast.parse(source)
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and any(getattr(target, 'id', '') == '_B64_KEEP' for target in node.targets):
+                exec(compile(ast.Module(body=[node], type_ignores=[]), lora_path, 'exec'), namespace)
+            if isinstance(node, ast.FunctionDef) and node.name in {'_clean_b64', '_valid_unit_uid'}:
+                exec(compile(ast.Module(body=[node], type_ignores=[]), lora_path, 'exec'), namespace)
+        self.assertEqual(namespace['_clean_b64']('eyJ1IjoieCJ9CRC:21CE\x00TYPE:X'), 'eyJ1IjoieCJ9')
+        self.assertTrue(namespace['_valid_unit_uid']('unit-l7riag'))
+        self.assertFalse(namespace['_valid_unit_uid']('unit-5HELLO'))
         self.assertTrue("st['data']['FIELD_DATA']" in source or 'st["data"]["FIELD_DATA"]' in source)
         self.assertIn('send_ack=False', source)
-        self.assertIn('ch[idx] = data_b64', source)
         self.assertNotIn('ch[idx] = clear', source)
         self.assertIn("ack += ':CMD:%s' % encoded_cmd", source)
         self.assertIn("'temp_f': getattr(sdata, 'cur_device_temp_f', None)", source)
