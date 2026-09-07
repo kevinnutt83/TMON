@@ -341,7 +341,9 @@ async def main():
             _record_startup_exception('log_rotate_loop', e)
     # Launch permanent LoRa task for hub roles; remotes use controlled-session path.
     is_remote = str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'remote'
-    if not (is_remote and bool(getattr(settings, 'REMOTE_DISABLE_CONNECTLORA_LOOP', True))):
+    skip_loop = (is_remote and bool(getattr(settings, 'REMOTE_DISABLE_CONNECTLORA_LOOP', True))
+                 and bool(getattr(settings, '_REMOTE_DEEPSLEEP_ACTIVE', False)))
+    if not skip_loop:
         asyncio.create_task(connectLora())
     # Run all other periodic tasks
     await tm.run()
@@ -355,15 +357,28 @@ except Exception:
 
 def start():
     """Called by boot.py after hardware init. Never run on import."""
-    is_remote = str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'remote'
-    use_deep_sleep = is_remote and bool(getattr(settings, 'REMOTE_DISABLE_CONNECTLORA_LOOP', True))
+    runtime_remote = str(getattr(settings, 'NODE_TYPE', '') or '').strip().lower() == 'remote'
+    persisted_remote = str(load_persisted_node_type() or '').strip().lower() == 'remote'
+    if runtime_remote and not persisted_remote:
+        try:
+            persist_node_type('remote')
+            persisted_remote = True
+        except Exception as e:
+            _record_startup_exception('persist_runtime_remote_role', e)
+    use_deep_sleep = (runtime_remote and persisted_remote and
+                      bool(getattr(settings, 'REMOTE_DISABLE_CONNECTLORA_LOOP', True)))
+    settings._REMOTE_DEEPSLEEP_ACTIVE = use_deep_sleep
     
     if use_deep_sleep:
         try:
             from remote_node import run_remote_deep_sleep
-            run_remote_deep_sleep()
+            result = run_remote_deep_sleep()
+            if result != 'slept':
+                settings._REMOTE_DEEPSLEEP_ACTIVE = False
+                asyncio.run(main())
         except Exception as e:
             _record_startup_exception('run_remote_deep_sleep', e)
+            settings._REMOTE_DEEPSLEEP_ACTIVE = False
             asyncio.run(main())
     else:
         # Continuous mode (or non-remote): run the full asyncio scheduler.

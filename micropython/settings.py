@@ -275,6 +275,7 @@ LORA_RETRY_BASE_DELAY_S = 1.5
 LORA_MAX_BACKOFF_S = 90
 LORA_MISSED_SYNC_THRESHOLD = 3
 LORA_HEARTBEAT_INTERVAL_S = 120
+# Application envelope CRC (body|CRC:XXXX), independent of SX1262 hardware CRC.
 LORA_CRC_ENABLED = False
 LORA_HARD_REBOOT_ERR_CODES = [-2]
 LORA_ERR_PERSIST_REBOOTS = 2
@@ -288,6 +289,9 @@ LORA_HMAC_REPLAY_PROTECT = False
 LORA_REPLAY_WINDOW = 8
 LORA_COUNTERS_FILE = '/logs/lora_counters.json'
 LORA_SESSION_SOFT_CRC = True
+REMOTE_BASE_STARTUP_WAIT_S = 3
+REMOTE_FALLBACK_UID_PREFIX = 'RM-'
+REMOTE_SYNC_INTERVAL_S = 300
 REMOTE_USE_CONTROLLED_SESSION_ONLY = True
 # When True  -> remote nodes use the battery-optimized deep-sleep cycle
 #              (run_remote_deep_sleep) and the continuous connectLora loop is skipped.
@@ -314,6 +318,7 @@ SYNC_WORD = 0xF4
 POWER = 17
 CURRENT_LIMIT = 140.0
 PREAMBLE_LEN = 12
+# SX1262 hardware CRC only; do not use this to enable envelope CRC.
 CRC_ON = True
 TCXO_VOLTAGE = 1.8
 USE_LDO = True

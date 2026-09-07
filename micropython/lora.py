@@ -892,6 +892,10 @@ async def _record_lora_session_failure(reason):
 def _usable_unit_id():
     uid = str(getattr(settings, 'UNIT_ID', '') or '').strip()
     if not uid or uid.lower() in ('none', 'null', 'unknown', 'n/a'):
+        if str(getattr(settings, 'NODE_TYPE', '')).lower() == 'remote':
+            machine_id = str(get_machine_id() or '').strip()
+            if machine_id:
+                return '%s%s' % (getattr(settings, 'REMOTE_FALLBACK_UID_PREFIX', 'RM-'), machine_id[-8:])
         return ''
     return uid
 
@@ -977,7 +981,7 @@ async def init_lora():
                 await display_message("LoRa OK", 1.5)
                 sdata.lora_last_init_ts = time.time()
                 sdata.lora_last_rx_ticks = time.ticks_ms()
-                sdata.lora_rx_pause_until = time.time() + 90
+                sdata.lora_rx_pause_until = time.time() + 3
                 return True
             elif status == -2:
                 await debug_print("Status -2 detected - aggressive reset already performed", "WARN")
@@ -1793,7 +1797,9 @@ async def handle_simple_session_hub(clear):
         try:
             remote_uid = clear.split(':', 1)[1].strip().split('|')[0].strip()
         except Exception:
-            remote_uid = 'unknown'
+            remote_uid = ''
+        if not remote_uid or remote_uid.lower() in ('none', 'null', 'unknown', 'n/a'):
+            remote_uid = 'UNPROVISIONED'
         await debug_print('HELLO from %s' % remote_uid, 'BASE_NODE')
 
         if not hasattr(settings, 'REMOTE_NODE_INFO') or settings.REMOTE_NODE_INFO is None:
@@ -1813,7 +1819,7 @@ async def handle_simple_session_hub(clear):
             pass
 
         chunk_sz = int(getattr(settings, 'LORA_CHUNK_SIZE', 80))
-        base_uid = str(getattr(settings, 'UNIT_ID', '') or '')
+        base_uid = _usable_unit_id() or str(get_machine_id() or 'BASE')
         ready = 'READY:%s:BASE:%s:CHUNKSZ:%d' % (remote_uid, base_uid, chunk_sz)
         try:
             secured = await _secure_message(ready, remote_uid=remote_uid)
@@ -1900,8 +1906,7 @@ async def handle_simple_session_hub(clear):
         next_delay = max(30, next_delay)
 
         if assembled is None and not st.get('staged_ok'):
-            sdata.lora_session_busy = False
-            return True
+            await debug_print('assemble failed; ACK anyway for %s' % remote_uid, 'WARN')
 
         ota_session_id = None
         try:
@@ -2298,7 +2303,7 @@ async def _secure_message(msg_str, remote_uid=None):
         # Simple-mode / diagnostics path: when HMAC is disabled, keep payload plain
         # and optionally append only CRC.
         if not bool(getattr(settings, 'LORA_HMAC_ENABLED', False)):
-            if bool(getattr(settings, 'LORA_CRC_ENABLED', False) or getattr(settings, 'CRC_ON', False)):
+            if bool(getattr(settings, 'LORA_CRC_ENABLED', False)):
                 c = crc16_ccitt(msg_str.encode() if not isinstance(msg_str, bytes) else msg_str)
                 return '%s|CRC:%s' % (msg_str, _format_crc(c))
             return msg_str
@@ -2328,7 +2333,7 @@ async def _secure_message(msg_str, remote_uid=None):
             except Exception as e:
                 await _sec_log('HMAC build failed: %s' % e)
 
-        if getattr(settings, 'LORA_CRC_ENABLED', True) or getattr(settings, 'CRC_ON', True):
+        if getattr(settings, 'LORA_CRC_ENABLED', False):
             c = crc16_ccitt(msg_str.encode() if not isinstance(msg_str, bytes) else msg_str)
             parts.append('CRC:' + _format_crc(c))
 
@@ -2404,24 +2409,24 @@ async def _unsecure_message(msg_str, remote_uid=None):
 
         # When HMAC is disabled, accept plain body and (optionally) validate CRC.
         if not hmac_enabled:
-            if crc_raw is not None and (bool(getattr(settings, 'LORA_CRC_ENABLED', False)) or bool(getattr(settings, 'CRC_ON', False))):
+            if crc_raw is not None and bool(getattr(settings, 'LORA_CRC_ENABLED', False)):
                 ok_crc, detail = verify_app_crc(body, crc_raw)
                 if not ok_crc:
                     if getattr(settings, 'LORA_SESSION_SOFT_CRC', True):
                         b = body.strip()
-                        if b.startswith('HELLO:') or b.startswith('READY:') or b.startswith('ACK:') or b.startswith('END:') or b.startswith('FWD:'):
+                        if b.startswith('HELLO:') or b.startswith('READY:') or b.startswith('ACK:') or b.startswith('END:') or b.startswith('FWD:') or b.startswith('TYPE:'):
                             await _sec_log('CRC soft-accept session frame: %s' % b[:32])
                             return body
                     await _sec_log(detail)
                     return None
             return body
 
-        if (getattr(settings, 'LORA_CRC_ENABLED', True) or getattr(settings, 'CRC_ON', True)) and crc_raw is not None:
+        if getattr(settings, 'LORA_CRC_ENABLED', False) and crc_raw is not None:
             ok_crc, detail = verify_app_crc(body, crc_raw)
             if not ok_crc:
                 if getattr(settings, 'LORA_SESSION_SOFT_CRC', True):
                     b = body.strip()
-                    if b.startswith('HELLO:') or b.startswith('READY:') or b.startswith('ACK:') or b.startswith('END:') or b.startswith('FWD:'):
+                    if b.startswith('HELLO:') or b.startswith('READY:') or b.startswith('ACK:') or b.startswith('END:') or b.startswith('FWD:') or b.startswith('TYPE:'):
                         await _sec_log('CRC soft-accept session frame: %s' % b[:32])
                         return body
                 await _sec_log(detail)

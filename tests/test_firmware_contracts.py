@@ -357,7 +357,8 @@ class FirmwareContractTests(unittest.TestCase):
         with open(os.path.join(ROOT, 'micropython', 'lora.py'), 'r', encoding='utf-8') as handle:
             lora_text = handle.read()
         self.assertIn('REMOTE_DISABLE_CONNECTLORA_LOOP', main_text)
-        self.assertIn('use_deep_sleep = is_remote and bool(getattr(settings, \'REMOTE_DISABLE_CONNECTLORA_LOOP\', True))', main_text)
+        self.assertIn('runtime_remote = str(getattr(settings, \'NODE_TYPE\', \'\') or \'\').strip().lower() == \'remote\'', main_text)
+        self.assertIn('persisted_remote = str(load_persisted_node_type() or \'\').strip().lower() == \'remote\'', main_text)
         self.assertIn("'rx listen lora=%s busy=%s'", lora_text)
         self.assertIn("'init failed; retry in 5s (no abort)'", lora_text)
         self.assertIn('READY not received; sending one-chunk payload best-effort', lora_text)
@@ -370,8 +371,13 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn('status=0x%02x mode=%d', lora_text)
         self.assertIn("'not in RX — re-arm'", lora_text)
         self.assertIn("'BEACON:%s' % _usable_unit_id()", lora_text)
+        self.assertIn("getattr(settings, 'LORA_CRC_ENABLED', False)", lora_text)
+        self.assertIn("b.startswith('TYPE:')", lora_text)
+        self.assertIn('assemble failed; ACK anyway', lora_text)
         self.assertIn("skipped=lora_startup", main_text)
         self.assertIn("skipped=lora_busy", main_text)
+        self.assertIn("result = run_remote_deep_sleep()", main_text)
+        self.assertIn("settings._REMOTE_DEEPSLEEP_ACTIVE = False", main_text)
 
         settings_mod = types.ModuleType('settings')
         settings_mod.LOG_DIR = '/logs'

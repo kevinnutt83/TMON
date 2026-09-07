@@ -145,9 +145,12 @@ async def _run_remote_cycle_once():
     next_epoch = None
     lora_init_ok = False
 
-    if not _usable_unit_id():
-        await debug_print('remote_sleep: UNIT_ID not provisioned; skipping LoRa TX', 'ERROR')
+    session_uid = _usable_unit_id()
+    if not session_uid:
+        await debug_print('remote_sleep: no usable UNIT_ID or fallback UID', 'ERROR')
         return _compute_next_sync_epoch(_now_epoch()) - _now_epoch(), False
+    if str(getattr(settings, 'UNIT_ID', '') or '').strip().lower() in ('', 'none', 'null', 'unknown', 'n/a'):
+        await debug_print('remote_sleep: using fallback UID %s for unprovisioned unit' % session_uid, 'WARN')
 
     try:
         lora_init_ok = await init_lora()
@@ -155,8 +158,10 @@ async def _run_remote_cycle_once():
             raise RuntimeError('remote_sleep: LoRa init failed')
 
         await ensure_lora_listening()
-        await debug_print('remote_sleep: waiting 20s for base LoRa startup', 'REMOTE_NODE')
-        await asyncio.sleep(20)
+        startup_wait = min(15, max(0, _safe_int(getattr(settings, 'REMOTE_BASE_STARTUP_WAIT_S', 3), 3)))
+        if startup_wait:
+            await debug_print('remote_sleep: waiting %ss for base LoRa startup' % startup_wait, 'REMOTE_NODE')
+            await asyncio.sleep(startup_wait)
         next_delay = await send_field_data_controlled(None)
         ack_ok = (next_delay is not None)
 
@@ -204,7 +209,8 @@ def run_remote_deep_sleep():
     except Exception:
         persisted_role = None
     runtime_role = str(getattr(settings, 'NODE_TYPE', '') or '').strip().lower()
-    if str(persisted_role or '').strip().lower() != 'remote':
+    role = str(persisted_role or runtime_role or '').strip().lower()
+    if role != 'remote':
         try:
             asyncio.run(debug_print(
                 'remote_sleep: expected remote role but persisted/runtime role is %s/%s' %
@@ -212,7 +218,7 @@ def run_remote_deep_sleep():
             ))
         except Exception:
             pass
-        return
+        return 'rejected_role'
 
     sleep_s = max(30, _safe_int(getattr(settings, 'LORA_SYNC_RATE', 300), 300))
     sync_success = False
@@ -276,7 +282,7 @@ def run_remote_deep_sleep():
         except Exception:
             while True:
                 time.sleep(5)
-        return
+        return 'slept'
 
     # Successful sync → normal deep sleep
     try:
@@ -289,3 +295,4 @@ def run_remote_deep_sleep():
     except Exception:
         while True:
             time.sleep(5)
+    return 'slept'
