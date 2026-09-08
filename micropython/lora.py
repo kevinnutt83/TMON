@@ -6,6 +6,7 @@
 # • TS metadata update uses .update() instead of overwriting the entire dict (prevents loss of persistent keys)
 # • Cleanup now safely pops only temporary burst keys (types/data/chunks/last_rx)
 # • All previous bulletproof fixes preserved (immediate assembly logging, multi-node UID filtering, short listen windows, etc.)
+# SESSION FIX: valid TYPE:FIELD_DATA_CHUNK frames are no longer treated as truncated.
 
 import ujson
 import os
@@ -1787,23 +1788,35 @@ def _chunk_data_ok(data, uid=None):
 
 _SHORT_OK = ('HELLO:', 'END:', 'ACK:', 'READY:', 'BEACON:')
 _TRUNC_HEADS = (
-    'TYPE:FIELD_DATA_C', 'YPE:FIELD', 'IELD_DATA', 'DATA_CHUNK',
-    'CHUNK,UID:', 'HEHELLO', 'HELLO:uHELLO', 'JTEND:',
+    'YPE:FIELD',
+    'E:FIELD_DATA',
+    'HEHELLO',
+    'HELLO:uHELLO',
+    'JTEND:',
+    'DAEND:',
+    '0/1,DA',
 )
 
 
 def _is_truncated_rx(raw):
     if not raw:
         return True
-    text = raw.decode('utf-8', 'ignore') if isinstance(raw, (bytes, bytearray)) else str(raw)
-    text = text.strip('\x00')
-    for bad in _TRUNC_HEADS:
-        if text.startswith(bad) or bad in text[:24]:
-            return True
+    if isinstance(raw, (bytes, bytearray)):
+        text = raw.decode('utf-8', 'ignore')
+    else:
+        text = str(raw)
+    text = text.strip('\x00').strip()
+    if not text:
+        return True
     if text.startswith(_SHORT_OK):
         return False
-    if len(raw) <= 24 and text.startswith('TYPE:') and 'DATA:' not in text:
-        return True
+    if text.startswith('TYPE:'):
+        if ('DATA:' not in text) and (len(raw) <= 24):
+            return True
+        return False
+    for bad in _TRUNC_HEADS:
+        if bad in text[:24]:
+            return True
     return False
 
 
@@ -1900,7 +1913,7 @@ async def handle_simple_session_hub(clear):
     SIMPLE SESSION ONLY:
       HELLO -> READY
       END   -> ACK
-      FIELD_DATA_CHUNK -> optional assemble; no SETTINGS/SDATA dependency
+      FIELD_DATA_CHUNK -> store slots; ACK after END if any slot stored
     """
     if not clear:
         return False
@@ -1988,6 +2001,13 @@ async def handle_simple_session_hub(clear):
                 if candidate_ok and (not existing or len(candidate) >= len(existing)):
                     ch[idx] = candidate
                     st['assemble_fail_count'] = 0
+                    have = len([item for item in ch if item])
+                    await debug_print(
+                        'CHUNK stored uid=%s idx=%s/%s have=%s b64=%s' % (
+                            uid, idx, total, have, len(candidate or '')
+                        ),
+                        'BASE_NODE'
+                    )
                 elif not candidate_ok:
                     await debug_print('Dropped invalid CHUNK data uid=%s idx=%s' % (uid, idx), 'WARN')
             st['last_chunk_ticks'] = time.ticks_ms()
@@ -2019,6 +2039,7 @@ async def handle_simple_session_hub(clear):
         assembled = None
         remote_fw = ''
         st = {}
+        have = 0
         try:
             if not hasattr(settings, 'REMOTE_NODE_INFO') or settings.REMOTE_NODE_INFO is None:
                 settings.REMOTE_NODE_INFO = {}
@@ -2031,10 +2052,19 @@ async def handle_simple_session_hub(clear):
             if batch_id:
                 st['batch_id'] = batch_id
             assembled = _assemble_simple_session_field_data(st)
+            have = len([item for item in _simple_session_chunk_slots(st) if item])
             if assembled is None:
-                await debug_print('Simple session assemble failed for %s have=%s total=%s' % (remote_uid, len([item for item in _simple_session_chunk_slots(st) if item]), st.get('chunk_total')), 'WARN')
+                await debug_print('Simple session assemble failed for %s have=%s total=%s' % (remote_uid, have, st.get('chunk_total')), 'WARN')
             elif not st.get('staged_ok') and callable(globals().get('process_remote_field_data')):
-                remote_fw = str(assembled.get('fw') or assembled.get('firmware_version') or '') if isinstance(assembled, dict) else ''
+                if isinstance(assembled, dict):
+                    remote_fw = str(assembled.get('fw') or assembled.get('firmware_version') or '')
+                    st['last_temp_f'] = assembled.get('temp_f', assembled.get('cur_temp_f', assembled.get('t')))
+                    st['last_humid'] = assembled.get('humid', assembled.get('cur_humid', assembled.get('h')))
+                    st['last_voltage'] = assembled.get('voltage', assembled.get('sys_voltage', assembled.get('v')))
+                    st['last_rssi'] = getattr(sdata, 'lora_SigStr', None)
+                    st['last_snr'] = getattr(sdata, 'lora_snr', None)
+                    st['last_seen_ts'] = time.time()
+                    st['fw'] = remote_fw or st.get('fw')
                 await process_remote_field_data(remote_uid, st, send_ack=False)
                 st['staged_ok'] = True
                 st['last_good_payload_ts'] = time.time()
@@ -2050,7 +2080,7 @@ async def handle_simple_session_hub(clear):
             pass
         next_delay = max(30, next_delay)
 
-        if assembled is None and not st.get('staged_ok'):
+        if assembled is None and have <= 0 and not st.get('staged_ok'):
             await debug_print('assemble failed; no ACK uid=%s' % remote_uid, 'WARN')
             st['simple_chunks'] = []
             st['session_active'] = False
@@ -2798,6 +2828,32 @@ async def _read_lora_packet():
             except Exception:
                 await debug_print('Dropped non-utf8 RX len=%d' % len(raw), 'WARN')
                 return None
+            try:
+                rssi = None
+                snr = None
+                if hasattr(lora, 'getRSSI'):
+                    try:
+                        rssi = lora.getRSSI()
+                    except TypeError:
+                        rssi = lora.getRSSI(False)
+                elif hasattr(lora, 'packetRssi'):
+                    rssi = lora.packetRssi()
+                if hasattr(lora, 'getSNR'):
+                    snr = lora.getSNR()
+                elif hasattr(lora, 'packetSnr'):
+                    snr = lora.packetSnr()
+                if rssi is not None:
+                    sdata.lora_SigStr = rssi
+                if snr is not None:
+                    sdata.lora_snr = snr
+                sdata.LORA_CONNECTED = True
+                sdata.lora_last_rx_ts = time.time()
+                try:
+                    sdata.lora_last_rx_ticks = time.ticks_ms()
+                except Exception:
+                    pass
+            except Exception:
+                pass
             await debug_print('RAW RX (%d): %r' % (len(raw), raw[:80]), 'LORA_RX')
             return raw
     except Exception as e:
@@ -3842,7 +3898,8 @@ async def connectLora():
 
             if getattr(sdata, 'lora_session_busy', False):
                 busy_since = float(getattr(sdata, 'lora_session_busy_ts', 0) or 0)
-                if busy_since and current_time - busy_since > 20:
+                limit_s = float(getattr(settings, 'LORA_SESSION_BUSY_TIMEOUT_S', 12) or 12)
+                if busy_since and (current_time - busy_since) > limit_s:
                     sdata.lora_session_busy = False
                     await debug_print('LoRa session busy watchdog cleared', 'WARN')
 
