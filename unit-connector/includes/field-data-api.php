@@ -1,5 +1,6 @@
 <?php
 // REST API for field data and data history log upload
+// IDENTITY FIX: table unit_id is the originating device, never the HTTP poster/base.
 // Permission: allow logged-in users locally, else require hub read auth (token/keys)
 if (!function_exists('tmon_uc_read_permission')) {
 function tmon_uc_read_permission($request) {
@@ -25,6 +26,46 @@ function tmon_record_epoch($row) {
         if ($value >= 1700000000 && $value <= 1900000000) return $value;
     }
     return time();
+}}
+
+if (!function_exists('tmon_uc_fd_originating_unit_id')) {
+function tmon_uc_fd_originating_unit_id($rec, $poster = '') {
+    if (!is_array($rec)) {
+        return sanitize_text_field((string) $poster);
+    }
+    foreach (['unit_id', 'remote_unit_id', 'u'] as $key) {
+        if (!empty($rec[$key])) {
+            return sanitize_text_field((string) $rec[$key]);
+        }
+    }
+    return sanitize_text_field((string) $poster);
+}}
+
+if (!function_exists('tmon_uc_fd_record_role')) {
+function tmon_uc_fd_record_role($rec) {
+    if (!is_array($rec)) {
+        return '';
+    }
+    $role = strtolower((string) ($rec['node_type'] ?? $rec['NODE_TYPE'] ?? $rec['role'] ?? ''));
+    return $role;
+}}
+
+if (!function_exists('tmon_uc_fd_is_bridged')) {
+function tmon_uc_fd_is_bridged($rec, $poster = '', $envelope_bridge = false) {
+    if (!is_array($rec)) {
+        return (bool) $envelope_bridge;
+    }
+    $role = tmon_uc_fd_record_role($rec);
+    $owner = tmon_uc_fd_originating_unit_id($rec, '');
+    $poster = sanitize_text_field((string) $poster);
+    $origin = strtolower((string) ($rec['origin'] ?? ''));
+    if ($envelope_bridge) return true;
+    if ($role === 'remote') return true;
+    if ($origin === 'remote_via_base' || $origin === 'direct_remote' || $origin === 'remote') return true;
+    if (!empty($rec['remote_unit_id'])) return true;
+    if (!empty($rec['source_unit_id']) && $owner !== '' && $owner !== sanitize_text_field((string) $rec['source_unit_id'])) return true;
+    if ($owner !== '' && $poster !== '' && $owner !== $poster) return true;
+    return false;
 }}
 
 add_action('rest_api_init', function() {
@@ -234,30 +275,34 @@ function tmon_uc_rest_export_field_data($request) {
         $d = json_decode($r['data'], true);
         if (!is_array($d)) continue;
         $origin = 'unknown';
-        if (!empty($d['machine_id'])) {
-            $origin = 'remote';
-        } elseif (!empty($d['NODE_TYPE'])) {
-            $origin = strtolower($d['NODE_TYPE']) === 'remote' ? 'remote' : 'base';
+        if (!empty($d['origin'])) {
+            $origin = strtolower((string) $d['origin']);
+        } elseif (tmon_uc_fd_is_bridged($d, $r['unit_id'])) {
+            $origin = 'remote_via_base';
+        } elseif (!empty($d['node_type']) || !empty($d['NODE_TYPE'])) {
+            $origin = (tmon_uc_fd_record_role($d) === 'remote') ? 'remote' : 'base';
         } else {
-            // Heuristic: if keys look like compact remote telemetry (t_f, hum, bar, v, fm), assume remote
             $remote_keys = 0;
             foreach (['t_f','t_c','hum','bar','v','fm'] as $k) { if (isset($d[$k])) $remote_keys++; }
             $origin = ($remote_keys >= 3) ? 'remote' : 'base';
         }
+        $created_at = function_exists('tmon_uc_format_mysql_datetime')
+            ? tmon_uc_format_mysql_datetime($r['created_at'])
+            : $r['created_at'];
         $flat = [
-            tmon_uc_format_mysql_datetime($r['created_at']),
+            $created_at,
             $r['unit_id'],
             $origin,
-            $d['timestamp'] ?? ($d['time'] ?? ''),
+            $d['timestamp'] ?? ($d['ts'] ?? ($d['time'] ?? '')),
             $d['name'] ?? '',
             $d['machine_id'] ?? '',
-            isset($d['t_f']) ? $d['t_f'] : ($d['cur_temp_f'] ?? ''),
-            isset($d['t_c']) ? $d['t_c'] : ($d['cur_temp_c'] ?? ''),
-            isset($d['hum']) ? $d['hum'] : ($d['cur_humid'] ?? ''),
+            isset($d['t_f']) ? $d['t_f'] : ($d['temp_f'] ?? ($d['cur_temp_f'] ?? '')),
+            isset($d['t_c']) ? $d['t_c'] : ($d['temp_c'] ?? ($d['cur_temp_c'] ?? '')),
+            isset($d['hum']) ? $d['hum'] : ($d['humid'] ?? ($d['cur_humid'] ?? '')),
             isset($d['bar']) ? $d['bar'] : ($d['cur_bar_pres'] ?? ''),
-            isset($d['v']) ? $d['v'] : ($d['sys_voltage'] ?? ''),
-            $d['wifi_rssi'] ?? '',
-            $d['lora_SigStr'] ?? '',
+            isset($d['v']) ? $d['v'] : ($d['volt'] ?? ($d['sys_voltage'] ?? '')),
+            $d['wifi_rssi'] ?? ($d['rssi'] ?? ''),
+            $d['lora_rssi'] ?? ($d['lora_SigStr'] ?? ''),
             isset($d['fm']) ? $d['fm'] : ($d['free_mem'] ?? ''),
             $d['gps_lat'] ?? ($d['GPS_LAT'] ?? ''),
             $d['gps_lng'] ?? ($d['GPS_LNG'] ?? ''),
@@ -304,8 +349,16 @@ function tmon_uc_receive_field_data($request) {
     if (!file_exists($log_dir)) {
         mkdir($log_dir, 0777, true);
     }
-    $unit_id = isset($data['unit_id']) ? sanitize_text_field($data['unit_id']) : '';
-    $machine_id = isset($data['machine_id']) ? sanitize_text_field($data['machine_id']) : '';
+    $poster = isset($data['poster_unit_id']) ? sanitize_text_field($data['poster_unit_id']) : '';
+    if ($poster === '' && isset($data['unit_id'])) {
+        $poster = sanitize_text_field($data['unit_id']);
+    }
+    $unit_id = $poster;
+    $machine_id = isset($data['poster_machine_id']) ? sanitize_text_field($data['poster_machine_id']) : '';
+    if ($machine_id === '' && isset($data['machine_id'])) {
+        $machine_id = sanitize_text_field($data['machine_id']);
+    }
+    $envelope_bridge = !empty($data['bridge']);
     $log_file = $log_dir . "/field_data_{$unit_id}.log";
     // Save inbound JSON envelope (raw for troubleshooting)
     file_put_contents($log_file, wp_json_encode($data) . "\n", FILE_APPEND);
@@ -320,8 +373,10 @@ function tmon_uc_receive_field_data($request) {
         $out['unit_id']   = $rec['unit_id'] ?? '';
         $out['machine_id']= $rec['machine_id'] ?? '';
         $out['name']      = $rec['name'] ?? '';
+        $out['origin']    = $rec['origin'] ?? '';
+        $out['source_unit_id'] = $rec['source_unit_id'] ?? '';
         // Common sensor aliases
-        $out['temp_f']    = isset($rec['t_f']) ? $rec['t_f'] : ($rec['cur_temp_f'] ?? null);
+        $out['temp_f']    = isset($rec['t_f']) ? $rec['t_f'] : ($rec['temp_f'] ?? ($rec['cur_temp_f'] ?? null));
         $out['temp_c']    = isset($rec['t_c']) ? $rec['t_c'] : ($rec['cur_temp_c'] ?? null);
         $out['humidity']  = isset($rec['hum']) ? $rec['hum'] : ($rec['humid'] ?? ($rec['cur_humid'] ?? null));
         $out['pressure']  = isset($rec['bar']) ? $rec['bar'] : ($rec['cur_bar_pres'] ?? null);
@@ -330,8 +385,8 @@ function tmon_uc_receive_field_data($request) {
         $out['probe_humid']  = $rec['probe_humid'] ?? ($rec['hum'] ?? ($rec['cur_humid'] ?? null));
         $out['probe_bar']    = $rec['probe_bar'] ?? ($rec['bar'] ?? ($rec['cur_bar_pres'] ?? null));
         $out['voltage_v'] = isset($rec['v']) ? $rec['v'] : ($rec['volt'] ?? ($rec['sys_voltage'] ?? null));
-        $out['wifi_rssi'] = $rec['wifi_rssi'] ?? null;
-        $out['lora_rssi'] = $rec['lora_SigStr'] ?? null;
+        $out['wifi_rssi'] = $rec['wifi_rssi'] ?? ($rec['rssi'] ?? null);
+        $out['lora_rssi'] = $rec['lora_rssi'] ?? ($rec['lora_SigStr'] ?? null);
         $out['free_mem']  = isset($rec['fm']) ? $rec['fm'] : ($rec['free_mem'] ?? null);
         // Device interior sensor fields
         $out['device_temp_f']   = $rec['device_temp_f'] ?? ($rec['dt_f'] ?? ($rec['cur_device_temp_f'] ?? null));
@@ -344,7 +399,7 @@ function tmon_uc_receive_field_data($request) {
         $out['soil_temp_f']     = $rec['st_f'] ?? ($rec['cur_soil_temp_f'] ?? null);
         // System / diagnostics
         $out['cpu_temp']        = $rec['cpu'] ?? ($rec['cpu_temp'] ?? null);
-        $out['node_type']       = $rec['NODE_TYPE'] ?? ($rec['node_type'] ?? null);
+        $out['node_type']       = $rec['node_type'] ?? ($rec['NODE_TYPE'] ?? null);
         $out['error_count']     = $rec['ec'] ?? ($rec['error_count'] ?? null);
         $out['script_runtime']  = $rec['sr'] ?? ($rec['script_runtime'] ?? null);
         $out['loop_runtime']    = $rec['lr'] ?? ($rec['loop_runtime'] ?? null);
@@ -423,41 +478,36 @@ function tmon_uc_receive_field_data($request) {
         $records = [$data];
     }
 
-    // If machine_id is provided but unit_id is empty or placeholder, try to map
+    // If machine_id is provided but poster unit_id is empty or placeholder, try to map the POSTER only
     if ($machine_id && (!$unit_id || $unit_id === '800000' || $unit_id === '999999')) {
         $mapped = $wpdb->get_var($wpdb->prepare("SELECT unit_id FROM {$wpdb->prefix}tmon_devices WHERE machine_id=%s", $machine_id));
         if ($mapped) {
             $unit_id = $mapped;
+            $poster = $mapped;
         }
     }
 
     $received = 0;
     $record_unit_ids = [];
     foreach ($records as $record_for_id) {
-        if (is_array($record_for_id) && isset($record_for_id['unit_id']) && $record_for_id['unit_id'] !== '') {
-            $record_unit_ids[sanitize_text_field($record_for_id['unit_id'])] = true;
+        $rid = tmon_uc_fd_originating_unit_id(is_array($record_for_id) ? $record_for_id : [], '');
+        if ($rid !== '') {
+            $record_unit_ids[$rid] = true;
         }
     }
-    $envelope_defaults = [
-        'unit_id' => $unit_id,
-        'machine_id' => $machine_id,
-        'firmware_version' => $data['firmware_version'] ?? null,
-        'NODE_TYPE' => $data['NODE_TYPE'] ?? ($data['node_type'] ?? null),
-    ];
 
     foreach ($records as $rec) {
         if (!is_array($rec)) continue;
-        // Some firmware/build variants nest telemetry inside sdata/data objects.
+        // Some firmware/build variants nest telemetry inside sdata objects.
         // Merge those keys into the active record so downstream charts/tables read consistent fields.
-        if (isset($rec['sdata']) && is_array($rec['sdata'])) {
+        if (isset($rec['sdata']) && is_array($rec['sdata']) && array_keys($rec['sdata']) !== range(0, count($rec['sdata']) - 1)) {
             $rec = array_merge($rec, $rec['sdata']);
         }
-        if (isset($rec['data']) && is_array($rec['data'])) {
+        // Only merge nested data when it is an associative object, never a list of child records.
+        if (isset($rec['data']) && is_array($rec['data']) && $rec['data'] && array_keys($rec['data']) !== range(0, count($rec['data']) - 1)) {
             $rec = array_merge($rec, $rec['data']);
         }
-        $rec = array_merge(array_filter($envelope_defaults, static function($value) {
-            return $value !== null && $value !== '';
-        }), $rec);
+
         // REMOTE_NODE_INFO may be on the record (from base) or top-level
         $remote_map = [];
         if (isset($rec['REMOTE_NODE_INFO']) && is_array($rec['REMOTE_NODE_INFO'])) {
@@ -466,19 +516,31 @@ function tmon_uc_receive_field_data($request) {
             $remote_map = $data['REMOTE_NODE_INFO'];
         }
 
-        $poster = $unit_id;
         $targets = [];
         $primary = $rec;
-        $rec_unit = isset($primary['unit_id']) ? sanitize_text_field($primary['unit_id']) : $poster;
-        $is_bridged = ($rec_unit !== '' && $poster !== '' && $rec_unit !== $poster)
-            || (isset($primary['node_type']) && strtolower($primary['node_type']) === 'remote');
+        $rec_unit = tmon_uc_fd_originating_unit_id($primary, $poster);
+        $is_bridged = tmon_uc_fd_is_bridged($primary, $poster, $envelope_bridge);
         if ($is_bridged) {
+            $primary['unit_id'] = $rec_unit;
+            $primary['node_type'] = 'remote';
             $primary['origin'] = 'remote_via_base';
             $primary['source_unit_id'] = $poster;
-        } elseif (!isset($primary['origin'])) {
-            $primary['origin'] = 'base';
+            $primary['source_node_type'] = 'base';
+            if (!empty($primary['machine_id']) && $machine_id !== '' && sanitize_text_field((string) $primary['machine_id']) === $machine_id) {
+                unset($primary['machine_id']);
+            }
+        } else {
+            if ($rec_unit === '') {
+                $rec_unit = $poster;
+            }
+            $primary['unit_id'] = $rec_unit;
+            if (!isset($primary['origin'])) {
+                $primary['origin'] = 'base';
+            }
+            if (!isset($primary['node_type'])) {
+                $primary['node_type'] = strtolower((string) ($data['poster_node_type'] ?? $data['NODE_TYPE'] ?? $data['node_type'] ?? 'base'));
+            }
         }
-        $primary['source_node_type'] = $data['NODE_TYPE'] ?? ($data['node_type'] ?? ($primary['NODE_TYPE'] ?? null));
         $targets[] = $primary;
         if (!empty($remote_map)) {
             foreach ($remote_map as $rid => $rdata) {
@@ -489,6 +551,7 @@ function tmon_uc_receive_field_data($request) {
                 $rdata['origin'] = 'remote_via_base';
                 $rdata['source_unit_id'] = $poster;
                 $rdata['source_node_type'] = 'base';
+                $rdata['node_type'] = 'remote';
                 $targets[] = $rdata;
             }
         }
@@ -499,13 +562,13 @@ function tmon_uc_receive_field_data($request) {
                 $t['ts'] = $t['timestamp'];
             }
             $t['device_ts'] = tmon_record_epoch($t);
-            $poster = sanitize_text_field((string) $unit_id);
-            $rec_unit = isset($t['unit_id']) ? sanitize_text_field((string) $t['unit_id']) : '';
-            $is_bridged = (!empty($t['node_type']) && strtolower($t['node_type']) === 'remote')
-                || ($rec_unit !== '' && $poster !== '' && $rec_unit !== $poster);
+            $rec_unit = tmon_uc_fd_originating_unit_id($t, $poster);
+            $is_bridged = tmon_uc_fd_is_bridged($t, $poster, $envelope_bridge);
             if ($rec_unit === '') {
                 $rec_unit = $poster;
             }
+            $t['unit_id'] = $rec_unit;
+
             $rec_machine = '';
             if (!$is_bridged && !empty($t['machine_id'])) {
                 $rec_machine = sanitize_text_field((string) $t['machine_id']);
@@ -515,7 +578,12 @@ function tmon_uc_receive_field_data($request) {
             if ($is_bridged) {
                 $t['origin'] = 'remote_via_base';
                 $t['source_unit_id'] = $poster;
-                $t['machine_id'] = '';
+                $t['source_node_type'] = 'base';
+                $t['node_type'] = 'remote';
+                if (!empty($t['machine_id']) && $machine_id !== '' && sanitize_text_field((string) $t['machine_id']) === $machine_id) {
+                    $t['machine_id'] = '';
+                }
+                $rec_machine = '';
             }
 
             // Canonicalize common sensor aliases so stored field_data always contains chart-friendly keys.
@@ -556,6 +624,7 @@ function tmon_uc_receive_field_data($request) {
                 $row = $wpdb->get_row($wpdb->prepare("SELECT unit_id FROM {$wpdb->prefix}tmon_devices WHERE machine_id=%s", $rec_machine), ARRAY_A);
                 if ($row && !empty($row['unit_id'])) {
                     $rec_unit = $row['unit_id'];
+                    $t['unit_id'] = $rec_unit;
                 }
             }
 
@@ -565,15 +634,16 @@ function tmon_uc_receive_field_data($request) {
                 continue;
             }
 
-            // Persist machine_id to unit mapping if both present
+            // Persist machine_id to unit mapping if both present. Never remap a bridged remote
+            // onto the poster's device row.
             if (!$is_bridged && $rec_unit && $rec_machine) {
                 $row = $wpdb->get_row($wpdb->prepare("SELECT unit_id, machine_id FROM {$wpdb->prefix}tmon_devices WHERE unit_id=%s OR machine_id=%s", $rec_unit, $rec_machine), ARRAY_A);
                 if ($row) {
-                    // Update existing row to ensure mapping is set
                     $wpdb->update($wpdb->prefix.'tmon_devices', ['machine_id'=>$rec_machine, 'last_seen'=>current_time('mysql', true)], ['unit_id'=>$row['unit_id']]);
-                    $rec_unit = $row['unit_id'];
+                    if ($row['unit_id'] === $rec_unit) {
+                        $rec_unit = $row['unit_id'];
+                    }
                 } else {
-                    // Create new mapping row minimally (only when unit_id provided)
                     $wpdb->insert($wpdb->prefix.'tmon_devices', [
                         'unit_id' => $rec_unit,
                         'machine_id' => $rec_machine,
@@ -591,8 +661,9 @@ function tmon_uc_receive_field_data($request) {
                 $forward_unknown($rec_unit, $rec_machine, $t);
                 continue;
             }
+            $t['unit_id'] = $rec_unit;
             $rec_json = wp_json_encode($t);
-            // Persist raw field data row
+            // Persist raw field data row under the originating unit, not the poster.
             $wpdb->insert(
                 $wpdb->prefix . 'tmon_field_data',
                 [
@@ -621,12 +692,13 @@ function tmon_uc_receive_field_data($request) {
             }
 
             // Mirror into UC devices table so Provisioned Devices lists reporters
+            $role_for_uc = $is_bridged ? 'remote' : sanitize_text_field((string) ($t['role'] ?? $t['node_type'] ?? ''));
             if (function_exists('uc_devices_upsert_row')) {
                 uc_devices_upsert_row([
                     'unit_id' => $rec_unit,
                     'machine_id' => $rec_machine,
                     'unit_name' => $incoming_name ?: $rec_unit,
-                    'role' => $t['role'] ?? '',
+                    'role' => $role_for_uc,
                     'assigned' => 1,
                 ]);
             } else {
@@ -637,7 +709,7 @@ function tmon_uc_receive_field_data($request) {
                     "INSERT INTO {$uc_table} (unit_id, machine_id, unit_name, role, assigned, updated_at)
                      VALUES (%s,%s,%s,%s,1,NOW())
                      ON DUPLICATE KEY UPDATE machine_id=VALUES(machine_id), unit_name=VALUES(unit_name), role=VALUES(role), assigned=1, updated_at=NOW()",
-                    $rec_unit, $rec_machine, $incoming_name ?: $rec_unit, isset($t['role']) ? sanitize_text_field($t['role']) : ''
+                    $rec_unit, $rec_machine, $incoming_name ?: $rec_unit, $role_for_uc
                 ));
             }
             // Update status JSON with latest GPS if present
@@ -660,8 +732,8 @@ function tmon_uc_receive_field_data($request) {
         }
     }
 
-    // Include resolved unit_id/machine_id for device to persist mapping
-    return rest_ensure_response(['status' => 'ok', 'received' => $received > 0, 'count' => $received, 'unit_id' => $unit_id ?: ($data['unit_id'] ?? ''), 'machine_id' => $machine_id]);
+    // Always echo the poster unit_id so the base does not adopt a remote identity.
+    return rest_ensure_response(['status' => 'ok', 'received' => $received > 0, 'count' => $received, 'unit_id' => $poster ?: ($data['unit_id'] ?? ''), 'machine_id' => $machine_id]);
 }
 
 function tmon_uc_receive_data_history($request) {
@@ -836,16 +908,18 @@ function tmon_uc_get_device_sdata($request) {
         ? tmon_uc_normalize_telemetry_point($raw)
         : $raw;
 
-    foreach ($raw as $k => $v) {
-        if (!array_key_exists($k, $norm)) {
-            $norm[$k] = $v;
+    if (is_array($raw)) {
+        foreach ($raw as $k => $v) {
+            if (!array_key_exists($k, $norm)) {
+                $norm[$k] = $v;
+            }
         }
     }
 
     $friendly = [
-        'Timestamp' => $norm['t'] ?? $norm['timestamp'] ?? ($created_at ? tmon_uc_format_mysql_datetime($created_at) : null),
+        'Timestamp' => $norm['t'] ?? $norm['timestamp'] ?? ($created_at ? (function_exists('tmon_uc_format_mysql_datetime') ? tmon_uc_format_mysql_datetime($created_at) : $created_at) : null),
         'Machine ID' => $norm['machine_id'] ?? null,
-        'Node Type' => $norm['NODE_TYPE'] ?? ($norm['node_type'] ?? null),
+        'Node Type' => $norm['node_type'] ?? ($norm['NODE_TYPE'] ?? null),
         'Probe Temp (F)' => $norm['temp_f'] ?? null,
         'Probe Temp (C)' => $norm['temp_c'] ?? null,
         'Probe Humidity (%)' => $norm['humid'] ?? null,
@@ -858,9 +932,9 @@ function tmon_uc_get_device_sdata($request) {
         'Voltage (V)' => $norm['volt'] ?? ($norm['sys_voltage'] ?? null),
         'CPU Temp' => $norm['cpu_temp'] ?? null,
         'WiFi RSSI' => $norm['wifi_rssi'] ?? null,
-        'LoRa Signal' => $norm['lora_SigStr'] ?? null,
+        'LoRa Signal' => $norm['lora_rssi'] ?? ($norm['lora_SigStr'] ?? null),
         'Free Mem (bytes)' => $norm['free_mem'] ?? null,
-        'Firmware' => $norm['firmware_version'] ?? null,
+        'Firmware' => $norm['firmware_version'] ?? ($norm['fw'] ?? null),
     ];
 
     return rest_ensure_response([
