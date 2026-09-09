@@ -7,6 +7,7 @@
 # • Cleanup now safely pops only temporary burst keys (types/data/chunks/last_rx)
 # • All previous bulletproof fixes preserved (immediate assembly logging, multi-node UID filtering, short listen windows, etc.)
 # SESSION FIX: valid TYPE:FIELD_DATA_CHUNK frames are no longer treated as truncated.
+# ASSEMBLE FIX: _clean_b64 no longer joins header junk onto DATA; JSON salvage + clipped-prefix recovery.
 
 import ujson
 import os
@@ -1731,13 +1732,107 @@ _B64_KEEP = frozenset('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234
 
 
 def _clean_b64(value):
+    """Keep only the first contiguous base64 run. Do not join across junk."""
     if not value:
         return ''
     text = str(value)
-    for marker in ('\x00', '|HMAC:', '|CRC:', '|CNT:'):
+    for marker in ('\x00', '|HMAC:', '|CRC:', '|CNT:', 'HELLO:', 'END:', 'READY:', 'ACK:'):
         text = text.split(marker, 1)[0]
-    cleaned = ''.join(char for char in text if char in _B64_KEEP).rstrip('=')
+    if 'TYPE:' in text and not text.lstrip().startswith(('e', 'E', 'T', 't', 'A', 'a', 'I', 'i', 'W', 'w', '{')):
+        text = text.split('TYPE:', 1)[0]
+    out = []
+    started = False
+    for ch in text:
+        if ch in _B64_KEEP:
+            started = True
+            out.append(ch)
+        elif ch in ' \t\r\n':
+            continue
+        elif started:
+            break
+    cleaned = ''.join(out).rstrip('=')
+    if not cleaned:
+        return ''
     return cleaned + ('=' * ((-len(cleaned)) % 4))
+
+
+def _b64_to_text(cleaned):
+    if not cleaned or len(cleaned) < 4:
+        return ''
+    raw = None
+    try:
+        raw = bytes(_ub.a2b_base64(cleaned))
+    except Exception:
+        for n in (1, 2, 3, 4):
+            trial = cleaned[:-n] if n < len(cleaned) else ''
+            trial = trial.rstrip('=') + ('=' * ((-len(trial.rstrip('='))) % 4))
+            if len(trial) < 4:
+                continue
+            try:
+                raw = bytes(_ub.a2b_base64(trial))
+                break
+            except Exception:
+                raw = None
+    if not raw:
+        return ''
+    try:
+        return raw.decode('utf-8').strip().rstrip('\x00')
+    except Exception:
+        try:
+            return raw.decode('latin-1').strip().rstrip('\x00')
+        except Exception:
+            return ''
+
+
+def _salvage_json_object(text):
+    if not text:
+        return None
+    if '{' in text:
+        text = text[text.index('{'):]
+    if '}' in text:
+        try:
+            obj = ujson.loads(text[:text.rindex('}') + 1])
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            text = text[:text.rindex('}')]
+    junk = text.find('TYPEFIELD')
+    if junk < 0:
+        junk = text.find('TYPE:')
+    if junk > 0:
+        text = text[:junk]
+    cut = text.rstrip()
+    for _ in range(12):
+        try:
+            obj = ujson.loads(cut + '}')
+            if isinstance(obj, dict) and obj:
+                return obj
+        except Exception:
+            pass
+        if cut.endswith(','):
+            cut = cut[:-1]
+            continue
+        comma = cut.rfind(',')
+        if comma > 0:
+            cut = cut[:comma]
+            continue
+        break
+    return None
+
+
+def _normalize_chunk_payload(data_b64, uid=None):
+    """Return clean re-encoded base64, or None if nothing usable."""
+    cleaned = _clean_b64(data_b64)
+    obj = _salvage_json_object(_b64_to_text(cleaned))
+    if not isinstance(obj, dict):
+        return None
+    if uid and not obj.get('u'):
+        obj['u'] = uid
+    try:
+        raw_json = ujson.dumps(obj, separators=(',', ':'))
+    except TypeError:
+        raw_json = ujson.dumps(obj)
+    return _ub.b2a_base64(raw_json.encode()).rstrip(b'\n').decode()
 
 
 def _valid_unit_uid(uid):
@@ -1748,42 +1843,7 @@ def _valid_unit_uid(uid):
 
 
 def _chunk_data_ok(data, uid=None):
-    cleaned = _clean_b64(data)
-    if len(cleaned) < 4:
-        return False
-    raw = None
-    try:
-        raw = bytes(_ub.a2b_base64(cleaned))
-    except Exception as e:
-        # FIFO cut mid-base64: retry after trimming trailing partial group
-        for n in (1, 2, 3):
-            try:
-                trial = cleaned[:-n] if n < len(cleaned) else ''
-                trial = trial.rstrip('=') + ('=' * ((-len(trial.rstrip('='))) % 4))
-                raw = bytes(_ub.a2b_base64(trial))
-                break
-            except Exception:
-                raw = None
-        if raw is None:
-            try:
-                print('chunk b64 fail len=%d err=%s head=%r' % (len(cleaned), e, cleaned[:24]))
-            except Exception:
-                pass
-            return False
-    try:
-        text = raw.decode('utf-8').strip().rstrip('\x00') if raw else ''
-        if '{' in text:
-            text = text[text.index('{'):]
-        if '}' not in text:
-            # sensors cut off; identity header still lets us store the slot
-            return bool(uid)
-        return isinstance(ujson.loads(text[:text.rindex('}') + 1]), dict)
-    except Exception as e:
-        try:
-            print('chunk json fail head=%r' % (text[:40] if 'text' in locals() else data))
-        except Exception:
-            pass
-        return bool(uid)
+    return _normalize_chunk_payload(data, uid=uid) is not None
 
 
 _SHORT_OK = ('HELLO:', 'END:', 'ACK:', 'READY:', 'BEACON:')
@@ -1810,9 +1870,11 @@ def _is_truncated_rx(raw):
         return True
     if text.startswith(_SHORT_OK):
         return False
-    if text.startswith('TYPE:'):
+    if text.startswith(('TYPE:', 'DATA_CHUNK,', 'IELD_DATA_CHUNK,', 'YPE:FIELD_DATA_CHUNK,')):
         if ('DATA:' not in text) and (len(raw) <= 24):
             return True
+        return False
+    if 'FIELD_DATA_CHUNK' in text and ',DATA:' in text:
         return False
     for bad in _TRUNC_HEADS:
         if bad in text[:24]:
@@ -1881,18 +1943,14 @@ def _assemble_simple_session_field_data(st):
         if not item:
             return None
         parts.append(_clean_b64(item))
-    try:
-        encoded = ''.join(parts)
-        if len(encoded) < 8:
-            return None
-        raw = _ub.a2b_base64(encoded)
-        payload = ujson.loads(raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw))
-    except Exception as e:
+    encoded = ''.join(parts)
+    payload = _salvage_json_object(_b64_to_text(encoded))
+    if not isinstance(payload, dict):
         st['assemble_fail_count'] = int(st.get('assemble_fail_count') or 0) + 1
         if st['assemble_fail_count'] <= 2:
             try:
                 asyncio.create_task(debug_print(
-                    'Simple session assemble error: %s len=%d head=%r' % (e, len(encoded), encoded[:24]),
+                    'Simple session assemble error: len=%d head=%r' % (len(encoded), encoded[:24]),
                     'WARN'
                 ))
             except Exception:
@@ -1978,7 +2036,7 @@ async def handle_simple_session_hub(clear):
             pass
         return True
 
-    if 'FIELD_DATA_CHUNK' in clear or clear.startswith('TYPE:FIELD_DATA_CHUNK'):
+    if 'FIELD_DATA_CHUNK' in clear or clear.startswith('TYPE:FIELD_DATA_CHUNK') or clear.startswith('DATA_CHUNK,'):
         uid, idx, total, data_b64, batch_id = _simple_session_parse_chunk(clear)
         if _valid_unit_uid(uid):
             if not hasattr(settings, 'REMOTE_NODE_INFO') or settings.REMOTE_NODE_INFO is None:
@@ -1995,21 +2053,25 @@ async def handle_simple_session_hub(clear):
             if idx >= 0:
                 while len(ch) <= idx:
                     ch.append(None)
-                candidate = _clean_b64(data_b64)
-                candidate_ok = _chunk_data_ok(candidate, uid=uid)
+                candidate = _normalize_chunk_payload(data_b64, uid=uid)
                 existing = ch[idx]
-                if candidate_ok and (not existing or len(candidate) >= len(existing)):
+                if candidate and (not existing or len(candidate) >= len(existing)):
                     ch[idx] = candidate
                     st['assemble_fail_count'] = 0
                     have = len([item for item in ch if item])
                     await debug_print(
                         'CHUNK stored uid=%s idx=%s/%s have=%s b64=%s' % (
-                            uid, idx, total, have, len(candidate or '')
+                            uid, idx, total, have, len(candidate)
                         ),
                         'BASE_NODE'
                     )
-                elif not candidate_ok:
-                    await debug_print('Dropped invalid CHUNK data uid=%s idx=%s' % (uid, idx), 'WARN')
+                elif not candidate:
+                    await debug_print(
+                        'Dropped invalid CHUNK data uid=%s idx=%s head=%r' % (
+                            uid, idx, (data_b64 or '')[:40]
+                        ),
+                        'WARN'
+                    )
             st['last_chunk_ticks'] = time.ticks_ms()
             await debug_print('Chunk %s %s/%s bytes=%s' % (uid, idx, total, len(data_b64 or '')), 'BASE_NODE')
         else:
@@ -2154,13 +2216,29 @@ def _looks_collided(message):
     return text.split(',DATA:', 1)[0].count('TYPE:') > 1
 
 
+def _recover_clipped_prefix(msg_str):
+    text = str(msg_str or '')
+    if text.startswith('DATA_CHUNK,'):
+        return 'TYPE:FIELD_' + text
+    if text.startswith('IELD_DATA_CHUNK,'):
+        return 'TYPE:F' + text
+    if text.startswith('YPE:FIELD_DATA_CHUNK,'):
+        return 'T' + text
+    if 'FIELD_DATA_CHUNK' in text and 'UID:' in text and ',DATA:' in text and not text.startswith('TYPE:'):
+        return 'TYPE:FIELD_DATA_CHUNK,' + text[text.find('UID:'):]
+    return text
+
+
 async def handle_incoming_packet(msg):
     global last_rx_ts, last_lora_activity_ts
     try:
         msg_str = msg.rstrip(b'\x00').decode('utf-8')
     except Exception:
-        await debug_print('Dropped non-utf8 inbound packet', 'WARN')
-        return
+        try:
+            msg_str = msg.rstrip(b'\x00').decode('latin-1')
+        except Exception:
+            await debug_print('Dropped non-utf8 inbound packet', 'WARN')
+            return
 
     uid_hint = None
     if _is_lora_hub_node():
@@ -2188,6 +2266,11 @@ async def handle_incoming_packet(msg):
     if not msg_str:
         await debug_print("Dropped inbound packet: secure decode failed", "WARN")
         return
+
+    recovered = _recover_clipped_prefix(msg_str)
+    if recovered != msg_str:
+        await debug_print('Recovered clipped CHUNK prefix', 'WARN')
+        msg_str = recovered
 
     valid_prefixes = ('HELLO:', 'READY:', 'END:', 'TYPE:', 'T:', 'FWD:', 'ACK:', 'BEACON:')
     if not any(msg_str.startswith(prefix) for prefix in valid_prefixes):
@@ -2826,8 +2909,14 @@ async def _read_lora_packet():
             try:
                 raw.decode('utf-8')
             except Exception:
-                await debug_print('Dropped non-utf8 RX len=%d' % len(raw), 'WARN')
-                return None
+                try:
+                    raw = raw.decode('latin-1').encode('utf-8', 'ignore')
+                except Exception:
+                    await debug_print('Dropped non-utf8 RX len=%d' % len(raw), 'WARN')
+                    return None
+                if not raw.startswith((b'HELLO:', b'END:', b'TYPE:', b'READY:', b'ACK:', b'DATA_CHUNK', b'IELD_', b'YPE:')):
+                    await debug_print('Dropped non-utf8 RX len=%d' % len(raw), 'WARN')
+                    return None
             try:
                 rssi = None
                 snr = None
