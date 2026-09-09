@@ -2,6 +2,7 @@
 
 # NOTE: This restores the previously working utils.py behavior (as provided),
 # and adds small compatibility aliases (free_pins_lora/free_pins_i2c) without changing logic.
+# FIELD DATA IDENTITY FIX: remote records keep their own unit_id. Envelope unit_id is the HTTP poster only.
 
 import ujson
 import uasyncio as asyncio
@@ -1246,7 +1247,8 @@ def _compact_field_record(record):
         return record
 
     identity_keys = {
-        'unit_id', 'remote_unit_id', 'base_unit_id', 'node_type', 'ingested_via',
+        'unit_id', 'remote_unit_id', 'base_unit_id', 'node_type', 'NODE_TYPE',
+        'ingested_via', 'origin', 'source_unit_id', 'source_node_type',
         'ts', 'ts_iso', 'timestamp', 'machine_id', 'fw', 'firmware_version',
     }
 
@@ -1270,7 +1272,7 @@ def _compact_field_record(record):
 
 
 FIELD_DATA_KEY_ORDER = (
-    'unit_id', 'node_type', 'ts', 'ts_iso', 'fw',
+    'unit_id', 'node_type', 'origin', 'source_unit_id', 'ts', 'ts_iso', 'fw',
     'temp_f', 'humid', 'bar', 'volt', 'rssi', 'lora_rssi',
 )
 
@@ -1295,15 +1297,43 @@ def build_field_data_record(unit_id, node_type='base', payload=None, rssi=None, 
         ts = 0
     if ts < 1600000000:
         ts = int(utc_epoch())
+
+    owner = str(
+        unit_id
+        or payload.get('unit_id')
+        or payload.get('u')
+        or payload.get('remote_unit_id')
+        or ''
+    )
+    role = str(node_type or payload.get('node_type') or payload.get('NODE_TYPE') or 'base').lower()
+    if role != 'remote':
+        role = 'base'
+    local_mid = ''
+    try:
+        local_mid = str(get_machine_id() or '')
+    except Exception:
+        local_mid = ''
+
     rec = {
-        'unit_id': str(unit_id or payload.get('unit_id') or payload.get('u') or ''),
-        'node_type': 'remote' if str(node_type).lower() == 'remote' else 'base',
+        'unit_id': owner,
+        'node_type': role,
         'ts': ts,
         'ts_iso': utc_iso(ts),
         'fw': payload.get('fw') or payload.get('firmware_version') or getattr(settings, 'FIRMWARE_VERSION', '') or '',
-        'rssi': None,
-        'lora_rssi': None,
     }
+    if role == 'remote':
+        rec['remote_unit_id'] = owner
+        rec['ingested_via'] = 'lora'
+        rec['origin'] = 'remote_via_base'
+        rec['source_unit_id'] = str(getattr(settings, 'UNIT_ID', '') or '')
+        rec['source_node_type'] = 'base'
+        mid = payload.get('machine_id') or payload.get('m') or payload.get('remote_machine_id')
+        if mid and str(mid) != local_mid:
+            rec['machine_id'] = str(mid)
+    else:
+        rec['origin'] = 'base'
+        rec['machine_id'] = str(payload.get('machine_id') or local_mid or '')
+
     values = (
         ('temp_f', payload.get('temp_f', payload.get('t'))),
         ('humid', payload.get('humid', payload.get('h'))),
@@ -1328,7 +1358,39 @@ def build_field_data_record(unit_id, node_type='base', payload=None, rssi=None, 
             rec['lora_rssi'] = int(lora)
         except Exception:
             pass
+    if rec.get('lora_rssi') == -120:
+        rec.pop('lora_rssi', None)
     return rec
+
+
+def _field_data_envelope(batch):
+    """HTTP envelope is the poster (base). Record unit_id stays on each item."""
+    poster = str(getattr(settings, 'UNIT_ID', '') or '')
+    has_remote = any(
+        isinstance(rec, dict) and str(rec.get('node_type') or '').lower() == 'remote'
+        for rec in (batch or [])
+    )
+    payload = {
+        'unit_id': poster,
+        'poster_unit_id': poster,
+        'data': batch,
+    }
+    if has_remote:
+        payload['bridge'] = True
+    try:
+        payload['poster_machine_id'] = get_machine_id()
+    except Exception:
+        pass
+    try:
+        payload['poster_firmware_version'] = getattr(settings, 'FIRMWARE_VERSION', '')
+    except Exception:
+        pass
+    try:
+        payload['poster_node_type'] = getattr(settings, 'NODE_TYPE', '')
+    except Exception:
+        pass
+    return payload
+
 
 def record_field_data():
     """Append the current device telemetry snapshot for transport and storage."""
@@ -1429,20 +1491,14 @@ async def send_field_data_log():
                             batch.append(_compact_field_record(obj))
                             total_lines += 1
                             if len(batch) >= batch_size:
-                                payload = {'unit_id': settings.UNIT_ID, 'data': batch}
-                                if any(isinstance(rec, dict) and rec.get('node_type') == 'remote' for rec in batch):
-                                    payload['bridge'] = True
-                                current_items.append({'payload': payload, 'source': 'log'})
+                                current_items.append({'payload': _field_data_envelope(batch), 'source': 'log'})
                                 batch = []
                                 if asyncio:
                                     await asyncio.sleep_ms(1)
                         except Exception as pe:
                             await debug_print(f'send_field_data_log: JSON parse error on a line: {pe}', 'ERROR')
             if batch:
-                payload = {'unit_id': settings.UNIT_ID, 'data': batch}
-                if any(isinstance(rec, dict) and rec.get('node_type') == 'remote' for rec in batch):
-                    payload['bridge'] = True
-                current_items.append({'payload': payload, 'source': 'log'})
+                current_items.append({'payload': _field_data_envelope(batch), 'source': 'log'})
 
             await debug_print(f'sfd: read {total_lines} lines, {len(current_items)} batches', 'DEBUG')
 
@@ -1518,18 +1574,26 @@ async def send_field_data_log():
                     await asyncio.sleep_ms(2)
                 except Exception:
                     pass
-                try:
-                    payload['machine_id'] = get_machine_id()
-                except Exception:
-                    pass
-                try:
-                    payload['firmware_version'] = getattr(settings, 'FIRMWARE_VERSION', '')
-                except Exception:
-                    pass
-                try:
-                    payload['node_type'] = getattr(settings, 'NODE_TYPE', '')
-                except Exception:
-                    pass
+                # Poster metadata only. Do not stamp machine_id / node_type /
+                # firmware_version onto the envelope — UC copies those onto remotes.
+                if isinstance(payload, dict):
+                    try:
+                        payload['poster_machine_id'] = get_machine_id()
+                    except Exception:
+                        pass
+                    try:
+                        payload['poster_firmware_version'] = getattr(settings, 'FIRMWARE_VERSION', '')
+                    except Exception:
+                        pass
+                    try:
+                        payload['poster_node_type'] = getattr(settings, 'NODE_TYPE', '')
+                    except Exception:
+                        pass
+                    payload.pop('machine_id', None)
+                    payload.pop('firmware_version', None)
+                    payload.pop('NODE_TYPE', None)
+                    if 'node_type' in payload and payload.get('bridge'):
+                        payload.pop('node_type', None)
 
                 delivered = False
                 await debug_print(f'sfd: send {idx+1}/{len(payload_items)}', 'DEBUG')
@@ -1582,7 +1646,11 @@ async def send_field_data_log():
                             if ok_resp:
                                 try:
                                     new_uid = resp_json.get('unit_id') if isinstance(resp_json, dict) else None
-                                    if new_uid and str(new_uid) != str(settings.UNIT_ID):
+                                    poster = str(getattr(settings, 'UNIT_ID', '') or '')
+                                    if new_uid and poster and str(new_uid) != poster:
+                                        # UC may echo a remote record id. Never adopt it as the base UNIT_ID.
+                                        await debug_print('sfd: ignore response unit_id=%s poster=%s' % (new_uid, poster), 'FIELD_DATA')
+                                    elif new_uid and not poster:
                                         settings.UNIT_ID = str(new_uid)
                                         try:
                                             persist_unit_id(settings.UNIT_ID)
@@ -1789,10 +1857,10 @@ async def send_field_data_via_lora():
                         continue
                     minimal_records.append({
                         'ts': row.get('timestamp') or row.get('ts') or batch_epoch,
-                        'v': row.get('sys_voltage'),
-                        't': row.get('cur_temp_f') if row.get('cur_temp_f') is not None else row.get('cur_device_temp_f'),
-                        'h': row.get('cur_humid'),
-                        'rssi': row.get('lora_SigStr'),
+                        'v': row.get('sys_voltage') or row.get('volt') or row.get('v'),
+                        't': row.get('cur_temp_f') if row.get('cur_temp_f') is not None else (row.get('temp_f') if row.get('temp_f') is not None else row.get('cur_device_temp_f')),
+                        'h': row.get('cur_humid') if row.get('cur_humid') is not None else row.get('humid'),
+                        'rssi': row.get('lora_SigStr') or row.get('lora_rssi'),
                     })
                 if not minimal_records:
                     minimal_records = [{
@@ -2223,5 +2291,5 @@ __all__ = [
     'append_field_data_entry',
     'stage_remote_field_data',    # NEW
     'stage_remote_files',         # NEW
+    'build_field_data_record',
 ]
-
