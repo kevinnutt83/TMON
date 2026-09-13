@@ -2,6 +2,7 @@
 # - connectLora() now runs directly as a permanent background task
 # - Removed redundant lora_comm_task wrapper (new lora.py handles its own retries)
 # - Cleaner structure, same behavior, full original logic preserved
+# - Dispatch: base/wifi pull UC settings+commands; base caches remote jobs for LoRa
 
 import uasyncio as asyncio
 import settings
@@ -61,7 +62,6 @@ def _record_startup_exception(context, exc):
     except Exception:
         pass
 
-# Apply any previously applied settings snapshot on boot
 try:
     load_applied_settings_on_boot()
 except Exception as e:
@@ -69,7 +69,6 @@ except Exception as e:
 
 script_start_time = time.ticks_ms()
 
-# Detect and persist MACHINE_ID on first boot if missing
 try:
     if settings.MACHINE_ID is None:
         mid = get_machine_id()
@@ -83,7 +82,6 @@ try:
 except Exception as e:
     _record_startup_exception('machine_id_bootstrap', e)
 
-# Load persisted UNIT_ID mapping if available
 try:
     stored_uid = load_persisted_unit_id()
     if stored_uid and str(stored_uid) != str(settings.UNIT_ID):
@@ -96,7 +94,6 @@ try:
 except Exception as e:
     _record_startup_exception('load_persisted_unit_id', e)
 
-# Load persisted UNIT_Name mapping if available
 try:
     stored_uname = load_persisted_unit_name()
     if stored_uname and str(stored_uname) != str(settings.UNIT_Name):
@@ -109,13 +106,11 @@ try:
 except Exception as e:
     _record_startup_exception('load_persisted_unit_name', e)
 
-# Load persisted WORDPRESS_API_URL before starting tasks
 try:
     load_persisted_wordpress_api_url()
 except Exception as e:
     _record_startup_exception('load_persisted_wordpress_api_url', e)
 
-# Load persisted NODE_TYPE if available before starting tasks
 try:
     _nt = load_persisted_node_type()
     if _nt:
@@ -123,24 +118,23 @@ try:
 except Exception as e:
     _record_startup_exception('load_persisted_node_type', e)
 
-# Load persisted custom settings that are not part of the staged-settings allowlist.
 try:
     load_persisted_custom_settings()
 except Exception as e:
     _record_startup_exception('load_persisted_custom_settings', e)
 
-# On a provisioned base, increase provision check interval to reduce noise
 try:
     if is_provisioned():
         settings.PROVISION_CHECK_INTERVAL_S = 300
 except Exception:
     pass
 
+
 def get_script_runtime():
     now = time.ticks_ms()
     return (now - script_start_time) // 1000
 
-# Simple provisioned check
+
 _provision_warned = False
 def is_provisioned():
     global _provision_warned
@@ -160,6 +154,7 @@ def is_provisioned():
                 print('[WARN] Device not marked provisioned (no flag or WORDPRESS_API_URL).')
             _provision_warned = True
         return False
+
 
 class TaskManager:
     def __init__(self):
@@ -195,8 +190,7 @@ class TaskManager:
             t['last_run'] = time.ticks_ms()
             await asyncio.sleep(t['interval'])
 
-# First-boot provisioning check-in
-# Sample task
+
 async def sample_task():
     if not is_provisioned():
         await asyncio.sleep(1)
@@ -222,15 +216,9 @@ async def sample_task():
     sdata.error_count = getattr(TMON_AI, 'error_count', 0)
     sdata.last_error = getattr(TMON_AI, 'last_error', '')
     record_field_data()
-    await debug_print(f"sample: lr={sdata.loop_runtime}s sr={sdata.script_runtime}s mem={sdata.free_mem}", "INFO")
-    try:
-        from utils import maybe_gc
-        maybe_gc("sample_task", min_interval_ms=5000, mem_free_below=35 * 1024)
-    except Exception:
-        pass
-    led_status_flash('INFO')
+    await debug_print(f"sample: lr={sdata.loop_runtime}s sr={sdata.script_runtime}s", "SAMPLE")
 
-# Periodic field data task
+
 async def periodic_field_data_task():
     from utils import send_field_data_log
     if not is_provisioned() or getattr(settings, 'DEVICE_SUSPENDED', False):
@@ -253,24 +241,25 @@ async def periodic_field_data_task():
     except Exception:
         pass
 
-# Periodic command poll task
+
 async def periodic_command_poll_task():
-    try:
-        from wprest import poll_device_commands
-    except Exception:
-        poll_device_commands = None
     if not is_provisioned() or getattr(settings, 'DEVICE_SUSPENDED', False):
         return
-    if poll_device_commands:
+    try:
+        from dispatch import sync_hub_dispatch
+        await sync_hub_dispatch()
+    except Exception as e:
+        await log_exception('periodic_command_poll_task', e)
         try:
+            from wprest import poll_device_commands
             await poll_device_commands()
-        except Exception as e:
-            await log_exception('periodic_command_poll_task', e)
-        try:
-            from utils import maybe_gc
-            maybe_gc("cmd_poll", min_interval_ms=12000, mem_free_below=40 * 1024)
-        except Exception:
-            pass
+        except Exception as e2:
+            await log_exception('periodic_command_poll_task_fallback', e2)
+    try:
+        from utils import maybe_gc
+        maybe_gc("cmd_poll", min_interval_ms=12000, mem_free_below=40 * 1024)
+    except Exception:
+        pass
 
 
 async def periodic_diagnostics_task():
@@ -289,7 +278,6 @@ async def periodic_diagnostics_task():
 
 node_role = str(getattr(settings, 'NODE_TYPE', 'base')).lower()
 
-# ========================== TASK SETUP ==========================
 tm = TaskManager()
 try:
     from provision import first_boot_provision as _first_boot_prov
@@ -315,9 +303,8 @@ tm.add_task(periodic_provision_check, 'provision_check', settings.PROVISION_CHEC
 tm.add_task(check_missed_syncs, 'missed_syncs', 60)
 if node_role != 'remote':
     tm.add_task(periodic_diagnostics_task, 'diagnostics', int(getattr(settings, 'DIAGNOSTIC_SEND_INTERVAL_S', 300)))
-# If running as base and WP sync helpers are available, schedule the periodic WP sync
 try:
-    if node_role == 'base':
+    if node_role in ('base', 'wifi'):
         tm.add_task(periodic_wp_sync, 'wp_sync', 300)
 except Exception as e:
     _record_startup_exception('add_wp_sync_task', e)
@@ -327,7 +314,7 @@ if user_commands_task:
     except Exception as e:
         _record_startup_exception('start_user_commands', e)
 
-# ========================== MAIN ENTRY POINT ==========================
+
 async def main():
     if rotate_logs_if_needed:
         try:
@@ -339,21 +326,20 @@ async def main():
             asyncio.create_task(log_rotate_loop())
         except Exception as e:
             _record_startup_exception('log_rotate_loop', e)
-    # Launch permanent LoRa task for hub roles; remotes use controlled-session path.
     is_remote = str(getattr(settings, 'NODE_TYPE', 'base')).lower() == 'remote'
     skip_loop = (is_remote and bool(getattr(settings, 'REMOTE_DISABLE_CONNECTLORA_LOOP', True))
                  and bool(getattr(settings, '_REMOTE_DEEPSLEEP_ACTIVE', False)))
     if not skip_loop:
         asyncio.create_task(connectLora())
-    # Run all other periodic tasks
     await tm.run()
 
-# Start remote deep-sleep mode for battery remotes; keep scheduler for base/wifi nodes.
+
 try:
     from utils import provisioning_log
     provisioning_log(f"[BOOT] NODE_TYPE={node_role}")
 except Exception:
     pass
+
 
 def start():
     """Called by boot.py after hardware init. Never run on import."""
@@ -368,7 +354,7 @@ def start():
     use_deep_sleep = (runtime_remote and persisted_remote and
                       bool(getattr(settings, 'REMOTE_DISABLE_CONNECTLORA_LOOP', True)))
     settings._REMOTE_DEEPSLEEP_ACTIVE = use_deep_sleep
-    
+
     if use_deep_sleep:
         try:
             from remote_node import run_remote_deep_sleep
@@ -381,10 +367,4 @@ def start():
             settings._REMOTE_DEEPSLEEP_ACTIVE = False
             asyncio.run(main())
     else:
-        # Continuous mode (or non-remote): run the full asyncio scheduler.
-        # connectLora() will be started inside main() because
-        # REMOTE_DISABLE_CONNECTLORA_LOOP is False.
         asyncio.run(main())
-
-
-# Do not call start() or asyncio.run here.

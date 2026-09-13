@@ -9,6 +9,7 @@
 # • PARTIAL JSON SALVAGE: keep compact u/t/h/b/v/ts fields from clipped CHUNK payloads.
 # • CLIPPED PREFIX RECOVERY: rebuild TYPE:FIELD_DATA_CHUNK from ,UID: / UID: fragments.
 # • LONGER SESSION BUSY WINDOW: default 25s so CHUNK/END are not abandoned mid-air.
+# • DISPATCH DOWNLINK: after READY, base sends staged SETTINGS via LoRa; ACK CMD prefers dispatch queue.
 # PRIOR (v2.01.6):
 # • FULL BURST COMPLETION DETECTION: processing/ACK now triggers ONLY after ALL types (TS + SETTINGS + SDATA) are assembled OR timeout
 # • PERSISTENT REMOTE NODE INFO: keeps next_expected / missed_syncs / COMPANY / MACHINE_ID across bursts
@@ -207,8 +208,6 @@ def _base_network_matches(msg_str, strict=False):
     if not expected_name and not expected_pass:
         return True
     net_name, net_pass = _extract_lora_network_fields(msg_str)
-    # Some frame types (e.g., chunked TYPE frames) do not carry NET/PASS inline.
-    # In non-strict mode we allow these frames and rely on LoRa HMAC/auth.
     if not strict and net_name is None and net_pass is None:
         return True
     if expected_name and net_name != expected_name:
@@ -274,6 +273,9 @@ _remote_ota_rx = {
     'version': None,
     'files': {},
     'received': {},
+}
+_remote_settings_rx = {
+    'chunks': {},
 }
 _crc_selftest_done = False
 _relay_dupe = []
@@ -564,6 +566,106 @@ def _remote_decode_json_b64(data_b64):
     return ujson.loads(raw.decode())
 
 
+async def _apply_inbound_settings_dict(payload):
+    if not isinstance(payload, dict) or not payload:
+        return False
+    try:
+        from dispatch import apply_inbound_settings_payload
+        return await apply_inbound_settings_payload(payload)
+    except Exception:
+        try:
+            persist_custom_settings(payload)
+            await debug_print('Remote SETTINGS applied via persist keys=%s' % ','.join(list(payload.keys())[:8]), 'REMOTE_NODE')
+            return True
+        except Exception as e:
+            await debug_print('Remote SETTINGS apply failed: %s' % e, 'ERROR')
+            return False
+
+
+async def _remote_handle_settings_wire_message(msg_str):
+    msg_type, uid, chunk_info, data_b64 = _remote_parse_type_message(msg_str)
+    my_uid = str(getattr(settings, 'UNIT_ID', '') or '')
+    if not msg_type or uid != my_uid:
+        return False
+    if msg_type not in ('SETTINGS', 'SETTINGS_CHUNK'):
+        return False
+    base_type = 'SETTINGS'
+    if msg_type.endswith('_CHUNK'):
+        try:
+            cn, total = map(int, str(chunk_info or '0/0').split('/'))
+        except Exception:
+            return False
+        if base_type not in _remote_settings_rx['chunks']:
+            _remote_settings_rx['chunks'][base_type] = {'total': total, 'parts': {}}
+        _remote_settings_rx['chunks'][base_type]['parts'][cn] = data_b64
+        slot = _remote_settings_rx['chunks'][base_type]
+        if len(slot['parts']) < total:
+            return True
+        if not all(i in slot['parts'] for i in range(total)):
+            return True
+        assembled_b64 = ''.join(slot['parts'][i] for i in range(total))
+        try:
+            del _remote_settings_rx['chunks'][base_type]
+        except Exception:
+            pass
+        payload = _remote_decode_json_b64(assembled_b64)
+        return await _apply_inbound_settings_dict(payload)
+    payload = _remote_decode_json_b64(data_b64)
+    return await _apply_inbound_settings_dict(payload)
+
+
+async def _remote_listen_settings_window(timeout_s=3.5):
+    """After READY, listen briefly for base SETTINGS downlink before field-data TX."""
+    try:
+        timeout_s = float(timeout_s)
+    except Exception:
+        timeout_s = 3.5
+    deadline = time.ticks_ms() + int(timeout_s * 1000)
+    await ensure_lora_listening()
+    while time.ticks_diff(deadline, time.ticks_ms()) > 0:
+        try:
+            if not _lora_rx_ready():
+                await asyncio.sleep_ms(50)
+                continue
+            msg = await _read_lora_packet()
+            if not msg:
+                continue
+            try:
+                raw = msg.rstrip(b'\x00').decode()
+            except Exception:
+                continue
+            clear = await _unsecure_message(raw)
+            if not clear:
+                continue
+            if clear.startswith('TYPE:SETTINGS') or 'TYPE:SETTINGS' in clear[:24]:
+                handled = await _remote_handle_settings_wire_message(clear)
+                await debug_print('Remote SETTINGS frame handled=%s' % handled, 'REMOTE_NODE')
+        except Exception as e:
+            await debug_print('settings listen error: %s' % e, 'WARN')
+        await asyncio.sleep_ms(20)
+    await ensure_lora_listening()
+
+
+async def _pending_command_for_remote(remote_uid, remote_machine_id=None):
+    """Prefer dispatch cache, then UC poll."""
+    try:
+        from dispatch import next_ack_command
+        pending = next_ack_command(remote_uid)
+        if isinstance(pending, dict):
+            return pending
+    except Exception:
+        pass
+    return await _fetch_remote_pending_command(remote_uid, remote_machine_id)
+
+
+async def _mark_pending_command_sent(remote_uid, pending_cmd):
+    try:
+        from dispatch import mark_ack_command_sent
+        await mark_ack_command_sent(remote_uid, pending_cmd, delivered=True)
+    except Exception:
+        pass
+
+
 async def _remote_handle_lora_ota_payload(msg_type, payload):
     if not isinstance(payload, dict):
         return False
@@ -740,7 +842,6 @@ async def _sec_log(msg, min_interval_s=10):
 
 
 async def _log_security_error(key, message, interval_s=5):
-    # Compatibility wrapper used by existing code paths.
     _ = key
     await _sec_log(message, min_interval_s=interval_s)
 
@@ -1082,8 +1183,9 @@ async def proxy_register_for_remote(remote_uid, remote_machine_id):
     else:
         await display_message(f"Reg {remote_uid[:8]} FAIL", 1.5)
     gc.collect()
-
-# ===================== BACKGROUND PROCESSOR =====================
+    
+    
+    # ===================== BACKGROUND PROCESSOR =====================
 async def process_remote_burst(uid, st):
     """Called immediately after FULL burst (TS+SETTINGS+SDATA) OR after idle timeout"""
     await debug_print(f"Processing complete burst for {uid} (background)", "BASE_NODE")
@@ -1093,6 +1195,8 @@ async def process_remote_burst(uid, st):
 
     ack_delay = None
     ack_msg = None
+    remote_ts = remote_company = remote_site = remote_zone = remote_cluster = None
+    remote_runtime = remote_script_runtime = temp_c = temp_f = bar = humid = None
 
     if 'TS' in st['types']:
         data = st['data']['TS']
@@ -1123,7 +1227,7 @@ async def process_remote_burst(uid, st):
     if uid:
         pending_cmd = None
         try:
-            pending_cmd = await _fetch_remote_pending_command(uid, remote_machine_id)
+            pending_cmd = await _pending_command_for_remote(uid, remote_machine_id)
         except Exception as cmd_fetch_e:
             await log_error(f"Pending command fetch error for {uid}: {cmd_fetch_e}")
 
@@ -1133,6 +1237,7 @@ async def process_remote_burst(uid, st):
             encoded_cmd = _encode_ack_command(pending_cmd)
             if encoded_cmd:
                 ack_msg += f":CMD:{encoded_cmd}"
+                await _mark_pending_command_sent(uid, pending_cmd)
         try:
             ota_session_hint = _remote_lora_ota_jobs.get(uid)
             if isinstance(ota_session_hint, dict) and ota_session_hint.get('session'):
@@ -1210,11 +1315,9 @@ async def process_remote_burst(uid, st):
         except Exception as ota_send_e:
             await log_error(f"LoRa OTA send error to {uid}: {ota_send_e}")
 
-    # Proxy HTTP calls AFTER ACK
     if 'TS' in st['types'] and remote_machine_id:
         await proxy_register_for_remote(uid, remote_machine_id)
 
-    # Cleanup ONLY temporary burst tracking keys - KEEP persistent info (next_expected, missed_syncs, COMPANY, etc.)
     if uid in settings.REMOTE_NODE_INFO:
         for temp_key in ('types', 'data', 'chunks', 'last_rx'):
             settings.REMOTE_NODE_INFO[uid].pop(temp_key, None)
@@ -1285,6 +1388,12 @@ async def process_remote_field_data(uid, st, send_ack=True):
                         ack_msg = f"ACK:{uid}:NEXT:{next_delay}"
                         if batch_id:
                             ack_msg += f":BID:{batch_id}"
+                        pending_cmd = await _pending_command_for_remote(uid, settings.REMOTE_NODE_INFO[uid].get('MACHINE_ID'))
+                        if isinstance(pending_cmd, dict):
+                            encoded_cmd = _encode_ack_command(pending_cmd)
+                            if encoded_cmd:
+                                ack_msg += f":CMD:{encoded_cmd}"
+                                await _mark_pending_command_sent(uid, pending_cmd)
                         ack_msg = await _secure_message(ack_msg, remote_uid=uid)
                         ack_ok = await _safe_send(ack_msg.encode(), remote_uid=uid)
                         if not ack_ok:
@@ -1301,7 +1410,6 @@ async def process_remote_field_data(uid, st, send_ack=True):
                     except Exception as ack_e:
                         await log_error(f"FIELD_DATA ACK send error to {uid}: {ack_e}")
 
-                # Stage after ACK so the radio window is not blocked by local IO.
                 try:
                     stage_remote_field_data(uid, merged_records)
                     await debug_print(f"Staged {len(merged_records)} remote field records from {uid}", "BASE_NODE")
@@ -1316,13 +1424,11 @@ async def process_remote_field_data(uid, st, send_ack=True):
         await log_error(f"Remote field data processor error for {uid}: {e}")
 
     finally:
-        # Clean up state for this burst
         try:
             if 'FIELD_DATA' in st.get('types', set()):
                 st['types'].discard('FIELD_DATA')
             if isinstance(st.get('data'), dict):
                 st['data'].pop('FIELD_DATA', None)
-            # Retain chunks until the next HELLO so a failed ACK can be retried.
         except Exception:
             pass
 
@@ -1365,17 +1471,17 @@ async def _send_final_ack(remote_uid, batch_id=None, reason='', remote_machine_i
         if batch_id:
             ack_msg += f":BID:{batch_id}"
 
-        # Opportunistically piggyback one queued command for this remote.
         try:
             if not remote_machine_id:
                 node_meta = getattr(settings, 'REMOTE_NODE_INFO', {}).get(str(remote_uid), {})
                 if isinstance(node_meta, dict):
                     remote_machine_id = node_meta.get('MACHINE_ID')
-            pending_cmd = await _fetch_remote_pending_command(remote_uid, remote_machine_id)
+            pending_cmd = await _pending_command_for_remote(remote_uid, remote_machine_id)
             if isinstance(pending_cmd, dict):
                 encoded_cmd = _encode_ack_command(pending_cmd)
                 if encoded_cmd:
                     ack_msg += f":CMD:{encoded_cmd}"
+                    await _mark_pending_command_sent(remote_uid, pending_cmd)
         except Exception as cmd_e:
             await log_error(f"Final ACK command piggyback error for {remote_uid}: {cmd_e}")
 
@@ -1392,7 +1498,6 @@ async def _send_final_ack(remote_uid, batch_id=None, reason='', remote_machine_i
                 "BASE_NODE"
             )
 
-        # Keep per-remote sync schedule current for watcher/missed-sync logic.
         try:
             now = time.time()
             if not hasattr(settings, 'REMOTE_NODE_INFO') or settings.REMOTE_NODE_INFO is None:
@@ -1537,6 +1642,11 @@ async def base_packet_processor():
                     except Exception:
                         pass
                     try:
+                        from dispatch import after_remote_ready
+                        await after_remote_ready(remote_uid)
+                    except Exception as disp_e:
+                        await debug_print('dispatch after READY failed: %s' % disp_e, 'WARN')
+                    try:
                         await ensure_lora_listening()
                     except Exception:
                         pass
@@ -1597,7 +1707,6 @@ async def base_packet_processor():
                 try:
                     cn, total = map(int, packet.get('chunk_info', '0/0').split('/'))
 
-                    # New burst detection: remote restarted chunking from 0, clear stale partials.
                     if cn == 0 and st.get('chunks', {}).get(orig_type):
                         st['chunks'][orig_type] = {}
                         st['chunk_first_ts'] = time.time()
@@ -1646,7 +1755,6 @@ async def base_packet_processor():
                 st['data'][packet_type] = parsed_data
                 st['last_rx'] = current_time
 
-            # Only process FIELD_DATA after it is fully assembled (or non-chunk payload).
             if orig_type == 'FIELD_DATA' and ('FIELD_DATA' in st.get('types', set())) and not handled_field_data:
                 await process_remote_field_data(uid, st)
             elif orig_type == 'CMD_RESULT':
@@ -1654,12 +1762,10 @@ async def base_packet_processor():
             elif orig_type == 'STATE_FILES':
                 await process_remote_state_files(uid, st)
             else:
-                # FULL BURST PROCESSING: only after ALL three expected types are present (or silence timeout)
                 full_burst = all(t in st['types'] for t in ('TS', 'SETTINGS', 'SDATA'))
                 if full_burst or (current_time - st['last_rx'] > 12):
                     await process_remote_burst(uid, st)
 
-            # Cleanup old partial bursts (prevent memory leak) - safe even if keys were popped in process_remote_burst
             chunks_dict = st.get('chunks', {})
             if isinstance(chunks_dict, dict):
                 for t in list(chunks_dict):
@@ -1723,7 +1829,6 @@ async def check_incomplete_bursts():
 
                 silence_limit_ms = int(float(getattr(settings, 'LORA_SESSION_SILENCE_S', 4) or 4) * 1000)
 
-                # Force ACK after short session silence.
                 if silent_ms >= silence_limit_ms:
                     have = len(field_chunks)
                     total = int(st.get('chunk_total') or 0)
@@ -1731,7 +1836,6 @@ async def check_incomplete_bursts():
                     assembled = _assemble_simple_session_field_data(st)
                     if assembled is None:
                         missing = [index for index in range(total) if index not in field_chunks]
-                        # Rate-limit this log to once per minute per uid.
                         last_log_time = st.get('last_incomplete_log_ticks')
                         now = time.ticks_ms()
                         if last_log_time is None or time.ticks_diff(now, last_log_time) >= 60000:
@@ -2118,8 +2222,8 @@ async def _release_hub_session(finished_uid=None):
 async def handle_simple_session_hub(clear):
     """
     SIMPLE SESSION ONLY:
-      HELLO -> READY
-      END   -> ACK
+      HELLO -> READY -> optional SETTINGS downlink
+      END   -> ACK (+ optional CMD from dispatch)
       FIELD_DATA_CHUNK -> store slots; ACK after END (retry ACK if assemble failed)
     """
     global _hub_active_uid
@@ -2181,6 +2285,18 @@ async def handle_simple_session_hub(clear):
             pass
 
         await _send_ready_to(remote_uid, st)
+        try:
+            from dispatch import after_remote_ready
+            sent = await after_remote_ready(remote_uid)
+            if sent:
+                await debug_print('SETTINGS downlink to %s via %s' % (remote_uid, sent), 'BASE_NODE')
+            await ensure_lora_listening()
+        except Exception as e:
+            await debug_print('dispatch after READY failed: %s' % e, 'WARN')
+            try:
+                await ensure_lora_listening()
+            except Exception:
+                pass
         return True
 
     if 'FIELD_DATA_CHUNK' in clear or clear.startswith('TYPE:FIELD_DATA_CHUNK') or clear.startswith('DATA_CHUNK,'):
@@ -2310,11 +2426,12 @@ async def handle_simple_session_hub(clear):
         if use_bid:
             ack += ':BID:%s' % use_bid
         try:
-            pending_cmd = await _fetch_remote_pending_command(remote_uid, st.get('MACHINE_ID'))
+            pending_cmd = await _pending_command_for_remote(remote_uid, st.get('MACHINE_ID'))
             if isinstance(pending_cmd, dict):
                 encoded_cmd = _encode_ack_command(pending_cmd)
                 if encoded_cmd:
                     ack += ':CMD:%s' % encoded_cmd
+                    await _mark_pending_command_sent(remote_uid, pending_cmd)
             ota_hint = _remote_lora_ota_jobs.get(remote_uid)
             if assembled is not None and isinstance(ota_hint, dict) and ota_hint.get('session'):
                 ack += ':OTA:%s:VER:%s' % (ota_hint['session'], getattr(settings, 'FIRMWARE_VERSION', ''))
@@ -2367,6 +2484,7 @@ async def handle_simple_session_hub(clear):
         return True
 
     return False
+
 
 def _looks_collided(message):
     text = str(message or '')
@@ -2461,13 +2579,20 @@ async def handle_incoming_packet(msg):
     except Exception:
         pass
 
+    if str(getattr(settings, 'NODE_TYPE', '')).lower() == 'remote':
+        if msg_str.startswith('TYPE:SETTINGS') or 'TYPE:SETTINGS' in msg_str[:24]:
+            await _remote_handle_settings_wire_message(msg_str)
+            return
+        if msg_str.startswith('TYPE:LORA_OTA_'):
+            await _remote_handle_lora_ota_wire_message(msg_str)
+            return
+
     if bool(getattr(settings, 'LORA_SIMPLE_SESSION_ONLY', True)):
         if str(getattr(settings, 'NODE_TYPE', '')).lower() in ('base', 'wifi'):
             handled = await handle_simple_session_hub(msg_str)
             if handled:
                 return
 
-    # Optional relay forwarding / unwrapping: FWD:ttl:origin:seq:inner
     if str(msg_str).startswith('FWD:'):
         node_type = str(getattr(settings, 'NODE_TYPE', '')).lower()
         if node_type in ('base', 'wifi'):
@@ -2483,7 +2608,6 @@ async def handle_incoming_packet(msg):
             await maybe_relay_forward(msg_str, rssi=(lora.getRSSI() if lora and hasattr(lora, 'getRSSI') else None))
             return
 
-    # Validate network membership after decryption so secure envelopes can be checked.
     if _is_lora_hub_node():
         strict_net_check = msg_str.startswith('T:')
         if not _base_network_matches(msg_str, strict=strict_net_check):
@@ -2497,7 +2621,6 @@ async def handle_incoming_packet(msg):
     sdata.lora_snr = lora.getSNR() if hasattr(lora, 'getSNR') else None
     sdata.LORA_CONNECTED = True
 
-    # Lightweight parse → queue (unchanged)
     remote_uid = None
     packet_type = 'UNKNOWN'
     parsed_data = None
@@ -2746,8 +2869,6 @@ async def _secure_message(msg_str, remote_uid=None):
             msg_str = msg_str.decode()
         msg_str = str(msg_str)
 
-        # Simple-mode / diagnostics path: when HMAC is disabled, keep payload plain
-        # and optionally append only CRC.
         if not bool(getattr(settings, 'LORA_HMAC_ENABLED', False)):
             if bool(getattr(settings, 'LORA_CRC_ENABLED', False)):
                 c = crc16_ccitt(msg_str.encode() if not isinstance(msg_str, bytes) else msg_str)
@@ -2837,7 +2958,6 @@ async def _unsecure_message(msg_str, remote_uid=None):
             elif pu.upper().startswith('HMAC:'):
                 hmac_hex = pu[5:].strip()
 
-        # Drop malformed: two CRC: tokens or invalid body prefix
         if raw.count('CRC:') > 1:
             await _sec_log('Malformed envelope: multiple CRC tokens')
             return None
@@ -2853,7 +2973,6 @@ async def _unsecure_message(msg_str, remote_uid=None):
                 return None
             return body
 
-        # When HMAC is disabled, accept plain body and (optionally) validate CRC.
         if not hmac_enabled:
             if crc_raw is not None and bool(getattr(settings, 'LORA_CRC_ENABLED', False)):
                 ok_crc, detail = verify_app_crc(body, crc_raw)
@@ -3311,13 +3430,11 @@ async def wait_for_next_sync_ack(timeout_s=None, expected_batch_id=None):
             lora_rx_pending = False
 
             try:
-                # Prefer non-blocking style receive if available
                 if hasattr(lora, 'recv'):
                     msg, err = lora.recv(0)
                 else:
                     msg, err = None, -1
             except TypeError:
-                # Some drivers don't accept the timeout argument
                 try:
                     msg, err = lora.recv()
                 except Exception:
@@ -3335,7 +3452,6 @@ async def wait_for_next_sync_ack(timeout_s=None, expected_batch_id=None):
 
                 if msg_str and msg_str.startswith('ACK:'):
                     parts = msg_str.split(':')
-                    # Expected format: ACK:<uid>:NEXT:<seconds>
                     if len(parts) >= 4 and parts[0] == 'ACK' and parts[1] == my_uid and parts[2] == 'NEXT':
                         ack_bid = None
                         if len(parts) >= 6:
@@ -3448,6 +3564,7 @@ async def send_hello_and_wait_ready(use_fwd=False):
                             "REMOTE_NODE"
                         )
                         await debug_print("=== SIMPLE SESSION READY ===", "REMOTE_NODE")
+                        await _remote_listen_settings_window(3.5)
                         return clear
             except Exception as e:
                 await debug_print('remote RX wait error: %s' % e, 'WARN')
@@ -3580,7 +3697,15 @@ async def send_field_data_controlled(payload):
                     clear = await _unsecure_message(raw)
                 except Exception:
                     continue
-                if not clear or not clear.startswith('ACK:'):
+                if not clear:
+                    continue
+                if clear.startswith('TYPE:SETTINGS') or 'TYPE:SETTINGS' in clear[:24]:
+                    await _remote_handle_settings_wire_message(clear)
+                    continue
+                if clear.startswith('TYPE:LORA_OTA_'):
+                    await _remote_handle_lora_ota_wire_message(clear)
+                    continue
+                if not clear.startswith('ACK:'):
                     continue
                 parts = clear.split(':')
                 if len(parts) < 4 or parts[1] != uid or parts[2] != 'NEXT':
@@ -4031,7 +4156,6 @@ async def handle_ota_job(job):
             await debug_print('handle_ota_job: firmware_updater missing', 'ERROR')
             return
 
-        # Start a background worker to perform the blocking download
         result_file = settings.LOG_DIR.rstrip('/') + f'/ota_job_{job_id or "temp"}.result.json'
 
         def _ota_worker():
@@ -4050,7 +4174,6 @@ async def handle_ota_job(job):
             except Exception:
                 pass
 
-        # Try to offload to a managed thread if available, else run in-process.
         try:
             if threading:
                 try:
@@ -4064,7 +4187,6 @@ async def handle_ota_job(job):
             await debug_print(f'OTA worker start failed: {e}', 'ERROR')
             return
 
-        # Poll for result (non-blocking) with timeout
         timeout = int(getattr(settings, 'OTA_JOB_TIMEOUT_S', 1800))
         poll_interval = 2
         waited = 0
@@ -4120,7 +4242,6 @@ async def handle_ota_job(job):
             await asyncio.sleep(poll_interval)
             waited += poll_interval
 
-        # timeout
         job_end_ts = time.time()
         duration = job_end_ts - job_start_ts
         await debug_print(f'OTA job {job_id} timed out after {timeout}s', 'ERROR')
@@ -4193,7 +4314,7 @@ async def connectLora():
 
     if settings.NODE_TYPE == 'remote':
         sync_rate = getattr(settings, 'LORA_SYNC_RATE', 300)
-        response_timeout = 20   # shortened to reduce crosstalk window
+        response_timeout = 20
         ota_wait_deadline = 0
         awaiting_ota_session = None
     else:
@@ -4234,9 +4355,6 @@ async def connectLora():
                     'LORA'
                 )
 
-            # ---------- Safer LoRa health watchdog ----------
-            # Only re-init if there has been NO activity for a long time.
-            # Never use the old aggressive watchdog on base/wifi.
             watch_timeout_s = int(getattr(settings, 'LORA_WATCHDOG_TIMEOUT_S', 86400))
             hard_reset_on_idle = bool(getattr(settings, 'LORA_WATCHDOG_HARD_RESET_ON_IDLE', False))
             is_base_or_wifi = str(getattr(settings, 'NODE_TYPE', '')).lower() in ('base', 'wifi')
@@ -4339,7 +4457,6 @@ async def connectLora():
                             msg_str = await _unsecure_message(msg_str)
                             if msg_str and msg_str.startswith('ACK:'):
                                 parts = msg_str.split(':')
-                                # STRICT UID CHECK - prevents accepting ACK meant for another remote
                                 if len(parts) >= 4 and parts[0] == 'ACK' and parts[1] == _usable_unit_id() and parts[2] == 'NEXT':
                                     await debug_print("Remote: ACK received for this node", "REMOTE_NODE")
                                     next_delay = int(parts[3])
@@ -4430,7 +4547,7 @@ async def connectLora():
                             retry_count = 0
                             continue
 
-            else:  # BASE NODE
+            else:
                 irq = 0
                 try:
                     if hasattr(lora, 'getIrqStatus'):
