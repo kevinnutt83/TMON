@@ -2233,7 +2233,7 @@ async def _send_ready_to(remote_uid, st):
             sdata.lora_session_busy = True
             sdata.lora_session_busy_ts = time.time()
     try:
-        await _wait_tx_done(400)
+        await _wait_tx_done(0.4)
         await _arm_rx_retry()
         await asyncio.sleep_ms(50)
     except Exception:
@@ -3112,6 +3112,19 @@ async def _unsecure_message(msg_str, remote_uid=None):
         await _sec_log('unsecure_message error: %s' % e)
         return None
     
+
+
+def _tx_status_ok(status):
+    """Interpret scalar or tuple return values from SX1262.send()."""
+    if status in (0, None, True):
+        return True
+    if isinstance(status, tuple):
+        if not status:
+            return False
+        return status[-1] in (0, None, True)
+    return False
+
+
 async def _send_with_retry(data, retries=3):
     global lora, _in_session_tx
     if lora is None or not hasattr(lora, 'send'):
@@ -3147,10 +3160,12 @@ async def _send_with_retry(data, retries=3):
 
             tx_view = _fill_tx(data)
             result = lora.send(tx_view)
-            if isinstance(result, tuple):
-                sent = result[-1] == 0
-            else:
-                sent = result == 0
+            sent = _tx_status_ok(result)
+            if not sent:
+                try:
+                    sent = await _wait_tx_done()
+                except Exception:
+                    sent = False
             if not sent:
                 last_err = 'send state=%r' % (result,)
                 await debug_print('TX attempt %s rejected: %s' % (att + 1, last_err), 'WARN')
@@ -3186,73 +3201,48 @@ async def _send_with_retry(data, retries=3):
     return False
 
 
-async def _wait_tx_done(timeout_ms=1500):
-    deadline = time.ticks_add(time.ticks_ms(), int(timeout_ms))
-    tx_done = int(getattr(lora, 'TX_DONE', IRQ_TX_DONE) or IRQ_TX_DONE)
-    while time.ticks_diff(deadline, time.ticks_ms()) > 0:
-        try:
-            irq = int(lora.getIrqStatus() or 0) if hasattr(lora, 'getIrqStatus') else 0
-        except Exception:
-            irq = 0
-        if irq & tx_done:
-            try:
-                if hasattr(lora, 'clearIrqStatus'):
-                    lora.clearIrqStatus(tx_done)
-            except Exception:
-                pass
-            return True
-        await asyncio.sleep_ms(10)
-    return False
+async def _safe_send(data: bytes, remote_uid=None):
+    """
+    Enforce maximum packet size before transmitting.
+    Returns True on success, False on failure.
+    """
+    max_size = int(getattr(settings, 'LORA_MAX_PACKET_SIZE', 240))
 
+    if len(data) > max_size:
+        await log_error(f"Payload too large: {len(data)} (max {max_size})")
+        return False
 
-def _tx_status_ok(status):
-    if status in (0, None, True):
-        return True
-    if isinstance(status, tuple):
-        if not status:
-            return False
-        code = status[-1]
-        return code in (0, None, True)
-    return False
+    try:
+        return await _send_with_retry(data)
+    except Exception as e:
+        await log_error(f"_safe_send error: {e}")
+        return False
 
-
-async def _safe_send(payload, remote_uid=None):
-    global last_lora_activity_ts, _in_session_tx
-    _ = remote_uid
+async def _wait_tx_done(timeout=None):
+    global lora
     if lora is None:
         return False
-    try:
-        if bool(getattr(settings, 'LORA_CAD_ON', True)) and hasattr(lora, 'scanChannel'):
-            try:
-                busy = lora.scanChannel()
-                if busy and not bool(getattr(settings, 'LORA_CAD_FORCE_TX', False)):
-                    await asyncio.sleep_ms(int(getattr(settings, 'LORA_CAD_BACKOFF_MS', 40)))
-            except Exception:
-                pass
-        data = _fill_tx(payload)
-        _in_session_tx = True
-        status = lora.send(data)
-        last_lora_activity_ts = time.time()
-        ok = _tx_status_ok(status)
-        if not ok:
-            await _wait_tx_done()
-            ok = True
-        if not ok:
-            await debug_print('TX rejected status=%s' % (status,), 'WARN')
-        else:
-            await _wait_tx_done()
-        return bool(ok)
-    except Exception as e:
-        await debug_print('TX error: %s' % (e,), 'ERROR')
-        return False
-    finally:
-        _in_session_tx = False
+    if timeout is None:
+        timeout = float(getattr(settings, 'LORA_TX_DONE_WAIT_S', 1.5) or 1.5)
+    timeout = max(0.2, float(timeout))
+    tx_start = time.time()
+    saw_tx_mode = False
+    while time.time() - tx_start < timeout:
         try:
-            if hasattr(lora, 'clearIrqStatus'):
-                lora.clearIrqStatus(IRQ_TX_DONE)
+            irq = lora.getIrqStatus() if hasattr(lora, 'getIrqStatus') else 0
+            if irq & IRQ_TX_DONE:
+                return True
+            if hasattr(lora, '_events') and (lora._events() & getattr(lora, 'TX_DONE', 0)):
+                return True
+            mode = (_chip_status() >> 4) & 7
+            if mode == 6:
+                saw_tx_mode = True
+            elif saw_tx_mode:
+                return True
         except Exception:
             pass
-        await _arm_rx_retry()
+        await asyncio.sleep(0.02)
+    return False
 
 
 async def _read_lora_packet():
@@ -4651,13 +4641,14 @@ async def connectLora():
                             continue
 
             else:
-                now_ticks = time.ticks_ms()
-                current_time = time.time()
                 irq = 0
                 try:
-                    irq = int(lora.getIrqStatus() or 0) if hasattr(lora, 'getIrqStatus') else 0
-                except Exception:
-                    irq = 0
+                    if hasattr(lora, 'getIrqStatus'):
+                        irq = lora.getIrqStatus()
+                except Exception as e:
+                    await debug_print('IRQ poll failed: %r' % (e,), 'WARN')
+
+                now_ticks = time.ticks_ms()
                 try:
                     status = _chip_status()
                     mode = (status >> 4) & 7
@@ -4743,7 +4734,10 @@ async def connectLora():
 
         except Exception as e:
             await log_error(f"Main LoRa loop error: {e!r}")
-            await display_message("LoRa Err", 2)
+            try:
+                await display_message("LoRa Err", 2)
+            except Exception:
+                pass
             try:
                 await _arm_rx_retry()
             except Exception:
