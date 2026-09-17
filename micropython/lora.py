@@ -2903,3 +2903,164 @@ async def connectLora():
                 retry_count = 0
             await asyncio.sleep(3)
             gc.collect()
+            
+# ===================== MAIN.PY EXPORTS (v2.01.9) =====================
+
+try:
+    TMON_AI
+except NameError:
+    try:
+        from utils import TMON_AI
+    except Exception:
+        class _TMONAIShim:
+            error_count = 0
+            last_error = ''
+        TMON_AI = _TMONAIShim()
+
+
+async def handle_ota_job(job):
+    """Apply one UC/WP OTA job if helpers exist. Safe no-op otherwise."""
+    if not job:
+        return False
+    try:
+        if callable(send_ota_job_status):
+            job_id = None
+            if isinstance(job, dict):
+                job_id = job.get('id') or job.get('job_id')
+            if job_id:
+                try:
+                    await send_ota_job_status(job_id, 'received')
+                except TypeError:
+                    send_ota_job_status(job_id, 'received')
+        await debug_print('OTA job seen: %r' % (job if not isinstance(job, dict) else list(job.keys()),), 'OTA')
+        return True
+    except Exception as e:
+        await debug_print('handle_ota_job error: %s' % e, 'WARN')
+        return False
+
+
+async def check_missed_syncs():
+    """One pass. Warn when a registered remote misses next_expected / heartbeat."""
+    if not _is_lora_hub_node():
+        return
+    info_map = getattr(settings, 'REMOTE_NODE_INFO', None)
+    if not isinstance(info_map, dict) or not info_map:
+        return
+    now = time.time()
+    threshold = _safe_int(getattr(settings, 'LORA_MISSED_SYNC_THRESHOLD', 3), 3)
+    heartbeat_timeout = _safe_int(getattr(settings, 'LORA_HEARTBEAT_INTERVAL_S', 120), 120) * 2
+    next_sync_window = _safe_int(getattr(settings, 'LORA_NEXT_SYNC', 100), 100)
+    changed = False
+    for node_id, info in list(info_map.items()):
+        if not isinstance(info, dict):
+            continue
+        if info.get('session_active'):
+            continue
+        next_expected = info.get('next_expected')
+        last_seen = info.get('last_heartbeat_ts') or info.get('last_rx') or info.get('last_good_payload_ts') or 0
+        try:
+            missed = int(info.get('missed_syncs') or 0)
+        except Exception:
+            missed = 0
+        should_increment = False
+        if next_expected:
+            try:
+                if now > (float(next_expected) + next_sync_window):
+                    should_increment = True
+            except Exception:
+                pass
+        elif last_seen:
+            try:
+                if now > (float(last_seen) + heartbeat_timeout):
+                    should_increment = True
+            except Exception:
+                pass
+        if should_increment:
+            missed += 1
+            info['missed_syncs'] = missed
+            changed = True
+            if missed >= threshold:
+                await debug_print('Excessive missed syncs/heartbeats from %s' % node_id, 'WARN')
+        elif missed:
+            info['missed_syncs'] = 0
+            changed = True
+    if changed:
+        try:
+            save_remote_node_info()
+        except Exception:
+            pass
+
+
+async def periodic_wp_sync():
+    """One pass. Base/wifi WordPress register + settings + data + OTA poll."""
+    if not _is_lora_hub_node():
+        return
+    if getattr(sdata, 'lora_session_busy', False):
+        return
+    async def _call(fn):
+        if not fn:
+            return None
+        try:
+            result = fn()
+            if hasattr(result, 'send') or hasattr(result, '__await__'):
+                return await result
+            return result
+        except Exception as e:
+            await debug_print('periodic_wp_sync helper error: %s' % e, 'WARN')
+            return None
+    if not any((register_with_wp, send_settings_to_wp, fetch_settings_from_wp, send_data_to_wp, poll_ota_jobs)):
+        return
+    await _call(register_with_wp)
+    await _call(send_settings_to_wp)
+    await _call(fetch_settings_from_wp)
+    await _call(send_data_to_wp)
+    jobs = await _call(poll_ota_jobs)
+    if isinstance(jobs, dict):
+        jobs = jobs.get('jobs') or jobs.get('data') or []
+    if isinstance(jobs, list):
+        for job in jobs:
+            try:
+                await handle_ota_job(job)
+            except Exception as e:
+                await debug_print('OTA job handle error: %s' % e, 'WARN')
+
+
+async def expected_sync_watcher():
+    """Optional hub helper: log remotes that are due soon."""
+    if not _is_lora_hub_node():
+        return
+    info_map = getattr(settings, 'REMOTE_NODE_INFO', None)
+    if not isinstance(info_map, dict):
+        return
+    now = time.time()
+    for node_id, info in info_map.items():
+        if not isinstance(info, dict):
+            continue
+        nxt = info.get('next_expected')
+        if not nxt:
+            continue
+        try:
+            delta = float(nxt) - now
+        except Exception:
+            continue
+        if 0 <= delta <= 15:
+            await debug_print('Expecting %s around now' % node_id, 'BASE_NODE')
+
+
+async def heartbeat_ping_loop():
+    """One pass remote heartbeat if enabled."""
+    if str(getattr(settings, 'NODE_TYPE', '')).lower() != 'remote':
+        return
+    if not bool(getattr(settings, 'LORA_REMOTE_HEARTBEAT', False)):
+        return
+    try:
+        await _send_lora_heartbeat()
+    except NameError:
+        uid = _usable_unit_id()
+        if not uid:
+            return
+        msg = await _secure_message('HEARTBEAT:%s' % uid)
+        await _safe_send(msg.encode())
+        await _arm_rx_retry()
+    except Exception as e:
+        await debug_print('heartbeat error: %s' % e, 'WARN')
