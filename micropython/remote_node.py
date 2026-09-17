@@ -188,7 +188,15 @@ async def _run_remote_cycle_once():
 
         await ensure_lora_listening()
         startup_wait = min(15, max(0, _safe_int(getattr(settings, 'REMOTE_BASE_STARTUP_WAIT_S', 3), 3)))
-        startup_wait += min(8, _uid_stagger_s(session_uid, 8))
+        # Stagger simultaneous wake-ups across a multi-remote deployment.
+        # The HELLO routine also applies randomized exponential backoff, so this
+        # first delay is intentionally only a coarse separation.
+        startup_wait += min(10, _uid_stagger_s(session_uid, 10))
+        if random:
+            try:
+                startup_wait += random.randint(0, 4)
+            except Exception:
+                pass
         if startup_wait:
             await debug_print('remote_sleep: waiting %ss for base LoRa startup' % startup_wait, 'REMOTE_NODE')
             await asyncio.sleep(startup_wait)
@@ -327,3 +335,4 @@ def run_remote_deep_sleep():
         while True:
             time.sleep(5)
     return 'slept'
+
