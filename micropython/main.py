@@ -1,4 +1,4 @@
-# TMON Version 2.00.1g - Main entry point (CLEANED & OPTIMIZED)
+# TMON Version 2.00.1i - Main entry point / fast LoRa orchestration
 # - connectLora() now runs directly as a permanent background task
 # - Removed redundant lora_comm_task wrapper (new lora.py handles its own retries)
 # - Cleaner structure, same behavior, full original logic preserved
@@ -300,7 +300,7 @@ if engine_loop:
 if node_role != 'remote':
     tm.add_task(wifi_rssi_monitor, 'wifi_rssi', settings.WIFI_SIGNAL_SAMPLE_INTERVAL_S)
 tm.add_task(periodic_provision_check, 'provision_check', settings.PROVISION_CHECK_INTERVAL_S)
-tm.add_task(check_missed_syncs, 'missed_syncs', 60)
+tm.add_task(check_missed_syncs, 'missed_syncs', 30)
 if node_role != 'remote':
     tm.add_task(periodic_diagnostics_task, 'diagnostics', int(getattr(settings, 'DIAGNOSTIC_SEND_INTERVAL_S', 300)))
 try:

@@ -1,4 +1,4 @@
-# Remote node deep-sleep cycle runner for battery-powered LoRa remotes.
+# TMON v2.01.12 - Fast/redundant remote deep-sleep cycle runner.
 # Deep sleep is conditional on successful LoRa sync + field data transmission.
 
 import gc
@@ -40,7 +40,7 @@ def _now_epoch():
 
 def _uid_stagger_s(uid, max_s=None):
     if max_s is None:
-        max_s = _safe_int(getattr(settings, 'REMOTE_UID_STAGGER_MAX_S', 18), 18)
+        max_s = _safe_int(getattr(settings, 'REMOTE_UID_STAGGER_MAX_S', 6), 6)
     max_s = max(0, max_s)
     text = str(uid or '')
     if (not text) or max_s <= 0:
@@ -187,14 +187,14 @@ async def _run_remote_cycle_once():
             raise RuntimeError('remote_sleep: LoRa init failed')
 
         await ensure_lora_listening()
-        startup_wait = min(15, max(0, _safe_int(getattr(settings, 'REMOTE_BASE_STARTUP_WAIT_S', 3), 3)))
+        startup_wait = min(4, max(0, _safe_int(getattr(settings, 'REMOTE_BASE_STARTUP_WAIT_S', 1), 1)))
         # Stagger simultaneous wake-ups across a multi-remote deployment.
         # The HELLO routine also applies randomized exponential backoff, so this
         # first delay is intentionally only a coarse separation.
-        startup_wait += min(10, _uid_stagger_s(session_uid, 10))
+        startup_wait += min(2, _uid_stagger_s(session_uid, 2))
         if random:
             try:
-                startup_wait += random.randint(0, 4)
+                startup_wait += random.randint(0, 1)
             except Exception:
                 pass
         if startup_wait:
@@ -298,8 +298,8 @@ def run_remote_deep_sleep():
     require_success = bool(getattr(settings, 'REMOTE_REQUIRE_SUCCESSFUL_SYNC_BEFORE_SLEEP', True))
 
     if require_success and not sync_success:
-        retry_s = max(15, _safe_int(getattr(settings, 'REMOTE_FAILED_SYNC_RETRY_S', 45), 45))
-        retry_s += _uid_stagger_s(_usable_unit_id())
+        retry_s = max(8, _safe_int(getattr(settings, 'REMOTE_FAILED_SYNC_RETRY_S', 15), 15))
+        retry_s += _uid_stagger_s(_usable_unit_id(), 6)
         if random:
             try:
                 retry_s += random.randint(0, 7)
