@@ -1,4 +1,4 @@
-# TMON v2.01.13 - LoRa fast/redundant session transport
+# TMON v2.01.14 - LoRa packet integrity and multi-node transport hardening
 # Preserves v2.01.8 protocol, chunking, HMAC/CRC, multi-node, OTA and dispatch features.
 # Reliability fixes: serialized TX, driver-compatible TX_DONE capture, deterministic RX re-arm,
 # fast bounded contention, selective chunk retransmission, quick ACK windows, and base watchdog isolation.
@@ -1132,7 +1132,7 @@ def warn_psram_pins():
 async def init_lora():
     global lora, lora_rx_pending
     warn_psram_pins()
-    await debug_print("LoRa bulletproof init sequence (v2.01.12)", "LORA")
+    await debug_print("LoRa bulletproof init sequence (v2.01.14)", "LORA")
     await debug_print(
         'lora rf freq=%s sf=%s bw=%s sync=0x%02X pwr=%s' % (
             getattr(settings, 'FREQ', 915.0), getattr(settings, 'SF', 10),
@@ -1554,6 +1554,7 @@ async def process_remote_state_files(uid, st):
 
 async def _send_final_ack(remote_uid, batch_id=None, reason='', remote_machine_id=None, retry=False):
     """Send a final ACK to a remote and include optional batch marker."""
+    global _hub_ready_ticks
     try:
         st = getattr(settings, 'REMOTE_NODE_INFO', {}).get(str(remote_uid), {})
         if isinstance(st, dict) and st.get('ack_sent') and not retry:
@@ -1617,6 +1618,8 @@ async def _send_final_ack(remote_uid, batch_id=None, reason='', remote_machine_i
                 st['session_active'] = True
                 st['repair_pending'] = True
                 st['repair_deadline_ts'] = time.time() + max(8, _safe_int(getattr(settings, 'LORA_REPAIR_WINDOW_S', 15), 15))
+                st['ready_sent_ticks'] = time.ticks_ms()
+                _hub_ready_ticks = st['ready_sent_ticks']
                 # Preserve both simple_chunks and legacy FIELD_DATA chunks.
             else:
                 st['session_active'] = False
@@ -2392,6 +2395,15 @@ async def _maybe_release_idle_hub():
     if not ready_ticks:
         return
 
+    # A pending repair is an active transaction. Never let the generic idle
+    # watchdog release this UID while the remote still has time to retransmit.
+    if st.get('repair_pending'):
+        repair_deadline = float(st.get('repair_deadline_ts', 0) or 0)
+        if repair_deadline and now_ts < repair_deadline:
+            return
+        st['repair_pending'] = False
+        st.pop('repair_deadline_ts', None)
+
     last_chunk_ticks = int(st.get('last_chunk_ticks') or 0)
     last_hello_ts = float(st.get('last_hello_ts', 0) or 0)
     session_started_ts = float(
@@ -2416,16 +2428,6 @@ async def _maybe_release_idle_hub():
         getattr(settings, 'LORA_HUB_SESSION_TIMEOUT_S', 30) or 30
     ))
     max_expired = (now_ts - session_started_ts) >= max_session_s
-
-    if st.get('repair_pending'):
-        repair_deadline = float(st.get('repair_deadline_ts', 0) or 0)
-        if repair_deadline and now_ts < repair_deadline:
-            return
-        st['repair_pending'] = False
-        st.pop('repair_deadline_ts', None)
-        # Repair window expired. Release using the current time rather than the
-        # old chunk timestamp so the next queued HELLO is admitted immediately.
-        idle_expired = True
 
     if not idle_expired and not max_expired:
         return
@@ -2789,6 +2791,8 @@ async def handle_simple_session_hub(clear):
             st['session_started_ts'] = time.time()
             st['repair_pending'] = True
             st['repair_deadline_ts'] = time.time() + max(8, _safe_int(getattr(settings, 'LORA_REPAIR_WINDOW_S', 15), 15))
+            st['ready_sent_ticks'] = time.ticks_ms()
+            _hub_ready_ticks = st['ready_sent_ticks']
             if sdata is not None:
                 sdata.lora_session_busy = True
                 sdata.lora_session_busy_ts = time.time()
@@ -3730,24 +3734,47 @@ async def _read_lora_packet():
         return None
 
     try:
-        length = lora.getPacketLength(True) if hasattr(lora, 'getPacketLength') else 0
-        if length < 5 or length > 253:
-            lora_rx_pending = False
-            _clear_lora_irq(IRQ_RX_CLEAR)
-            return None
+        # IMPORTANT: do not pass the packet length into recv().  Several SX1262
+        # drivers expose recv(arg) where the argument is a timeout/flag rather than
+        # a byte count.  Passing getPacketLength() there can make the driver read
+        # from the wrong FIFO state and is consistent with the observed frames that
+        # contain the tail of one payload followed by TYPE:FIELD_DATA_CHUNK.
+        # Prefer the driver's native recv() and only fall back to recv(length) for
+        # drivers whose API explicitly requires an argument.
+        expected_len = 0
+        try:
+            if hasattr(lora, 'getPacketLength'):
+                try:
+                    expected_len = int(lora.getPacketLength())
+                except TypeError:
+                    expected_len = int(lora.getPacketLength(True))
+        except Exception:
+            expected_len = 0
 
         try:
-            msg, err = lora.recv(length)
-        except TypeError:
             msg, err = lora.recv()
+        except TypeError:
+            try:
+                msg, err = lora.recv(expected_len if expected_len > 0 else 0)
+            except TypeError:
+                msg, err = lora.recv(expected_len) if expected_len > 0 else (None, -1)
 
         lora_rx_pending = False
-        _clear_lora_irq(IRQ_RX_CLEAR)
-
         if err != 0 or not msg:
+            _clear_lora_irq(IRQ_RX_CLEAR)
+            await _arm_rx_retry(force=True)
             return None
 
-        raw = bytes(msg)[:length].rstrip(b'\x00')
+        raw = bytes(msg).rstrip(b'\x00')
+        if expected_len > 0 and len(raw) > 253:
+            raw = raw[:253]
+        if len(raw) < 5:
+            _clear_lora_irq(IRQ_RX_CLEAR)
+            await _arm_rx_retry(force=True)
+            return None
+
+        # Clear the RX event only after the FIFO has been consumed.
+        _clear_lora_irq(IRQ_RX_CLEAR)
         if not raw:
             return None
 
@@ -4177,10 +4204,20 @@ async def send_hello_and_wait_ready(use_fwd=False):
 
 
 def _lora_data_budget():
+    """Return a conservative base64 payload size for one RF frame.
+
+    At SF10/BW125 the larger ~130-byte application frames seen in the field have
+    a much longer airtime and are disproportionately represented in the CRC/header
+    failures.  Keep the wire protocol unchanged but cap each base64 fragment at 64
+    bytes.  A typical telemetry record becomes 2-3 short frames instead of one
+    long frame, while the existing END/MISS selective repair supplies redundancy.
+    """
     max_pkt = int(getattr(settings, 'LORA_MAX_PACKET_SIZE', 200) or 200)
     overhead = 60
-    configured = _safe_int(getattr(settings, 'LORA_CHUNK_SIZE', 120), 120)
-    return max(48, min(configured, max_pkt - overhead, 120))
+    configured = _safe_int(getattr(settings, 'LORA_CHUNK_SIZE', 64), 64)
+    reliable_cap = _safe_int(getattr(settings, 'LORA_RELIABLE_CHUNK_B64', 64), 64)
+    reliable_cap = max(48, min(reliable_cap, 72))
+    return max(48, min(configured, reliable_cap, max_pkt - overhead))
 
 
 def _minimal_remote_payload():
@@ -4374,7 +4411,11 @@ async def send_field_data_controlled(payload):
                             # Selective repair. The base retained the good chunks;
                             # only the reported missing indices are retransmitted.
                             try:
-                                requested = [] if str(ack_missing).upper() == 'ALL' else [int(x) for x in str(ack_missing).split(',') if x.strip().isdigit()]
+                                if str(ack_missing).strip().upper() == 'ALL':
+                                    requested = list(range(len(tx_parts)))
+                                else:
+                                    requested = [int(x) for x in str(ack_missing).split(',') if x.strip().isdigit()]
+                                requested = sorted(set(requested))
                                 if requested:
                                     await debug_print('Remote: selective repair chunks=%s' % requested, 'REMOTE_NODE')
                                     for idx in requested:
@@ -4384,7 +4425,7 @@ async def send_field_data_controlled(payload):
                                             repair_bytes = repair_sec.encode() if isinstance(repair_sec, str) else repair_sec
                                             if len(repair_bytes) <= max_pkt:
                                                 await _safe_send(repair_bytes)
-                                                await asyncio.sleep_ms(100)
+                                                await asyncio.sleep_ms(180)
                                     await _arm_rx_retry()
                                     end_repair = await _secure_message(f"END:{uid}:{len(tx_parts)}")
                                     await _safe_send(end_repair.encode() if isinstance(end_repair, str) else end_repair)
@@ -5261,7 +5302,7 @@ async def connectLora():
 
                 if irq & (IRQ_CRC_ERR | IRQ_HEADER_ERR):
                     await debug_print(
-                        'RX CRC/header err irq=0x%04X' % irq,
+                        'RX CRC/header err irq=0x%04X; resetting RX FIFO state' % irq,
                         'WARN'
                     )
                     _clear_lora_irq(IRQ_RX_CLEAR)
@@ -5276,7 +5317,14 @@ async def connectLora():
                     )
                     for info in (getattr(settings, 'REMOTE_NODE_INFO', {}) or {}).values()
                 )
+                # Never start a beacon immediately after hearing a remote.  The
+                # base is half-duplex, so a periodic beacon that overlaps a remote
+                # HELLO/CHUNK is a self-inflicted collision.  Keep the beacon feature,
+                # but reserve a short receive guard around remote activity.
+                recent_rx_guard_s = max(3, _safe_int(getattr(settings, 'LORA_BEACON_RX_GUARD_S', 8), 8))
+                recent_rx = (time.time() - float(last_rx_ts or 0)) < recent_rx_guard_s if last_rx_ts else False
                 if (getattr(settings, 'LORA_BASE_BEACON_ENABLED', True) and
+                    not recent_rx and
                     not (getattr(settings, 'LORA_BASE_BEACON_PAUSE_DURING_SESSION', True) and sessions_active) and
                         time.ticks_diff(now_ticks, last_beacon_ticks) >=
                         int(getattr(settings, 'LORA_BASE_BEACON_INTERVAL_S', 30)) * 1000):

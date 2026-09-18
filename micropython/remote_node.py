@@ -1,4 +1,4 @@
-# TMON v2.01.12 - Fast/redundant remote deep-sleep cycle runner.
+# TMON v2.01.14 - Fast/redundant remote deep-sleep cycle runner.
 # Deep sleep is conditional on successful LoRa sync + field data transmission.
 
 import gc
@@ -335,4 +335,3 @@ def run_remote_deep_sleep():
         while True:
             time.sleep(5)
     return 'slept'
-
