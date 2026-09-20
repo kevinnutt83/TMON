@@ -1016,7 +1016,7 @@ def _reset_fifo_windows():
 
 
 def arm_rx(force=False):
-    """Set continuous receive mode, using a single 256-byte FIFO window.
+    """Set continuous receive mode using split TX/RX FIFO windows.
 
     Always put the SX1262 in standby before startReceive().  This avoids the
     -1 TX/startReceive wedge seen after a rejected RX FIFO slice or stale IRQ.
@@ -1041,9 +1041,10 @@ def arm_rx(force=False):
 
         _clear_lora_irq(IRQ_RX_CLEAR | IRQ_TX_DONE)
         _discard_rx_buffer_status()
-        # TX and RX use separate FIFO regions.  Reapply the bases after every
-        # TX/standby transition so the RX write pointer cannot inherit TX state.
-        _reset_fifo_windows()
+        # Only reapply the split FIFO bases on a forced re-arm (normally after
+        # TX). For ordinary RX recovery, trust the chip's reported FIFO pointer.
+        if force:
+            _reset_fifo_windows()
 
         try:
             state = lora.startReceive(0xFFFFFF)
@@ -3811,12 +3812,66 @@ async def _safe_send(data: bytes, remote_uid=None):
         return False
 
 
-def _sx1262_read_rx_fifo():
-    """Read exactly the SX1262-reported RX FIFO slice.
+_PROTOCOL_MARKERS = (
+    b'HELLO:', b'READY:', b'ACK:', b'END:',
+    b'TYPE:', b'T:', b'FWD:', b'BEACON:'
+)
 
-    TX and RX use separate SX1262 FIFO base regions. Never search the whole
-    FIFO for a protocol marker: stale TX bytes and previous packets must never
-    become a new TMON frame.
+
+def _frame_starts_protocol(raw):
+    return bool(raw) and raw.startswith(_PROTOCOL_MARKERS)
+
+
+def _read_buffer_at(offset, length):
+    """Read `length` bytes from SX1262 buffer address `offset`."""
+    if lora is None or length <= 0 or length > 255:
+        return None, -1
+    data = bytearray(length)
+    first = min(length, 256 - (offset & 0xFF))
+    try:
+        rc = lora.SPIreadCommand([0x1E, offset & 0xFF], 2, data, first)
+    except TypeError:
+        try:
+            rc = lora.SPIreadCommand([0x1E, offset & 0xFF], 2, data)
+        except Exception:
+            return None, -3
+    except Exception:
+        return None, -3
+    if rc not in (0, None, True):
+        return None, int(rc)
+    remaining = length - first
+    if remaining:
+        tail = bytearray(remaining)
+        try:
+            rc = lora.SPIreadCommand([0x1E, 0x00], 2, tail, remaining)
+        except TypeError:
+            try:
+                rc = lora.SPIreadCommand([0x1E, 0x00], 2, tail)
+            except Exception:
+                return None, -3
+        except Exception:
+            return None, -3
+        if rc not in (0, None, True):
+            return None, int(rc)
+        data[first:] = tail
+    return bytes(data), 0
+
+
+def _pick_protocol_frame(raw):
+    """Accept a frame, or the same bytes after a leading SX1262 status byte."""
+    if _frame_starts_protocol(raw):
+        return raw
+    if raw and len(raw) > 1 and _frame_starts_protocol(raw[1:]):
+        return raw[1:]
+    return None
+
+
+def _sx1262_read_rx_fifo():
+    """Read the SX1262-reported RX slice. Trust the chip pointer.
+
+    Do not clamp offset to RX_FIFO_BASE. After TX the chip can report
+    offset=0 even when setBufferBaseAddress(0x00, 0x80) was requested.
+    Clamping that to 0x80 can read the unused half and drop a valid HELLO.
     """
     if lora is None:
         return None, -1, 0, 0
@@ -3825,77 +3880,102 @@ def _sx1262_read_rx_fifo():
         if hasattr(lora, 'recv'):
             try:
                 data, rc = lora.recv()
-                return (bytes(data) if data else None), int(rc or 0), len(data or b''), 0
             except TypeError:
                 try:
                     data, rc = lora.recv(0)
-                    return (bytes(data) if data else None), int(rc or 0), len(data or b''), 0
                 except Exception:
-                    pass
+                    return None, -2, 0, 0
             except Exception:
-                pass
+                return None, -2, 0, 0
+            raw = bytes(data) if data else None
+            picked = _pick_protocol_frame(raw)
+            return (picked, 0, len(raw or b''), 0) if picked else (None, 0, len(raw or b''), 0)
         return None, -2, 0, 0
 
     status_buf = bytearray(2)
     try:
         rc = lora.SPIreadCommand([0x13], 1, status_buf, 2)
-        if rc not in (0, None, True):
-            return None, int(rc), 0, 0
-
-        length = int(status_buf[0])
-        offset = int(status_buf[1])
-        if length <= 0 or length > 255 or offset > 255:
-            return None, 0, length, offset
-
-        data = bytearray(length)
-        first = min(length, 256 - offset)
-        rc = lora.SPIreadCommand([0x1E, offset & 0xFF], 2, data, first)
-        if rc not in (0, None, True):
-            return None, int(rc), length, offset
-
-        remaining = length - first
-        if remaining:
-            tail = bytearray(remaining)
-            rc = lora.SPIreadCommand([0x1E, 0x00], 2, tail, remaining)
-            if rc not in (0, None, True):
-                return None, int(rc), length, offset
-            data[first:] = tail
-
-        raw = bytes(data)
-        protocol_markers = (b'HELLO:', b'READY:', b'ACK:', b'END:', b'TYPE:', b'T:', b'FWD:', b'BEACON:')
-        if not raw.startswith(protocol_markers):
-            return None, 0, length, offset
-        return raw, 0, length, offset
+    except TypeError:
+        try:
+            rc = lora.SPIreadCommand([0x13], 1, status_buf)
+        except Exception:
+            return None, -3, 0, 0
     except Exception:
         return None, -3, 0, 0
+    if rc not in (0, None, True):
+        return None, int(rc), 0, 0
+
+    length = int(status_buf[0])
+    raw_off = int(status_buf[1])
+    if length <= 0 or length > 255 or raw_off > 255:
+        return None, 0, length, raw_off
+
+    raw, err = _read_buffer_at(raw_off, length)
+    if err != 0:
+        return None, err, length, raw_off
+
+    picked = _pick_protocol_frame(raw)
+    if picked:
+        return picked, 0, length, raw_off
+
+    # Wrong-window fallback: the chip reported one window but the payload is in
+    # the other. This is intentionally a bounded second read, never a FIFO scan.
+    alt_off = 0x00 if raw_off >= 0x80 else RX_FIFO_BASE
+    alt, alt_err = _read_buffer_at(alt_off, length)
+    if alt_err == 0:
+        picked = _pick_protocol_frame(alt)
+        if picked:
+            try:
+                asyncio.create_task(debug_print(
+                    'RX window fallback raw_off=%d alt_off=%d head=%r' %
+                    (raw_off, alt_off, picked[:24]),
+                    'LORA_RX'
+                ))
+            except Exception:
+                pass
+            return picked, 0, length, alt_off
+
+    try:
+        asyncio.create_task(debug_print(
+            'FIFO slice head raw_off=%d len=%d hex=%s repr=%r' %
+            (raw_off, length,
+             ''.join('%02X' % b for b in (raw or b'')[:16]),
+             (raw or b'')[:24]),
+            'WARN'
+        ))
+    except Exception:
+        pass
+    return None, 0, length, raw_off
 
 
 async def _read_lora_packet():
-    """Return the next captured RX frame, falling back to a direct read.
-
-    Normal operation is queue-first: the dedicated transport drain captures
-    RX_DONE frames before WordPress/file/display work can delay the protocol
-    handler.  Direct-read fallback preserves compatibility during startup or
-    on ports where the drain task has not yet been started.
-    """
+    """Return the next captured RX frame without competing for FIFO ownership."""
     try:
         if _rx_frames._queue:
             return _rx_frames._queue.pop(0)
     except Exception:
         pass
-    return await _read_lora_packet_direct()
+    # The dedicated drain is the sole normal FIFO consumer. Only a caller that
+    # runs before that task exists may use the direct-reader fallback.
+    if _lora_rx_drain_task is None:
+        return await _read_lora_packet_direct(locked=False)
+    return None
 
 
-async def _read_lora_packet_direct():
-    """Read one validated SX1262 packet directly from the radio FIFO."""
+async def _read_lora_packet_direct(locked=False):
+    """Read one validated SX1262 packet directly from the radio FIFO.
+
+    When locked=True the caller already owns lora_radio_lock. uasyncio.Lock is
+    not re-entrant, so the FIFO read body must not acquire it a second time.
+    """
     global lora_rx_pending, _last_rx_digest, _last_rx_ticks
 
     if lora is None or not _lora_rx_ready():
         return None
 
-    # RX and TX must never touch the SX1262 concurrently.  This lock is separate
-    # from the old TX lock so the RX loop cannot race a background downlink TX.
-    async with lora_radio_lock:
+    async def _do_read():
+        # Nested functions do not inherit the outer global statement.
+        global lora_rx_pending, _last_rx_digest, _last_rx_ticks
         try:
             irq_before = int(lora.getIrqStatus() or 0) if hasattr(lora, 'getIrqStatus') else 0
 
@@ -3921,8 +4001,6 @@ async def _read_lora_packet_direct():
                 await _arm_rx_retry(force=True)
                 return None
 
-            # The FIFO has been consumed. Clear only RX-related flags; TX_DONE is
-            # handled independently by the TX completion path.
             _clear_lora_irq(IRQ_RX_CLEAR)
 
             if err != 0:
@@ -3955,6 +4033,7 @@ async def _read_lora_packet_direct():
                 'LORA_RX'
             )
 
+            raw_text = ''
             try:
                 raw_text = raw.decode('utf-8')
             except UnicodeError:
@@ -3962,16 +4041,14 @@ async def _read_lora_packet_direct():
                     raw_text = raw.decode('latin-1')
                 except Exception:
                     raw_text = ''
-                # The wire protocol is ASCII. Latin-1 is only a diagnostic
-                # fallback; it still must begin with a real protocol prefix.
-                if not raw_text:
-                    await debug_print(
-                        'Dropped non-decodable RX len=%d off=%d irq=0x%04X' %
-                        (length, offset, irq_before),
-                        'WARN'
-                    )
-                    await _arm_rx_retry(force=True)
-                    return None
+            if not raw_text:
+                await debug_print(
+                    'Dropped non-decodable RX len=%d off=%d irq=0x%04X' %
+                    (length, offset, irq_before),
+                    'WARN'
+                )
+                await _arm_rx_retry(force=True)
+                return None
 
             valid_rx_prefixes = ('HELLO:', 'READY:', 'ACK:', 'END:', 'TYPE:', 'T:', 'FWD:', 'BEACON:')
             if not raw_text.startswith(valid_rx_prefixes):
@@ -4039,6 +4116,10 @@ async def _read_lora_packet_direct():
                 pass
             return None
 
+    if locked:
+        return await _do_read()
+    async with lora_radio_lock:
+        return await _do_read()
 
 def _slot_width_s():
     spacing = _safe_int(getattr(settings, 'LORA_SLOT_SPACING_S', 20), 20)
@@ -4268,6 +4349,39 @@ async def wait_for_next_sync_ack(timeout_s=None, expected_batch_id=None):
     return None
 
 
+async def _wait_for_base_beacon(timeout_s=None):
+    """Wait for a base beacon before beginning a remote HELLO burst."""
+    if str(getattr(settings, 'NODE_TYPE', '')).lower() != 'remote':
+        return True
+    if timeout_s is None:
+        timeout_s = max(20, int(getattr(settings, 'REMOTE_BASE_STARTUP_WAIT_S', 45) or 45))
+    timeout_s = max(1, int(timeout_s))
+    deadline = time.ticks_add(time.ticks_ms(), timeout_s * 1000)
+    await debug_print('remote_sleep: waiting %ds for base LoRa startup' % timeout_s, 'REMOTE_NODE')
+    try:
+        await _arm_rx_retry(force=True)
+    except Exception:
+        pass
+    while time.ticks_diff(deadline, time.ticks_ms()) > 0:
+        try:
+            msg = await _read_lora_packet()
+            if msg:
+                try:
+                    raw = bytes(msg).rstrip(b'\x00').decode()
+                except Exception:
+                    raw = ''
+                if raw:
+                    clear = await _unsecure_message(raw)
+                    if clear and clear.startswith('BEACON:'):
+                        await debug_print('Base beacon received; starting HELLO', 'REMOTE_NODE')
+                        return True
+        except Exception as e:
+            await debug_print('base beacon wait error: %s' % e, 'WARN')
+        await asyncio.sleep_ms(50)
+    await debug_print('Base beacon wait expired; proceeding with HELLO retries', 'WARN')
+    return False
+
+
 async def send_hello_and_wait_ready(use_fwd=False):
     """Simple mode remote greeting: direct HELLO -> wait for READY."""
     global lora_rx_pending
@@ -4289,6 +4403,8 @@ async def send_hello_and_wait_ready(use_fwd=False):
         pass
     await debug_print("=== SIMPLE SESSION START ===", "REMOTE_NODE")
     sdata.lora_session_busy = True
+    if not use_fwd:
+        await _wait_for_base_beacon()
     jitter_ms = sum(ord(char) for char in uid) % 801
     await asyncio.sleep_ms(jitter_ms)
     hello = 'HELLO:%s' % uid
@@ -4324,6 +4440,8 @@ async def send_hello_and_wait_ready(use_fwd=False):
                     raw = msg.rstrip(b'\x00').decode()
                     clear = await _unsecure_message(raw)
                     if not clear or clear.startswith('BEACON:'):
+                        continue
+                    if clear.startswith('HELLO:'):
                         continue
                     parts = clear.split(':')
                     if len(parts) >= 2 and parts[0] == 'READY' and parts[1] != uid:
@@ -5180,40 +5298,36 @@ async def handle_ota_job(job):
 async def _lora_rx_drain():
     """Continuously drain RX_DONE into a software queue.
 
-    This task performs only radio/FIFO work.  It deliberately does not invoke
-    protocol handlers, WordPress, provisioning, file IO, or display code.
+    This task is the normal FIFO owner. It may hold lora_radio_lock while
+    reading, but passes locked=True so the direct reader never nests the lock.
     """
     global lora_rx_pending, last_lora_activity_ts
     while True:
         try:
             if lora is None:
-                await asyncio.sleep_ms(10)
+                await asyncio.sleep_ms(20)
                 continue
-            # Do not read another frame while captured frames are waiting.
-            if _rx_frames._queue:
-                await asyncio.sleep_ms(2)
+            if len(_rx_frames._queue) >= _rx_frames.maxsize:
+                await asyncio.sleep_ms(5)
                 continue
             if not _lora_rx_ready():
-                await asyncio.sleep_ms(2)
+                await asyncio.sleep_ms(5)
                 continue
             async with lora_radio_lock:
-                raw = await _read_lora_packet_direct()
+                raw = await _read_lora_packet_direct(locked=True)
             if raw:
-                try:
-                    if len(_rx_frames._queue) < _rx_frames.maxsize:
-                        _rx_frames._queue.append(bytes(raw))
-                        _rx_frames._event.set()
-                    else:
-                        await debug_print('RX software queue full; dropping frame len=%d' % len(raw), 'WARN')
-                except Exception:
-                    pass
+                if len(_rx_frames._queue) < _rx_frames.maxsize:
+                    _rx_frames._queue.append(bytes(raw))
+                    _rx_frames._event.set()
+                else:
+                    await debug_print('RX software queue full; dropping frame len=%d' % len(raw), 'WARN')
                 last_lora_activity_ts = time.time()
             else:
                 await asyncio.sleep_ms(2)
         except Exception as e:
             lora_rx_pending = True
             await debug_print('RX drain error: %s' % e, 'WARN')
-            await asyncio.sleep_ms(5)
+            await asyncio.sleep_ms(20)
 
 
 async def connectLora():
@@ -5628,17 +5742,25 @@ async def connectLora():
                     await debug_print('BEACON sent ok=%s' % beacon_ok, 'LORA')
                     await _arm_rx_retry()
 
-                rx_done = getattr(lora, 'RX_DONE', 0)
-                packet_ready = bool(_rx_frames._queue) or bool(irq & rx_done) or bool(lora_rx_pending)
-                if not packet_ready:
-                    await asyncio.sleep_ms(10)
-                    continue
-                last_lora_activity_ts = current_time
-                msg = await _read_lora_packet()
+                msg = None
+                try:
+                    if _rx_frames._queue:
+                        msg = _rx_frames._queue.pop(0)
+                except Exception:
+                    msg = None
+
+                # The dedicated drain is the sole normal FIFO consumer. Only use
+                # direct fallback when the drain task was never started.
+                if msg is None and _lora_rx_drain_task is None:
+                    msg = await _read_lora_packet_direct(locked=False)
+
                 if msg:
+                    last_lora_activity_ts = current_time
                     await handle_incoming_packet(msg)
                     if ((_chip_status() >> 4) & 7) != 5:
                         await _arm_rx_retry()
+                else:
+                    await asyncio.sleep_ms(10)
                 await asyncio.sleep_ms(5)
 
         except Exception as e:
