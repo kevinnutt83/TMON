@@ -931,6 +931,11 @@ IRQ_RX_CLEAR = IRQ_PREAMBLE | IRQ_HEADER_VALID | IRQ_HEADER_ERR | IRQ_CRC_ERR | 
 IRQ_RX = IRQ_RX_DONE | IRQ_CRC_ERR | IRQ_HEADER_ERR | IRQ_TIMEOUT
 IRQ_ALL = 0x03FF
 
+# SX1262 operating-mode values used by the radio-state guards.
+TX_MODE = 0x06
+RX_MODE = 0x05
+MAX_PREAMBLE_MS = 3000  # SF10 / ~200 B needs more than 1500 ms.
+
 
 def _clear_lora_irq(mask):
     if lora is None or not hasattr(lora, 'clearIrqStatus'):
@@ -974,7 +979,7 @@ def _discard_rx_buffer_status():
 def _looks_b64_json(value):
     """Return True only when value is base64 encoding of a telemetry JSON object."""
     text = str(value or '').strip()
-    if len(text) < 8:
+    if len(text) < 4:
         return False
     if any(ch not in _B64_KEEP for ch in text):
         return False
@@ -1015,20 +1020,36 @@ def _reset_fifo_windows():
         return False
 
 
-def arm_rx(force=False):
-    """Set continuous receive mode using split TX/RX FIFO windows.
+def _rx_in_progress():
+    """Return True while a preamble/header is actively arriving."""
+    if lora is None or not hasattr(lora, 'getIrqStatus'):
+        return False
+    try:
+        irq = int(lora.getIrqStatus() or 0)
+    except Exception:
+        return False
+    return bool(irq & (IRQ_PREAMBLE | IRQ_HEADER_VALID)) and not (irq & IRQ_RX_DONE)
 
-    Always put the SX1262 in standby before startReceive().  This avoids the
-    -1 TX/startReceive wedge seen after a rejected RX FIFO slice or stale IRQ.
-    """
+
+def arm_rx(force=False):
+    """Arm continuous RX without interrupting a live RX frame or TX."""
     if lora is None:
         return False
     try:
         irq = int(lora.getIrqStatus() or 0) if hasattr(lora, 'getIrqStatus') else 0
-        # Never restart RX over a good unread packet.  The RX drain owns FIFO
-        # consumption; callers only force a re-arm after that packet is consumed.
+
+        # Preserve a complete unread packet. The RX drain owns FIFO consumption.
         if not force and (irq & IRQ_RX_DONE) and not (irq & (IRQ_CRC_ERR | IRQ_HEADER_ERR)):
             return True
+
+        # Never yank RX away from an in-flight preamble/header.
+        if irq & (IRQ_PREAMBLE | IRQ_HEADER_VALID) and not (irq & IRQ_RX_DONE):
+            if not (irq & (IRQ_CRC_ERR | IRQ_HEADER_ERR)):
+                return True
+
+        # Never call startReceive while the SX1262 is transmitting.
+        if _chip_mode() == TX_MODE:
+            return False
 
         try:
             if hasattr(lora, 'standby'):
@@ -1041,19 +1062,20 @@ def arm_rx(force=False):
 
         _clear_lora_irq(IRQ_RX_CLEAR | IRQ_TX_DONE)
         _discard_rx_buffer_status()
-        # Only reapply the split FIFO bases on a forced re-arm (normally after
-        # TX). For ordinary RX recovery, trust the chip's reported FIFO pointer.
         if force:
             _reset_fifo_windows()
+
+        # Recheck after standby: do not race a driver that is still finishing TX.
+        if _chip_mode() == TX_MODE:
+            return False
 
         try:
             state = lora.startReceive(0xFFFFFF)
         except TypeError:
             state = lora.startReceive()
         if state not in (0, None, True):
-            await_status = _chip_status()
             try:
-                print('startReceive failed state=%r chip=0x%02X' % (state, await_status))
+                print('startReceive failed state=%r chip=0x%02X' % (state, _chip_status()))
             except Exception:
                 pass
             return False
@@ -1066,7 +1088,6 @@ def arm_rx(force=False):
         except Exception:
             pass
         return False
-
 
 def _chip_status():
     if lora is None or not hasattr(lora, 'getStatus'):
@@ -1105,29 +1126,65 @@ async def ensure_lora_listening():
         return False
 
 
-async def _arm_rx_retry(tries=5, force=False):
-    failures = 0
-    for i in range(max(1, int(tries))):
-        try:
-            if arm_rx(force=force):
-                return True
-        except NameError as e:
-            await debug_print('RX arm NameError (missing helper): %s' % e, 'ERROR')
-            return False
-        failures += 1
-        await asyncio.sleep_ms(40 + (i * 30))
-    # Radio recovery is allowed only outside an active session.  Never reset a
-    # live burst/chunk exchange, because that can destroy the session state.
-    busy = bool(getattr(sdata, 'lora_session_busy', False)) if sdata is not None else False
-    if failures >= 2 and not busy and not _in_session_tx:
-        try:
-            await debug_print('RX re-arm failed repeatedly; reinitializing radio', 'WARN')
-            await hard_reset_lora()
-            return bool(await init_lora())
-        except Exception as e:
-            await debug_print('RX radio recovery failed: %s' % e, 'WARN')
-    return await ensure_lora_listening()
+def _chip_mode():
+    """Return the SX1262 operating mode nibble from GetStatus()."""
+    return (_chip_status() >> 4) & 0x07
 
+
+async def _wait_not_tx(timeout_ms=800):
+    deadline = time.ticks_add(time.ticks_ms(), max(1, int(timeout_ms)))
+    while time.ticks_diff(deadline, time.ticks_ms()) > 0:
+        if _chip_mode() != TX_MODE:
+            return True
+        await asyncio.sleep_ms(10)
+    return _chip_mode() != TX_MODE
+
+
+STBY_MODE = 0x02  # chip status nibble for STBY_RC
+
+
+async def _recover_radio_for_tx():
+    """Put the SX1262 into a sendable state without an RX storm."""
+    if lora is None:
+        return False
+    try:
+        if hasattr(lora, 'standby'):
+            try:
+                lora.standby()
+            except TypeError:
+                lora.standby(0)
+    except Exception:
+        pass
+    await _wait_not_tx(timeout_ms=600)
+    _clear_lora_irq(IRQ_ALL)
+    _reset_fifo_windows()
+    _discard_rx_buffer_status()
+    await asyncio.sleep_ms(40)
+    return _chip_mode() != TX_MODE
+
+
+async def _arm_rx_retry(tries=3, force=False):
+    if _rx_in_progress() and not force:
+        return True
+    if _chip_mode() == RX_MODE and not force:
+        return True
+    if not await _wait_not_tx():
+        return False
+
+    for i in range(max(1, int(tries))):
+        if _rx_in_progress() or (_chip_mode() == RX_MODE and not force):
+            return True
+        if arm_rx(force=force):
+            return True
+        # 0x22 / -707: chip is in STBY and still busy. Back off hard.
+        await asyncio.sleep_ms(200 + (i * 120))
+        try:
+            if hasattr(lora, 'standby'):
+                lora.standby()
+        except Exception:
+            pass
+        await _wait_not_tx(timeout_ms=400)
+    return _chip_mode() == RX_MODE
 
 def _lora_irq_callback(events=0):
     """Capture IRQ state before the SX1262 driver's callback wrapper clears it.
@@ -1158,19 +1215,13 @@ def _lora_irq_callback(events=0):
 def _lora_rx_ready():
     if lora is None:
         return False
-    if bool(globals().get('lora_rx_pending', False)):
-        return True
     try:
-        if hasattr(lora, 'getIrqStatus'):
-            rx_done = int(getattr(lora, 'RX_DONE', IRQ_RX_DONE) or IRQ_RX_DONE)
-            if int(lora.getIrqStatus() or 0) & rx_done:
-                return True
-    except Exception as e:
-        try:
-            asyncio.create_task(debug_print('LoRa RX event check error: %s' % e, 'WARN'))
-        except Exception:
-            pass
-    return False
+        irq = int(lora.getIrqStatus() or 0) if hasattr(lora, 'getIrqStatus') else 0
+    except Exception:
+        return False
+    if irq & (IRQ_CRC_ERR | IRQ_HEADER_ERR):
+        return False
+    return bool(irq & IRQ_RX_DONE)
 
 
 async def _record_lora_session_failure(reason):
@@ -1226,7 +1277,7 @@ def warn_psram_pins():
 async def init_lora():
     global lora, lora_rx_pending, _lora_tx_done_pending
     warn_psram_pins()
-    await debug_print("LoRa transport init sequence (v2.01.26)", "LORA")
+    await debug_print("LoRa transport init sequence (v2.01.37)", "LORA")
     await debug_print(
         'lora rf freq=%s sf=%s bw=%s sync=0x%02X pwr=%s' % (
             getattr(settings, 'FREQ', 915.0), getattr(settings, 'SF', 10),
@@ -1242,10 +1293,34 @@ async def init_lora():
         'LORA'
     )
     await display_message("LoRa Init...", 1)
+
+    # Deep-sleep recovery: do not repeatedly isolate GPIO 35/36/37. Those pins
+    # are shared with Octal PSRAM on the S3R2 and pulling them down can prevent
+    # the SX1262 SPI path from ever recovering.
     for attempt in range(20):
-        await hard_reset_lora()
-        await free_pins()
-        await asyncio.sleep(1.2)
+        if attempt == 0:
+            try:
+                rst = machine.Pin(
+                    getattr(settings, 'RST_PIN', 40),
+                    machine.Pin.OUT
+                )
+                rst.value(0)
+                await asyncio.sleep_ms(20)
+                rst.value(1)
+                await asyncio.sleep_ms(80)
+            except Exception:
+                pass
+        elif attempt in (3, 8, 14):
+            try:
+                await hard_reset_lora()
+            except Exception:
+                pass
+            # Do not call free_pins() here; it may manipulate PSRAM-shared
+            # SPI GPIOs during repeated recovery attempts.
+            await asyncio.sleep(1000)
+        else:
+            await asyncio.sleep_ms(300)
+
         try:
             lora = SX1262(
                 getattr(settings, 'SPI_BUS', 1), getattr(settings, 'CLK_PIN', 35),
@@ -1254,24 +1329,33 @@ async def init_lora():
                 getattr(settings, 'RST_PIN', 40), getattr(settings, 'BUSY_PIN', 13)
             )
             status = lora.begin(
-                freq=getattr(settings, 'FREQ', 915.0), bw=getattr(settings, 'BW', 125.0),
-                sf=getattr(settings, 'SF', 10), cr=getattr(settings, 'CR', 7),
-                syncWord=getattr(settings, 'SYNC_WORD', 0xF4), power=getattr(settings, 'POWER', 17),
+                freq=getattr(settings, 'FREQ', 915.0),
+                bw=getattr(settings, 'BW', 125.0),
+                sf=getattr(settings, 'SF', 10),
+                cr=getattr(settings, 'CR', 7),
+                syncWord=getattr(settings, 'SYNC_WORD', 0xF4),
+                power=getattr(settings, 'POWER', 17),
                 currentLimit=getattr(settings, 'CURRENT_LIMIT', 140.0),
                 preambleLength=getattr(settings, 'PREAMBLE_LEN', 12),
-                implicit=False, implicitLen=0xFF, crcOn=getattr(settings, 'CRC_ON', True),
+                implicit=False, implicitLen=0xFF,
+                crcOn=getattr(settings, 'CRC_ON', True),
                 txIq=False, rxIq=False,
                 tcxoVoltage=getattr(settings, 'TCXO_VOLTAGE', 1.8),
                 useRegulatorLDO=getattr(settings, 'USE_LDO', True),
                 blocking=False
             )
-            await debug_print(f'begin() attempt {attempt+1}: status {status}', 'LORA')
+            await debug_print(
+                'begin() attempt %d: status %s' % (attempt + 1, status),
+                'LORA'
+            )
             if status == 0:
                 try:
                     if not _reset_fifo_windows():
                         await debug_print('RX/TX FIFO base setup unavailable', 'WARN')
                 except Exception as e:
-                    await debug_print('RX/TX buffer base setup failed: %r' % (e,), 'WARN')
+                    await debug_print(
+                        'RX/TX buffer base setup failed: %r' % (e,), 'WARN'
+                    )
                 lora_rx_pending = False
                 _lora_tx_done_pending = False
                 try:
@@ -1291,25 +1375,23 @@ async def init_lora():
                 sdata.lora_last_rx_ticks = time.ticks_ms()
                 sdata.lora_rx_pause_until = time.time() + 3
                 return True
-            elif status == -2:
-                await debug_print("Status -2 detected - aggressive reset already performed", "WARN")
-                await asyncio.sleep(2.5)
+            if status == -2:
+                await debug_print(
+                    "Status -2 detected - retrying without GPIO isolation",
+                    "WARN"
+                )
         except Exception as e:
-            await debug_print(f"init attempt {attempt+1} exception: {e}", "WARN")
+            await debug_print(
+                'init attempt %d exception: %s' % (attempt + 1, e), 'WARN'
+            )
             lora = None
-        await asyncio.sleep(1.5)
 
-    await debug_print("LoRa init FAILED after 20 attempts; connectLora will retry", "ERROR")
+    await debug_print(
+        "LoRa init FAILED after 20 attempts; connectLora will retry", "ERROR"
+    )
     await display_message("LoRa FAIL - RETRY", 2)
-    await free_pins()
     lora = None
     return False
-
-command_handlers = {
-    "toggle_relay": toggle_relay,
-}
-
-REMOTE_NODE_INFO_FILE = getattr(settings, 'REMOTE_NODE_INFO_FILE', settings.LOG_DIR + '/remote_node_info.json')
 
 def load_remote_node_info():
     try:
@@ -1699,7 +1781,7 @@ async def _send_final_ack(remote_uid, batch_id=None, reason='', remote_machine_i
         # yield long enough for _maybe_release_idle_hub() to run concurrently.
         if retry and isinstance(st, dict):
             st['repair_tx_pending'] = True
-            st['repair_deadline_ticks'] = time.ticks_ms() + int(float(getattr(settings, 'LORA_REPAIR_WINDOW_S', 30) or 30) * 1000)
+            st['repair_deadline_ticks'] = time.ticks_ms() + int(max(45.0, float(getattr(settings, 'LORA_REPAIR_WINDOW_S', 45) or 45)) * 1000)
             st['session_active'] = True
             st['ack_sent'] = False
         ok = await _safe_send(data, remote_uid=remote_uid)
@@ -1738,7 +1820,7 @@ async def _send_final_ack(remote_uid, batch_id=None, reason='', remote_machine_i
             st['session_active'] = True
             st['repair_pending'] = True
             st['repair_tx_pending'] = False
-            st['repair_deadline_ticks'] = time.ticks_ms() + int(float(getattr(settings, 'LORA_REPAIR_WINDOW_S', 30) or 30) * 1000)
+            st['repair_deadline_ticks'] = time.ticks_ms() + int(max(45.0, float(getattr(settings, 'LORA_REPAIR_WINDOW_S', 45) or 45)) * 1000)
             st['ready_sent'] = True
             st['ready_sent_ticks'] = time.ticks_ms()
             st['last_ack_retry_ts'] = now
@@ -1764,45 +1846,49 @@ async def _maybe_force_ack_on_silence(remote_uid, st):
     try:
         if st.get('ack_sent') or st.get('repair_pending') or st.get('repair_tx_pending'):
             return
-        last_ack = int(st.get('ack_sent_ticks') or 0)
-        if last_ack and time.ticks_diff(time.ticks_ms(), last_ack) < int(float(getattr(settings, 'LORA_ACK_MIN_INTERVAL_S', 8) or 8) * 1000):
-            return
-        silent_need_ms = int(float(getattr(settings, 'LORA_SESSION_SILENCE_S', 5)) * 1000)
-        last = int(st.get('last_chunk_ticks') or 0)
-        if last <= 0 or time.ticks_diff(time.ticks_ms(), last) < silent_need_ms:
-            return
         if not st.get('session_active'):
             return
+        if not st.get('saw_end'):
+            return
+        now = time.ticks_ms()
 
-        chunks = (st.get('chunks') or {}).get('FIELD_DATA') or {}
-        have_simple = len([item for item in _simple_session_chunk_slots(st) if item])
-        if not chunks and not have_simple and not st.get('saw_end'):
+        last_ack = int(st.get('ack_sent_ticks') or 0)
+        if last_ack and time.ticks_diff(now, last_ack) < 8000:
+            return
+
+        ready_ticks = int(st.get('ready_sent_ticks') or 0)
+        burst_guard_ms = int(float(max(40, float(getattr(settings, 'LORA_BURST_GUARD_S', 40) or 40))) * 1000)
+        if (not ready_ticks) or time.ticks_diff(now, ready_ticks) < burst_guard_ms:
+            return
+
+        last = int(st.get('last_chunk_ticks') or 0)
+        silent_need_ms = int(max(
+            12.0,
+            float(getattr(settings, 'LORA_SESSION_SILENCE_S', 20) or 20)
+        ) * 1000)
+        if last and time.ticks_diff(now, last) < silent_need_ms:
             return
 
         assembled = _assemble_simple_session_field_data(st)
         if assembled is None:
-            await debug_print('Silence ACK retry-schedule for partial session %s' % remote_uid, 'WARN')
-            await _send_final_ack(remote_uid, batch_id=st.get('batch_id'), reason='silence-retry', retry=True)
-            # Retry ACK owns the repair window and hub lock.
+            st['chunk_total'] = int(st.get('chunk_total') or 2)
+            await debug_print(
+                'Silence/CRC ACK MISS for %s crc=%s ready_age_ms=%s' %
+                (remote_uid, st.get('crc_err_count'),
+                 time.ticks_diff(now, ready_ticks)),
+                'WARN'
+            )
+            await _send_final_ack(
+                remote_uid,
+                batch_id=st.get('batch_id'),
+                reason='crc-silence-retry',
+                retry=True,
+                force=True,
+            )
             return
-        next_delay = await _send_final_ack(remote_uid, batch_id=st.get('batch_id'), reason='silence')
-        await debug_print(
-            f"Silence ACK to {remote_uid} ok={bool(next_delay)}",
-            "BASE_NODE"
-        )
-        st['session_active'] = False
-        try:
-            st.get('chunks', {}).pop('FIELD_DATA', None)
-        except Exception:
-            pass
-        st.pop('chunk_first_ts', None)
-        st.pop('last_chunk_ts', None)
-        st.pop('last_chunk_ticks', None)
-        st.pop('chunk_total', None)
-        st.pop('batch_id', None)
-        st.pop('saw_end', None)
+        await _send_final_ack(remote_uid, batch_id=st.get('batch_id'), reason='silence')
     except Exception as e:
-        await log_error(f"Silence ACK handler error for {remote_uid}: {e}")
+        await log_error('Silence ACK handler error for %s: %s' % (remote_uid, e))
 
 async def base_packet_processor():
     global last_lora_activity_ts
@@ -2074,7 +2160,7 @@ async def check_incomplete_bursts():
                 if last_ticks == 0:
                     continue
                 silent_ms = time.ticks_diff(now_ticks, last_ticks)
-                silence_limit_ms = int(float(getattr(settings, 'LORA_SESSION_SILENCE_S', 4) or 4) * 1000)
+                silence_limit_ms = int(max(12.0, float(getattr(settings, 'LORA_SESSION_SILENCE_S', 12) or 12)) * 1000)
                 if silent_ms >= silence_limit_ms:
                     have = len(field_chunks)
                     total = int(st.get('chunk_total') or 0)
@@ -2255,8 +2341,37 @@ def _salvage_json_object(text):
     return _extract_short_fields(text)
 
 
+def _is_b64_fragment(value):
+    """Return True for an opaque base64 payload fragment.
+
+    Individual CHUNK slices are not required to decode as standalone JSON;
+    validation happens only after all indexed fragments have been joined.
+    """
+    text = str(value or '').strip()
+    if len(text) < 4:
+        return False
+    return all(ch in _B64_KEEP for ch in text)
+
+
+_DATA_TERMINATORS = (
+    'TYPE:', 'HELLO:', 'READY:', 'ACK:', 'END:', 'BEACON:',
+    '|CNT:', '|HMAC:', '|CRC:',
+)
+
+
+def _clip_chunk_data(data_b64):
+    """Clip a FIFO-glued protocol frame from a CHUNK DATA field."""
+    text = str(data_b64 or '')
+    cut = len(text)
+    for token in _DATA_TERMINATORS:
+        i = text.find(token)
+        if i > 0 and i < cut:
+            cut = i
+    return text[:cut].strip()
+
+
 def _normalize_chunk_payload(data_b64, uid=None):
-    """Accept only complete base64 JSON telemetry; never salvage arbitrary data."""
+    """Normalize and validate a fully joined base64 JSON telemetry payload."""
     if not data_b64:
         return None
     if uid and not _valid_unit_uid(uid):
@@ -2299,7 +2414,7 @@ def _chunk_data_ok(data, uid=None):
     return _normalize_chunk_payload(data, uid=uid) is not None
 
 
-_SHORT_OK = ('HELLO:', 'END:', 'ACK:', 'READY:', 'BEACON:')
+_SHORT_OK = ('HELLO:', 'END:', 'ACK:', 'READY:', 'BEACON:', 'FD:')
 _TRUNC_HEADS = (
     'YPE:FIELD',
     'E:FIELD_DATA',
@@ -2368,6 +2483,8 @@ def _simple_session_parse_chunk(clear):
                 data_b64 = part[5:].strip()
     except Exception:
         pass
+    if data_b64:
+        data_b64 = _clip_chunk_data(data_b64)
     return uid, idx, total, data_b64, batch_id
 
 
@@ -2403,7 +2520,7 @@ def _simple_session_miss_text(st, total=None):
 
 
 def _assemble_simple_session_field_data(st):
-    """Decode complete, independently validated simple-session FIELD_DATA chunks."""
+    """Join opaque base64 fragments first, then validate/decode the full payload."""
     if not isinstance(st, dict):
         return None
     slots = _simple_session_chunk_slots(st)
@@ -2414,36 +2531,33 @@ def _assemble_simple_session_field_data(st):
     if total <= 0 or total > 8:
         return None
     uid = str(st.get('UNIT_ID') or st.get('unit_id') or '') or None
-    payload = {}
+    parts = []
     for index in range(total):
         item = slots[index] if index < len(slots) else None
-        if not item:
+        if not _is_b64_fragment(item):
             return None
-        normalized = _normalize_chunk_payload(item, uid=uid)
-        if not normalized:
-            return None
-        try:
-            obj = ujson.loads(bytes(_ub.a2b_base64(normalized)).decode('utf-8').strip())
-        except Exception:
-            return None
-        if not isinstance(obj, dict):
-            return None
-        if uid and str(obj.get('u') or '') != uid:
-            return None
-        for key, value in obj.items():
-            if key != 'u' or 'u' not in payload:
-                payload[key] = value
-    if not any(key in payload for key in ('u', 't', 'h', 'b', 'v', 'ts')):
+        parts.append(str(item).strip())
+    joined = ''.join(parts)
+    normalized = _normalize_chunk_payload(joined, uid=uid)
+    if not normalized:
+        return None
+    try:
+        payload = ujson.loads(bytes(_ub.a2b_base64(normalized)).decode('utf-8').strip())
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
         return None
     if uid and str(payload.get('u') or '') != uid:
         return None
+    if not any(key in payload for key in ('u', 't', 'h', 'b', 'v', 'ts')):
+        return None
     st['assemble_fail_count'] = 0
-    if not isinstance(st.get('data'), dict):
-        st['data'] = {}
-    st['data']['FIELD_DATA'] = payload
-    if not isinstance(st.get('types'), set):
-        st['types'] = set(st.get('types') or [])
-    st['types'].add('FIELD_DATA')
+    st.setdefault('data', {})['FIELD_DATA'] = payload
+    types = st.get('types')
+    if not isinstance(types, set):
+        types = set(types or [])
+        st['types'] = types
+    types.add('FIELD_DATA')
     return payload
 
 
@@ -2494,7 +2608,7 @@ async def _send_ready_to(remote_uid, st, force=False):
         if ok:
             # Return to RX immediately. HELLO retries already provide the
             # retransmission mechanism; a second READY only adds collision airtime.
-            await _arm_rx_retry(force=True)
+            await _arm_rx_retry(force=False, tries=2)
     except Exception as e:
         ok = False
         await debug_print('READY send error: %s' % (e,), 'ERROR')
@@ -2543,6 +2657,10 @@ async def _maybe_release_idle_hub():
     live = _hub_live_uid()
     if not live:
         return
+    # Do not release a live session while the SX1262 is in a preamble/header
+    # window. This prevents the hub timeout path from tearing down a burst.
+    if _rx_in_progress():
+        return
     st = (getattr(settings, 'REMOTE_NODE_INFO', {}) or {}).get(live) or {}
     now_ticks = time.ticks_ms()
     ready_ticks = int(st.get('ready_sent_ticks') or 0)
@@ -2570,8 +2688,8 @@ async def _maybe_release_idle_hub():
     if last_rx and time.ticks_diff(last_rx, session_start) < 0:
         last_rx = session_start
     reference = last_rx or session_start
-    idle_s = max(5.0, float(getattr(settings, 'LORA_HUB_IDLE_RELEASE_S', 25) or 25))
-    max_s = max(20.0, float(getattr(settings, 'LORA_HUB_SESSION_TIMEOUT_S', 45) or 45))
+    idle_s = max(40.0, float(getattr(settings, 'LORA_HUB_IDLE_RELEASE_S', 40) or 40))
+    max_s = max(70.0, float(getattr(settings, 'LORA_HUB_SESSION_TIMEOUT_S', 70) or 70))
     idle_elapsed = time.ticks_diff(now_ticks, reference) / 1000.0
     total_elapsed = time.ticks_diff(now_ticks, session_start) / 1000.0
     # READY without END is allowed to live until the hard session timeout; do not
@@ -2614,14 +2732,51 @@ async def handle_simple_session_hub(clear):
         await debug_print('Simple mode: ignore FWD frame', 'BASE_NODE')
         return True
 
+    parsed = _parse_compact_field(clear)
+    if parsed:
+        uid, obj = parsed
+        if not _valid_unit_uid(uid):
+            return True
+        if not hasattr(settings, 'REMOTE_NODE_INFO') or settings.REMOTE_NODE_INFO is None:
+            settings.REMOTE_NODE_INFO = {}
+        st = settings.REMOTE_NODE_INFO.setdefault(uid, {})
+        st['UNIT_ID'] = uid
+        st['unit_id'] = uid
+        st['chunk_total'] = 1
+        try:
+            encoded = _ub.b2a_base64(ujson.dumps(obj, separators=(',', ':')).encode()).rstrip(b'\n').decode()
+        except TypeError:
+            encoded = _ub.b2a_base64(ujson.dumps(obj).encode()).rstrip(b'\n').decode()
+        st['simple_chunks'] = [encoded]
+        st['last_chunk_ticks'] = time.ticks_ms()
+        st['last_chunk_ts'] = time.time()
+        st['last_session_rx_ticks'] = time.ticks_ms()
+        st['session_active'] = True
+        st['saw_end'] = False
+        st['assemble_fail_count'] = 0
+        st.setdefault('data', {})['FIELD_DATA'] = obj
+        types = st.get('types')
+        if not isinstance(types, set):
+            types = set(types or [])
+            st['types'] = types
+        types.add('FIELD_DATA')
+        await debug_print('FD stored uid=%s t=%s v=%s' % (uid, obj.get('t'), obj.get('v')), 'BASE_NODE')
+        return True
+
     if clear.startswith('HELLO:'):
+        clear = _repair_hello_uid(clear)
         try:
             remote_uid = clear.split(':', 1)[1].strip().split('|')[0].strip()
         except Exception:
             remote_uid = ''
         if not _valid_unit_uid(remote_uid):
-            await debug_print('Dropped invalid HELLO uid=%r' % remote_uid, 'WARN')
-            return True
+            live = _hub_live_uid()
+            if live and (not remote_uid or live.startswith(remote_uid) or remote_uid.startswith(live[:6])):
+                remote_uid = live
+                clear = 'HELLO:%s' % live
+            else:
+                await debug_print('Dropped invalid HELLO uid=%r' % remote_uid, 'WARN')
+                return True
         await debug_print('HELLO from %s' % remote_uid, 'BASE_NODE')
 
         if not hasattr(settings, 'REMOTE_NODE_INFO') or settings.REMOTE_NODE_INFO is None:
@@ -2767,9 +2922,9 @@ async def handle_simple_session_hub(clear):
             return True
         while len(ch) <= idx:
             ch.append(None)
-        candidate = _normalize_chunk_payload(data_b64, uid=uid)
+        candidate = _clip_chunk_data(str(data_b64 or '').strip())
         existing = ch[idx]
-        if candidate and (not existing or len(candidate) >= len(str(existing or ''))):
+        if _is_b64_fragment(candidate) and (not existing or len(candidate) >= len(str(existing or ''))):
             ch[idx] = candidate
             st['assemble_fail_count'] = 0
             st['ready_retry_count'] = 0
@@ -2778,9 +2933,17 @@ async def handle_simple_session_hub(clear):
             st['last_chunk_ts'] = time.time()
             st['last_session_rx_ticks'] = time.ticks_ms()
             have = len([item for item in ch if item])
-            await debug_print('CHUNK stored uid=%s idx=%s/%s have=%s b64=%s' % (uid, idx, total, have, len(candidate)), 'BASE_NODE')
+            await debug_print(
+                'CHUNK stored uid=%s idx=%s/%s have=%s b64=%s' %
+                (uid, idx, total, have, len(candidate)),
+                'BASE_NODE'
+            )
         else:
-            await debug_print('Dropped unusable CHUNK uid=%s idx=%s head=%r' % (uid, idx, (data_b64 or '')[:40]), 'WARN')
+            await debug_print(
+                'Dropped unusable CHUNK uid=%s idx=%s head=%r' %
+                (uid, idx, (data_b64 or '')[:40]),
+                'WARN'
+            )
         return True
 
     if clear.startswith('END:'):
@@ -2792,7 +2955,7 @@ async def handle_simple_session_hub(clear):
         total = 0
         try:
             if len(parts) > 2:
-                total = int(parts[2])
+                total = _leading_int(parts[2], 0)
         except Exception:
             total = 0
         batch_id = None
@@ -2842,17 +3005,39 @@ async def handle_simple_session_hub(clear):
             await debug_print('field process skip: %s' % e, 'WARN')
 
         retry_ack = assembled is None
+        miss_text_now = ''
         if retry_ack:
             st['miss_rounds'] = int(st.get('miss_rounds') or 0) + 1
-            miss_text_now = _simple_session_miss_text(st, total=st.get('chunk_total'))
-            if int(st.get('miss_rounds') or 0) > max(1, _safe_int(getattr(settings, 'LORA_MAX_MISS_ROUNDS', 2), 2)):
+            max_rounds = max(1, _safe_int(max(3, _safe_int(getattr(settings, 'LORA_MAX_MISS_ROUNDS', 3), 3))))
+            miss_text_now = _simple_session_miss_text(
+                st, total=st.get('chunk_total') or 2
+            )
+            if int(st.get('miss_rounds') or 0) > max_rounds:
+                # Still a failed session. Never turn an empty assembly into a
+                # normal long NEXT/success ACK.
                 retry_ack = False
-            elif miss_text_now and miss_text_now == st.get('last_miss_text') and st.get('repair_pending'):
-                await debug_print('Duplicate END/MISS suppressed uid=%s miss=%s' % (remote_uid, miss_text_now), 'BASE_NODE')
+                next_delay = max(
+                    45,
+                    _safe_int(getattr(settings, 'REMOTE_FAILED_SYNC_RETRY_S', 60), 60)
+                )
+            elif (miss_text_now
+                  and miss_text_now == st.get('last_miss_text')
+                  and st.get('repair_pending')
+                  and int(st.get('last_chunk_ticks') or 0)
+                      <= int(st.get('ack_sent_ticks') or 0)):
+                await debug_print(
+                    'Duplicate END/MISS suppressed uid=%s miss=%s' %
+                    (remote_uid, miss_text_now), 'BASE_NODE'
+                )
                 return True
             else:
                 st['last_miss_text'] = miss_text_now
-        next_delay = calculate_next_delay(remote_uid, retry=retry_ack)
+                next_delay = None
+        else:
+            next_delay = None
+
+        if next_delay is None:
+            next_delay = calculate_next_delay(remote_uid, retry=retry_ack)
         next_delay = max(20, next_delay)
 
         ota_session_id = None
@@ -2890,7 +3075,7 @@ async def handle_simple_session_hub(clear):
         if retry_ack:
             st['repair_tx_pending'] = True
             st['repair_pending'] = True
-            st['repair_deadline_ticks'] = time.ticks_ms() + int(float(getattr(settings, 'LORA_REPAIR_WINDOW_S', 30) or 30) * 1000)
+            st['repair_deadline_ticks'] = time.ticks_ms() + int(max(45.0, float(getattr(settings, 'LORA_REPAIR_WINDOW_S', 45) or 45)) * 1000)
             st['session_active'] = True
             st['ack_sent'] = False
         try:
@@ -2948,7 +3133,7 @@ async def handle_simple_session_hub(clear):
                 st['session_active'] = True
                 st['repair_pending'] = True
                 st['repair_tx_pending'] = False
-                st['repair_deadline_ticks'] = time.ticks_ms() + int(float(getattr(settings, 'LORA_REPAIR_WINDOW_S', 30) or 30) * 1000)
+                st['repair_deadline_ticks'] = time.ticks_ms() + int(max(45.0, float(getattr(settings, 'LORA_REPAIR_WINDOW_S', 45) or 45)) * 1000)
                 st['ready_sent'] = True
                 st['ready_sent_ticks'] = time.ticks_ms()
                 st['session_start_ticks'] = st.get('session_start_ticks') or st['ready_sent_ticks']
@@ -2986,12 +3171,23 @@ async def handle_simple_session_hub(clear):
 
     return False
 
+_FRAME_MARKERS = ('TYPE:', 'HELLO:', 'END:', 'READY:', 'ACK:', 'BEACON:', 'FD:')
+
+def _clip_to_first_frame(text):
+    text = str(text or '')
+    cut = len(text)
+    for marker in _FRAME_MARKERS:
+        i = text.find(marker, 5)
+        if 5 <= i < cut:
+            cut = i
+    return text[:cut].strip()
+
 def _looks_collided(message):
-    text = str(message or '')
-    control_starts = text.count('HELLO:') + text.count('END:') + text.count('READY:') + text.count('ACK:')
-    if control_starts > 1:
-        return True
-    return text.split(',DATA:', 1)[0].count('TYPE:') > 1
+    # After clipping there should be only one protocol start.
+    text = _clip_to_first_frame(message)
+    head = text.split('|', 1)[0].split(',DATA:', 1)[0]
+    starts = sum(head.count(token) for token in _FRAME_MARKERS)
+    return starts > 1
 
 
 def _recover_clipped_prefix(msg_str):
@@ -3015,6 +3211,7 @@ async def handle_incoming_packet(msg):
         except Exception:
             await debug_print('Dropped non-utf8 inbound packet', 'WARN')
             return
+    msg_str = _clip_to_first_frame(msg_str)
 
     uid_hint = None
     if _is_lora_hub_node():
@@ -3045,8 +3242,7 @@ async def handle_incoming_packet(msg):
         return
 
 
-    valid_prefixes = ('HELLO:', 'READY:', 'END:', 'TYPE:', 'T:', 'FWD:', 'ACK:', 'BEACON:')
-    if not any(msg_str.startswith(prefix) for prefix in valid_prefixes):
+    if not any(msg_str.startswith(prefix) for prefix in _VALID_RX_PREFIXES):
         await debug_print(f"Dropped invalid prefix: {msg_str[:20]!r}", "WARN")
         try:
             await _arm_rx_retry(force=True)
@@ -3353,6 +3549,18 @@ async def _secure_message(msg_str, remote_uid=None):
             msg_str = msg_str.decode()
         msg_str = str(msg_str)
 
+        # Keep radio CRC protection on FIELD_DATA, but omit the application HMAC
+        # so the small DATA frame remains within the known-good RF/FIFO size.
+        skip_field_hmac = (
+            msg_str.startswith('TYPE:FIELD_DATA') or
+            msg_str.startswith('FD:')
+        )
+        if skip_field_hmac:
+            if bool(getattr(settings, 'LORA_CRC_ENABLED', False)):
+                c = crc16_ccitt(msg_str.encode())
+                return '%s|CRC:%s' % (msg_str, _format_crc(c))
+            return msg_str
+
         if not bool(getattr(settings, 'LORA_HMAC_ENABLED', False)):
             if bool(getattr(settings, 'LORA_CRC_ENABLED', False)):
                 c = crc16_ccitt(msg_str.encode() if not isinstance(msg_str, bytes) else msg_str)
@@ -3417,7 +3625,7 @@ async def _unsecure_message(msg_str, remote_uid=None):
             return None
 
         if '|' not in raw:
-            if raw.startswith('HELLO:') or raw.startswith('READY:') or raw.startswith('ACK:') or raw.startswith('END:') or raw.startswith('FWD:') or raw.startswith('TYPE:') or raw.startswith('BEACON:'):
+            if raw.startswith('HELLO:') or raw.startswith('READY:') or raw.startswith('ACK:') or raw.startswith('END:') or raw.startswith('FWD:') or raw.startswith('TYPE:') or raw.startswith('BEACON:') or raw.startswith('FD:'):
                 return raw
             if getattr(settings, 'LORA_HMAC_REJECT_UNSIGNED', False) and getattr(settings, 'LORA_HMAC_ENABLED', False):
                 await _sec_log('Invalid secure format (no CNT/HMAC)')
@@ -3445,13 +3653,20 @@ async def _unsecure_message(msg_str, remote_uid=None):
         if raw.count('CRC:') > 1:
             await _sec_log('Malformed envelope: multiple CRC tokens')
             return None
-        if not body.startswith(('HELLO:', 'READY:', 'ACK:', 'END:', 'TYPE:', 'FWD:')):
+        if not body.startswith(('HELLO:', 'READY:', 'ACK:', 'END:', 'TYPE:', 'FWD:', 'FD:')):
             await _sec_log('Malformed envelope: invalid prefix %s' % body[:20])
             return None
         
         hmac_enabled = bool(getattr(settings, 'LORA_HMAC_ENABLED', False))
 
         if hmac_enabled and hmac_hex is None:
+            if body.startswith('FD:'):
+                if getattr(settings, 'LORA_CRC_ENABLED', False) and crc_raw is not None:
+                    ok_crc, detail = verify_app_crc(body, crc_raw)
+                    if not ok_crc:
+                        await _sec_log(detail)
+                        return None
+                return body
             if getattr(settings, 'LORA_HMAC_REJECT_UNSIGNED', False):
                 await _sec_log('Invalid secure format (no CNT/HMAC)')
                 return None
@@ -3720,6 +3935,8 @@ async def _send_with_retry(data, retries=3):
                                 (att + 1, last_err),
                                 'WARN'
                             )
+                            await _recover_radio_for_tx()
+                            await asyncio.sleep_ms(250)
                             continue
 
                         # send() acceptance is not transmission completion. Require a fresh
@@ -3740,15 +3957,30 @@ async def _send_with_retry(data, retries=3):
                         except Exception:
                             pass
 
-                        try:
-                            # Force a clean RX transition. Do not rely on stale RX/TX flags.
-                            await _arm_rx_retry(force=True)
-                            await debug_print('RX rearmed after TX', 'LORA')
-                        except Exception as rx_error:
-                            last_err = 'RX re-arm failed: %s' % (rx_error,)
-                            await debug_print(last_err, 'WARN')
-                            continue
+                        # TX_DONE means the packet has already left the radio.
+                        # A failed RX transition must never turn a successful TX
+                        # into a retransmission: that creates the observed
+                        # -706/-707/-805 collision storm on the remote.
+                        await _wait_not_tx(timeout_ms=400)
+                        await asyncio.sleep_ms(40)
+                        _reset_fifo_windows()
+                        _discard_rx_buffer_status()
+                        _clear_lora_irq(IRQ_RX_CLEAR)
 
+                        # Re-arm is best-effort only. The packet already left the
+                        # radio, so return success regardless of RX re-arm status.
+                        armed = False
+                        try:
+                            armed = await _arm_rx_retry(force=True, tries=2)
+                        except Exception as rx_error:
+                            await debug_print(
+                                'RX re-arm after TX: %s' % rx_error,
+                                'WARN'
+                            )
+                        if armed:
+                            await debug_print('RX rearmed after TX', 'LORA')
+                        else:
+                            await debug_print('RX re-arm deferred after TX', 'WARN')
                         return True
                     finally:
                         _in_session_tx = previous_session_tx
@@ -3814,12 +4046,21 @@ async def _safe_send(data: bytes, remote_uid=None):
 
 _PROTOCOL_MARKERS = (
     b'HELLO:', b'READY:', b'ACK:', b'END:',
-    b'TYPE:', b'T:', b'FWD:', b'BEACON:'
+    b'TYPE:', b'T:', b'FWD:', b'BEACON:', b'FD:'
+)
+
+_VALID_RX_PREFIXES = (
+    'HELLO:', 'READY:', 'ACK:', 'END:', 'TYPE:', 'T:',
+    'FWD:', 'BEACON:', 'FD:',
 )
 
 
 def _frame_starts_protocol(raw):
-    return bool(raw) and raw.startswith(_PROTOCOL_MARKERS)
+    if not raw:
+        return False
+    if isinstance(raw, (bytes, bytearray)):
+        return raw.startswith(_PROTOCOL_MARKERS)
+    return str(raw).startswith(_VALID_RX_PREFIXES)
 
 
 def _read_buffer_at(offset, length):
@@ -3858,13 +4099,37 @@ def _read_buffer_at(offset, length):
 
 
 def _pick_protocol_frame(raw):
-    """Accept a frame, or the same bytes after a leading SX1262 status byte."""
+    """Pick the first protocol frame and clip any FIFO-glued successor."""
+    if not raw:
+        return None
     if _frame_starts_protocol(raw):
-        return raw
-    if raw and len(raw) > 1 and _frame_starts_protocol(raw[1:]):
-        return raw[1:]
+        text = raw.decode('utf-8', 'ignore') if isinstance(raw, (bytes, bytearray)) else str(raw)
+        clipped = _clip_to_first_frame(text)
+        return clipped.encode() if isinstance(raw, (bytes, bytearray)) else clipped
+    limit = min(8, len(raw) - 5)
+    for i in range(1, max(1, limit)):
+        if _frame_starts_protocol(raw[i:]):
+            piece = raw[i:]
+            text = piece.decode('utf-8', 'ignore') if isinstance(piece, (bytes, bytearray)) else str(piece)
+            clipped = _clip_to_first_frame(text)
+            return clipped.encode() if isinstance(piece, (bytes, bytearray)) else clipped
     return None
 
+
+def _repair_hello_uid(text):
+    if not text.startswith('HELLO:'):
+        return text
+    uid = text.split(':', 1)[1].split('|', 1)[0].strip()
+    if _valid_unit_uid(uid):
+        return text
+    live = _hub_live_uid()
+    if live and uid.startswith(live[:8]):
+        return 'HELLO:%s' % live
+    info = getattr(settings, 'REMOTE_NODE_INFO', {}) or {}
+    for known in info:
+        if known.startswith(uid[:8]) or uid.startswith(known[:8]):
+            return 'HELLO:%s' % known
+    return text
 
 def _sx1262_read_rx_fifo():
     """Read the SX1262-reported RX slice. Trust the chip pointer.
@@ -3914,37 +4179,14 @@ def _sx1262_read_rx_fifo():
     if err != 0:
         return None, err, length, raw_off
 
+    if raw_off != 0 and not _frame_starts_protocol(raw or b''):
+        _reset_fifo_windows()
+        _discard_rx_buffer_status()
+        return None, 0, 0, 0
+
     picked = _pick_protocol_frame(raw)
     if picked:
         return picked, 0, length, raw_off
-
-    # Wrong-window fallback: the chip reported one window but the payload is in
-    # the other. This is intentionally a bounded second read, never a FIFO scan.
-    alt_off = 0x00 if raw_off >= 0x80 else RX_FIFO_BASE
-    alt, alt_err = _read_buffer_at(alt_off, length)
-    if alt_err == 0:
-        picked = _pick_protocol_frame(alt)
-        if picked:
-            try:
-                asyncio.create_task(debug_print(
-                    'RX window fallback raw_off=%d alt_off=%d head=%r' %
-                    (raw_off, alt_off, picked[:24]),
-                    'LORA_RX'
-                ))
-            except Exception:
-                pass
-            return picked, 0, length, alt_off
-
-    try:
-        asyncio.create_task(debug_print(
-            'FIFO slice head raw_off=%d len=%d hex=%s repr=%r' %
-            (raw_off, length,
-             ''.join('%02X' % b for b in (raw or b'')[:16]),
-             (raw or b'')[:24]),
-            'WARN'
-        ))
-    except Exception:
-        pass
     return None, 0, length, raw_off
 
 
@@ -3960,6 +4202,19 @@ async def _read_lora_packet():
     if _lora_rx_drain_task is None:
         return await _read_lora_packet_direct(locked=False)
     return None
+
+
+def _is_self_echo(raw_text):
+    uid = _usable_unit_id()
+    if not uid or not raw_text:
+        return False
+    if raw_text.startswith('END:%s' % uid):
+        return True
+    if raw_text.startswith('HELLO:%s' % uid):
+        return True
+    if 'UID:%s' % uid in raw_text[:48] and raw_text.startswith('TYPE:FIELD_DATA'):
+        return True
+    return False
 
 
 async def _read_lora_packet_direct(locked=False):
@@ -3979,14 +4234,26 @@ async def _read_lora_packet_direct(locked=False):
         try:
             irq_before = int(lora.getIrqStatus() or 0) if hasattr(lora, 'getIrqStatus') else 0
 
+            # Never consume FIFO data unless the SX1262 reports a real RX_DONE.
+            # A callback/driver state transition can otherwise expose stale TX data.
+            if not (irq_before & IRQ_RX_DONE):
+                lora_rx_pending = False
+                return None
+
             if irq_before & (IRQ_CRC_ERR | IRQ_HEADER_ERR):
                 await debug_print(
                     'RX error irq=0x%04X; discarding corrupted FIFO frame' % irq_before,
                     'WARN'
                 )
                 lora_rx_pending = False
+                # Clear CRC/header AND RX_DONE, then discard the chip's reported
+                # RX buffer status. Never parse a FIFO slice belonging to a
+                # hardware-CRC-failed packet. Do not force-rearm here: the next
+                # chunk may already be in its burst window.
                 _clear_lora_irq(IRQ_RX_CLEAR)
-                await _arm_rx_retry(force=True)
+                _reset_fifo_windows()
+                _discard_rx_buffer_status()
+                await asyncio.sleep_ms(80)
                 return None
 
             raw, err, length, offset = _sx1262_read_rx_fifo()
@@ -4002,6 +4269,10 @@ async def _read_lora_packet_direct(locked=False):
                 return None
 
             _clear_lora_irq(IRQ_RX_CLEAR)
+            # Every FIFO read owns a clean RX window. This prevents a following
+            # packet from being returned as a glued tail of the previous slice.
+            _reset_fifo_windows()
+            _discard_rx_buffer_status()
 
             if err != 0:
                 await debug_print(
@@ -4011,6 +4282,15 @@ async def _read_lora_packet_direct(locked=False):
                 await _arm_rx_retry(force=True)
                 return None
             if raw is None:
+                # A bare RX_DONE with a zero-length FIFO is a stale/empty IRQ,
+                # not a frame. Do not immediately force-rearm: repeated empty
+                # RX_DONE events can create an IRQ storm and starve HELLO TX
+                # with driver state=-805. Clear it once and yield 35 ms.
+                if (length is not None and int(length) <= 0) and (irq_before & IRQ_RX_DONE):
+                    _clear_lora_irq(IRQ_RX_CLEAR)
+                    _discard_rx_buffer_status()
+                    await asyncio.sleep_ms(20)
+                    return None
                 await debug_print(
                     'Dropped non-protocol FIFO slice len=%s off=%s irq=0x%04X' %
                     (length, offset, irq_before), 'WARN'
@@ -4042,22 +4322,21 @@ async def _read_lora_packet_direct(locked=False):
                 except Exception:
                     raw_text = ''
             if not raw_text:
-                await debug_print(
-                    'Dropped non-decodable RX len=%d off=%d irq=0x%04X' %
-                    (length, offset, irq_before),
-                    'WARN'
-                )
-                await _arm_rx_retry(force=True)
+                # A non-text FIFO slice is not a protocol frame. Do not force
+                # standby/startReceive here; doing so can steal the next chunk
+                # while it is already on the air.
                 return None
 
-            valid_rx_prefixes = ('HELLO:', 'READY:', 'ACK:', 'END:', 'TYPE:', 'T:', 'FWD:', 'BEACON:')
-            if not raw_text.startswith(valid_rx_prefixes):
+            if _is_self_echo(raw_text):
+                await debug_print('Dropped self-echo RX: %r' % raw_text[:64], 'WARN')
+                return None
+
+            if not raw_text.startswith(_VALID_RX_PREFIXES):
                 await debug_print(
                     'Dropped RX with invalid frame start off=%d head=%r' %
                     (offset, raw[:32]),
                     'WARN'
                 )
-                await _arm_rx_retry(force=True)
                 return None
 
             if _is_truncated_rx(raw):
@@ -4066,13 +4345,11 @@ async def _read_lora_packet_direct(locked=False):
                     (length, offset, raw[:40]),
                     'WARN'
                 )
-                await _arm_rx_retry(force=True)
                 return None
 
             digest = (length, raw[:24])
             now = time.ticks_ms()
             if digest == _last_rx_digest and time.ticks_diff(now, _last_rx_ticks) < 1000:
-                await _arm_rx_retry(force=True)
                 return None
             _last_rx_digest = digest
             _last_rx_ticks = now
@@ -4111,7 +4388,7 @@ async def _read_lora_packet_direct(locked=False):
             await debug_print('read packet failed: %r' % e, 'WARN')
             try:
                 _clear_lora_irq(IRQ_RX_CLEAR)
-                await _arm_rx_retry(force=True)
+                _discard_rx_buffer_status()
             except Exception:
                 pass
             return None
@@ -4283,7 +4560,7 @@ async def wait_for_next_sync_ack(timeout_s=None, expected_batch_id=None):
     if timeout_s is None:
         timeout_s = getattr(settings, 'REMOTE_ACK_WAIT_S', 25)
     try:
-        timeout_s = max(15, int(timeout_s))
+        timeout_s = max(45, int(timeout_s))
     except Exception:
         timeout_s = 25
 
@@ -4349,6 +4626,25 @@ async def wait_for_next_sync_ack(timeout_s=None, expected_batch_id=None):
     return None
 
 
+async def _pop_rx_frame():
+    """Consume the dedicated RX-drain software queue, not the hardware IRQ gate."""
+    msg = await _read_lora_packet()
+    if not msg:
+        return None
+    try:
+        raw = bytes(msg).rstrip(b'\x00').decode()
+    except Exception:
+        return None
+    clear = await _unsecure_message(raw)
+    if not clear:
+        return None
+    if clear.startswith('BEACON:'):
+        return None
+    if _is_self_echo(clear):
+        return None
+    return clear
+
+
 async def _wait_for_base_beacon(timeout_s=None):
     """Wait for a base beacon before beginning a remote HELLO burst."""
     if str(getattr(settings, 'NODE_TYPE', '')).lower() != 'remote':
@@ -4409,9 +4705,9 @@ async def send_hello_and_wait_ready(use_fwd=False):
     await asyncio.sleep_ms(jitter_ms)
     hello = 'HELLO:%s' % uid
 
-    retries = int(getattr(settings, 'LORA_HELLO_RETRIES', 5))
+    retries = int(getattr(settings, 'LORA_HELLO_RETRIES', 6))
     timeout = max(2, _safe_int(getattr(settings, 'LORA_HELLO_TIMEOUT_S', 45), 45))
-    retry_gap_ms = max(400, _safe_int(getattr(settings, 'LORA_HELLO_RETRY_GAP_S', 6), 6) * 1000)
+    retry_gap_ms = max(8000, _safe_int(getattr(settings, 'LORA_HELLO_RETRY_GAP_S', 12), 12) * 1000)
     deadline = time.ticks_ms() + timeout * 1000
     for attempt in range(retries):
         if time.ticks_diff(deadline, time.ticks_ms()) <= 0:
@@ -4426,64 +4722,93 @@ async def send_hello_and_wait_ready(use_fwd=False):
                 pass
         except Exception as e:
             await debug_print(f"HELLO TX error: {e}", "WARN")
+        # RX ownership belongs to _lora_rx_drain().  _read_lora_packet() first
+        # consumes that task's software queue, so NEVER gate this waiter on the
+        # hardware RX_DONE bit.  The drain may already have cleared the IRQ.
         window_end = min(deadline, time.ticks_ms() + retry_gap_ms)
+        last_arm = time.ticks_ms()
         while time.ticks_diff(window_end, time.ticks_ms()) > 0:
             try:
                 if lora is None:
                     await asyncio.sleep_ms(100)
                     continue
-                if not _lora_rx_ready():
+
+                msg = await _read_lora_packet()
+                if not msg:
+                    now_ticks = time.ticks_ms()
+                    if time.ticks_diff(now_ticks, last_arm) >= 4000:
+                        if _chip_mode() == RX_MODE:
+                            last_arm = now_ticks
+                        else:
+                            try:
+                                await _arm_rx_retry(force=False, tries=2)
+                            except Exception:
+                                pass
+                            last_arm = now_ticks
                     await asyncio.sleep_ms(80)
                     continue
-                msg = await _read_lora_packet()
-                if msg:
-                    raw = msg.rstrip(b'\x00').decode()
-                    clear = await _unsecure_message(raw)
-                    if not clear or clear.startswith('BEACON:'):
-                        continue
-                    if clear.startswith('HELLO:'):
-                        continue
-                    parts = clear.split(':')
-                    if len(parts) >= 2 and parts[0] == 'READY' and parts[1] != uid:
-                        slot = sum(ord(char) for char in uid) % 3
-                        backoff_ms = (max(1, _safe_int(getattr(settings, 'LORA_HELLO_RETRY_GAP_S', 6), 6)) + (slot * 3)) * 1000
-                        await debug_print('Foreign READY for %s; backing off %.1fs' % (parts[1], backoff_ms / 1000.0), 'REMOTE_NODE')
-                        await asyncio.sleep_ms(backoff_ms)
-                        continue
-                    if len(parts) >= 2 and parts[0] == 'TYPE' and 'FIELD_DATA' in clear and ('UID:' + uid) not in clear:
-                        slot = sum(ord(char) for char in uid) % 3
-                        await asyncio.sleep_ms((max(1, _safe_int(getattr(settings, 'LORA_HELLO_RETRY_GAP_S', 6), 6)) + (slot * 3)) * 1000)
-                        continue
-                    if len(parts) >= 2 and parts[0] == 'READY' and parts[1] == uid and 'BASE' in parts:
-                        await debug_print(f"READY received: {clear}", "REMOTE_NODE")
-                        base_uid = None
-                        chunk_sz = _lora_data_budget()
-                        try:
-                            if 'BASE' in parts:
-                                base_uid = parts[parts.index('BASE') + 1]
-                            if 'CHUNKSZ' in parts:
-                                chunk_sz = int(parts[parts.index('CHUNKSZ') + 1])
-                        except Exception:
-                            pass
-                        if chunk_sz > 120:
-                            chunk_sz = _lora_data_budget()
-                        try:
-                            settings.PAIRED_BASE_UID = base_uid
-                            settings.LORA_CHUNK_SIZE = chunk_sz
-                            with open(settings.LOG_DIR.rstrip('/') + '/paired_base.txt', 'w') as f:
-                                f.write(str(base_uid or ''))
-                        except Exception:
-                            pass
-                        await debug_print(
-                            f"Paired with base {base_uid}, chunk_size={chunk_sz}",
-                            "REMOTE_NODE"
-                        )
-                        await debug_print("=== SIMPLE SESSION READY ===", "REMOTE_NODE")
-                        await _remote_listen_settings_window(3.5)
-                        return clear
+
+                raw = msg.rstrip(b'\x00').decode()
+                clear = await _unsecure_message(raw)
+                if not clear or clear.startswith('BEACON:'):
+                    continue
+                if _is_self_echo(clear):
+                    continue
+                if clear.startswith('HELLO:'):
+                    continue
+
+                parts = clear.split(':')
+                if len(parts) >= 4 and parts[0] == 'ACK' and parts[1] == uid:
+                    # A session ACK while we are still waiting for READY means the
+                    # base has already processed/released this UID.  It is not a
+                    # successful READY, so immediately send another HELLO rather
+                    # than sitting out the rest of this retry window.
+                    await debug_print('ACK during HELLO wait: %s' % clear, 'REMOTE_NODE')
+                    window_end = time.ticks_ms()
+                    continue
+
+                if len(parts) >= 2 and parts[0] == 'READY' and parts[1] != uid:
+                    slot = sum(ord(char) for char in uid) % 3
+                    backoff_ms = (max(1, _safe_int(getattr(settings, 'LORA_HELLO_RETRY_GAP_S', 8), 8)) + (slot * 3)) * 1000
+                    await debug_print('Foreign READY for %s; backing off %.1fs' % (parts[1], backoff_ms / 1000.0), 'REMOTE_NODE')
+                    await asyncio.sleep_ms(backoff_ms)
+                    continue
+
+                if len(parts) >= 2 and parts[0] == 'TYPE' and 'FIELD_DATA' in clear and ('UID:' + uid) not in clear:
+                    slot = sum(ord(char) for char in uid) % 3
+                    await asyncio.sleep_ms((max(1, _safe_int(getattr(settings, 'LORA_HELLO_RETRY_GAP_S', 8), 8)) + (slot * 3)) * 1000)
+                    continue
+
+                if len(parts) >= 2 and parts[0] == 'READY' and parts[1] == uid and 'BASE' in parts:
+                    await debug_print(f"READY received: {clear}", "REMOTE_NODE")
+                    base_uid = None
+                    chunk_sz = _lora_data_budget()
+                    try:
+                        if 'BASE' in parts:
+                            base_uid = parts[parts.index('BASE') + 1]
+                        if 'CHUNKSZ' in parts:
+                            advertised = int(parts[parts.index('CHUNKSZ') + 1])
+                            chunk_sz = min(advertised, _lora_data_budget())
+                    except Exception:
+                        pass
+                    chunk_sz = min(chunk_sz, _lora_data_budget())
+                    try:
+                        settings.PAIRED_BASE_UID = base_uid
+                        settings.LORA_CHUNK_SIZE = chunk_sz
+                        with open(settings.LOG_DIR.rstrip('/') + '/paired_base.txt', 'w') as f:
+                            f.write(str(base_uid or ''))
+                    except Exception:
+                        pass
+                    await debug_print(
+                        f"Paired with base {base_uid}, chunk_size={chunk_sz}",
+                        "REMOTE_NODE"
+                    )
+                    await debug_print("=== SIMPLE SESSION READY ===", "REMOTE_NODE")
+                    await _remote_listen_settings_window(3.5)
+                    return clear
             except Exception as e:
                 await debug_print('remote RX wait error: %s' % e, 'WARN')
-            await asyncio.sleep_ms(80)
+            await asyncio.sleep_ms(50)
 
     await _record_lora_session_failure('READY timeout')
     sdata.lora_session_busy = False
@@ -4492,18 +4817,21 @@ async def send_hello_and_wait_ready(use_fwd=False):
 
 def _lora_data_budget():
     max_pkt = int(getattr(settings, 'LORA_MAX_PACKET_SIZE', 200) or 200)
-    header = 56
+    header = 52
     env = 0
     if getattr(settings, 'LORA_HMAC_ENABLED', False):
-        env += 8 + int(getattr(settings, 'LORA_HMAC_TRUNCATE', 16) or 16)
+        env += 8 + int(getattr(settings, 'LORA_HMAC_TRUNCATE', 8) or 8)
     if getattr(settings, 'LORA_CRC_ENABLED', False):
         env += 9
-    configured = _safe_int(getattr(settings, 'LORA_CHUNK_SIZE', 140), 140)
-    return max(48, min(configured, max_pkt - header - env))
+    # PSRAM-shared SPI on 35/36/37 corrupts roughly 100 B frames (irq=0x0056).
+    # Keep DATA at the known-good small-frame ceiling.
+    configured = _safe_int(getattr(settings, 'LORA_CHUNK_SIZE', 24), 24)
+    room = max_pkt - header - env
+    return max(16, min(configured, 24, room if room > 16 else 24))
 
 
 def _minimal_remote_payload():
-    """Build minimal remote payload with short keys, omitting None values."""
+    """Build the smallest field-data payload needed for the simple session."""
     def _q(value, digits=1):
         try:
             return round(float(value), digits)
@@ -4513,12 +4841,72 @@ def _minimal_remote_payload():
     payload = {
         'u': _usable_unit_id(),
         't': _q(getattr(sdata, 'cur_device_temp_f', None), 1),
-        'h': _q(getattr(sdata, 'cur_device_humid', None), 1),
-        'b': _q(getattr(sdata, 'cur_device_bar_pres', None), 1),
         'v': _q(getattr(sdata, 'sys_voltage', None), 2),
-        'ts': int(time.time()),
     }
     return {key: value for key, value in payload.items() if value is not None and value != ''}
+
+
+def _compact_field_frame(uid, payload):
+    payload = payload if isinstance(payload, dict) else {}
+    t = payload.get('t', '')
+    v = payload.get('v', '')
+    return 'FD:%s:t=%s:v=%s' % (uid, t, v)
+
+
+def _parse_compact_field(clear):
+    if not str(clear).startswith('FD:'):
+        return None
+    parts = str(clear).split(':')
+    if len(parts) < 2:
+        return None
+    uid = parts[1].strip()
+    obj = {'u': uid}
+    for part in parts[2:]:
+        if '=' not in part:
+            continue
+        k, val = part.split('=', 1)
+        if k == 't':
+            try:
+                obj['t'] = float(val)
+            except Exception:
+                pass
+        elif k == 'v':
+            try:
+                obj['v'] = float(val)
+            except Exception:
+                pass
+    if 't' not in obj and 'v' not in obj:
+        return None
+    return uid, obj
+
+
+def _leading_int(text, default=0):
+    n = 0
+    seen = False
+    for ch in str(text or ''):
+        if '0' <= ch <= '9':
+            seen = True
+            n = n * 10 + (ord(ch) - 48)
+        elif seen:
+            break
+    return n if seen else default
+
+
+async def _resend_compact_session(uid, frame):
+    """Repair path for FD + END:1. No chunk snapshot exists in compact mode."""
+    await asyncio.sleep_ms(250)
+    if not await _wait_not_tx(timeout_ms=800):
+        await _recover_radio_for_tx()
+    secured = await _secure_message(frame)
+    ok = await _safe_send(secured.encode() if isinstance(secured, str) else secured)
+    if not ok:
+        return False
+    await asyncio.sleep_ms(400)
+    if not await _wait_not_tx(timeout_ms=800):
+        await _recover_radio_for_tx()
+    end_msg = 'END:%s:1' % uid
+    end_secured = await _secure_message(end_msg)
+    return await _safe_send(end_secured.encode() if isinstance(end_secured, str) else end_secured)
 
 
 async def send_field_data_controlled(payload):
@@ -4541,160 +4929,47 @@ async def send_field_data_controlled(payload):
     await _arm_rx_retry()
 
     payload = _minimal_remote_payload()
-
-    max_pkt = int(getattr(settings, 'LORA_MAX_PACKET_SIZE', 200) or 200)
-    
+    frame = _compact_field_frame(uid, payload)
+    await asyncio.sleep_ms(400)
     try:
-        try:
-            raw_json = ujson.dumps(payload, separators=(',', ':'))
-        except TypeError:
-            raw_json = ujson.dumps(payload)
-        full_b64 = _ub.b2a_base64(raw_json.encode()).rstrip(b'\n').decode()
+        secured = await _secure_message(frame)
+        secured_bytes = secured.encode() if isinstance(secured, str) else secured
+        ok = await _safe_send(secured_bytes)
+        await debug_print('FD sent ok=%s frame=%s' % (ok, frame), 'REMOTE_NODE')
+        if not ok:
+            await _record_lora_session_failure('FD TX failed')
+            sdata.lora_session_busy = False
+            return None
+        await _wait_not_tx(timeout_ms=800)
+        await asyncio.sleep_ms(500)
+        if not await _recover_radio_for_tx():
+            await debug_print('END deferred; radio still busy', 'WARN')
+            await asyncio.sleep_ms(300)
+        end_msg = 'END:%s:1' % uid
+        end_secured = await _secure_message(end_msg)
+        end_bytes = end_secured.encode() if isinstance(end_secured, str) else end_secured
+        end_ok = await _safe_send(end_bytes)
+        await debug_print('END:%s:1 sent ok=%s' % (uid, end_ok), 'LORA')
+        if not end_ok:
+            await _record_lora_session_failure('END TX failure')
+            sdata.lora_session_busy = False
+            return None
+        await _arm_rx_retry()
     except Exception as e:
-        await debug_print(f"Payload encode failed: {e}", "ERROR")
-        await debug_print("=== SIMPLE SESSION FAILED ===", "REMOTE_NODE")
+        await _record_lora_session_failure('FD session TX failure: %s' % e)
         sdata.lora_session_busy = False
         return None
 
-    await asyncio.sleep_ms(400)
+    _in_session_tx = False
 
-    data_budget = _lora_data_budget()
-    prefer_split = bool(getattr(settings, 'LORA_PREFER_TWO_CHUNKS', False))
-    if (not prefer_split) and len(full_b64) <= data_budget:
-        data_parts = [full_b64]
-    else:
-        telemetry = dict(payload)
-        secondary_keys = [k for k in ('t', 'h', 'b', 'v', 'ts') if k in telemetry]
-        midpoint = max(1, (len(secondary_keys) + 1) // 2)
-        groups = (secondary_keys[:midpoint], secondary_keys[midpoint:])
-        data_parts = []
-        for group in groups:
-            part_obj = {'u': telemetry.get('u')}
-            for key in group:
-                part_obj[key] = telemetry.get(key)
-            try:
-                part_json = ujson.dumps(part_obj, separators=(',', ':'))
-            except TypeError:
-                part_json = ujson.dumps(part_obj)
-            part_b64 = _ub.b2a_base64(part_json.encode()).rstrip(b'\n').decode()
-            data_parts.append(part_b64)
-        data_parts = [part for part in data_parts if part]
-        if not data_parts:
-            data_parts = [full_b64]
-    await debug_print('b64=%d budget=%d chunks=%d' % (len(full_b64), data_budget, len(data_parts)), 'REMOTE_NODE')
-    total = max(1, len(data_parts))
-    # Immutable snapshot: ACK parsing below must never be able to overwrite the
-    # original payload chunks used by MISS repair.
-    repair_parts = tuple(data_parts)
-    await debug_print(f"lora tx bytes={len(raw_json)} max={max_pkt} chunks={total} budget={data_budget}", "REMOTE_NODE")
-
-    async def _send_repair_chunks(missing):
-        sent_any = False
-        for idx in missing:
-            try:
-                idx = int(idx)
-            except Exception:
-                continue
-            if idx < 0 or idx >= len(repair_parts):
-                await debug_print('Repair aborted; snapshot idx=%s out of range' % idx, 'ERROR')
-                return False
-            part = repair_parts[idx]
-            if not isinstance(part, str) or len(part) < 16:
-                await debug_print('Repair aborted; snapshot idx=%s invalid' % idx, 'ERROR')
-                return False
-            if not (part.startswith(('eyJ', 'e3', '{')) or _looks_b64_json(part)):
-                await debug_print('Repair aborted; snapshot idx=%s is not base64 JSON' % idx, 'ERROR')
-                return False
-            chunk_msg = f"TYPE:FIELD_DATA_CHUNK,UID:{uid},CHUNK:{idx}/{total},DATA:{part}"
-            try:
-                secured = await _secure_message(chunk_msg)
-                secured_bytes = secured.encode() if isinstance(secured, str) else secured
-                if len(secured_bytes) > max_pkt:
-                    await debug_print(f"Repair chunk {idx} too large: {len(secured_bytes)} > {max_pkt}", "WARN")
-                    continue
-                ok = await _safe_send(secured_bytes)
-                await debug_print(f"lora repair chunk idx={idx}/{total} ok={ok}", "REMOTE_NODE")
-                if not ok:
-                    return False
-                sent_any = True
-            except Exception as e:
-                await debug_print(f"Repair chunk {idx} TX error: {e}", "WARN")
-                return False
-            if idx != missing[-1]:
-                await asyncio.sleep_ms(max(900, _safe_int(getattr(settings, 'LORA_INTER_CHUNK_MS', 900), 900)))
-        if not sent_any:
-            return False
-        await asyncio.sleep_ms(200)
-        try:
-            secured = await _secure_message(f"END:{uid}:{total}")
-            ok = await _safe_send(secured.encode() if isinstance(secured, str) else secured)
-            await debug_print(f"Repair END:{uid}:{total} sent ok={ok}", "LORA")
-            if ok:
-                await _arm_rx_retry(force=True)
-                await asyncio.sleep_ms(80)
-            return bool(ok)
-        except Exception as e:
-            await debug_print(f"Repair END TX error: {e}", "WARN")
-            return False
-
-    _in_session_tx = True
-    try:
-        for i, part in enumerate(data_parts):
-            chunk_msg = f"TYPE:FIELD_DATA_CHUNK,UID:{uid},CHUNK:{i}/{total},DATA:{part}"
-            try:
-                secured = await _secure_message(chunk_msg)
-                secured_bytes = secured.encode() if isinstance(secured, str) else secured
-                if len(secured_bytes) > max_pkt:
-                    await debug_print(f"Payload too large: {len(secured_bytes)} > {max_pkt}; aborting", "REMOTE_NODE")
-                    sdata.lora_session_busy = False
-                    return None
-                ok = await _safe_send(secured_bytes)
-                await debug_print(
-                    f"lora tx bytes={len(raw_json)} max={max_pkt} chunks={total} idx={i} ok={ok}",
-                    "REMOTE_NODE"
-                )
-                if not ok:
-                    await _record_lora_session_failure(f"Chunk {i} TX failed")
-                    sdata.lora_session_busy = False
-                    return None
-            except Exception as e:
-                await _record_lora_session_failure(f"Chunk {i} exception: {e}")
-                sdata.lora_session_busy = False
-                return None
-            if i + 1 < total:
-                await asyncio.sleep_ms(max(900, _safe_int(getattr(settings, 'LORA_INTER_CHUNK_MS', 900), 900)))
-
-        await asyncio.sleep_ms(400)
-
-        end_msg = f"END:{uid}:{total}"
-
-        try:
-            secured = await _secure_message(end_msg)
-            ok = await _safe_send(secured.encode())
-            await debug_print(f"END:{uid}:{total} sent ok={ok}", "LORA")
-            if ok:
-                await _arm_rx_retry(force=True)
-                await asyncio.sleep_ms(200)
-        except Exception as e:
-            await _record_lora_session_failure(f"END TX failure: {e}")
-            await debug_print("=== SIMPLE SESSION FAILED ===", "REMOTE_NODE")
-            sdata.lora_session_busy = False
-            return None
-    finally:
-        _in_session_tx = False
-        try:
-            await _arm_rx_retry()
-        except Exception:
-            pass
-        
     await debug_print("Waiting for final ACK...", "REMOTE_NODE")
-    ack_armed = await _arm_rx_retry(tries=8, force=True)
+    ack_armed = await _arm_rx_retry(force=False, tries=2)
     await debug_print('ACK wait listening armed=%s' % ack_armed, 'REMOTE_NODE')
     if not ack_armed:
         await debug_print('Final ACK listen arm failed; retrying arm only', 'WARN')
-        await _arm_rx_retry(tries=8, force=True)
+        await _arm_rx_retry(force=False, tries=2)
 
-    ack_timeout = max(20, _safe_int(getattr(settings, 'REMOTE_ACK_WAIT_S', 30), 30))
+    ack_timeout = max(45, _safe_int(getattr(settings, 'REMOTE_ACK_WAIT_S', 45), 45))
     end_ticks = time.ticks_ms() + ack_timeout * 1000
     last_arm_ticks = time.ticks_ms()
 
@@ -4702,13 +4977,18 @@ async def send_field_data_controlled(payload):
         try:
             if lora is None:
                 break
-            if not _lora_rx_ready():
-                if time.ticks_diff(time.ticks_ms(), last_arm_ticks) >= 3000:
-                    await _arm_rx_retry(force=True)
+
+            # The RX drain owns the hardware FIFO. Always consume its software
+            # queue first; RX_DONE is normally already cleared by the drain.
+            msg = await _read_lora_packet()
+            if not msg:
+                if time.ticks_diff(time.ticks_ms(), last_arm_ticks) >= 5000:
+                    if _chip_mode() != RX_MODE:
+                        await _arm_rx_retry(force=False, tries=1)
                     last_arm_ticks = time.ticks_ms()
                 await asyncio.sleep_ms(80)
                 continue
-            msg = await _read_lora_packet()
+
             if msg:
                 try:
                     raw = bytes(msg).rstrip(b'\x00').decode('ascii')
@@ -4774,12 +5054,17 @@ async def send_field_data_controlled(payload):
                             delay = None
                         await debug_print(f"FINAL ACK received: {clear}", "REMOTE_NODE")
                         if miss:
-                            await debug_print('Remote: base requested repair chunks=%s' % miss, 'REMOTE_NODE')
-                            await debug_print('Remote: repairing from immutable chunk snapshot total=%s' % total, 'REMOTE_NODE')
-                            repaired = await _send_repair_chunks(miss)
+                            await debug_print(
+                                'Remote: base requested repair chunks=%s' % miss,
+                                'REMOTE_NODE'
+                            )
+                            repaired = await _resend_compact_session(uid, frame)
                             if repaired:
-                                end_ticks = time.ticks_ms() + max(10, _safe_int(getattr(settings, 'REMOTE_REPAIR_ACK_WAIT_S', 25), 25)) * 1000
-                                await _arm_rx_retry()
+                                end_ticks = time.ticks_ms() + max(
+                                    10,
+                                    _safe_int(getattr(settings, 'REMOTE_REPAIR_ACK_WAIT_S', 25), 25)
+                                ) * 1000
+                                await _arm_rx_retry(force=False, tries=2)
                                 continue
                             await debug_print('Remote: repair transmission failed', 'WARN')
                             continue
@@ -5406,6 +5691,21 @@ async def connectLora():
     last_irq_log_ticks = last_rx_heartbeat_ticks
     last_beacon_ticks = last_rx_heartbeat_ticks
     while True:
+        # Give CRC-only sessions a repair ACK even when no decoded packet ever
+        # reached base_packet_processor(). Run at roughly one-second cadence.
+        if _is_lora_hub_node():
+            now_silence_ticks = time.ticks_ms()
+            silence_tick = int(getattr(sdata, '_crc_silence_check_ticks', 0) or 0)
+            if time.ticks_diff(now_silence_ticks, silence_tick) >= 1000:
+                try:
+                    sdata._crc_silence_check_ticks = now_silence_ticks
+                except Exception:
+                    pass
+                live_uid = _hub_live_uid()
+                if live_uid:
+                    live_st = (getattr(settings, 'REMOTE_NODE_INFO', {}) or {}).get(live_uid) or {}
+                    if isinstance(live_st, dict):
+                        await _maybe_force_ack_on_silence(live_uid, live_st)
         try:
             current_time = time.time()
 
@@ -5675,7 +5975,7 @@ async def connectLora():
                             sdata._preamble_ticks = now_ticks
                         except Exception:
                             pass
-                    elif time.ticks_diff(now_ticks, stuck_from) > 1500:
+                    elif time.ticks_diff(now_ticks, stuck_from) > MAX_PREAMBLE_MS:
                         _clear_lora_irq(IRQ_RX_CLEAR)
                         await _arm_rx_retry(force=True)
                         try:
@@ -5693,24 +5993,28 @@ async def connectLora():
                         'RX CRC/header err irq=0x%04X' % irq,
                         'WARN'
                     )
-                    if _is_lora_hub_node():
-                        live = _hub_live_uid()
-                        if live:
-                            st = (getattr(settings, 'REMOTE_NODE_INFO', {}) or {}).get(live) or {}
-                            if isinstance(st, dict):
-                                st['last_session_rx_ticks'] = time.ticks_ms()
+                    live = _hub_live_uid() if _is_lora_hub_node() else None
+                    if live:
+                        st = (getattr(settings, 'REMOTE_NODE_INFO', {}) or {}).get(live) or {}
+                        if isinstance(st, dict):
+                            st['last_session_rx_ticks'] = time.ticks_ms()
+                            st['crc_err_count'] = int(st.get('crc_err_count') or 0) + 1
+                            st['session_active'] = True
                     _clear_lora_irq(IRQ_RX_CLEAR)
-                    await _arm_rx_retry(force=True)
-                    await asyncio.sleep_ms(20)
+                    _discard_rx_buffer_status()
+                    # The FIFO contents belong to the CRC-failed frame. Never
+                    # leave RX_DONE set for the drain to interpret as a valid
+                    # packet, and do not force-rearm into the next chunk.
+                    await asyncio.sleep_ms(80)
                     continue
 
                 # Direct FIFO reads temporarily put the SX1262 into standby.
                 # If a packet was rejected before handle_incoming_packet(), make
                 # sure the receiver is restored immediately.  This is the guard
                 # that prevents the observed status=0x22 / mode=2 tight loop.
-                if mode != 5 and not irq:
+                if mode != RX_MODE and not irq and mode != TX_MODE:
                     rx_rearm_ticks = int(getattr(sdata, '_rx_rearm_ticks', 0) or 0)
-                    if time.ticks_diff(now_ticks, rx_rearm_ticks) >= 150:
+                    if time.ticks_diff(now_ticks, rx_rearm_ticks) >= 250:
                         try:
                             sdata._rx_rearm_ticks = now_ticks
                         except Exception:
@@ -5778,3 +6082,4 @@ async def connectLora():
                 retry_count = 0
             await asyncio.sleep(3)
             gc.collect()
+

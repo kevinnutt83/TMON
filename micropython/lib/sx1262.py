@@ -1,4 +1,4 @@
-# Updated sx1262.py
+# Updated sx1262.py — v2.01.32
 
 from _sx126x import *
 from sx126x import SX126X
@@ -323,7 +323,12 @@ class SX1262(SX126X):
         pass
 
     def _onIRQ(self, callback):
+        """Dispatch IRQs without implicitly changing the radio mode.
+
+        RX re-arming after TX_DONE is owned by lora.py so it can wait for TX
+        completion, clear the correct IRQ/FIFO state, and avoid racing the
+        first inbound frame.
+        """
         events = self._events()
-        if events & SX126X_IRQ_TX_DONE:
-            super().startReceive()
         self._callbackFunction(events)
+
